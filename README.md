@@ -5,8 +5,8 @@
 
 ## 📊 Version History
 
-- 0.2 - Security updates, addressing vulnerabilities in base dependencies
-- 0.1 - Initial release
+- v0.2 - Security updates, addressing vulnerabilities in base dependencies
+- v0.1 - Initial release
 
 ## 🌟 Overview
 

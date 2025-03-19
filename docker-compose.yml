@@ -1,0 +1,23 @@
+version: '3.0'
+services:
+  ChannelWatch:
+    image: coderluii/channelwatch:latest
+    container_name: channelwatch
+    network_mode: bridge
+    volumes:
+      # Map your config directory to /config in the container
+      - /path/to/your/config/directory:/config
+      # Map your Channels DVR log file (read-only)
+      - /path/to/channels-dvr.log:/channels-dvr.log:ro
+    environment:
+      # Application settings
+      LOG_CHECK_INTERVAL: 10              # Check log file every 10 seconds (default)
+      
+      # Enable desired alerts (TRUE to enable, FALSE to disable)
+      Alerts_Channel-Watching: TRUE       # Notify when someone is watching TV
+      
+      # Pushover notification credentials (required)
+      PUSHOVER_USER_KEY: your_user_key_here
+      PUSHOVER_API_TOKEN: your_api_token_here
+      
+    restart: unless-stopped

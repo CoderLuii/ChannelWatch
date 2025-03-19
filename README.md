@@ -1,7 +1,7 @@
 # ChannelWatch 📺🔔
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Docker Pulls](https://img.shields.io/docker/pulls/coderluii/channelwatch.svg)](https://hub.docker.com/r/coderluii/channelwatch)
+[![Docker Pulls](https://img.shields.io/docker/pulls/coderluii/channelwatch.svg?sanitize=true)](https://hub.docker.com/r/coderluii/channelwatch)
 
 ## 📊 Version History
 

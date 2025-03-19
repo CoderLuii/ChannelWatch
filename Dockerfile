@@ -1,16 +1,19 @@
-# Use a slim Python 3.9 base image
-FROM python:3.9-slim
+# Use alpine base image
+FROM python:alpine
 
 # Labels for metadata
 LABEL maintainer="CoderLuii"
-LABEL version="0.1"
+LABEL version="0.2"
 LABEL description="ChannelWatch - Channels DVR Log Monitor"
 
 # Set working directory
 WORKDIR /app
 
+# Copy requirements file
+COPY requirements.txt .
+
 # Install required Python packages
-RUN pip install --no-cache-dir requests
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code (changed line)
 COPY . /app/channelwatch

@@ -3,6 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker Pulls](https://img.shields.io/docker/pulls/coderluii/channelwatch.svg)](https://hub.docker.com/r/coderluii/channelwatch)
 
+## 📊 Version History
+
+- 0.2 - Security updates, addressing vulnerabilities in base dependencies
+- 0.1 - Initial release
+
 ## 🌟 Overview
 
 ChannelWatch is a lightweight Docker container that monitors Channels DVR log files and sends real-time Pushover notifications when TV viewing begins. Track household TV usage with minimal setup and resource requirements.

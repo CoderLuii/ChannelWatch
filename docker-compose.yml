@@ -1,23 +1,86 @@
 version: '3.0'
 services:
   ChannelWatch:
-    image: coderluii/channelwatch:latest
+    build: .
+    image: channelwatch:0.3
     container_name: channelwatch
-    network_mode: bridge
+    network_mode: host
     volumes:
-      # Map your config directory to /config in the container
-      - /path/to/your/config/directory:/config
-      # Map your Channels DVR log file (read-only)
-      - /path/to/channels-dvr.log:/channels-dvr.log:ro
+      # Path to store configuration and logs
+      - /your/local/path:/config
     environment:
-      # Application settings
-      LOG_CHECK_INTERVAL: 10              # Check log file every 10 seconds (default)
+      # ========== CORE SETTINGS ==========
+      # Required: IP address of your Channels DVR server
+      CHANNELS_DVR_HOST: x.x.x.x
       
-      # Enable desired alerts (TRUE to enable, FALSE to disable)
-      Alerts_Channel-Watching: TRUE       # Notify when someone is watching TV
+      # Optional: Port for your Channels DVR server (default: 8089)
+      # Only change if you've modified the default Channels DVR port
+      CHANNELS_DVR_PORT: 8089
       
-      # Pushover notification credentials (required)
-      PUSHOVER_USER_KEY: your_user_key_here
-      PUSHOVER_API_TOKEN: your_api_token_here
+      # Optional: Timezone for logs and timestamps
+      # Find your TZ value at: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+      # Example: America/New_York, Europe/London, Asia/Tokyo
+      TZ: Your/Timezone
+      
+      # ========== LOGGING CONFIGURATION ==========
+      # Optional: Log verbosity level (1=Standard, 2=Verbose)
+      LOG_LEVEL: 1
+      
+      # Optional: Number of days to keep log files
+      LOG_RETENTION_DAYS: 7
+      
+      # ========== ALERT CONFIGURATION ==========
+      # Enable/disable specific alert types
+      # Set to TRUE to enable, FALSE to disable (or remove the line)
+      Alerts_Channel-Watching: TRUE
+      
+      # ========== NOTIFICATION SETTINGS ==========
+      # Optional: Enable/disable channel logos in notifications
+      CHANNEL_IMAGES: TRUE
+      
+      # ========== NOTIFICATION PROVIDERS ==========
+      # Configure at least one provider below to receive alerts
+      # Feel free to leave empty or completely remove any services you don't use
+      
+      # ----- Pushover Configuration -----
+      # Get credentials at https://pushover.net
+      PUSHOVER_USER_KEY: ""       # Your Pushover user key
+      PUSHOVER_API_TOKEN: ""      # Your Pushover application token
+      
+      # ----- Apprise Configuration -----
+      # Configure any services you want to use
+      
+      # Discord Webhooks - Format: webhook_id/webhook_token
+      # Create webhook in Discord Server Settings → Integrations
+      APPRISE_DISCORD: ""
+      
+      # Email - Format: user:password@gmail.com
+      # For Gmail, use App Password from Google Account settings
+      APPRISE_EMAIL: ""
+      APPRISE_EMAIL_TO: ""        # Recipient email (optional)
+      
+      # Telegram - Format: bottoken/ChatID
+      # Create bot with @BotFather and get your Chat ID with @userinfobot
+      APPRISE_TELEGRAM: ""
+      
+      # Slack - Format: tokenA/tokenB/tokenC
+      # Create app at https://api.slack.com/apps
+      APPRISE_SLACK: ""
+      
+      # Gotify - Format: gotify.example.com/token
+      # Self-hosted push notification service
+      APPRISE_GOTIFY: ""
+      
+      # Matrix - Format: matrixuser:pass@domain/#room
+      # Open-source chat platform
+      APPRISE_MATRIX: ""
+      
+      # MQTT - Format: mqtt://user:pass@hostname
+      # For smart home integrations
+      APPRISE_MQTT: ""
+      
+      # Custom Apprise URL - For other services
+      # See: https://github.com/caronc/apprise/wiki
+      APPRISE_CUSTOM: ""
       
     restart: unless-stopped

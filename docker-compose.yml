@@ -1,8 +1,7 @@
 version: '3.0'
 services:
   ChannelWatch:
-    build: .
-    image: channelwatch:0.3
+    image: coderluii/channelwatch:latest
     container_name: channelwatch
     network_mode: host
     volumes:

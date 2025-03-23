@@ -3,8 +3,8 @@ FROM python:alpine
 
 # Labels for metadata
 LABEL maintainer="CoderLuii"
-LABEL version="0.2"
-LABEL description="ChannelWatch - Channels DVR Log Monitor"
+LABEL version="0.3"
+LABEL description="ChannelWatch - Channels DVR Monitoring Tool"
 
 # Set working directory
 WORKDIR /app
@@ -15,7 +15,7 @@ COPY requirements.txt .
 # Install required Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application code (changed line)
+# Copy the application code
 COPY . /app/channelwatch
 
 # Create configuration directory

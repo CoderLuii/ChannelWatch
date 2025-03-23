@@ -6,8 +6,9 @@ ChannelWatch is currently maintained with security updates for the following ver
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.0   | :white_check_mark: |
-| 0.1.0   | :x:                |
+| 0.3  | :white_check_mark: |
+| 0.2   | :white_check_mark: |
+| 0.1   | :x:                |
 
 ## Reporting a Vulnerability
 

@@ -28,9 +28,9 @@
 
 ## 📊 Version History
 
-- v0.3.0 - Major rewrite with improved architecture, real-time event monitoring, multi-provider notifications, session tracking, and enhanced stability
-- v0.2.0 - Security updates, addressing vulnerabilities in base dependencies
-- v0.1.0 - Initial release
+- v0.3 - Major rewrite with improved architecture, real-time event monitoring, multi-provider notifications, session tracking, and enhanced stability
+- v0.2 - Security updates, addressing vulnerabilities in base dependencies
+- v0.1 - Initial release
 
 ## 🌟 Overview
 

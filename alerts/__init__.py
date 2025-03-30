@@ -4,10 +4,14 @@ Alert system initialization.
 from typing import Dict, Any, Optional, Type
 from ..helpers.logging import log
 from .channel_watching import ChannelWatchingAlert
+from .disk_space import DiskSpaceAlert
+from .vod_watching import VODWatchingAlert
 
 # Alert class registry
-ALERT_CLASSES = {
+ALERT_TYPES = {
     "Channel-Watching": ChannelWatchingAlert,
+    "Disk-Space": DiskSpaceAlert,
+    "VOD-Watching": VODWatchingAlert,
     # Add new alert types here
 }
 
@@ -20,7 +24,7 @@ def get_alert_class(alert_type: str) -> Optional[Type]:
     Returns:
         class: The alert class, or None if not found
     """
-    return ALERT_CLASSES.get(alert_type)
+    return ALERT_TYPES.get(alert_type)
 
 def register_alert_class(alert_type: str, alert_class: Type) -> bool:
     """Register a new alert class.
@@ -32,11 +36,11 @@ def register_alert_class(alert_type: str, alert_class: Type) -> bool:
     Returns:
         bool: True if the alert class was registered, False otherwise
     """
-    if alert_type in ALERT_CLASSES:
+    if alert_type in ALERT_TYPES:
         log(f"Alert type {alert_type} already registered")
         return False
     
-    ALERT_CLASSES[alert_type] = alert_class
+    ALERT_TYPES[alert_type] = alert_class
     log(f"Registered alert type: {alert_type}")
     return True
 
@@ -47,8 +51,19 @@ def get_available_alert_types() -> Dict[str, str]:
         dict: Dictionary mapping alert types to descriptions
     """
     result = {}
-    for alert_type, alert_class in ALERT_CLASSES.items():
+    for alert_type, alert_class in ALERT_TYPES.items():
         if alert_class:
             result[alert_type] = getattr(alert_class, "DESCRIPTION", "No description")
     
     return result
+
+__all__ = [
+    'BaseAlert',
+    'ChannelWatchingAlert',
+    'DiskSpaceAlert',
+    'VODWatchingAlert',
+    'ALERT_TYPES',
+    'get_alert_class',
+    'register_alert_class',
+    'get_available_alert_types'
+]

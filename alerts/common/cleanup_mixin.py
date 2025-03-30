@@ -6,12 +6,9 @@ consistent cleanup operations for time-based data across different components.
 """
 import time
 import threading
-from typing import Dict, Any, List, Callable, Optional, TypeVar, Generic
+from typing import Dict, Any, List
 
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
-
-# Generic type for data structures
-T = TypeVar('T')
 
 class CleanupMixin:
     """
@@ -34,6 +31,12 @@ class CleanupMixin:
         # Auto-cleanup thread
         self.cleanup_thread = None
         self.cleanup_running = False
+        
+        # Logging control
+        self.initial_cleanup_done = False  # Track if first cleanup has happened
+        self.last_logged_cleanup = 0       # When we last logged a cleanup
+        self.log_cleanup_interval = 86400  # Only log cleanups once per day by default
+        self.removal_threshold = 5         # Only log if more than this many items were removed
         
     def configure_cleanup(self, 
                          enabled: bool = True, 
@@ -79,147 +82,117 @@ class CleanupMixin:
                 current_time = time.time()
                 if (current_time - self.cleanup_config['last_cleanup'] >= 
                     self.cleanup_config['interval']):
-                    log("Running automatic cleanup...", LOG_VERBOSE)
+                    
+                    # Run the cleanup - logging handled in run_cleanup and log_cleanup_results
                     self.run_cleanup()
                     self.cleanup_config['last_cleanup'] = current_time
             except Exception as e:
                 log(f"Error in auto-cleanup thread: {e}", LOG_STANDARD)
     
-    def run_cleanup(self) -> None:
+    def run_cleanup(self) -> Dict[str, Any]:
         """
         Run all cleanup operations.
         
         This method should be overridden by subclasses to call specific
         cleanup methods based on their needs.
+        
+        Returns:
+            Dict with statistics about the cleanup operation
         """
-        # Base implementation does nothing
-        pass
+        # Base implementation that returns basic stats
+        return {
+            "start_time": time.time(),
+            "component": self.__class__.__name__
+        }
     
     def cleanup_dict_by_time(self, 
                            data: Dict[Any, Dict[str, Any]], 
                            ttl: int,
                            timestamp_key: str = 'timestamp') -> List[Any]:
         """
-        Clean up dictionary items based on timestamp.
+        Clean up dictionary entries based on timestamp in nested dictionary.
         
         Args:
-            data: Dictionary with items to clean up
+            data: Dictionary of dictionaries, where each value contains a timestamp
             ttl: Time-to-live in seconds
-            timestamp_key: Key in the nested dictionary containing the timestamp
+            timestamp_key: Key for the timestamp in the nested dictionary
             
         Returns:
             List of keys that were removed
         """
-        if not self.cleanup_config['enabled']:
-            return []
-            
-        current_time = time.time()
         removed_keys = []
+        current_time = time.time()
         
-        for key, item_data in list(data.items()):
-            # Skip items with no timestamp
-            if timestamp_key not in item_data:
-                continue
-                
-            timestamp = item_data[timestamp_key]
-            if current_time - timestamp > ttl:
-                removed_keys.append(key)
-                data.pop(key, None)
-                
+        # Find keys to remove
+        for key, value in list(data.items()):
+            if timestamp_key in value:
+                timestamp = value[timestamp_key]
+                if current_time - timestamp > ttl:
+                    del data[key]
+                    removed_keys.append(key)
+        
         return removed_keys
     
     def cleanup_dict_by_timestamp(self,
                                 data: Dict[Any, float],
                                 ttl: int) -> List[Any]:
         """
-        Clean up dictionary with direct timestamp values.
+        Clean up dictionary entries based on timestamp values.
         
         Args:
-            data: Dictionary with keys and timestamp values
+            data: Dictionary where values are timestamp floats
             ttl: Time-to-live in seconds
             
         Returns:
             List of keys that were removed
         """
-        if not self.cleanup_config['enabled']:
-            return []
-            
-        current_time = time.time()
         removed_keys = []
+        current_time = time.time()
         
+        # Find keys to remove
         for key, timestamp in list(data.items()):
             if current_time - timestamp > ttl:
+                del data[key]
                 removed_keys.append(key)
-                data.pop(key, None)
-                
+        
         return removed_keys
-    
-    def cleanup_list_by_time(self,
-                          data: List[Dict[str, Any]],
-                          ttl: int,
-                          timestamp_key: str = 'timestamp') -> int:
+        
+    def log_cleanup_results(self, component: str, removed: Dict[str, int]) -> None:
         """
-        Clean up list items based on timestamp.
-        
-        Args:
-            data: List of dictionaries to clean up
-            ttl: Time-to-live in seconds
-            timestamp_key: Key in the dictionary containing the timestamp
-            
-        Returns:
-            Number of items removed
-        """
-        if not self.cleanup_config['enabled']:
-            return 0
-            
-        current_time = time.time()
-        original_length = len(data)
-        
-        # Remove items with expired timestamps
-        data[:] = [item for item in data 
-                  if timestamp_key in item and 
-                  current_time - item[timestamp_key] <= ttl]
-        
-        return original_length - len(data)
-    
-    def cleanup_with_callback(self,
-                           data: List[T],
-                           is_expired: Callable[[T, float], bool]) -> int:
-        """
-        Clean up items using a custom expiration check.
-        
-        Args:
-            data: List of items to clean up
-            is_expired: Function that takes (item, current_time) and returns True if expired
-            
-        Returns:
-            Number of items removed
-        """
-        if not self.cleanup_config['enabled']:
-            return 0
-            
-        current_time = time.time()
-        original_length = len(data)
-        
-        # Remove items that are expired according to the callback
-        data[:] = [item for item in data if not is_expired(item, current_time)]
-        
-        return original_length - len(data)
-    
-    def log_cleanup_results(self, 
-                          component: str, 
-                          removed: Dict[str, int]) -> None:
-        """
-        Log cleanup results in a standardized format.
+        Log the results of a cleanup operation.
         
         Args:
             component: Name of the component being cleaned up
-            removed: Dictionary with cleanup counts by category
+            removed: Dictionary with counts of different types of removed items
         """
-        if not removed:
-            log(f"Cleanup completed for {component}: nothing to remove", LOG_VERBOSE)
-            return
+        # Check if anything was actually removed
+        total_removed = sum(removed.values())
+        current_time = time.time()
+        
+        # Determine if we should log this cleanup
+        should_log = (
+            # Log first successful cleanup
+            not self.initial_cleanup_done or
+            # Log if significant cleanup happened
+            total_removed >= self.removal_threshold or
+            # Log periodically even if nothing was removed, but not too frequently
+            (total_removed > 0 and 
+             current_time - self.last_logged_cleanup >= self.log_cleanup_interval)
+        )
+        
+        # Update initial cleanup flag
+        if not self.initial_cleanup_done:
+            self.initial_cleanup_done = True
             
-        items = [f"{count} {category}" for category, count in removed.items() if count > 0]
-        if items:
-            log(f"Cleanup completed for {component}: removed {', '.join(items)}", LOG_STANDARD)
+        # Only log if criteria are met
+        if should_log:
+            if total_removed > 0:
+                # Prepare a compact single-line summary
+                items_list = ", ".join(f"{count} {item}" for item, count in removed.items() if count > 0)
+                log(f"Cleanup: {component} - Removed {items_list}", LOG_VERBOSE)
+            elif not self.initial_cleanup_done:
+                # Only for the very first run, note that cleanup is working but nothing needed
+                log(f"Cleanup: {component} initialized - nothing to clean up", LOG_VERBOSE)
+                
+            # Update last logged time
+            self.last_logged_cleanup = current_time

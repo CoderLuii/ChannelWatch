@@ -3,7 +3,7 @@ FROM python:alpine
 
 # Labels for metadata
 LABEL maintainer="CoderLuii"
-LABEL version="0.3"
+LABEL version="0.4"
 LABEL description="ChannelWatch - Channels DVR Monitoring Tool"
 
 # Set working directory
@@ -25,4 +25,4 @@ RUN mkdir -p /config
 RUN chmod +x /app/channelwatch/main.py
 
 # Default command
-CMD ["python", "-m", "channelwatch.main"]
+CMD ["python", "-m", "channelwatch.main", "--stay-alive"]

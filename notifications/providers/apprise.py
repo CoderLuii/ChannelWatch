@@ -298,40 +298,49 @@ class AppriseProvider(NotificationProvider):
                                 success = False
                                 log("Failed to send to Slack", LOG_VERBOSE)
                             else:
-                                log("Slack notification sent", LOG_VERBOSE)
+                                log("Slack notification sent with image", LOG_VERBOSE)
                 except Exception as e:
                     log(f"Error sending Slack notification: {e}", LOG_VERBOSE)
                     success = False
             
-            # 5. HANDLE ALL OTHER SERVICES
+            # 5. SEND TO OTHER SERVICES VIA APPRISE CORE
             if other_urls:
                 try:
+                    # Initialize a separate Apprise instance for other services
                     other_apprise = apprise_module.Apprise()
-                    
-                    # Add all other URLs
                     for url in other_urls:
                         other_apprise.add(url)
                     
-                    # Send to other services
+                    # Determine body format based on services
+                    body_format = apprise_module.NotifyFormat.TEXT
+                    # Check if services support HTML formatting
+                    # This is a simplified check; Apprise handles complex formats
+                    if any(url.startswith('mailto://') for url in other_urls):
+                        body_format = apprise_module.NotifyFormat.HTML
+                        
+                    # Use the dedicated 'other_apprise' instance for these
                     other_result = other_apprise.notify(
                         title=title,
                         body=message,
-                        attach=image_url
+                        attach=image_url if image_url else None,
+                        body_format=body_format
                     )
                     
                     if not other_result:
                         success = False
-                        log("Failed to send to other services", LOG_VERBOSE)
+                        log("Failed to send to other services via Apprise core", LOG_VERBOSE)
                     else:
-                        service_types = set([url.split('://')[0] for url in other_urls if '://' in url])
-                        log(f"Notification sent to other services: {', '.join(service_types)}", LOG_VERBOSE)
+                        # Get the list of service types it was sent to
+                        sent_to_services = [url.split('://')[0] for url in other_urls if '://' in url]
+                        service_types = list(set(sent_to_services)) # Unique service types
+                        log(f"Notification sent via Apprise: {title}", LOG_VERBOSE)
                         
                 except Exception as e:
-                    log(f"Error sending to other services: {e}", LOG_VERBOSE)
+                    log(f"Error sending to other services via Apprise core: {e}", LOG_VERBOSE)
                     success = False
                 
             return success
                 
         except Exception as e:
-            log(f"Error sending Apprise notification: {e}")
+            log(f"Error sending notification via Apprise: {e}")
             return False

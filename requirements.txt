@@ -3,3 +3,4 @@ pip>=23.3
 requests>=2.31.0
 sseclient-py>=1.7.2
 apprise>=1.4.0
+pytz>=2023.3

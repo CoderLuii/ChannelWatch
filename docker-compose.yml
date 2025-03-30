@@ -31,11 +31,46 @@ services:
       # ========== ALERT CONFIGURATION ==========
       # Enable/disable specific alert types
       # Set to TRUE to enable, FALSE to disable (or remove the line)
-      Alerts_Channel-Watching: TRUE
+      Channel-Watching: TRUE   # Live TV watching alerts
+      VOD-Watching: TRUE       # DVR/recorded content alerts
+      Disk-Space: TRUE         # Monitor and alert on low disk space
       
-      # ========== NOTIFICATION SETTINGS ==========
-      # Optional: Enable/disable channel logos in notifications
-      CHANNEL_IMAGES: TRUE
+      # ========== CHANNEL-WATCHING ALERT SETTINGS ==========
+      # Control what appears in channel watching notifications
+      # Set to TRUE to show, FALSE to hide
+      CHANNEL_NAME: TRUE       # Show channel name in notifications
+      CHANNEL_NUMBER: TRUE     # Show channel number in notifications
+      PROGRAM_NAME: TRUE       # Show program name in notifications
+      DEVICE_NAME: TRUE        # Show device name in notifications
+      DEVICE_IP_ADDRESS: TRUE  # Show device IP address in notifications
+      STREAM_SOURCE: TRUE      # Show stream source in notifications
+      STREAM_COUNT: TRUE       # Show total stream count in notifications
+      IMAGE_SOURCE: PROGRAM    # Which image to use (CHANNEL or PROGRAM)
+      
+      # ========== VOD-WATCHING ALERT SETTINGS ==========
+      # Control what appears in VOD/DVR content notifications
+      VOD_TITLE: TRUE          # Show content title
+      VOD_EPISODE_TITLE: TRUE  # Show episode title (for TV shows)
+      VOD_SUMMARY: TRUE        # Show content summary
+      VOD_DURATION: TRUE       # Show content duration
+      VOD_PROGRESS: TRUE       # Show current playback progress
+      VOD_IMAGE: TRUE          # Show content image
+      VOD_RATING: TRUE         # Show content rating
+      VOD_GENRES: TRUE         # Show content genres
+      VOD_CAST: TRUE           # Show cast members
+      VOD_DEVICE_NAME: TRUE    # Show device name
+      VOD_DEVICE_IP: TRUE      # Show device IP
+      
+      # ========== DISK SPACE SETTINGS ==========
+      # Configure disk space monitoring thresholds
+      DISK_SPACE_THRESHOLD_PERCENT: 10   # Alert when free space falls below 10%
+      DISK_SPACE_THRESHOLD_GB: 50        # Alert when free space falls below 50GB
+      
+      # ========== CACHE SETTINGS ==========
+      # How long to cache data (in seconds)
+      CHANNEL_CACHE_TTL: 86400     # Refresh channel data every 24 hours
+      PROGRAM_CACHE_TTL: 86400     # Refresh program data every 24 hours
+      VOD_CACHE_TTL: 86400         # Refresh VOD metadata every 24 hours
       
       # ========== NOTIFICATION PROVIDERS ==========
       # Configure at least one provider below to receive alerts

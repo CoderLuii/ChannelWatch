@@ -21,22 +21,6 @@ def parse_event_data(data: str) -> Optional[Dict[str, Any]]:
     except (json.JSONDecodeError, TypeError):
         return None
 
-def parse_sse_line(line: str) -> Optional[Dict[str, Any]]:
-    """Parse a Server-Sent Events line.
-    
-    Args:
-        line: The SSE line to parse
-        
-    Returns:
-        dict: Parsed event data, or None if parsing failed
-    """
-    try:
-        if line.startswith('data:'):
-            data = line[5:].strip()
-            return json.loads(data)
-        return None
-    except Exception:
-        return None
 
 def extract_session_info(value: str) -> Tuple[Optional[str], Optional[str]]:
     """Extract session information from an activity value.
@@ -59,18 +43,18 @@ def extract_channel_number(value: str) -> Optional[str]:
         value: The activity value string
         
     Returns:
-        str: Channel number, or None if not found
+        str: Channel number (can include decimals for virtual channels), or None if not found
     """
     try:
-        # First look for the standard format
-        match = re.search(r'Watching ch(\d+)', value)
-        if match:
-            return match.group(1)
+        # Debug log the value we're trying to parse
+        log(f"Parsing channel number from: {value}", level=LOG_VERBOSE)
         
-        # Alternative pattern in case channel info is formatted differently
-        alt_match = re.search(r'ch(?:annel)?\s*(\d+)', value, re.IGNORECASE)
-        if alt_match:
-            return alt_match.group(1)
+        # First look for the standard format with possible decimal point
+        match = re.search(r'ch(?:annel)?\s*(\d+\.\d+|\d+)', value, re.IGNORECASE)
+        if match:
+            channel = match.group(1)
+            log(f"Extracted channel number: {channel}", level=LOG_VERBOSE)
+            return channel
             
         return None
     except Exception as e:
@@ -87,12 +71,19 @@ def extract_channel_name(value: str) -> Optional[str]:
         str: Channel name, or None if not found
     """
     try:
+        # Debug log the value we're trying to parse
+        log(f"Parsing channel name from: {value}", level=LOG_VERBOSE)
+        
         # Look for name between channel number and 'from'
-        match = re.search(r'Watching ch\d+\s+([^()]+?)(?:\s+from)', value)
+        # Updated pattern to handle decimal channel numbers
+        match = re.search(r'ch(?:annel)?\s*(?:\d+\.\d+|\d+)\s+([^()]+?)(?:\s+from)', value, re.IGNORECASE)
         if match and match.group(1).strip():
-            return match.group(1).strip()
+            name = match.group(1).strip()
+            log(f"Extracted channel name: {name}", level=LOG_VERBOSE)
+            return name
         return None
-    except Exception:
+    except Exception as e:
+        log(f"Error extracting channel name: {e}", level=LOG_VERBOSE)
         return None
 
 def extract_device_name(value: str) -> Optional[str]:
@@ -172,7 +163,46 @@ def extract_source_from_session_id(session_id: str) -> Optional[str]:
         str: Source information, or None if not found
     """
     try:
-        match = re.search(r'M3U-(\w+)', session_id)
-        return match.group(1) if match else None
-    except Exception:
+        # Debug log the session ID we're parsing
+        log(f"Extracting source from session ID: {session_id}", level=LOG_VERBOSE)
+        
+        # Check for standard format: 6-stream-<SOURCE_TYPE>-...
+        parts = session_id.split('-')
+        
+        # Ensure we have enough parts and it starts with "stream"
+        if len(parts) >= 3 and "stream" in parts[1]:
+            source_type = parts[2]
+            
+            # Case 1: M3U sources (e.g., M3U-PrimaryKEMO)
+            if source_type.startswith("M3U"):
+                if len(parts) > 3:
+                    source_name = parts[3]
+                    log(f"Extracted M3U source: {source_name}", level=LOG_VERBOSE)
+                    return source_name
+                return "M3U"
+            
+            # Case 2: TVE sources (TV Everywhere, e.g., TVE-frontier)
+            elif source_type.startswith("TVE"):
+                if len(parts) > 3:
+                    # Extract just the provider name
+                    provider = parts[3].split('_')[0].capitalize()
+                    log(f"Extracted TVE source: {provider}", level=LOG_VERBOSE)
+                    return f"TVE ({provider})"
+                return "TVE"
+            
+            # Case 3: Tuner ID (e.g., 10B196A5)
+            elif re.match(r'^[0-9A-F]+$', source_type, re.IGNORECASE):
+                log(f"Extracted tuner source: {source_type}", level=LOG_VERBOSE)
+                return f"Tuner ({source_type})"
+            
+            # Case 4: Any other source type
+            else:
+                log(f"Extracted other source: {source_type}", level=LOG_VERBOSE)
+                return source_type
+        
+        # For any unrecognized format
+        log(f"Unknown session ID format: {session_id}", level=LOG_VERBOSE)
+        return "Unknown source"
+    except Exception as e:
+        log(f"Error extracting source from session ID: {e}", level=LOG_VERBOSE)
         return None

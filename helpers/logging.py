@@ -10,8 +10,8 @@ from logging.handlers import TimedRotatingFileHandler
 from typing import Optional
 
 # Log levels
-LOG_STANDARD = 1  # Basic operational information
-LOG_VERBOSE = 2   # Detailed troubleshooting information
+LOG_STANDARD = 1  # Essential operational information (user-facing, meaningful state changes)
+LOG_VERBOSE = 2   # Detailed debugging information (developer-focused, implementation details)
 
 # Global log level
 log_level = LOG_STANDARD
@@ -20,12 +20,13 @@ log_level = LOG_STANDARD
 log_file = None
 log_handler = None
 
-def setup_logging(config_path: str, retention_days: int = 7):
+def setup_logging(config_path: str, retention_days: int = 7, test_mode: bool = False):
     """Set up file logging with rotation.
     
     Args:
         config_path: The path to the config directory
         retention_days: The number of days to keep log files (default: 7)
+        test_mode: Whether we're running in test mode (suppresses setup messages)
     """
     global log_file, log_handler
     
@@ -57,20 +58,37 @@ def setup_logging(config_path: str, retention_days: int = 7):
     log_handler.setFormatter(formatter)
     root_logger.addHandler(log_handler)
     
-    log(f"Log file: {log_file} (keeping {retention_days} days)")
+    if not test_mode:
+        log(f"Log file: {log_file} (keeping {retention_days} days)")
 
-def set_log_level(level: int):
+def set_log_level(level: int, test_mode: bool = False):
     """Set the global log level.
     
     Args:
         level: The log level (1=standard, 2=verbose)
+        test_mode: Whether we're running in test mode (suppresses setup messages)
     """
     global log_level
     log_level = level
-    log(f"Log level: {level} ({'Standard' if level == 1 else 'Verbose'})")
+    if not test_mode:
+        log(f"Log level: {level} ({'Standard' if level == 1 else 'Verbose'})")
 
 def log(message: str, level: int = LOG_STANDARD):
     """Log a message to stdout and to file if configured.
+    
+    Use LOG_STANDARD (1) for:
+    - Application startup and shutdown
+    - Connection status changes
+    - Important operations (caching completed, features enabled)
+    - User-visible events (channels being watched, alerts)
+    - Errors that affect functionality
+    
+    Use LOG_VERBOSE (2) for:
+    - Data processing details (parsing, conversions)
+    - API request/response details
+    - Internal state changes
+    - Function entry/exit for key operations
+    - Detailed explanations of decisions made by the code
     
     Args:
         message: The message to log

@@ -1,9 +1,9 @@
-# Use alpine base image
+﻿# Use alpine base image
 FROM python:alpine
 
 # Labels for metadata
 LABEL maintainer="CoderLuii"
-LABEL version="0.4"
+LABEL version="0.5"
 LABEL description="ChannelWatch - Channels DVR Monitoring Tool"
 
 # Set working directory

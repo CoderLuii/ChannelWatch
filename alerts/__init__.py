@@ -6,12 +6,14 @@ from ..helpers.logging import log
 from .channel_watching import ChannelWatchingAlert
 from .disk_space import DiskSpaceAlert
 from .vod_watching import VODWatchingAlert
+from .recording_events import RecordingEventsAlert
 
 # Alert class registry
 ALERT_TYPES = {
     "Channel-Watching": ChannelWatchingAlert,
     "Disk-Space": DiskSpaceAlert,
     "VOD-Watching": VODWatchingAlert,
+    "Recording-Events": RecordingEventsAlert,
     # Add new alert types here
 }
 
@@ -62,6 +64,7 @@ __all__ = [
     'ChannelWatchingAlert',
     'DiskSpaceAlert',
     'VODWatchingAlert',
+    'RecordingEventsAlert',
     'ALERT_TYPES',
     'get_alert_class',
     'register_alert_class',

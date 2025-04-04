@@ -81,19 +81,36 @@ def initialize_alerts(notification_manager, test_mode=False):
     # Register enabled alerts
     enabled_alerts = []
     
-    # Look for alerts with new format (without Alerts_ prefix)
-    for alert_type in ["Channel-Watching", "Disk-Space", "VOD-Watching"]:  # List of supported alert types
-        value = os.environ.get(alert_type)
+    # First check for new ALERT_ prefix format
+    alert_types = {
+        "ALERT_CHANNEL_WATCHING": "Channel-Watching",
+        "ALERT_DISK_SPACE": "Disk-Space",
+        "ALERT_VOD_WATCHING": "VOD-Watching",
+        "ALERT_RECORDING_EVENTS": "Recording-Events"
+    }
+    
+    # Check for new ALERT_ prefix format first
+    for env_var, alert_type in alert_types.items():
+        value = os.environ.get(env_var)
         if value and value.lower() in ("true", "1", "yes", "y"):
             if alert_manager.register_alert(alert_type):
                 enabled_alerts.append(alert_type)
+    
+    # Then check for old format without prefix for backward compatibility
+    for alert_type in ["Channel-Watching", "Disk-Space", "VOD-Watching", "Recording-Events"]:
+        # Only register if not already registered via new format
+        if alert_type not in enabled_alerts:
+            value = os.environ.get(alert_type)
+            if value and value.lower() in ("true", "1", "yes", "y"):
+                if alert_manager.register_alert(alert_type):
+                    enabled_alerts.append(alert_type)
     
     # For backwards compatibility, also check for alerts with Alerts_ prefix
     for env_var, value in os.environ.items():
         if env_var.startswith("Alerts_"):
             alert_type = env_var[len("Alerts_"):]
             if value.lower() in ("true", "1", "yes", "y"):
-                # Only register if not already registered via new format
+                # Only register if not already registered via new formats
                 if alert_type not in enabled_alerts and alert_manager.register_alert(alert_type):
                     enabled_alerts.append(alert_type)
     

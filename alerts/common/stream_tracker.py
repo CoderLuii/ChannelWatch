@@ -8,6 +8,10 @@ import requests
 
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 
+# Singleton instance
+_INSTANCE = None
+_INSTANCE_LOCK = threading.Lock()
+
 class StreamTracker:
     """
     Tracks active streaming sessions and provides accurate count information.
@@ -15,6 +19,9 @@ class StreamTracker:
     The StreamTracker maintains a list of active streams across devices, handling
     new sessions, session switches, and session termination. It distinguishes between
     different devices to prevent over-counting when users switch channels.
+    
+    This class uses a singleton pattern to ensure all alert modules share the same
+    stream tracking state.
     
     Attributes:
         host: The Channels DVR host address
@@ -24,6 +31,24 @@ class StreamTracker:
         last_count: The last known stream count for change detection
     """
     
+    def __new__(cls, host: str, port: int):
+        """
+        Create or return the singleton instance.
+        
+        Args:
+            host: The Channels DVR host
+            port: The Channels DVR port
+            
+        Returns:
+            The singleton StreamTracker instance
+        """
+        global _INSTANCE
+        with _INSTANCE_LOCK:
+            if _INSTANCE is None:
+                _INSTANCE = super(StreamTracker, cls).__new__(cls)
+                _INSTANCE._initialized = False
+            return _INSTANCE
+    
     def __init__(self, host: str, port: int):
         """
         Initialize the stream tracker.
@@ -32,6 +57,10 @@ class StreamTracker:
             host: The Channels DVR host
             port: The Channels DVR port
         """
+        # Only initialize once
+        if getattr(self, '_initialized', False):
+            return
+            
         self.host = host
         self.port = port
         self.base_url = f"http://{host}:{port}"
@@ -44,6 +73,11 @@ class StreamTracker:
         
         # Last known total count
         self.last_count = 0
+        
+        # Flag to prevent multiple initializations
+        self._initialized = True
+        
+        log(f"StreamTracker singleton initialized for {host}:{port}", level=LOG_VERBOSE)
         
     def update_from_status(self) -> Optional[Dict[str, Any]]:
         """
@@ -124,14 +158,16 @@ class StreamTracker:
             
             # Convert to string for easier processing
             activity_str = str(activity_data).lower()
-            is_watching = "watching" in activity_str and "ch" in activity_str
+            
+            # Check for both watching and recording activities with channel info
+            is_watching = ("watching" in activity_str or "recording" in activity_str) and "ch" in activity_str
             
             # Try to extract device name
             device_name = self.extract_device_name(activity_data)
             
             # Debug log
             if is_watching:
-                log(f"StreamTracker: Processing watching activity for session {session_id[:10]}... device: {device_name}", LOG_VERBOSE)
+                log(f"StreamTracker: Processing stream activity for session {session_id[:10]}... device: {device_name}", LOG_VERBOSE)
             
             if is_watching and device_name:
                 # If this device already has a different session, remove the old one
@@ -167,7 +203,6 @@ class StreamTracker:
             
             # Log the details of current streams in verbose mode
             if old_count != new_count:
-                log(f"StreamTracker: Count changed from {old_count} to {new_count}", LOG_VERBOSE)
                 if len(self.device_sessions) > 0:
                     devices = ", ".join(self.device_sessions.keys())
                     log(f"StreamTracker: Active devices: {devices}", LOG_VERBOSE)

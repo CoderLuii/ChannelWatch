@@ -161,7 +161,7 @@ class AlertFormatter:
                     if stream_count is not None:
                         lines.append(f"Total Streams: {stream_count}")
                 elif component == 'ip' and self.config['show_ip']:
-                    lines.append(f"IP: {value}")
+                    lines.append(f"Device IP: {value}")
                 elif component == 'status':
                     lines.append(f"Status: {value}")
                 elif component == 'time':

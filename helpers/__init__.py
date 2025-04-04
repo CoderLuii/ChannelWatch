@@ -4,6 +4,8 @@ Helper modules for ChannelWatch.
 from .channel_info import ChannelInfoProvider
 from .program_info import ProgramInfoProvider
 from .vod_info import VODInfoProvider
+from .recording_info import RecordingInfoProvider
+from .job_info import JobInfoProvider
 from .initialize import (
     check_server_connectivity,
     initialize_notifications,
@@ -25,6 +27,8 @@ __all__ = [
     'ChannelInfoProvider',
     'ProgramInfoProvider',
     'VODInfoProvider',
+    'RecordingInfoProvider',
+    'JobInfoProvider',
     'check_server_connectivity',
     'initialize_notifications',
     'initialize_alerts',

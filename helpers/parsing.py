@@ -3,9 +3,21 @@ Event and data parsing helper functions.
 """
 import re
 import json
+import ipaddress
 from typing import Dict, Any, Optional, List, Tuple
 
 from .logging import log, LOG_VERBOSE
+
+def is_valid_ip_address(text: str) -> bool:
+    """Check if a string matches the IPv4 or IPv6 address format using ipaddress module."""
+    if not text:
+        return False
+    try:
+        ipaddress.ip_address(text) # Try to parse as an IP address
+        return True
+    except ValueError:
+        # Not a valid IP address (covers IPv4 and IPv6)
+        return False
 
 def parse_event_data(data: str) -> Optional[Dict[str, Any]]:
     """Parse event data from string to dictionary.
@@ -87,7 +99,7 @@ def extract_channel_name(value: str) -> Optional[str]:
         return None
 
 def extract_device_name(value: str) -> Optional[str]:
-    """Extract just the device name without IP address.
+    """Extract just the device name, ensuring it's not an IP address.
     
     Args:
         value: The activity value string
@@ -96,25 +108,40 @@ def extract_device_name(value: str) -> Optional[str]:
         str: Device name, or None if not found
     """
     try:
+        # Regex looks for text after 'from ' that doesn't contain ':' or '('
+        # It might capture an IP address if no parentheses are present.
         match = re.search(r'from\s+([^:()]+)', value)
         if match:
-            return match.group(1).strip()
+            potential_name = match.group(1).strip()
+            # Check if the extracted part is actually an IP address
+            if not is_valid_ip_address(potential_name):
+                return potential_name # It's not an IP, so return it as the name
+            else:
+                return None # It is an IP, return None
         return None
     except Exception:
         return None
 
 def extract_ip_address(value: str) -> Optional[str]:
-    """Extract IP address from event value.
-    
-    Args:
-        value: The activity value string
-        
-    Returns:
-        str: IP address, or None if not found
-    """
+    """Extract IP address from event value, checking parentheses first, then directly after 'from '."""
     try:
-        match = re.search(r'\(([\d\.]+)\)', value)
-        return match.group(1) if match else None
+        # Priority 1: Check for IP inside parentheses: DeviceName (IP.Address)
+        match_paren = re.search(r'\(([\d\.]+)\)', value)
+        if match_paren:
+             potential_ip_paren = match_paren.group(1).strip()
+             if is_valid_ip_address(potential_ip_paren):
+                  return potential_ip_paren
+             
+        # Priority 2: Check for IP directly after 'from ': ... from IP.Address
+        # Extract the same part that extract_device_name looks at
+        match_direct = re.search(r'from\s+([^:()]+)', value)
+        if match_direct:
+            potential_ip_direct = match_direct.group(1).strip()
+            if is_valid_ip_address(potential_ip_direct):
+                return potential_ip_direct # Found valid IP directly after 'from'
+                
+        # No valid IP found in either pattern
+        return None
     except Exception:
         return None
 

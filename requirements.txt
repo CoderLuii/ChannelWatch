@@ -1,6 +1,18 @@
+# Core
 setuptools>=65.5.1
 pip>=23.3
 requests>=2.31.0
-sseclient-py>=1.7.2
-apprise>=1.4.0
 pytz>=2023.3
+
+# Events
+sseclient-py>=1.7.2
+
+# Notifications
+apprise>=1.4.0
+
+# Web
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+
+# Management
+supervisor>=4.2.0

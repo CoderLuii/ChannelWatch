@@ -1,4 +1,4 @@
-# <a name="top"></a>ChannelWatch 📺🔔
+# <img src="https://github.com/CoderLuii/ChannelWatch/blob/main/ui/public/favicon.png?raw=true" alt="ChannelWatch" width="39" valign="bottom"> <a name="top"></a>ChannelWatch
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker Pulls](https://badgen.net/docker/pulls/coderluii/channelwatch?icon=docker)](https://hub.docker.com/r/coderluii/channelwatch)
@@ -10,7 +10,7 @@
 ## 📑 Table of Contents
 - 📈 [Version History](#-version-history)
 - 🌟 [Overview](#-overview)
-- 🏛 [Architecture](#-architecture)
+- 🏛  [ Architecture](#-architecture)
 - 📋 [Key Features](#-key-features)
 - ⚡ [Performance](#-performance)
 - 💡 [Support This Project](#-support-this-project)
@@ -28,6 +28,32 @@
 - 💬 [Get Help](#-get-help)
 
 ## 📈 Version History
+
+- **v0.6 (April 26, 2024)** - Project Restructuring, Web UI & Configuration Improvements
+  - **Complete Project Restructuring**:
+    - Organized codebase with clearer separation of concerns
+    - Improved maintainability with consistent file structure
+    - Better component organization and reusability
+  - **Modern Web UI**:
+    - Responsive design with full mobile compatibility
+    - Dashboard with real-time system status monitoring
+    - Comprehensive settings management interface
+  - **Configuration Improvements**:
+    - Eliminated environment variables for simpler setup
+    - Web-based configuration for all settings
+    - Persistent configuration through Docker volumes
+  - **Enhanced User Experience**:
+    - Status overview with disk space, active streams, and upcoming recordings
+    - Diagnostic tools accessible directly from the UI
+    - Real-time feedback for system operations
+  - **UI Component Architecture**:
+    - Reusable base component library
+    - Consistent styling and behavior across interfaces
+    - Improved accessibility and responsiveness
+  - **Bug Fixes**:
+    - Improved error handling and recovery
+    - Enhanced notification delivery reliability
+    - Optimized performance for resource-constrained environments
 
 - **v0.5 (April 3, 2024)** - Recording Events, Variable Standardization & Enhanced IP/Device Extraction
   - **New Recording Events Alert**:
@@ -102,21 +128,23 @@
 
 ## 🌟 Overview
 
-ChannelWatch is a lightweight Docker container that monitors Channels DVR events and sends real-time push notifications when TV viewing begins or recorded content is played. Perfect for:
+ChannelWatch is a comprehensive monitoring solution with a modern web interface that tracks Channels DVR activity and sends real-time notifications. The system features:
 
+- 🌐 **Modern Web Dashboard** - Responsive UI with system status monitoring and configuration
 - 📱 **Real-time viewing alerts** - Get instant notifications when channels are being watched
 - 📺 **Content monitoring** - See exactly what's being played on your Channels DVR
 - 🎬 **VOD tracking** - Know when recorded content or DVR libraries are accessed
 - 🔴 **Recording lifecycle alerts** - Track when recordings are scheduled, start, complete, or are cancelled
+- 💾 **System monitoring** - Track disk space usage and receive alerts when space runs low
 - 🔔 **Multi-device awareness** - Track viewing across all your connected devices and clients
 - 🏠 **Home automation integration** - Use alerts as triggers for smart home routines
 
-The notifications provide detailed information with minimal setup and resource usage:
-- Rich media details (channel/program info, VOD metadata)
-- Device identification (name and IP address)
-- Technical details (stream source, quality)
-- Beautiful visuals (channel logos or program images)
-- Customizable notification content
+The system provides comprehensive information with a simple setup process:
+- Web-based configuration with no environment variables needed
+- Rich media notifications with detailed metadata
+- Device identification and stream tracking
+- Technical details with beautiful visuals
+- Fully customizable notification content
 
 <p align="right">
   <a href="#top">↑ back to top</a>
@@ -124,12 +152,13 @@ The notifications provide detailed information with minimal setup and resource u
 
 ## 🏛 Architecture
 
-ChannelWatch follows a modular, service-oriented architecture:
+ChannelWatch follows a modern, component-based architecture:
 
-- **Event System**: Monitors the Channels DVR event stream
+- **Core Backend**: Monitors the Channels DVR event stream and processes alerts
+- **Web UI**: Provides a responsive dashboard for configuration and monitoring
 - **Alert System**: Processes events to determine when to send notifications
 - **Notification System**: Handles sending notifications through various providers
-- **Configuration System**: Centralizes all configuration with environment variables
+- **Configuration System**: Web-based settings management with persistent storage
 - **Extension Framework**: Makes it easy to add new alert types and notification providers
 
 <p align="right">
@@ -138,6 +167,17 @@ ChannelWatch follows a modular, service-oriented architecture:
 
 ## 📋 Key Features
 
+- 🌐 **Modern Web Interface** with:
+  - Responsive dashboard for desktop and mobile
+  - Real-time system status monitoring
+  - Visual disk space and stream tracking
+  - Upcoming recordings display
+  - Quick access diagnostic tools
+- ⚙️ **Web-based Configuration** with:
+  - Intuitive settings management
+  - No environment variables required
+  - Persistent configuration storage
+  - Real-time validation and feedback
 - 🔍 **Real-time monitoring** of Channels DVR event stream
 - 📲 **Multi-provider notifications** via:
   - Pushover for simple push notifications
@@ -165,13 +205,8 @@ ChannelWatch follows a modular, service-oriented architecture:
 - 💾 **System monitoring** with:
   - Disk space alerts when recording space runs low
   - Configurable thresholds (percentage and absolute GB)
-- ⚙️ **Highly configurable** settings to control exactly what appears in your notifications
+  - Visual dashboard representation of system status
 - 🧹 **Automatic session tracking and management**
-- 🚀 **Optimized performance** with:
-  - Low resource usage (<1% CPU on most systems)
-  - Small memory footprint (~30MB RAM)
-  - Intelligent caching with configurable TTLs
-  - Quick startup time
 
 <p align="right">
   <a href="#top">↑ back to top</a>
@@ -179,12 +214,14 @@ ChannelWatch follows a modular, service-oriented architecture:
 
 ## ⚡ Performance
 
-ChannelWatch is designed to be lightweight and efficient:
+ChannelWatch continues to be lightweight and efficient despite the addition of a full web UI:
 
-- Minimal CPU usage (<1% on most systems)
-- Low memory footprint (~30MB RAM)
-- Small Docker image size (~100MB)
+- Minimal CPU usage (<2% on most systems)
+- Modest memory footprint (~50MB RAM)
+- Compact Docker image size (~150MB)
 - Quick startup time (<5 seconds)
+- Responsive web interface even on low-powered devices
+- Efficient background processing with minimal resource contention
 
 <p align="right">
   <a href="#top">↑ back to top</a>
@@ -222,7 +259,6 @@ ChannelWatch is available as a multi-platform Docker image, supporting:
 
 - `linux/amd64`: Standard 64-bit x86 servers and PCs
 - `linux/arm64`: Modern ARM devices (Raspberry Pi 4, Apple M1/M2 Macs)
-- `linux/arm/v7`: Older ARM devices (Raspberry Pi 3 and earlier)
 
 The correct image will be automatically selected for your hardware when using `docker pull coderluii/channelwatch:latest`.
 
@@ -244,139 +280,19 @@ services:
     container_name: channelwatch
     network_mode: host
     volumes:
-      # Path to store configuration and logs
+      # Path to store configuration, logs, and settings
       - /your/local/path:/config
-    environment:
-      # ========== CORE SETTINGS ==========
-      # Required: IP address of your Channels DVR server
-      CHANNELS_DVR_HOST: x.x.x.x
-      
-      # Optional: Port for your Channels DVR server (default: 8089)
-      # Only change if you've modified the default Channels DVR port
-      CHANNELS_DVR_PORT: 8089
-      
-      # Optional: Timezone for logs and timestamps
-      # Find your TZ value at: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-      # Example: America/New_York, Europe/London, Asia/Tokyo
-      TZ: Your/Timezone
-      
-      # ========== LOGGING CONFIGURATION ==========
-      # Optional: Log verbosity level (1=Standard, 2=Verbose)
-      LOG_LEVEL: 1
-      
-      # Optional: Number of days to keep log files
-      LOG_RETENTION_DAYS: 7
-      
-      # ========== ALERT MODULES ==========
-      # Enable/disable specific alert types
-      # Set to TRUE to enable, FALSE to disable
-      ALERT_CHANNEL_WATCHING: TRUE   # Live TV watching alerts
-      ALERT_VOD_WATCHING: TRUE       # DVR/recorded content alerts
-      ALERT_DISK_SPACE: TRUE         # Monitor and alert on low disk space
-      ALERT_RECORDING_EVENTS: TRUE   # Recording events (scheduled, started, cancelled, completed)
-      
-      # ========== STREAM COUNTING ==========
-      # Affects BOTH channel watching AND recording alerts
-      # Set TRUE to count all streams together, FALSE to disable count
-      STREAM_COUNT: TRUE
-      
-      # ========== CHANNEL-WATCHING ALERT SETTINGS ==========
-      # Control what appears in channel watching notifications
-      # Set to TRUE to show, FALSE to hide
-      CW_CHANNEL_NAME: TRUE       # Show channel name in notifications
-      CW_CHANNEL_NUMBER: TRUE     # Show channel number in notifications
-      CW_PROGRAM_NAME: TRUE       # Show program name in notifications
-      CW_DEVICE_NAME: TRUE        # Show device name in notifications
-      CW_DEVICE_IP: TRUE          # Show device IP address in notifications
-      CW_STREAM_SOURCE: TRUE      # Show stream source in notifications
-      CW_IMAGE_SOURCE: PROGRAM    # Set to "CHANNEL" or "PROGRAM" to determine which image to show
-      
-      # ========== RECORDING EVENTS ALERT SETTINGS ==========
-      # Alert types - set to TRUE to enable, FALSE to disable
-      RD_ALERT_SCHEDULED: TRUE    # Show alerts when recordings are scheduled
-      RD_ALERT_STARTED: TRUE      # Show alerts when recordings start
-      RD_ALERT_COMPLETED: TRUE    # Show alerts when recordings complete
-      RD_ALERT_CANCELLED: TRUE    # Show alerts when recordings are cancelled
-      
-      # Content settings - set to TRUE to show, FALSE to hide in recording alerts
-      RD_PROGRAM_NAME: TRUE       # Show program name
-      RD_PROGRAM_DESC: TRUE       # Show program description
-      RD_DURATION: TRUE           # Show duration
-      RD_CHANNEL_NAME: TRUE       # Show channel name
-      RD_CHANNEL_NUMBER: TRUE     # Show channel number
-      RD_TYPE: TRUE               # Show if recording is scheduled or manual
-      
-      # ========== VOD WATCHING ALERT SETTINGS ==========
-      # Control what appears in VOD/DVR content notifications
-      VOD_TITLE: TRUE             # Show content title
-      VOD_EPISODE_TITLE: TRUE     # Show episode title (for TV shows)
-      VOD_SUMMARY: TRUE           # Show content summary
-      VOD_DURATION: TRUE          # Show content duration
-      VOD_PROGRESS: TRUE          # Show current playback progress
-      VOD_IMAGE: TRUE             # Show content image
-      VOD_RATING: TRUE            # Show content rating
-      VOD_GENRES: TRUE            # Show content genres
-      VOD_CAST: TRUE              # Show cast members
-      VOD_DEVICE_NAME: TRUE       # Show device name
-      VOD_DEVICE_IP: TRUE         # Show device IP
-      
-      # ========== CACHE SETTINGS (TTL in seconds) ==========
-      CHANNEL_CACHE_TTL: 86400    # Refresh channel data every 24 hours
-      PROGRAM_CACHE_TTL: 86400    # Refresh program data every 24 hours
-      JOB_CACHE_TTL: 3600         # Refresh job data every hour
-      VOD_CACHE_TTL: 86400        # Refresh VOD data every 24 hours
-      
-      # ========== DISK SPACE MONITORING ==========
-      DS_THRESHOLD_PERCENT: 10  # Alert when free space falls below 10%
-      DS_THRESHOLD_GB: 50       # Alert when free space falls below 50GB
-      
-      # ========== NOTIFICATION PROVIDERS ==========
-      # Configure at least one provider below to receive alerts
-      # Feel free to leave empty or completely remove any services you don't use
-      
-      # ----- Pushover Configuration -----
-      # Get credentials at https://pushover.net
-      PUSHOVER_USER_KEY: ""       # Your Pushover user key
-      PUSHOVER_API_TOKEN: ""      # Your Pushover application token
-      
-      # ----- Apprise Configuration -----
-      # Configure any services you want to use
-      
-      # Discord Webhooks - Format: webhook_id/webhook_token
-      # Create webhook in Discord Server Settings → Integrations
-      APPRISE_DISCORD: ""
-      
-      # Email - Format: user:password@gmail.com
-      # For Gmail, use App Password from Google Account settings
-      APPRISE_EMAIL: ""
-      APPRISE_EMAIL_TO: ""        # Recipient email (optional)
-      
-      # Telegram - Format: bottoken/ChatID
-      # Create bot with @BotFather and get your Chat ID with @userinfobot
-      APPRISE_TELEGRAM: ""
-      
-      # Slack - Format: tokenA/tokenB/tokenC
-      # Create app at https://api.slack.com/apps
-      APPRISE_SLACK: ""
-      
-      # Gotify - Format: gotify.example.com/token
-      # Self-hosted push notification service
-      APPRISE_GOTIFY: ""
-      
-      # Matrix - Format: matrixuser:pass@domain/#room
-      # Open-source chat platform
-      APPRISE_MATRIX: ""
-      
-      # MQTT - Format: mqtt://user:pass@hostname
-      # For smart home integrations
-      APPRISE_MQTT: ""
-      
-      # Custom Apprise URL - For other services
-      # See: https://github.com/caronc/apprise/wiki
-      APPRISE_CUSTOM: ""
-      
     restart: unless-stopped
 ```
+
+> **Note:** 
+> - All configuration is now done through the web UI at `http://your-server-ip:8501`
+> - For bridge networking, replace `network_mode: host` with:
+>   ```yaml
+>   network_mode: bridge
+>   ports:
+>     - "8501:8501"  # Or replace 8501 on the left with your desired port
+>   ```
 
 ### 2. Start the Container
 
@@ -396,109 +312,83 @@ docker logs -f channelwatch
 
 ## 🔨 Configuration Options
 
-### Environment Variables
+Configuration is managed through the web UI at `http://your-server-ip:8501`
 
-#### Core Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CHANNELS_DVR_HOST` | IP address of your Channels DVR server | _Required_ |
-| `CHANNELS_DVR_PORT` | Port number for your Channels DVR server | `8089` |
-| `TZ` | Timezone for logs and timestamps (e.g., America/New_York) | `UTC` |
+### Core Settings
 
-#### Alert Types
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ALERT_CHANNEL_WATCHING` | Enable/disable channel watching alerts (TRUE/FALSE) | `TRUE` |
-| `ALERT_VOD_WATCHING` | Enable/disable VOD/DVR content alerts (TRUE/FALSE) | `FALSE` |
-| `ALERT_DISK_SPACE` | Enable/disable disk space monitoring alerts (TRUE/FALSE) | `FALSE` |
-| `ALERT_RECORDING_EVENTS` | Enable/disable recording events alerts (TRUE/FALSE) | `FALSE` |
+| Setting | Description |
+|---------|-------------|
+| Channels DVR Host | Server IP or hostname |
+| Channels DVR Port | Server port (default: 8089) |
+| Timezone | Local timezone for timestamps |
+| Log Level | Standard or Verbose logging |
+| Log Retention | Auto-cleanup period in days |
 
-#### Logging Options
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LOG_LEVEL` | Log verbosity level (1=Standard, 2=Verbose) | `1` |
-| `LOG_RETENTION_DAYS` | Number of days to keep log files before rotation | `7` |
-| `CONFIG_PATH` | Path to configuration directory in container | `/config` |
+### Alert Types
 
-#### Stream Counting
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `STREAM_COUNT` | Enable/disable stream count in notifications (TRUE/FALSE) | `TRUE` |
+| Alert | Description |
+|-------|-------------|
+| Channel Watching | Live TV viewing notifications |
+| VOD Watching | Recorded content playback alerts |
+| Recording Events | Track recording lifecycle |
+| Stream Counting | Show total active streams |
 
-#### Channel-Watching Alert Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CW_CHANNEL_NAME` | Show channel name in notifications (TRUE/FALSE) | `TRUE` |
-| `CW_CHANNEL_NUMBER` | Show channel number in notifications (TRUE/FALSE) | `TRUE` |
-| `CW_PROGRAM_NAME` | Show program title in notifications (TRUE/FALSE) | `TRUE` |
-| `CW_DEVICE_NAME` | Show device name in notifications (TRUE/FALSE) | `TRUE` |
-| `CW_DEVICE_IP` | Show device IP address in notifications (TRUE/FALSE) | `TRUE` |
-| `CW_STREAM_SOURCE` | Show stream source in notifications (TRUE/FALSE) | `TRUE` |
-| `CW_IMAGE_SOURCE` | Which image to use (CHANNEL or PROGRAM) | `CHANNEL` |
+### Channel Watching Options
 
-#### Recording Events Alert Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RD_ALERT_SCHEDULED` | Enable/disable scheduled recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_ALERT_STARTED` | Enable/disable started recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_ALERT_COMPLETED` | Enable/disable completed recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_ALERT_CANCELLED` | Enable/disable cancelled recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_PROGRAM_NAME` | Show program name in recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_PROGRAM_DESC` | Show program description in recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_DURATION` | Show duration in recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_CHANNEL_NAME` | Show channel name in recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_CHANNEL_NUMBER` | Show channel number in recording alerts (TRUE/FALSE) | `TRUE` |
-| `RD_TYPE` | Show recording type in recording alerts (TRUE/FALSE) | `TRUE` |
+| Option | Description |
+|--------|-------------|
+| Image Source | Channel Logo or Program Image |
+| Show Channel Name | Display channel name |
+| Show Channel Number | Display channel number |
+| Show Program Name | Display program title |
+| Show Device Name | Display device name |
+| Show Device IP | Display device IP address |
+| Show Stream Source | Display stream source |
 
-#### VOD-Watching Alert Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VOD_TITLE` | Show content title in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_EPISODE_TITLE` | Show episode title in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_SUMMARY` | Show content summary in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_DURATION` | Show content duration in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_PROGRESS` | Show playback progress in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_IMAGE` | Show content image in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_RATING` | Show content rating in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_GENRES` | Show content genres in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_CAST` | Show cast members in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_DEVICE_NAME` | Show device name in VOD notifications (TRUE/FALSE) | `TRUE` |
-| `VOD_DEVICE_IP` | Show device IP in VOD notifications (TRUE/FALSE) | `TRUE` |
+### VOD Watching Options
 
-#### Cache Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CHANNEL_CACHE_TTL` | Channel data cache duration in seconds | `86400` |
-| `PROGRAM_CACHE_TTL` | Program data cache duration in seconds | `86400` |
-| `JOB_CACHE_TTL` | Job data cache duration in seconds | `3600` |
-| `VOD_CACHE_TTL` | VOD metadata cache duration in seconds | `86400` |
+| Option | Description |
+|--------|-------------|
+| Show Title | Display content title |
+| Show Episode Title | Display episode title for TV shows |
+| Show Summary | Display content summary/description |
+| Show Content Image | Display thumbnail image |
+| Show Duration | Display content duration |
+| Show Progress | Display playback progress |
+| Show Rating | Display content rating |
+| Show Genres | Display content genres |
+| Show Cast | Display cast members |
+| Show Device Name | Display device name |
+| Show Device IP | Display device IP address |
 
-#### Disk Space Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DS_THRESHOLD_PERCENT` | Percentage threshold for low disk space alerts | `10` |
-| `DS_THRESHOLD_GB` | Absolute threshold in GB for low disk space alerts | `50` |
+### Recording Events Options
 
-#### Notification Provider Settings
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PUSHOVER_USER_KEY` | Your Pushover user key from pushover.net | _Optional_ |
-| `PUSHOVER_API_TOKEN` | Your Pushover application token | _Optional_ |
-| `APPRISE_DISCORD` | Discord webhook in format: webhook_id/webhook_token | _Optional_ |
-| `APPRISE_EMAIL` | Email configuration in format: user:password@server | _Optional_ |
-| `APPRISE_EMAIL_TO` | Email recipient address | _Optional_ |
-| `APPRISE_TELEGRAM` | Telegram configuration in format: bottoken/ChatID | _Optional_ |
-| `APPRISE_SLACK` | Slack configuration in format: tokenA/tokenB/tokenC | _Optional_ |
-| `APPRISE_GOTIFY` | Gotify configuration in format: gotify.example.com/token | _Optional_ |
-| `APPRISE_MATRIX` | Matrix configuration in format: user:pass@domain/#room | _Optional_ |
-| `APPRISE_MQTT` | MQTT configuration in format: mqtt://user:pass@hostname | _Optional_ |
-| `APPRISE_CUSTOM` | Custom Apprise URL for other services | _Optional_ |
+| Option | Description |
+|--------|-------------|
+| Scheduled Events | Show alerts for scheduled recordings |
+| Started Events | Show alerts when recordings start |
+| Completed Events | Show alerts when recordings complete |
+| Cancelled Events | Show alerts when recordings are cancelled |
+| Show Program Name | Display program name |
+| Show Description | Display program description |
+| Show Duration | Display recording duration |
+| Show Channel Name | Display channel name |
+| Show Channel Number | Display channel number |
+| Show Recording Type | Display if recording is scheduled or manual |
 
-### Volume Mounts
+### Notification Providers
 
-| Container Path | Purpose |
-|----------------|---------|
-| `/config` | Configuration and log storage |
+| Provider | Description | Config Needed |
+|----------|-------------|---------------|
+| Pushover | Mobile/Desktop notifications | User Key, API Token |
+| Discord | Chat channel notifications | Webhook URL |
+| Telegram | Messaging service | Bot Token, Chat ID |
+| Email | Standard email | SMTP Settings |
+| Slack | Team collaboration | Webhook Tokens |
+| Gotify | Self-hosted notifications | URL, Token |
+| Matrix | Open chat platform | User/Pass, Room |
+| MQTT | IoT messaging protocol | Broker URL |
+| Custom | Any Apprise-supported service | URL |
 
 <p align="right">
   <a href="#top">↑ back to top</a>
@@ -595,45 +485,44 @@ Astronauts awake to a terrifying reality aboard a seemingly abandoned spaceship.
 
 ## 🔍 Troubleshooting
 
-### No Notifications
+### Diagnostics & Testing
 
-1. Check container logs: `docker logs channelwatch`
-2. Verify notification provider credentials are correct
-3. Ensure Channels DVR server is accessible
-4. Test connectivity: `docker exec -it channelwatch python -m channelwatch.main --test-connectivity`
+#### Web UI (Recommended)
+Access diagnostics tools at `http://your-server-ip:8501` and navigate to the "Diagnostics" tab:
 
-### Testing Individual Alerts
+- **System Status** - Overview of service health and connectivity
+- **Connection Tests** - Verify connectivity to Channels DVR
+- **API Tests** - Check endpoint functionality
+- **Alert Tests** - Send test notifications for each alert type
 
-You can test each alert type with these commands:
-
-```bash
-# Test live TV watching alerts
-docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_CHANNEL_WATCHING
-
-# Test DVR/recorded content playback alerts
-docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_VOD_WATCHING
-
-# Test disk space monitoring alerts
-docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_DISK_SPACE
-
-# Test recording events alerts (scheduled, started, completed, cancelled)
-docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_RECORDING_EVENTS
-```
-
-### Advanced Diagnostics
-
-The application includes several diagnostic tools:
+#### Command Line (Advanced)
+For automation or headless troubleshooting:
 
 ```bash
-# Test connection to Channels DVR server
+# Test connectivity
 docker exec -it channelwatch python -m channelwatch.main --test-connectivity
 
-# Test API endpoints for connectivity
+# Test API endpoints
 docker exec -it channelwatch python -m channelwatch.main --test-api
+
+# Test individual alert types
+docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_CHANNEL_WATCHING
+docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_VOD_WATCHING
+docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_DISK_SPACE
+docker exec -it channelwatch python -m channelwatch.main --test-alert ALERT_RECORDING_EVENTS
 
 # Monitor event stream for 60 seconds
 docker exec -it channelwatch python -m channelwatch.main --monitor-events 60
 ```
+
+### Common Issues
+
+#### No Notifications
+1. Check logs: `docker logs channelwatch`
+2. Verify notification provider credentials are correct
+3. Ensure Channels DVR server is accessible (test connection)
+4. Check if notification service is operational (test with diagnostic panel)
+5. Confirm alerts are properly configured and enabled
 
 <p align="right">
   <a href="#top">↑ back to top</a>
@@ -656,65 +545,131 @@ docker-compose up -d
 
 ```
 ChannelWatch/
-├── .github/
-│   ├── FUNDING.yml
-│   └── ISSUE_TEMPLATE/          
-├── alerts/
-│   ├── __init__.py
-│   ├── base.py
-│   ├── channel_watching.py
-│   ├── disk_space.py
-│   ├── recording_events.py
-│   ├── vod_watching.py
-│   └── common/                 
-│       ├── __init__.py
-│       ├── alert_formatter.py
-│       ├── cleanup_mixin.py
-│       ├── session_manager.py
-│       └── stream_tracker.py
-├── core/
-│   ├── __init__.py
-│   ├── alert_manager.py
-│   └── event_monitor.py
-├── helpers/
-│   ├── __init__.py
-│   ├── channel_info.py
-│   ├── initialize.py
-│   ├── job_info.py            
-│   ├── logging.py
-│   ├── parsing.py
-│   ├── program_info.py
-│   ├── recording_info.py       
-│   ├── tools.py
-│   └── vod_info.py
-├── notifications/
-│   ├── __init__.py
-│   ├── notification.py
-│   └── providers/             
-│       ├── __init__.py
-│       ├── apprise.py
-│       ├── base.py
-│       └── pushover.py
-├── test/
-│   ├── __init__.py
-│   ├── alerts/
+├── core/                       # Core backend logic (Python)
+│   ├── docker-entrypoint.sh    #   Container startup script
+│   ├── alerts/                 #   Alert handling modules (one per alert type)
 │   │   ├── __init__.py
-│   │   ├── test_channel_watching.py
-│   │   ├── test_disk_space.py
-│   │   └── test_vod_watching.py
-│   │   └── test_recording_events.py
-│   ├── connectivity/
+│   │   ├── base.py
+│   │   ├── channel_watching.py
+│   │   ├── disk_space.py
+│   │   ├── recording_events.py
+│   │   ├── vod_watching.py
+│   │   └── common/             #   Shared alert utilities (formatting, sessions)
+│   │       ├── __init__.py
+│   │       ├── alert_formatter.py
+│   │       ├── cleanup_mixin.py
+│   │       ├── session_manager.py
+│   │       └── stream_tracker.py
+│   ├── engine/                 #   Event processing engine & orchestration
 │   │   ├── __init__.py
-│   │   └── test_server.py
-│   └── utils/
-│       ├── __init__.py
-│       └── test_utils.py
-├── __init__.py
-├── Dockerfile
-├── docker-compose.yml
-├── main.py
-├── README.md
-├── requirements.txt
+│   │   ├── alert_manager.py
+│   │   └── event_monitor.py
+│   ├── helpers/                #   Backend utilities & data providers (config, logging, API interactions)
+│   │   ├── __init__.py
+│   │   ├── activity_recorder.py
+│   │   ├── channel_info.py
+│   │   ├── config.py
+│   │   ├── initialize.py
+│   │   ├── job_info.py
+│   │   ├── logging.py
+│   │   ├── parsing.py
+│   │   ├── program_info.py
+│   │   ├── recording_info.py
+│   │   ├── tools.py
+│   │   ├── type_utils.py
+│   │   └── vod_info.py
+│   ├── notifications/          #   Notification sending system
+│   │   ├── __init__.py
+│   │   ├── notification.py
+│   │   └── providers/         #   Specific notification services (Pushover, Apprise)
+│   │       ├── __init__.py
+│   │       ├── apprise.py
+│   │       ├── base.py
+│   │       └── pushover.py
+│   ├── test/                   #   Backend test framework & simulations
+│   │   ├── __init__.py
+│   │   ├── alerts/             #   Alert simulation tests
+│   │   │   ├── __init__.py
+│   │   │   ├── test_channel_watching.py
+│   │   │   ├── test_disk_space.py
+│   │   │   ├── test_recording_events.py
+│   │   │   └── test_vod_watching.py
+│   │   ├── connectivity/       #   Server connection tests
+│   │   │   ├── __init__.py
+│   │   │   └── test_server.py
+│   │   └── utils/              #   Test helper utilities
+│   │       ├── __init__.py
+│   │       └── test_utils.py
+│   ├── main.py                 #   Backend entry point (CLI/testing)
+│   └── __init__.py             #   Backend package marker & version info
+├── ui/                         # Web Interface (Next.js/React frontend, FastAPI backend)
+│   ├── app/                    #   Next.js frontend application root
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   └── globals.css
+│   ├── backend/                #   FastAPI backend serving the UI API
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   └── schemas.py
+│   ├── components/             #   React UI components
+│   │   ├── base/               #     shadcn/ui base components
+│   │   │   ├── alert.tsx
+│   │   │   ├── badge.tsx
+│   │   │   ├── button.tsx
+│   │   │   ├── card.tsx
+│   │   │   ├── checkbox.tsx
+│   │   │   ├── command.tsx
+│   │   │   ├── dialog.tsx
+│   │   │   ├── dropdown-menu.tsx
+│   │   │   ├── form.tsx
+│   │   │   ├── input.tsx
+│   │   │   ├── label.tsx
+│   │   │   ├── popover.tsx
+│   │   │   ├── progress.tsx
+│   │   │   ├── select.tsx
+│   │   │   ├── separator.tsx
+│   │   │   ├── switch.tsx
+│   │   │   ├── tabs.tsx
+│   │   │   ├── toast.tsx
+│   │   │   ├── toaster.tsx
+│   │   │   └── tooltip.tsx
+│   │   ├── dashboard.tsx
+│   │   ├── header.tsx
+│   │   ├── settings-form.tsx
+│   │   ├── sidebar.tsx
+│   │   ├── diagnostics-panel.tsx
+│   │   ├── about-section.tsx
+│   │   ├── mode-toggle.tsx
+│   │   ├── status-overview.tsx
+│   │   └── theme-provider.tsx
+│   ├── hooks/                  #   Custom React hooks
+│   │   └── use-toast.ts
+│   ├── lib/                    #   Frontend helper libraries & utilities
+│   │   ├── api.ts
+│   │   ├── types.ts
+│   │   └── utils.ts
+│   ├── public/                 #   Static assets (images, favicon)
+│   │   ├── images/             #     Image assets
+│   │   │   ├── channelwatch-logo.png
+│   │   │   ├── background-bio.webp
+│   │   │   └── coder-luii.png
+│   │   ├── favicon.png
+│   │   └── og-image.png
+│   ├── types/                  #   Custom TypeScript definitions
+│   │   └── global.d.ts
+│   ├── components.json
+│   ├── next-env.d.ts
+│   ├── next.config.mjs
+│   ├── package.json
+│   ├── pnpm-lock.yaml
+│   ├── postcss.config.mjs
+│   ├── tailwind.config.ts
+│   └── tsconfig.json
+├── Dockerfile                  # Docker container build instructions
+├── docker-compose.yml          # Example Docker deployment file
+├── supervisord.conf            # Process manager (supervisor) configuration
+├── requirements.txt            # Python dependency list (backend)
+└── README.md
 ```
 
 <p align="right">
@@ -733,6 +688,7 @@ MIT License - see the LICENSE file for details.
 
 - [Channels DVR](https://getchannels.com/) for exceptional DVR software
 - [Pushover](https://pushover.net/) and [Apprise](https://github.com/caronc/apprise) for powering the notification capabilities
+- [Shadcn/ui](https://ui.shadcn.com/) for the beautiful and responsive UI components
 
 <p align="right">
   <a href="#top">↑ back to top</a>
@@ -740,27 +696,14 @@ MIT License - see the LICENSE file for details.
 
 ## 🗺 Future Roadmap
 
-The development roadmap for ChannelWatch focuses on enhanced customization, monitoring, and user experience:
+ChannelWatch will continue to evolve with these planned enhancements:
 
-- **Advanced Notification System**
-  - Custom notification templates with variable support
-  - Priority-based alert routing (critical vs. informational)
-  - Notification batching options to reduce alert fatigue
+### 🔔 Advanced Notification System
+- Custom notification templates with variable support
+- Error alerting for system and connection issues
 
-- **Intelligent Filtering**
-  - Network-aware filtering (internal vs. external IP ranges)
-  - Device-specific alert rules and exceptions
-  - Time-based alert profiles (day/night, weekday/weekend)
-
-- **Enhanced Monitoring**
-  - System error detection and alerting
-  - Channels DVR health monitoring
-  - Tuner status and signal quality tracking
-
-- **Management Interface**
-  - Web-based configuration dashboard
-  - Real-time monitoring and statistics
-  - Mobile-responsive design
+### 🛠️ Enhanced Diagnostics
+- Live container log feed in diagnostic page
 
 <p align="right">
   <a href="#top">↑ back to top</a>

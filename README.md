@@ -1,4 +1,4 @@
-# <a name="top"></a>ChannelWatch 📺🔔
+# <img src="https://github.com/CoderLuii/ChannelWatch/blob/main/ui/public/favicon.png?raw=true" alt="ChannelWatch" width="39" valign="bottom"> <a name="top"></a>ChannelWatch
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker Pulls](https://badgen.net/docker/pulls/coderluii/channelwatch?icon=docker)](https://hub.docker.com/r/coderluii/channelwatch)

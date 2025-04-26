@@ -1,3 +1,6 @@
+﻿"""
+ChannelWatch - Channels DVR monitoring tool for real-time notifications.
 """
-Core functionality for the ChannelWatch application.
-"""
+
+__version__ = '0.7'
+__app_name__ = 'ChannelWatch'

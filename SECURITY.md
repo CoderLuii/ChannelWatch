@@ -1,4 +1,4 @@
-# Security Policy
+﻿# Security Policy
 
 ## Supported Versions
 
@@ -6,6 +6,7 @@ ChannelWatch is currently maintained with security updates for the following ver
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 0.6  | :white_check_mark: |
 | 0.5  | :white_check_mark: |
 | 0.4  | :white_check_mark: |
 | 0.3  | :white_check_mark: |
@@ -52,3 +53,4 @@ Security updates are delivered as new releases in the current supported version 
 ## Acknowledgments
 
 We appreciate the security community's efforts in helping keep ChannelWatch and its users secure. Contributors who report security vulnerabilities responsibly will be acknowledged (with permission) in security advisories.
+

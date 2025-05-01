@@ -71,7 +71,6 @@
   apprise_slack: string
   apprise_gotify: string
   apprise_matrix: string
-  apprise_mqtt: string
   apprise_custom: string
 }
 

@@ -29,6 +29,20 @@
 
 ## 📈 Version History
 
+- **v0.7 (May 01, 2025)** - Notification Enhancements & Bug Fixes
+  - **Apprise Module Improvements**:
+    - 📧 **Enhanced Email Logic** - Improved email configuration with support for custom SMTP servers
+    - 🔗 **Advanced Discord Integration** - Better formatting and reliability for Discord notifications
+    - 🖼️ **UI Enhancements** - Clearer documentation and examples for notification configuration
+    - 🧹 **Removed MQTT** - Streamlined notification options by removing deprecated MQTT support
+  - **Live TV Improvements**:
+    - 🖼️ **Fixed Image Selection** - Corrected case-sensitive bug in channel/program image selection
+    - 📊 **Better UI Documentation** - Added detailed formatting guides for notification services
+  - **Bug Fixes**:
+    - Fixed email formatting issues with various SMTP providers
+    - Improved error handling for notification delivery
+    - Enhanced security for authentication credentials
+
 - **v0.6 (April 26, 2024)** - Project Restructuring, Web UI & Configuration Improvements
   - **Complete Project Restructuring**:
     - Organized codebase with clearer separation of concerns
@@ -382,12 +396,11 @@ Configuration is managed through the web UI at `http://your-server-ip:8501`
 |----------|-------------|---------------|
 | Pushover | Mobile/Desktop notifications | User Key, API Token |
 | Discord | Chat channel notifications | Webhook URL |
-| Telegram | Messaging service | Bot Token, Chat ID |
+| Telegram | Chat messaging | Bot Token/Chat ID |
 | Email | Standard email | SMTP Settings |
-| Slack | Team collaboration | Webhook Tokens |
-| Gotify | Self-hosted notifications | URL, Token |
-| Matrix | Open chat platform | User/Pass, Room |
-| MQTT | IoT messaging protocol | Broker URL |
+| Slack | Chat messaging | Webhook URL (token format) |
+| Gotify | Self-hosted notifications | Server URL & Token |
+| Matrix | Decentralized chat | Room/User credentials |
 | Custom | Any Apprise-supported service | URL |
 
 <p align="right">

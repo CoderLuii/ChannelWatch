@@ -280,10 +280,7 @@ class ChannelWatchingAlert(BaseAlert, CleanupMixin):
                     channel_info["program_title"] = program_info["title"]
                     
                     if program_info.get("icon_url"):
-                        if self.image_source == "Program":
-                            channel_info["program_icon_url"] = program_info["icon_url"]
-                        elif self.image_source == "Channel":
-                            channel_info["program_icon_url"] = program_info["icon_url"]
+                        channel_info["program_icon_url"] = program_info["icon_url"]
             
             success = self._send_alert(channel_info)
             
@@ -345,7 +342,7 @@ class ChannelWatchingAlert(BaseAlert, CleanupMixin):
             if program_info and program_info.get("icon_url"):
                 program_image_url = program_info["icon_url"]
             
-            if self.image_source == "Channel":
+            if self.image_source.upper() == "CHANNEL":
                 image_url = channel_logo_url if channel_logo_url else program_image_url
                 log(f"Using channel image: {image_url}", level=LOG_VERBOSE)
             else:

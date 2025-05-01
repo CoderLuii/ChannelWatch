@@ -74,7 +74,6 @@ if [ ! -f "$SETTINGS_FILE" ]; then
     \"apprise_slack\": \"\",
     \"apprise_gotify\": \"\",
     \"apprise_matrix\": \"\",
-    \"apprise_mqtt\": \"\",
     \"apprise_custom\": \"\"
 }
 EOF"

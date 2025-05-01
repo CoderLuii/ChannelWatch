@@ -83,7 +83,6 @@ class AppSettings(BaseModel):
     apprise_slack: Optional[str] = StrEmpty()
     apprise_gotify: Optional[str] = StrEmpty()
     apprise_matrix: Optional[str] = StrEmpty()
-    apprise_mqtt: Optional[str] = StrEmpty()
     apprise_custom: Optional[str] = StrEmpty()
     
     model_config = {

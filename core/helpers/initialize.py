@@ -50,7 +50,7 @@ def initialize_notifications(settings: CoreSettings, test_mode=False) -> Optiona
         settings.apprise_discord, settings.apprise_email, 
         settings.apprise_telegram, settings.apprise_slack,
         settings.apprise_gotify, settings.apprise_matrix,
-        settings.apprise_mqtt, settings.apprise_custom
+        settings.apprise_custom
     ])
 
     if apprise_configured:

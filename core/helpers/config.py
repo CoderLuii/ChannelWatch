@@ -88,7 +88,6 @@ class CoreSettings:
     apprise_slack: Optional[str] = ""
     apprise_gotify: Optional[str] = ""
     apprise_matrix: Optional[str] = ""
-    apprise_mqtt: Optional[str] = ""
     apprise_custom: Optional[str] = ""
 
     # Singleton

@@ -422,13 +422,12 @@ export function SettingsForm({ onSettingsSaved }: SettingsFormProps) {
   const [enabledProviders, setEnabledProviders] = useState({
     pushover: false,
     discord: false,
-    telegram: false,
     email: false,
+    telegram: false,
     slack: false,
     gotify: false,
     matrix: false,
-    mqtt: false,
-    custom: false,
+    custom: false
   });
 
   
@@ -473,7 +472,6 @@ export function SettingsForm({ onSettingsSaved }: SettingsFormProps) {
         slack: !!formValues.apprise_slack,
         gotify: !!formValues.apprise_gotify,
         matrix: !!formValues.apprise_matrix,
-        mqtt: !!formValues.apprise_mqtt,
         custom: !!formValues.apprise_custom,
       });
     }
@@ -1963,12 +1961,45 @@ export function SettingsForm({ onSettingsSaved }: SettingsFormProps) {
                               <Label htmlFor="apprise_email">SMTP Server</Label>
                               <Input
                                 id="apprise_email"
-                                placeholder="user:password@smtp.domain.com"
+                                placeholder="user:password@domain.com"
                                 {...register("apprise_email")}
                               />
-                              <p className="text-xs text-muted-foreground">
-                                Format: user:password@smtp.domain.com (include port if needed)
-                              </p>
+                              <div className="text-xs text-muted-foreground space-y-2">
+                                <p className="font-medium">Basic Format: <code>user:password@domain.com</code></p>
+                                <details className="cursor-pointer">
+                                  <summary>Custom Format</summary>
+                                  <div className="pl-3 pt-1">
+                                    <p>Parameters:</p>
+                                    <ul className="list-disc pl-5 pt-1">
+                                      <li><code>user</code> - username/email-address</li>
+                                      <li><code>pass</code> - password</li>
+                                      <li><code>smtp</code> - mail server address</li>
+                                      <li><code>port</code> - port number</li>
+                                    </ul>
+                                    <p className="pt-2">Example:</p>
+                                    <p><code>user=myemail@domain.com&pass=mypassword&smtp=smtp.gmail.com&port=587</code></p>
+                                  </div>
+                                </details>
+                                <details className="cursor-pointer">
+                                  <summary>Built-in Email Providers</summary>
+                                  <div className="pl-3 pt-1">
+                                    <ul className="list-disc pl-5 pt-1">
+                                      <li>Gmail: <code>user:app-password@gmail.com</code></li>
+                                      <li>Yahoo: <code>user:app-password@yahoo.com</code></li>
+                                      <li>Hotmail/Live: <code>user:password@hotmail.com</code></li>
+                                      <li>Fastmail: <code>user:app-password@fastmail.com</code></li>
+                                      <li>Zoho: <code>user:password@zoho.com</code></li>
+                                      <li>Yandex: <code>user:password@yandex.com</code></li>
+                                    </ul>
+                                    <p className="pt-2 text-xs italic">Note: Google and Yahoo require app-specific passwords if you use 2FA</p>
+                                  </div>
+                                </details>
+                                <p className="mt-2 text-xs">
+                                  <a href="https://github.com/caronc/apprise/wiki/Notify_email" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
+                                    More information about Apprise email configuration
+                                  </a>
+                                </p>
+                              </div>
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="apprise_email_to">Recipient Email</Label>
@@ -2134,51 +2165,6 @@ export function SettingsForm({ onSettingsSaved }: SettingsFormProps) {
                                     />
                                     <p className="text-xs text-muted-foreground">
                                       Format: user:pass@domain/#room
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* MQTT Card */}
-                            <div className="space-y-4">
-                              <div className="flex flex-row items-center justify-between p-4 rounded-xl border border-red-400/20 bg-red-500/5 backdrop-blur-sm shadow-sm transition-colors hover:bg-red-500/10">
-                                <div className="flex items-center gap-3">
-                                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
-                                    <Share2 className="h-5 w-5 text-red-400" />
-                                  </div>
-                                  <div className="flex flex-col justify-center">
-                                    <span className="text-base font-medium">
-                                      MQTT
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      IoT messaging protocol
-                                    </span>
-                                  </div>
-                                </div>
-                                <Switch
-                                  id="mqtt-toggle"
-                                  checked={enabledProviders.mqtt}
-                                  onCheckedChange={(checked) => {
-                                    setEnabledProviders(prev => ({ ...prev, mqtt: checked }));
-                                    if (!checked) {
-                                      setValue("apprise_mqtt", "", { shouldDirty: true });
-                                    }
-                                  }}
-                                />
-                              </div>
-
-                              {enabledProviders.mqtt && (
-                                <div className="pl-14 space-y-3">
-                                  <div className="space-y-2">
-                                    <Label htmlFor="apprise_mqtt">MQTT Broker URL</Label>
-                                    <Input
-                                      id="apprise_mqtt"
-                                      placeholder="mqtt://user:pass@host"
-                                      {...register("apprise_mqtt")}
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                      Format: mqtt://user:pass@host
                                     </p>
                                   </div>
                                 </div>

@@ -29,112 +29,14 @@
 
 ## 📈 Version History
 
-- **v0.7 (May 01, 2025)** - Notification Enhancements & Bug Fixes
-  - **Apprise Module Improvements**:
-    - 📧 **Enhanced Email Logic** - Improved email configuration with support for custom SMTP servers
-    - 🔗 **Advanced Discord Integration** - Better formatting and reliability for Discord notifications
-    - 🖼️ **UI Enhancements** - Clearer documentation and examples for notification configuration
-    - 🧹 **Removed MQTT** - Streamlined notification options by removing deprecated MQTT support
-  - **Live TV Improvements**:
-    - 🖼️ **Fixed Image Selection** - Corrected case-sensitive bug in channel/program image selection
-    - 📊 **Better UI Documentation** - Added detailed formatting guides for notification services
-  - **Bug Fixes**:
-    - Fixed email formatting issues with various SMTP providers
-    - Improved error handling for notification delivery
-    - Enhanced security for authentication credentials
+- **v0.7** - Notification enhancements with improved email and Discord integration, UI documentation improvements, and bug fixes for image selection
+- **v0.6** - Complete project restructuring with modern web UI, simplified configuration (no environment variables), responsive dashboard, and enhanced error recovery
+- **v0.5** - Added Recording-Events alerts for monitoring the entire recording lifecycle (scheduled, started, completed, cancelled, stopped), enhanced stream count integration, improved time formatting
+- **v0.4** - Expanded alert types with VOD-Watching and Disk-Space monitoring, enhanced Channel-Watching with program details and images, improved session tracking
+- **v0.3** - Complete architecture overhaul with real-time event monitoring, multi-provider notifications, session tracking, and enhanced stability
+- **v0.2** - Security updates addressing Python dependency vulnerabilities and adding Docker supply chain attestations
+- **v0.1** - Initial release with core monitoring and notification features
 
-- **v0.6 (April 26, 2024)** - Project Restructuring, Web UI & Configuration Improvements
-  - **Complete Project Restructuring**:
-    - Organized codebase with clearer separation of concerns
-    - Improved maintainability with consistent file structure
-    - Better component organization and reusability
-  - **Modern Web UI**:
-    - Responsive design with full mobile compatibility
-    - Dashboard with real-time system status monitoring
-    - Comprehensive settings management interface
-  - **Configuration Improvements**:
-    - Eliminated environment variables for simpler setup
-    - Web-based configuration for all settings
-    - Persistent configuration through Docker volumes
-  - **Enhanced User Experience**:
-    - Status overview with disk space, active streams, and upcoming recordings
-    - Diagnostic tools accessible directly from the UI
-    - Real-time feedback for system operations
-  - **UI Component Architecture**:
-    - Reusable base component library
-    - Consistent styling and behavior across interfaces
-    - Improved accessibility and responsiveness
-  - **Bug Fixes**:
-    - Improved error handling and recovery
-    - Enhanced notification delivery reliability
-    - Optimized performance for resource-constrained environments
-
-- **v0.5 (April 3, 2024)** - Recording Events, Variable Standardization & Enhanced IP/Device Extraction
-  - **New Recording Events Alert**:
-    - 🔴 Complete DVR recording lifecycle tracking with status indicators 
-
-              📅 Scheduled, 🔴 Recording, ✅ Completed, ⏹️ Cancelled
-    - Detailed notifications with program information and images
-    - Consistent stream counting across viewing and recording activities
-  - **Variable Standardization**:
-    - Organized prefix system for all settings (`ALERT_*`, `CW_*`, `RD_*`, `VOD_*`, `DS_*`)
-    - Clean, consistent configuration options across all alert types
-  - **IP/Device Improvements**:
-    - Better device name and IP address detection across log patterns
-    - IP address caching for more reliable notifications
-    - Enhanced detection for both Channel and VOD alerts
-  - **Alert Refinements**:
-    - Smarter VOD session handling for content switching
-    - Improved filtering for various event formats
-    - Clearer labeling in notification messages
-  - **Bug Fixes**:
-    - Enhanced image handling for channel logos and program thumbnails
-    - Improved stream tracking reliability
-    - Optimized cache performance
-
-- **v0.4 (March 30, 2024)** - Expanded alert types and enhanced capabilities
-  - **New Alert Types**:
-    - 🎬 **VOD-Watching Alert**: Track when recorded/VOD content is being watched
-      - Rich metadata display with title, episode, progress, duration
-      - Device identification and tracking
-      - Support for both 6-file and 7-file patterns
-      - Single notification per viewing session
-      - Detailed logging of viewing activity
-    - 💾 **Disk-Space Monitoring**: Get alerted when recording space runs low
-      - Configurable thresholds (percentage and absolute GB)
-      - Detailed space usage information
-  - **Channel-Watching Improvements**:
-    - 📺 Program Titles - See exactly what's playing on each channel directly in notifications
-    - 🖼️ Program Images - Choose between channel logos or actual program images in alerts
-    - 🎭 Enhanced Metadata - Richer program information with improved formatting
-    - 🔢 Decimal Channel Support - Full support for subchannels (13.1, etc.) for broadcast/OTA channels
-    - 📊 Total Streams Counter - See how many concurrent streams are active across your system
-    - 📱 Stream Source Identification - Cleaner display of M3U, TVE, and Tuner sources
-  - **System Improvements**:
-    - ⚡ Performance Optimizations - Preloaded cache at startup for faster operation
-    - ⚙️ Expanded Configuration - Control exactly what appears in your notifications
-    - 🔄 Cache Management - Configurable TTLs and improved validation
-  - **Bug Fixes**:
-    - Fixed IP address extraction from various event formats
-    - Improved timestamp and duration formatting
-    - Enhanced session tracking reliability
-
-- **v0.3 (March 23, 2024)** - Major architectural overhaul
-  - Complete rewrite with new architecture for better reliability and expandability
-  - Real-time event monitoring through direct connection to Channels DVR event stream
-  - Multi-service notifications via Apprise integration (Discord, Slack, Telegram, Email)
-  - Added channel logos in notifications for visual identification
-  - Enhanced session tracking with automatic cleanup
-  - Improved error handling and diagnostic capabilities
-
-- **v0.2 (March 20, 2024)** - Security updates
-  - Addressed vulnerabilities in base dependencies
-  - Minor bug fixes and stability improvements
-
-- **v0.1 (March 19, 2024)** - Initial release
-  - Basic Channel-Watching alerts
-  - Pushover notification support
-  - Log file monitoring
 
 <p align="right">
   <a href="#top">↑ back to top</a>

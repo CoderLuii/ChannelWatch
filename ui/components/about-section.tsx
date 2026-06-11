@@ -6,7 +6,7 @@ import { Button } from "@/components/base/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/base/tabs"
 import { Separator } from "@/components/base/separator"
 import { Badge } from "@/components/base/badge"
-import { Loader2, Github, ExternalLink, Coffee, Heart, Twitter, Code } from "lucide-react"
+import { Loader2, GitBranch, ExternalLink, X, Code } from "lucide-react"
 import { fetchSystemInfo } from "@/lib/api"
 
 export function AboutSection() {
@@ -369,7 +369,7 @@ export function AboutSection() {
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 justify-center"
                 >
-                  <Github className="h-4 w-4" />
+                  <GitBranch className="h-4 w-4" />
                   GitHub Repository
                 </a>
               </Button>
@@ -411,7 +411,7 @@ export function AboutSection() {
                   className="flex items-center gap-3 p-4 rounded-xl border border-blue-400/20 hover:bg-blue-500/10 transition-colors shadow-sm backdrop-blur-sm bg-blue-500/5"
                 >
                   <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                    <Github className="h-5 w-5 text-blue-300" />
+                    <GitBranch className="h-5 w-5 text-blue-300" />
                   </div>
                   <div>
                     <h3 className="font-medium text-blue-300">GitHub</h3>
@@ -426,7 +426,7 @@ export function AboutSection() {
                   className="flex items-center gap-3 p-4 rounded-xl border border-blue-400/20 hover:bg-blue-500/10 transition-colors shadow-sm backdrop-blur-sm bg-blue-500/5"
                 >
                   <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                    <Twitter className="h-5 w-5 text-blue-300" />
+                    <X className="h-5 w-5 text-blue-300" />
                   </div>
                   <div>
                     <h3 className="font-medium text-blue-300">X/Twitter</h3>

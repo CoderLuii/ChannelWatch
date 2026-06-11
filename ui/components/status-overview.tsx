@@ -296,7 +296,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     const timeSlots = [];
     for (let i = 0; i < slotCount; i++) {
       
-      let actualIndex = startSlotIndex + i;
+      const actualIndex = startSlotIndex + i;
       let slotTime;
       
       if (actualIndex < 0) {
@@ -465,7 +465,6 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     if (settingsToUse.apprise_slack) count += 1
     if (settingsToUse.apprise_gotify) count += 1
     if (settingsToUse.apprise_matrix) count += 1
-    if (settingsToUse.apprise_mqtt) count += 1
     if (settingsToUse.apprise_custom) count += 1
     
     return count
@@ -925,8 +924,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
                       borderColor: "hsl(var(--border))",
                       fontSize: "12px",
                     }}
-                    formatter={(value: number, name: string) => {
-                      return [value, name];
+                    formatter={(value, name) => {
+                      return [value ?? 0, name];
                     }}
                     labelFormatter={(label, payload) => {
                       

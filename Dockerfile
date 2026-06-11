@@ -1,13 +1,13 @@
 ﻿#-----------------------------------------------------------------------------
 # Stage 1: UI Build
 #-----------------------------------------------------------------------------
-FROM node:18-alpine AS ui-builder
+FROM node:24-alpine AS ui-builder
 
 WORKDIR /src
 COPY ui/ .
 
-RUN npm install -g pnpm
-RUN pnpm install
+RUN corepack enable
+RUN pnpm install --frozen-lockfile
 RUN pnpm build 
 
 #-----------------------------------------------------------------------------

@@ -29,6 +29,8 @@
 
 ## 📈 Version History
 
+- **v0.8.1** - Documents the release workflow, version-only release commit rule, and public maintainer-copy requirements
+- **v0.8** - Dependency refresh for the UI, backend, and Docker build with current supported package baselines
 - **v0.7** - Notification enhancements with improved email and Discord integration, UI documentation improvements, and bug fixes for image selection
 - **v0.6** - Complete project restructuring with modern web UI, simplified configuration (no environment variables), responsive dashboard, and enhanced error recovery
 - **v0.5** - Added Recording-Events alerts for monitoring the entire recording lifecycle (scheduled, started, completed, cancelled, stopped), enhanced stream count integration, improved time formatting
@@ -451,6 +453,10 @@ To upgrade to the latest version:
 docker-compose pull
 docker-compose up -d
 ```
+
+## Release Process
+
+Maintainer release rules are documented in [RELEASE.md](RELEASE.md). Release changes should land as one commit on `main`, with the commit subject exactly matching the release tag, such as `v0.8.1`. The matching git tag and GitHub Release should be created in the same release flow, and public release text should read as maintainer-authored copy without tool attribution.
 
 <p align="right">
   <a href="#top">↑ back to top</a>

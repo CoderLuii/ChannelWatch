@@ -1,10 +1,11 @@
 name: ChannelWatch
-version: '3.0'
 services:
   ChannelWatch:
     image: coderluii/channelwatch:latest
     container_name: channelwatch
     network_mode: host
+    environment:
+      TZ: America/Los_Angeles
     volumes:
       # Path to store configuration, logs, and settings
       - /your/local/path:/config

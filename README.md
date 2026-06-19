@@ -29,6 +29,7 @@
 
 ## 📈 Version History
 
+- **v0.8.1** - Adds Docker `TZ` support and publishes Docker Hub and GHCR images from release tags
 - **v0.8** - Library updates for the UI, backend, and Docker build, plus a PostCSS update for the web build
 - **v0.7** - Notification enhancements with improved email and Discord integration, UI documentation improvements, and bug fixes for image selection
 - **v0.6** - Complete project restructuring with modern web UI, simplified configuration (no environment variables), responsive dashboard, and enhanced error recovery
@@ -190,12 +191,13 @@ The correct image will be automatically selected for your hardware when using `d
 Create a `docker-compose.yml` file:
 
 ```yaml
-version: '3.0'
 services:
   ChannelWatch:
     image: coderluii/channelwatch:latest
     container_name: channelwatch
     network_mode: host
+    environment:
+      TZ: America/Los_Angeles
     volumes:
       # Path to store configuration, logs, and settings
       - /your/local/path:/config
@@ -204,6 +206,7 @@ services:
 
 > **Note:** 
 > - All configuration is now done through the web UI at `http://your-server-ip:8501`
+> - `TZ` is optional. Change it to your local timezone, for example `America/New_York`.
 > - For bridge networking, replace `network_mode: host` with:
 >   ```yaml
 >   network_mode: bridge
@@ -240,6 +243,10 @@ Configuration is managed through the web UI at `http://your-server-ip:8501`
 | Timezone | Local timezone for timestamps |
 | Log Level | Standard or Verbose logging |
 | Log Retention | Auto-cleanup period in days |
+
+You can also set the container timezone with Docker's standard `TZ` environment
+variable. When `TZ` is set, ChannelWatch uses it for the app timezone and keeps
+the web UI setting in sync.
 
 ### Alert Types
 

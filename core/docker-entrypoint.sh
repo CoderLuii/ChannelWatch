@@ -2,7 +2,9 @@
 # CONFIGURATION
 CONFIG_DIR="/config"
 SETTINGS_FILE="${CONFIG_DIR}/settings.json"
-DEFAULT_TZ="America/Los_Angeles"
+APP_DEFAULT_TZ="America/Los_Angeles"
+DOCKER_TZ="${TZ:-}"
+DEFAULT_TZ="$APP_DEFAULT_TZ"
 
 # USER SETUP
 APP_UID=${PUID:-1000}
@@ -86,18 +88,83 @@ find "$CONFIG_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
 find "$CONFIG_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
 
 # TIMEZONE
-TZ=$(grep -o '"tz": *"[^"]*"' "$SETTINGS_FILE" | sed 's/"tz": *"\([^"]*\)"/\1/')
+CONFIG_TZ=$(SETTINGS_FILE="$SETTINGS_FILE" DEFAULT_TZ="$APP_DEFAULT_TZ" DOCKER_TZ="$DOCKER_TZ" python - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-if [ -z "$TZ" ]; then
-    echo "No timezone found in settings.json, using default: $DEFAULT_TZ"
-    TZ="$DEFAULT_TZ"
+settings_file = Path(os.environ["SETTINGS_FILE"])
+default_tz = os.environ.get("DEFAULT_TZ") or "America/Los_Angeles"
+docker_tz = (os.environ.get("DOCKER_TZ") or "").strip()
+data = {}
+can_write = False
+
+def is_valid_timezone(value):
+    if not value:
+        return False
+    try:
+        ZoneInfo(value)
+        return True
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+
+try:
+    loaded = json.loads(settings_file.read_text())
+    if isinstance(loaded, dict):
+        data = loaded
+        can_write = True
+    else:
+        print(f"Warning: {settings_file} is not a JSON object; using default timezone.", file=sys.stderr)
+except Exception as exc:
+    print(f"Warning: Failed to read timezone from {settings_file}: {exc}", file=sys.stderr)
+
+configured_tz = str(data.get("tz") or "").strip()
+selected_tz = configured_tz or default_tz
+should_write = False
+
+if docker_tz:
+    if is_valid_timezone(docker_tz):
+        selected_tz = docker_tz
+        if data.get("tz") != selected_tz:
+            data["tz"] = selected_tz
+            should_write = True
+    else:
+        print(f"Warning: Invalid TZ environment variable '{docker_tz}', using configured timezone.", file=sys.stderr)
+elif not configured_tz:
+    data["tz"] = selected_tz
+    should_write = True
+
+if not is_valid_timezone(selected_tz):
+    print(f"Warning: Invalid configured timezone '{selected_tz}', using UTC.", file=sys.stderr)
+    selected_tz = "UTC"
+    data["tz"] = selected_tz
+    should_write = True
+
+if should_write and can_write:
+    settings_file.write_text(json.dumps(data, indent=4) + "\n")
+
+print(selected_tz)
+PY
+)
+
+if [ -z "$CONFIG_TZ" ]; then
+    echo "No timezone found in settings.json, using default: $APP_DEFAULT_TZ"
+    CONFIG_TZ="$APP_DEFAULT_TZ"
 fi
 
+TZ="$CONFIG_TZ"
 echo "Setting timezone to: $TZ"
 export TZ
+if [ -n "$DOCKER_TZ" ] && [ "$DOCKER_TZ" = "$CONFIG_TZ" ]; then
+    export CHANNELWATCH_TZ_OVERRIDE="$DOCKER_TZ"
+fi
+chown "$APP_UID:$APP_GID" "$SETTINGS_FILE" || echo "Warning: Failed to chown $SETTINGS_FILE"
+chmod 644 "$SETTINGS_FILE" || echo "Warning: Failed to chmod $SETTINGS_FILE"
 
 # I/O PERMISSIONS
 chmod 666 /proc/self/fd/1 /proc/self/fd/2 || echo "Warning: Failed to chmod stdout/stderr"
 
 # LAUNCH
-exec su-exec "$APP_UID:$APP_GID" "$@" 
+exec su-exec "$APP_UID:$APP_GID" "$@"

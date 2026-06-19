@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .schemas import AppSettings
 from pydantic import ValidationError
 
@@ -16,6 +17,21 @@ def get_model_defaults(model):
         if default_value is not None:
              defaults[name] = default_value
     return defaults
+
+def apply_env_overrides(settings_data: dict) -> dict:
+    """Apply Docker environment overrides that should mirror app settings."""
+    updated = settings_data.copy()
+    tz_env = os.getenv("CHANNELWATCH_TZ_OVERRIDE")
+
+    if tz_env:
+        try:
+            ZoneInfo(tz_env)
+            updated["tz"] = tz_env
+            print(f"Info: Overriding timezone from TZ environment variable: {tz_env}")
+        except (ZoneInfoNotFoundError, ValueError):
+            print(f"Warning: Invalid TZ environment variable: {tz_env}")
+
+    return updated
 
 # SETTINGS MANAGEMENT
 def load_settings() -> AppSettings:
@@ -50,6 +66,7 @@ def load_settings() -> AppSettings:
         if value is None and key in model_defaults and model_defaults[key] is not None:
             print(f"Info: Ignoring null value for '{key}' from {CONFIG_FILE}, using schema default.")
             del cleaned_data[key]
+    cleaned_data = apply_env_overrides(cleaned_data)
             
     try:
         final_settings = AppSettings(**cleaned_data)
@@ -73,4 +90,4 @@ def save_settings(settings: AppSettings):
         raise
     except Exception as e:
         print(f"Error: Failed to save settings to {CONFIG_FILE}: {e}")
-        raise 
+        raise

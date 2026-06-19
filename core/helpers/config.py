@@ -6,6 +6,7 @@ from pathlib import Path
 from dataclasses import dataclass, fields, field, is_dataclass
 from typing import Optional, Any, List, Type
 from threading import Lock
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # Import custom logger
 from .logging import log, LOG_VERBOSE, LOG_STANDARD
 
@@ -121,6 +122,15 @@ class CoreSettings:
             except ValueError:
                 print(f"[Core Config] Warning: Invalid CHANNELS_DVR_PORT env var: {port_env}")
 
+        tz_env = os.getenv("CHANNELWATCH_TZ_OVERRIDE")
+        if tz_env:
+            try:
+                ZoneInfo(tz_env)
+                self.tz = tz_env
+                print(f"[Core Config] Info: Overriding timezone from TZ env var to {self.tz}.")
+            except (ZoneInfoNotFoundError, ValueError):
+                print(f"[Core Config] Warning: Invalid TZ env var: {tz_env}")
+
     def _load_and_override(self):
         """Process configuration from file then apply environment variable overrides."""
         file_settings = self._load_from_file()
@@ -150,4 +160,4 @@ _lock = Lock()
 
 log("Settings module loaded", level=LOG_VERBOSE)
 
-# Decorator for thread-safe access to settings 
+# Decorator for thread-safe access to settings

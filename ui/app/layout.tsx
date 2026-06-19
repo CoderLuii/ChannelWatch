@@ -13,6 +13,7 @@ const fontSans = FontSans({
 })
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://demo.luiverse.com"),
   title: "ChannelWatch",
   description: "Real-time monitoring and alerts for your Channels DVR",
   generator: 'CoderLuii',

@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>ChannelWatch</Name>
+  <Repository>coderluii/channelwatch:latest</Repository>
+  <Registry>https://hub.docker.com/r/coderluii/channelwatch</Registry>
+  <Network>host</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/CoderLuii/ChannelWatch/discussions</Support>
+  <Project>https://github.com/CoderLuii/ChannelWatch</Project>
+  <Overview>ChannelWatch monitors Channels DVR activity and sends real-time notifications for live viewing, VOD playback, recording events, disk space, and connected clients. Configuration is handled through the web UI after the container starts.</Overview>
+  <Category>MediaApp:Video</Category>
+  <WebUI>http://[IP]:[PORT:8501]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/CoderLuii/ChannelWatch/refs/heads/main/deploy/unraid/channelwatch.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/CoderLuii/ChannelWatch/refs/heads/main/ui/public/favicon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="config" Target="/config" Default="/mnt/user/appdata/channelwatch" Mode="rw" Description="Stores ChannelWatch settings, logs, and runtime data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/channelwatch</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID used to run ChannelWatch inside the container. The Unraid default is usually 99." Type="Variable" Display="always" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID used to run ChannelWatch inside the container. The Unraid default is usually 100." Type="Variable" Display="always" Required="false" Mask="false">100</Config>
+  <Config Name="Timezone" Target="TZ" Default="America/Los_Angeles" Mode="" Description="Container timezone. Change this to your local timezone, for example America/New_York." Type="Variable" Display="always" Required="false" Mask="false">America/Los_Angeles</Config>
+  <TailscaleStateDir/>
+</Container>

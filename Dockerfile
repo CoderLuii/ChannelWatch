@@ -23,7 +23,7 @@ RUN addgroup -g ${GID} -S appgroup \
 
 # Metadata
 LABEL maintainer="CoderLuii"
-LABEL version="0.8.1"
+LABEL version="0.8.2"
 LABEL description="ChannelWatch - Channels DVR Monitoring Tool"
 
 # Directory structure

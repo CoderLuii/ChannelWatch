@@ -29,6 +29,7 @@
 
 ## 📈 Version History
 
+- **v0.8.2** - Adds a maintained Unraid install template
 - **v0.8.1** - Adds Docker `TZ` support and publishes Docker Hub and GHCR images from release tags
 - **v0.8** - Library updates for the UI, backend, and Docker build, plus a PostCSS update for the web build
 - **v0.7** - Notification enhancements with improved email and Discord integration, UI documentation improvements, and bug fixes for image selection
@@ -213,6 +214,16 @@ services:
 >   ports:
 >     - "8501:8501"  # Or replace 8501 on the left with your desired port
 >   ```
+
+### Unraid Template
+
+A maintained Unraid user template is available at
+[`deploy/unraid/channelwatch.xml`](deploy/unraid/channelwatch.xml).
+
+Copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your
+Unraid flash device, then go to Docker > Add Container and select
+`ChannelWatch`. Change `TZ` to your local timezone before starting the
+container. ChannelWatch is still configured through the web UI at port `8501`.
 
 ### 2. Start the Container
 

@@ -1,5 +1,6 @@
 # IMPORTS
 import os
+import signal
 import sys 
 from fastapi import FastAPI, HTTPException, Response, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
@@ -676,8 +677,7 @@ async def restart_container():
             try:
                 time.sleep(2)
                 
-                import subprocess
-                subprocess.run(["kill", "-15", "1"], check=True)
+                os.kill(1, signal.SIGTERM)
             except Exception as e:
                 print(f"[WebUI API] ERROR: Failed to restart ChannelWatch: {e}")
         

@@ -29,6 +29,7 @@
 
 ## 📈 Version History
 
+- **v0.8.3** - Updates the container runtime image for the BusyBox security alert
 - **v0.8.2** - Adds a maintained Unraid install template
 - **v0.8.1** - Adds Docker `TZ` support and publishes Docker Hub and GHCR images from release tags
 - **v0.8** - Library updates for the UI, backend, and Docker build, plus a PostCSS update for the web build
@@ -476,7 +477,7 @@ docker-compose up -d
 ```
 ChannelWatch/
 ├── core/                       # Core backend logic (Python)
-│   ├── docker-entrypoint.sh    #   Container startup script
+│   ├── docker-entrypoint.py    #   Container startup script
 │   ├── alerts/                 #   Alert handling modules (one per alert type)
 │   │   ├── __init__.py
 │   │   ├── base.py

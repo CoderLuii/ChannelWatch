@@ -1,0 +1,110 @@
+# Multi-replica is intentionally unsupported for ChannelWatch.
+replicaCount: 1
+
+image:
+  repository: coderluii/channelwatch
+  tag: "0.9.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8501
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: channelwatch.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # Example tls entry:
+  # - secretName: channelwatch-tls
+  #   hosts:
+  #     - channelwatch.local
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  storageClassName: ""
+  annotations: {}
+
+resources: {}
+
+podAnnotations: {}
+podLabels: {}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  capabilities:
+    drop:
+      - ALL
+
+podSecurityContext:
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+config:
+  tz: America/New_York
+  channelsDvrHost: ""
+  channelsDvrPort: "8089"
+  channelsDvrServers: ""
+  puid: "1000"
+  pgid: "1000"
+  logLevel: "1"
+  disableAuth: "false"
+  alertChannelWatching: "true"
+  alertVodWatching: "true"
+  alertDiskSpace: "true"
+  alertRecordingEvents: "true"
+  dsThresholdPercent: "10"
+  dsThresholdGb: "50"
+  dsAlertCooldown: "3600"
+
+secretConfig:
+  apiKey: ""
+  adminUser: ""
+  adminPass: ""
+  appriseDiscord: ""
+  apprisePushover: ""
+  appriseTelegram: ""
+  appriseEmail: ""
+  appriseEmailTo: ""
+  appriseSlack: ""
+  appriseGotify: ""
+  appriseMatrix: ""
+  appriseCustom: ""
+
+probes:
+  startup:
+    path: /healthz/startup
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+  readiness:
+    path: /healthz/ready
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    path: /healthz/live
+    initialDelaySeconds: 0
+    periodSeconds: 30
+    timeoutSeconds: 3
+    failureThreshold: 3

@@ -1,0 +1,93 @@
+name: channelwatch
+services:
+  ChannelWatch:
+    image: coderluii/channelwatch:latest
+    container_name: channelwatch
+    init: true
+    network_mode: host
+    volumes:
+      # Path to store configuration, logs, and settings
+      - /your/local/path:/config
+    environment:
+      # ── DVR Connection ───────────────────────────────────────────
+      # Optional one-time bootstrap for initial setup.
+      # These values only seed an empty config. After startup, the web UI is the long-term source of truth.
+      CHANNELS_DVR_HOST: "192.168.1.100"
+      # CHANNELS_DVR_PORT: "8089"
+
+      # Multi-DVR bootstrap (use instead of CHANNELS_DVR_HOST):
+      # CHANNELS_DVR_SERVERS: "Main@192.168.1.100:8089,Backup@192.168.1.200:8089"
+
+      # ── Timezone ─────────────────────────────────────────────────
+      TZ: "America/New_York"
+
+      # ── User/Group IDs (match your host user) ───────────────────
+      # PUID: "1000"
+      # PGID: "1000"
+
+      # ── Notification Providers (configure one or more) ──────────
+      # CW_APPRISE_DISCORD: "webhook_id/token"
+      # CW_APPRISE_PUSHOVER: "user_key@api_token"
+      # CW_APPRISE_TELEGRAM: "bot_token/chat_id"
+      # CW_APPRISE_SLACK: "token_a/token_b/token_c"
+      # CW_APPRISE_GOTIFY: "hostname/token"
+      # CW_APPRISE_EMAIL: "user:pass@smtp.example.com"
+      # CW_APPRISE_EMAIL_TO: "recipient@example.com"
+      # CW_APPRISE_MATRIX: "user:pass@hostname/#room"
+      # CW_APPRISE_CUSTOM: "apprise://custom-url"
+
+      # ── Alert Toggles (all enabled by default) ──────────────────
+      # CW_ALERT_CHANNEL_WATCHING: "true"
+      # CW_ALERT_VOD_WATCHING: "true"
+      # CW_ALERT_DISK_SPACE: "true"
+      # CW_ALERT_RECORDING_EVENTS: "true"
+
+      # ── Disk Space Thresholds ────────────────────────────────────
+      # CW_DS_THRESHOLD_PERCENT: "10"
+      # CW_DS_THRESHOLD_GB: "50"
+      # CW_DS_ALERT_COOLDOWN: "3600"
+
+      # ── System ───────────────────────────────────────────────────
+      # CW_LOG_LEVEL: "1"          # 1=standard, 2=verbose
+      # CW_DISABLE_AUTH: "false"   # Temporary break-glass runtime override only; does not change the saved auth mode in /config/settings.json
+    restart: unless-stopped
+
+    # ── Network Modes ────────────────────────────────────────────
+    # Bridge mode (use instead of network_mode: host):
+    # network_mode: bridge
+    # ports:
+    #   - "8501:8501"
+    # Note: When using bridge mode, set your DVR host to the LAN IP
+    # (not localhost). Use host.docker.internal if your DVR runs on
+    # the same machine.
+
+    # ── DNS Configuration ────────────────────────────────────────
+    # DNS search domain (enables short hostnames for DVR host):
+    # dns_search: localdomain
+    #
+    # Tailscale users: set dns_search to your Tailnet to use short
+    # hostnames that resolve via MagicDNS:
+    # dns_search: localdomain tail12345.ts.net
+    #
+    # With this set, you can enter just "media-server" as the DVR
+    # host instead of a full IP or FQDN.
+    #
+    # If DNS resolution fails entirely, override DNS servers:
+    # dns:
+    #   - 1.1.1.1
+    #   - 8.8.8.8
+
+    # ── Optional Security Hardening ──────────────────────────────
+    # Mount /run/channelwatch as tmpfs so supervisor credentials
+    # never touch disk. uid=0 (root), gid=1000 (appgroup).
+    # tmpfs:
+    #   - /run/channelwatch:mode=0750,uid=0,gid=1000
+
+# Source-of-truth rule:
+# - Compose/env runs the app (image, ports, volumes, runtime bootstrap)
+# - Fresh installs are setup-first, with secure login recommended and no-auth as an advanced reversible option
+# - Disabling persisted no-auth returns the install to secure-login setup, not legacy API-key browser mode
+# - Legacy API-key mode is compatibility-only for older installs
+# - ChannelWatch settings and auth DB configure the app after setup
+# - Avoid treating compose/env as the normal long-term home for auth mode, users, feeds, or alert preferences
+# - For admin recovery, use `channelwatch doctor reset-admin-password`, not file inspection

@@ -1,0 +1,37 @@
+Thank you for installing ChannelWatch.
+
+ChannelWatch is deployed as a single replica only. Do not scale this release above one pod: the application persists shared state under /config and does not support concurrent writers.
+
+Access the UI after the pod becomes Ready:
+
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}
+  kubectl port-forward svc/{{ include "channelwatch.fullname" . }} 8501:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+
+Then open:
+
+  http://127.0.0.1:8501
+{{- if .Values.ingress.enabled }}
+
+Or access via Ingress at:
+{{- range .Values.ingress.hosts }}
+{{- $host := .host }}
+{{- $paths := .paths | default (list (dict "path" "/" "pathType" "Prefix")) }}
+{{- range $paths }}
+    http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+PVC details:
+
+  Claim: {{ include "channelwatch.pvcName" . }}
+  Mount: /config
+
+Secret-backed values:
+
+  - secretConfig.apiKey is exposed to the container as CW_API_KEY; the entrypoint seeds it during the first /config/settings.json bootstrap.
+  - secretConfig.adminUser/adminPass are exposed as CW_ADMIN_USER/CW_ADMIN_PASS; the UI backend bootstraps the first RBAC admin when RBAC is enabled and no users exist yet.
+
+Upgrade note:
+
+  ChannelWatch stores persistent settings, logs, backups, and runtime state in /config. Keep the PVC when upgrading or reinstalling if you want to preserve state.

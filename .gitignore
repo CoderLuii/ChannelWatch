@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node / Next.js
+app/ui/node_modules/
+app/ui/.next/
+app/ui/.next-build/
+app/ui/out/
+app/ui/.turbo/
+app/ui/dist/
+app/ui/build/
+app/ui/coverage/
+app/ui/tsconfig.tsbuildinfo
+
+# Playwright
+app/ui/playwright-report/
+app/ui/test-results/
+app/ui/blob-report/
+
+# Local Compose data used by examples
+deploy/compose/.compose-data/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# Runtime artifacts (must NEVER be committed)
+/config/
+config/settings.json
+config/settings.v*.json
+config/activity_history.json
+config/channelwatch.log
+config/session_state_*.json
+config/encryption.key
+*.log
+
+# Build / packaging
+dist/
+build/
+*.tar.gz
+*.zip
+
+# IDE / project files
+*.iml
+.project
+.classpath

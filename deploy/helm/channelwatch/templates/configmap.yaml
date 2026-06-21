@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "channelwatch.configMapName" . }}
+  labels:
+    {{- include "channelwatch.labels" . | nindent 4 }}
+data:
+  TZ: {{ .Values.config.tz | quote }}
+  CHANNELS_DVR_HOST: {{ .Values.config.channelsDvrHost | quote }}
+  CHANNELS_DVR_PORT: {{ .Values.config.channelsDvrPort | quote }}
+  CHANNELS_DVR_SERVERS: {{ .Values.config.channelsDvrServers | quote }}
+  PUID: {{ .Values.config.puid | quote }}
+  PGID: {{ .Values.config.pgid | quote }}
+  CW_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  CW_DISABLE_AUTH: {{ .Values.config.disableAuth | quote }}
+  CW_ALERT_CHANNEL_WATCHING: {{ .Values.config.alertChannelWatching | quote }}
+  CW_ALERT_VOD_WATCHING: {{ .Values.config.alertVodWatching | quote }}
+  CW_ALERT_DISK_SPACE: {{ .Values.config.alertDiskSpace | quote }}
+  CW_ALERT_RECORDING_EVENTS: {{ .Values.config.alertRecordingEvents | quote }}
+  CW_DS_THRESHOLD_PERCENT: {{ .Values.config.dsThresholdPercent | quote }}
+  CW_DS_THRESHOLD_GB: {{ .Values.config.dsThresholdGb | quote }}
+  CW_DS_ALERT_COOLDOWN: {{ .Values.config.dsAlertCooldown | quote }}

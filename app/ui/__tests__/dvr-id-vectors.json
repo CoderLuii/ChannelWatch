@@ -1,0 +1,163 @@
+[
+  {
+    "input": {
+      "host": "192.168.1.1",
+      "port": 8089
+    },
+    "expected_id": "dvr_aef6d698"
+  },
+  {
+    "input": {
+      "host": "192.168.1.2",
+      "port": 8089
+    },
+    "expected_id": "dvr_56a5e213"
+  },
+  {
+    "input": {
+      "host": "10.0.0.1",
+      "port": 8089
+    },
+    "expected_id": "dvr_e6785710"
+  },
+  {
+    "input": {
+      "host": "192.168.1.1",
+      "port": 9090
+    },
+    "expected_id": "dvr_b3033482"
+  },
+  {
+    "input": {
+      "host": "dvr.local",
+      "port": 8089
+    },
+    "expected_id": "dvr_e1b92638"
+  },
+  {
+    "input": {
+      "host": "dvr.example.com",
+      "port": 8089
+    },
+    "expected_id": "dvr_89cc9b63"
+  },
+  {
+    "input": {
+      "host": "localhost",
+      "port": 8089
+    },
+    "expected_id": "dvr_e6f9a23f"
+  },
+  {
+    "input": {
+      "host": "127.0.0.1",
+      "port": 8089
+    },
+    "expected_id": "dvr_db3313ef"
+  },
+  {
+    "input": {
+      "host": "::1",
+      "port": 8089
+    },
+    "expected_id": "dvr_6244d64f"
+  },
+  {
+    "input": {
+      "host": "[::1]",
+      "port": 8089
+    },
+    "expected_id": "dvr_6244d64f"
+  },
+  {
+    "input": {
+      "host": "2001:db8::1",
+      "port": 8089
+    },
+    "expected_id": "dvr_2e679e72"
+  },
+  {
+    "input": {
+      "host": "[2001:db8::1]",
+      "port": 8089
+    },
+    "expected_id": "dvr_2e679e72"
+  },
+  {
+    "input": {
+      "host": "2001:DB8::1",
+      "port": 8089
+    },
+    "expected_id": "dvr_2e679e72"
+  },
+  {
+    "input": {
+      "host": "[2001:DB8::1]",
+      "port": 8089
+    },
+    "expected_id": "dvr_2e679e72"
+  },
+  {
+    "input": {
+      "host": "fe80::1%eth0",
+      "port": 8089
+    },
+    "expected_id": "dvr_f356cadc"
+  },
+  {
+    "input": {
+      "host": "[fe80::1%eth0]",
+      "port": 8089
+    },
+    "expected_id": "dvr_f356cadc"
+  },
+  {
+    "input": {
+      "host": "2001:db8:85a3::8a2e:370:7334",
+      "port": 8089
+    },
+    "expected_id": "dvr_e5a54470"
+  },
+  {
+    "input": {
+      "host": "[2001:db8:85a3::8a2e:370:7334]",
+      "port": 8089
+    },
+    "expected_id": "dvr_e5a54470"
+  },
+  {
+    "input": {
+      "host": "CHANNELSDVR.LOCAL",
+      "port": 8089
+    },
+    "expected_id": "dvr_6ed91433"
+  },
+  {
+    "input": {
+      "host": "192.168.100.200",
+      "port": 8089
+    },
+    "expected_id": "dvr_493f41ca"
+  },
+  {
+    "input": {
+      "host": "dvr.local",
+      "port": 57000
+    },
+    "expected_id": "dvr_836678c7"
+  },
+  {
+    "input": {
+      "host": "::1",
+      "port": 1234
+    },
+    "expected_id": "dvr_4b60e4e7"
+  },
+  {
+    "input": {
+      "host": "0.0.0.0",
+      "port": 8089
+    },
+    "expected_id": "dvr_c7d9568a"
+  }
+]

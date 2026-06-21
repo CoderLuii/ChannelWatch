@@ -1,0 +1,31 @@
+#!/usr/bin/python
+"""ChannelWatch container helper."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import runpy
+import sys
+
+
+def main() -> int:
+    if len(sys.argv) >= 2 and sys.argv[1] == "doctor":
+        app_dir = Path(os.environ.get("CHANNELWATCH_APP_DIR", "/app"))
+        if app_dir.is_dir():
+            os.chdir(app_dir)
+        python_path = os.environ.get("PYTHONPATH", "")
+        path_parts = [str(app_dir)]
+        if python_path:
+            path_parts.append(python_path)
+        os.environ["PYTHONPATH"] = os.pathsep.join(path_parts)
+        sys.argv = ["python -m core.cli.doctor", *sys.argv[2:]]
+        runpy.run_module("core.cli.doctor", run_name="__main__")
+        return 0
+
+    print("Usage: channelwatch doctor [ARGS...]", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

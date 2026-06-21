@@ -1,0 +1,125 @@
+name: Issue Triage
+
+on:
+  issues:
+    types: [opened, reopened, labeled]
+  schedule:
+    # Run stale checks daily at 02:00 UTC
+    - cron: "0 2 * * *"
+
+permissions:
+  issues: write
+
+jobs:
+  # -----------------------------------------------------------------------
+  # 1. Label every new issue as needs-triage
+  # -----------------------------------------------------------------------
+  label-new-issue:
+    name: Add needs-triage label
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened')
+    steps:
+      - name: Add status/needs-triage
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['status/needs-triage'],
+            });
+
+  # -----------------------------------------------------------------------
+  # 2. Auto-label type/security when the title or body matches security keywords
+  # -----------------------------------------------------------------------
+  label-security:
+    name: Auto-label security issues
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened')
+    steps:
+      - name: Check for security keywords and label
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const text = `${issue.title} ${issue.body || ''}`.toLowerCase();
+
+            const securityPattern = /\b(cve|vulnerability|exploit|injection|xss|csrf|rce|sqli|sql injection|auth bypass|authentication bypass|privilege escalation|path traversal|directory traversal|ssrf|open redirect|secret|credential|token leak|api key leak|security|insecure|unsafe)\b/;
+
+            if (securityPattern.test(text)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['type/security'],
+              });
+
+              // Add a comment directing to private disclosure
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `> [!WARNING]
+                > This issue was automatically flagged as potentially security-related.
+                >
+                > If you have found a **vulnerability**, please close this issue and use the [private security advisory](https://github.com/${context.repo.owner}/${context.repo.repo}/security/advisories/new) instead. Public issues are visible to everyone and could put users at risk before a patch is available.
+                >
+                > If this is a general security question (not a vulnerability), you can ignore this message.`,
+              });
+            }
+
+  # -----------------------------------------------------------------------
+  # 3. Stale: close questions after 30 days, bugs with more-info-needed after 14 days
+  #    Never auto-close type/bug without the more-info-needed label
+  # -----------------------------------------------------------------------
+  stale-questions:
+    name: Close stale questions (30 days)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Mark and close stale questions
+        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          # Only target issues labeled type/question
+          only-labels: "type/question"
+          # Exempt bugs and security issues entirely
+          exempt-issue-labels: "type/bug,type/security,type/feature,type/enhancement"
+          days-before-stale: 25
+          days-before-close: 5
+          stale-issue-label: "status/stale"
+          stale-issue-message: |
+            This question has had no activity for 25 days. It will be closed in 5 days unless there is new activity.
+
+            If you still need help, please:
+            1. Check the [FAQ in SUPPORT.md](https://github.com/${{ github.repository }}/blob/main/.github/SUPPORT.md)
+            2. Try [GitHub Discussions](https://github.com/${{ github.repository }}/discussions) for community help
+            3. Comment here with any new information
+
+            Questions are automatically closed after 30 days of inactivity to keep the tracker focused on bugs and features.
+          close-issue-message: |
+            Closing this question after 30 days of inactivity. If you still need help, please open a new issue or ask in [Discussions](https://github.com/${{ github.repository }}/discussions).
+          operations-per-run: 50
+
+  stale-more-info-needed:
+    name: Close bugs awaiting more info (14 days)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Mark and close bugs with more-info-needed
+        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          # Only target issues that have BOTH type/bug AND status/more-info-needed
+          only-labels: "type/bug,status/more-info-needed"
+          days-before-stale: 10
+          days-before-close: 4
+          stale-issue-label: "status/stale"
+          stale-issue-message: |
+            This bug report has been waiting for more information for 10 days. It will be closed in 4 days unless the requested information is provided.
+
+            Please provide the details requested above so we can investigate. Without them, we can't reproduce or fix the issue.
+          close-issue-message: |
+            Closing this bug report after 14 days without the requested information. If you can provide the details, please open a new issue with the full information included.
+          operations-per-run: 50

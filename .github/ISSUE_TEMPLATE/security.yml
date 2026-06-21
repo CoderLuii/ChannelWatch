@@ -1,0 +1,44 @@
+name: Security Vulnerability
+description: Report a security vulnerability (private disclosure only)
+title: "[Security]: "
+labels: ["type/security", "status/needs-triage", "priority/critical"]
+assignees:
+  - CoderLuii
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Stop — do not post vulnerability details here
+
+        This public issue form is for **non-sensitive** security questions only (e.g. "does ChannelWatch support TLS?").
+
+        **If you have found a vulnerability**, please use GitHub's private reporting channel instead:
+
+        **[Report a security vulnerability (private)](https://github.com/CoderLuii/ChannelWatch/security/advisories/new)**
+
+        Private reports are visible only to maintainers. We acknowledge within 48 hours and follow the response SLA in [SECURITY.md](../SECURITY.md):
+        - Critical: 7 days
+        - High: 14 days
+        - Medium/Low: 30 days
+
+        Do not open a public issue for any finding that could expose user data, credentials, or allow unauthorized access. Public disclosure before a patch is available puts all users at risk.
+
+  - type: dropdown
+    id: report_type
+    attributes:
+      label: What kind of security question is this?
+      description: If your answer is "I found a vulnerability", close this and use the private link above.
+      options:
+        - General security question (e.g. TLS support, auth model)
+        - Documentation clarification (e.g. threat model wording)
+        - Supply chain / dependency question
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: Ask your non-sensitive security question here.
+    validations:
+      required: true

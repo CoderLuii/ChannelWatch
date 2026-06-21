@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions (questions & ideas)
+    url: https://github.com/CoderLuii/ChannelWatch/discussions
+    about: Ask questions, share ideas, and get help from the community.
+  - name: SUPPORT.md (FAQ & triage funnel)
+    url: https://github.com/CoderLuii/ChannelWatch/blob/main/.github/SUPPORT.md
+    about: Read the FAQ and support funnel before opening an issue.
+  - name: Private security report
+    url: https://github.com/CoderLuii/ChannelWatch/security/advisories/new
+    about: Report a vulnerability privately. Do not use a public issue.

@@ -1,0 +1,11 @@
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - react-hook-form@7.80.0
+
+overrides:
+  brace-expansion@>=5.0.0 <5.0.6: 5.0.6
+  postcss: 8.5.15

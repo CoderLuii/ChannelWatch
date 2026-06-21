@@ -1,0 +1,72 @@
+area/core:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/core/**"
+      - "app/core/main.py"
+      - "app/core/helpers/**"
+      - "app/core/engine/**"
+      - "app/core/alerts/**"
+      - "app/core/notifications/**"
+
+area/ui:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/ui/**"
+      - "app/ui/backend/**"
+      - "app/ui/components/**"
+      - "app/ui/app/**"
+      - "app/ui/lib/**"
+
+area/docker:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "deploy/docker/Dockerfile"
+      - "deploy/compose/**"
+      - "deploy/config/supervisor/supervisord.conf.template"
+      - "app/core/docker-entrypoint.py"
+      - "deploy/docker/Dockerfile.dockerignore"
+
+area/notifications:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/core/notifications/**"
+      - "app/ui/components/settings/notification*"
+      - "app/ui/components/settings/webhook*"
+
+area/auth:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/ui/backend/main.py"
+      - "app/core/helpers/security*"
+      - "app/ui/components/settings/security*"
+      - "app/ui/components/settings/user*"
+
+area/dvr-api:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/core/engine/event_monitor*"
+      - "app/core/helpers/dvr*"
+      - "app/core/dvr_client*"
+
+area/multidvr:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/core/helpers/dvr_id*"
+      - "app/core/helpers/migration*"
+      - "app/ui/components/settings/dvr*"
+      - "app/ui/components/settings/server*"
+
+area/i18n:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "app/ui/lib/i18n/**"
+      - "**/*.po"
+      - "**/*.pot"
+
+type/docs:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "*.md"
+      - "**/*.md"
+      - "docs/legal/NOTICE"
+      - "LICENSE"

@@ -1,0 +1,99 @@
+- name: "type/bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "type/feature"
+  color: "a2eeef"
+  description: "New capability or behavior"
+
+- name: "type/enhancement"
+  color: "84b6eb"
+  description: "Improvement to an existing feature"
+
+- name: "type/question"
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: "type/docs"
+  color: "0075ca"
+  description: "Documentation addition or correction"
+
+- name: "type/security"
+  color: "e4e669"
+  description: "Security-related finding or question"
+
+- name: "type/regression"
+  color: "b60205"
+  description: "Something that used to work no longer does"
+
+- name: "priority/critical"
+  color: "b60205"
+  description: "Must fix before next release"
+
+- name: "priority/high"
+  color: "e11d48"
+  description: "Important; fix soon"
+
+- name: "priority/medium"
+  color: "f97316"
+  description: "Normal priority"
+
+- name: "priority/low"
+  color: "fbbf24"
+  description: "Nice to have; no urgency"
+
+- name: "area/core"
+  color: "1d76db"
+  description: "Python monitoring core"
+
+- name: "area/ui"
+  color: "0052cc"
+  description: "Next.js frontend or FastAPI backend"
+
+- name: "area/notifications"
+  color: "5319e7"
+  description: "Apprise, webhooks, or notification templates"
+
+- name: "area/docker"
+  color: "006b75"
+  description: "Dockerfile, compose, or entrypoint"
+
+- name: "area/dvr-api"
+  color: "0e8a16"
+  description: "Channels DVR API integration"
+
+- name: "area/auth"
+  color: "c2e0c6"
+  description: "Authentication, RBAC, or API keys"
+
+- name: "area/i18n"
+  color: "bfd4f2"
+  description: "Internationalization or localization"
+
+- name: "area/multidvr"
+  color: "d4c5f9"
+  description: "Multi-DVR support"
+
+- name: "status/needs-triage"
+  color: "ededed"
+  description: "Awaiting maintainer review"
+
+- name: "status/more-info-needed"
+  color: "fef2c0"
+  description: "Waiting for reporter to provide more details"
+
+- name: "status/stale"
+  color: "cfd3d7"
+  description: "No activity for an extended period"
+
+- name: "status/wont-fix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+- name: "status/duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "status/good-first-issue"
+  color: "7057ff"
+  description: "Good for newcomers"

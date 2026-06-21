@@ -1,0 +1,17 @@
+name: channelwatch-vm
+
+services:
+  channelwatch:
+    image: ${CHANNELWATCH_IMAGE:-coderluii/channelwatch:latest}
+    container_name: ${CHANNELWATCH_CONTAINER_NAME:-channelwatch-vm}
+    init: true
+    network_mode: bridge
+    ports:
+      - "${CHANNELWATCH_HTTP_PORT:-8501}:8501"
+    volumes:
+      - "${CHANNELWATCH_CONFIG_DIR:-./.compose-data/vm}:/config"
+    environment:
+      TZ: "${TZ:-America/Los_Angeles}"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+    restart: unless-stopped

@@ -1,0 +1,115 @@
+name: Bug Report
+description: Something isn't working as expected
+title: "[Bug]: "
+labels: ["type/bug", "status/needs-triage"]
+assignees:
+  - CoderLuii
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much detail as you can — it helps us reproduce and fix the issue faster.
+
+        **Before opening:** check [Discussions](https://github.com/CoderLuii/ChannelWatch/discussions) and existing issues to see if this has already been reported.
+
+  - type: input
+    id: cw_version
+    attributes:
+      label: ChannelWatch version
+      description: Run `docker inspect coderluii/channelwatch:latest | grep -i version` or check the UI footer.
+      placeholder: "e.g. 0.9.0"
+    validations:
+      required: true
+
+  - type: input
+    id: dvr_version
+    attributes:
+      label: Channels DVR version
+      description: Shown in the Channels DVR web UI under Settings > About.
+      placeholder: "e.g. 2024.06.15.1234"
+    validations:
+      required: true
+
+  - type: input
+    id: host_os
+    attributes:
+      label: Host OS / platform
+      placeholder: "e.g. Ubuntu 22.04, Synology DSM 7.2, TrueNAS SCALE 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: docker_version
+    attributes:
+      label: Docker version
+      placeholder: "e.g. 24.0.7"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: num_dvrs
+    attributes:
+      label: Number of Channels DVR servers monitored
+      options:
+        - "1"
+        - "2-4"
+        - "5-9"
+        - "10+"
+    validations:
+      required: true
+
+  - type: textarea
+    id: compose_snippet
+    attributes:
+      label: docker-compose.yml snippet
+      description: Paste the relevant portion of your compose file. Remove passwords and API keys.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that reliably trigger the bug.
+      placeholder: |
+        1. Start ChannelWatch with the config above
+        2. Navigate to ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Paste output from `docker logs channelwatch 2>&1 | tail -100` or the full debug bundle from `channelwatch doctor debug bundle`.
+        Wrap long output in a `<details>` block if needed.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, related issues, anything else that might help.
+    validations:
+      required: false

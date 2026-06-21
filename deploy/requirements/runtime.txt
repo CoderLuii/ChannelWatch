@@ -1,0 +1,29 @@
+# Core
+setuptools>=82.0.1
+pip>=26.1.2
+requests>=2.34.2
+httpx>=0.28.1
+pytz>=2026.2
+pydantic>=2.13.4
+
+# Events
+sseclient-py>=1.9.0
+
+# Storage and auth
+sqlmodel>=0.0.38
+bcrypt>=5.0.0
+cryptography>=49.0.0
+
+# Notifications
+apprise>=1.11.0
+
+# Web
+fastapi>=0.138.0
+uvicorn[standard]>=0.49.0
+python-multipart>=0.0.32
+
+# Discovery
+zeroconf>=0.149.16
+
+# Management
+supervisor>=4.3.0

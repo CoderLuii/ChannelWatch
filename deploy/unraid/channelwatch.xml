@@ -13,7 +13,7 @@
   <Category>MediaApp:Video</Category>
   <WebUI>http://[IP]:[PORT:8501]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/CoderLuii/ChannelWatch/refs/heads/main/deploy/unraid/channelwatch.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/CoderLuii/ChannelWatch/refs/heads/main/ui/public/favicon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/CoderLuii/ChannelWatch/refs/heads/main/app/ui/public/favicon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>

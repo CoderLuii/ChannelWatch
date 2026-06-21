@@ -1,0 +1,22 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "^https?://localhost"
+    },
+    {
+      "pattern": "node_modules"
+    },
+    {
+      "pattern": "^http://127\\."
+    }
+  ],
+  "retryOn429": true,
+  "retryCount": 2,
+  "aliveStatusCodes": [
+    200,
+    206,
+    301,
+    302
+  ],
+  "timeout": "10s"
+}

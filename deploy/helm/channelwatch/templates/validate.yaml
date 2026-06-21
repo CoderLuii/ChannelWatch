@@ -1,0 +1,6 @@
+{{- if ne (int .Values.replicaCount) 1 -}}
+{{- fail "ChannelWatch supports replicaCount=1 only. Multi-replica is unsupported because /config is shared state and the application is not designed for concurrent writers." -}}
+{{- end -}}
+{{- if not .Values.persistence.enabled -}}
+{{- fail "ChannelWatch requires persistence.enabled=true because /config must be backed by a PersistentVolumeClaim." -}}
+{{- end -}}

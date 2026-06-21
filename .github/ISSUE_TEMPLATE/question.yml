@@ -1,0 +1,61 @@
+name: Question
+description: Ask a question about using or configuring ChannelWatch
+title: "[Question]: "
+labels: ["type/question", "status/needs-triage"]
+assignees:
+  - CoderLuii
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Please check these first
+
+        Issues are for bugs and feature requests. Questions get faster, richer answers in [GitHub Discussions](https://github.com/CoderLuii/ChannelWatch/discussions).
+
+        **Before continuing:**
+        1. Check the [FAQ in SUPPORT.md](../SUPPORT.md) for common setup questions.
+        2. Search [Discussions](https://github.com/CoderLuii/ChannelWatch/discussions) — your question may already be answered.
+        3. Search [existing issues](https://github.com/CoderLuii/ChannelWatch/issues) for related bugs.
+
+        If you've done all three and still need help, fill in the form below. Questions with no activity for 30 days are automatically closed.
+
+  - type: input
+    id: cw_version
+    attributes:
+      label: ChannelWatch version
+      placeholder: "e.g. 0.9.0"
+    validations:
+      required: true
+
+  - type: input
+    id: host_os
+    attributes:
+      label: Host OS / platform
+      placeholder: "e.g. Ubuntu 22.04, Synology DSM 7.2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: Be specific. Include what you're trying to accomplish and what you've already tried.
+    validations:
+      required: true
+
+  - type: textarea
+    id: already_tried
+    attributes:
+      label: What I've already tried
+      description: Docs read, config changes attempted, search terms used.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config_snippet
+    attributes:
+      label: Relevant configuration (optional)
+      description: Paste your docker-compose.yml or settings snippet if relevant. Remove passwords and API keys.
+      render: yaml
+    validations:
+      required: false

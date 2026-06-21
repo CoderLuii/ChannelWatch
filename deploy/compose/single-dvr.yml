@@ -1,0 +1,21 @@
+name: channelwatch-single-dvr
+
+services:
+  channelwatch:
+    image: ${CHANNELWATCH_IMAGE:-coderluii/channelwatch:latest} # ChannelWatch image tag to run for this profile.
+    container_name: ${CHANNELWATCH_CONTAINER_NAME:-channelwatch-single-dvr} # Container name used by docker ps and logs for this profile.
+    init: true
+    network_mode: bridge
+    ports:
+      - "${CHANNELWATCH_HTTP_PORT:-18501}:8501" # Host port that exposes the UI and health endpoints on this machine.
+    volumes:
+      - "${CHANNELWATCH_CONFIG_DIR:-./.compose-data/single-dvr}:/config" # Host path that stores settings.json, logs, history, and per-DVR state.
+    environment:
+      CHANNELS_DVR_HOST: "${CHANNELS_DVR_HOST:-dvr-one.example.invalid}" # Single DVR hostname or IP that will be merged into dvr_servers[0] at startup.
+      CHANNELS_DVR_PORT: "${CHANNELS_DVR_PORT:-8089}" # API port for CHANNELS_DVR_HOST.
+      TZ: "${TZ:-America/New_York}" # IANA timezone used for UI timestamps and scheduled-event formatting.
+      PUID: "${PUID:-1000}" # Host user id that should own files written under /config.
+      PGID: "${PGID:-1000}" # Host group id that should own files written under /config.
+      CW_LOG_LEVEL: "${CW_LOG_LEVEL:-1}" # ChannelWatch log verbosity, 1=standard, 2=verbose.
+      CW_DISABLE_AUTH: "${CW_DISABLE_AUTH:-false}" # Set to true only for trusted local testing where API auth should be disabled.
+    restart: unless-stopped

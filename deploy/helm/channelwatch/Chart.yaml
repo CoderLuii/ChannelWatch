@@ -1,0 +1,6 @@
+apiVersion: v2
+name: channelwatch
+description: Single-replica Helm chart for ChannelWatch
+type: application
+version: 0.9.0
+appVersion: "0.9.0"

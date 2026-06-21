@@ -9,7 +9,7 @@ ChannelWatch does not expose the full Apprise catalog. Providers not listed here
 `deploy/requirements/runtime.txt` sets the Apprise dependency as:
 
 ```text
-apprise>=1.4.0
+apprise>=1.11.0
 ```
 
 

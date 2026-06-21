@@ -6,9 +6,6 @@ httpx>=0.28.1
 pytz>=2026.2
 pydantic>=2.13.4
 
-# Events
-sseclient-py>=1.9.0
-
 # Storage and auth
 sqlmodel>=0.0.38
 bcrypt>=5.0.0

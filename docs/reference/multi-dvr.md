@@ -104,7 +104,7 @@ Environment bootstrap:
 | Input | Shipped v0.9 behavior |
 |---|---|
 | `CHANNELS_DVR_SERVERS` | Parses comma-separated `Name@host:port` entries, preserves existing matching IDs and overrides, and keeps manual entries not listed in the env value. |
-| `CHANNELS_DVR_HOST`, `CHANNELS_DVR_PORT` | Legacy single-DVR compatibility path. Still accepted with a warning, despite the original plan to remove it in v0.9. |
+| `CHANNELS_DVR_HOST`, `CHANNELS_DVR_PORT` | Legacy single-DVR compatibility path. Still accepted with a warning in v0.9. |
 | `CW_DVR_<N>_*` and `/config/dvrs.yaml` | Deferred. They are listed as known limits in the v0.9 changelog and are not implemented in the shipped config loader. |
 
 ## Per-DVR state isolation
@@ -257,18 +257,18 @@ The v0.9 changelog is authoritative for known limits.
 | Config loaders | `CHANNELS_DVR_SERVERS` comma-separated `Name@host:port` entries and legacy single-DVR env vars ship. `CW_DVR_<N>_*` and `/config/dvrs.yaml` are deferred. |
 | Concurrency | The core has asyncio task groups, but parts of event monitoring still run through threads. |
 | Real DVR CI | Mock cluster tests exist. A real Channels DVR image lane is deferred. |
-| Display field split | The plan called for separate `display_name`; shipped v0.9 primarily uses `name`. |
+| Display field split | A separate `display_name` field is not shipped; v0.9 primarily uses `name`. |
 | Legacy env vars | Legacy `CHANNELS_DVR_HOST` and `CHANNELS_DVR_PORT` still work with warnings. Full removal is deferred. |
 
 ## Relationship to `docs/how-to/multi-dvr.md`
 
 `docs/how-to/multi-dvr.md` is the user-facing guide. It explains practical setup, discovery, routing, removal, restore, and general limits.
 
-This reference is intentionally more exhaustive. It adds exact settings shapes, shipped field names, implementation-level routing defaults, state isolation details, hot reload internals, encryption behavior, and known v0.9 drift from the original plan.
+This reference is intentionally more exhaustive. It adds exact settings shapes, shipped field names, implementation-level routing defaults, state isolation details, hot reload internals, encryption behavior, and known v0.9 limits.
 
 The two documents should not contradict each other. If they differ, treat this page as the more detailed reference and verify against the cited source files.
 
 ## See also
 
 * `docs/how-to/multi-dvr.md`, multi-DVR how-to guide
-* `docs/releases/CHANGELOG.md`, v0.9.0 release notes and known limits
+* `docs/releases/CHANGELOG.md`, v0.9 release notes and known limits

@@ -32,12 +32,12 @@ FROM cgr.dev/chainguard/python:latest
 
 USER root
 
-ARG VERSION=0.9.0
+ARG VERSION=0.9.1
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 
 LABEL org.opencontainers.image.title="ChannelWatch"
-LABEL org.opencontainers.image.description="Self-hosted monitoring for Channels DVR"
+LABEL org.opencontainers.image.description="Self-hosted Channels DVR monitoring with multi-DVR dashboards, alerts, health checks, and notifications"
 LABEL org.opencontainers.image.source="https://github.com/CoderLuii/ChannelWatch"
 LABEL org.opencontainers.image.url="https://hub.docker.com/r/coderluii/channelwatch"
 LABEL org.opencontainers.image.version="${VERSION}"

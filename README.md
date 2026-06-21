@@ -215,8 +215,8 @@ docker logs -f channelwatch
 Useful in-container checks:
 
 ```bash
-docker exec -it channelwatch channelwatch doctor test-connectivity
-docker exec -it channelwatch channelwatch doctor test-api
+docker exec -it channelwatch channelwatch doctor config-check
+docker exec -it channelwatch channelwatch doctor diagnose
 docker exec -it channelwatch channelwatch doctor reset-admin-password --username <admin>
 ```
 

@@ -216,7 +216,7 @@ The Backup tab does not add fields to `settings.json`. It exposes backup and res
 
 | Setting | Schema default | Core default | Entrypoint first-file default | Note |
 |---|---:|---:|---:|---|
-| `_version` | Not a Pydantic field | Migration managed | `3` | Core migrations own the authoritative schema epoch; UI saves preserve the existing `_version` when present and should not be treated as the source of truth for core migration state. |
+| `_version` | Not a Pydantic field | Migration managed | `7` | Core migrations own the authoritative schema epoch; UI saves preserve the existing `_version` when present and should not be treated as the source of truth for core migration state. |
 | `history_retention_days` | `90` | `90` | omitted | Added by model defaults or migration after load. |
 | `multi_dvr_v2_enabled` | `true` | `true` | omitted | Added by model defaults or migration after load. |
 | `rbac_enabled` | `false` | omitted | omitted | UI schema only, derived from auth mode in the Security tab. |

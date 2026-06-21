@@ -8,7 +8,15 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
-## [0.9.0] - 2026-06-20
+## [0.9.1] - 2026-06-21
+
+### Fixed
+
+- Align public documentation, operator guidance, release metadata, and deployment examples with the current v0.9 release line.
+- Remove stale unused dependency entries from runtime and UI manifests.
+- Make webhook receiver examples require an explicit shared secret instead of falling back to placeholder values.
+
+## [0.9.0] - 2026-06-21
 
 ### Added
 
@@ -62,13 +70,13 @@ All notable changes to this project will be documented in this file. The format 
 - Authentication ships with API-key support and optional RBAC cookie sessions, but optional HTTP Basic Auth is not included yet. This keeps the v0.9 auth surface smaller while the patch series fills the remaining compatibility gap.
 - The core now has an asyncio entry point and per-DVR task groups, but part of the event monitor still uses internal threads. Full removal of that threading layer is deferred so v0.9 can ship with the safer mixed model already tested.
 - The core logs a soft warning around more than 10 DVRs. Larger setups may still work, but v0.9 does not display a UI scale warning or override control.
-- Performance baseline tooling and the CI regression gate are not complete. A post-check found a large 10-DVR webhook latency regression, so v0.9.1 should investigate that path before turning the gate on.
-- The main multi-DVR UI pieces have badges, including the wizard, switcher, and tabs, but the full "badges everywhere" audit is still open. v0.9 ships the verified badge coverage and leaves the exhaustive polish pass for a patch release.
+- Performance baseline tooling and the CI regression gate are not complete. A 10-DVR webhook stress path still needs follow-up before a latency gate is enabled.
+- The main multi-DVR UI pieces have badges, including the wizard, switcher, and tabs. Secondary badge polish remains a patch-release follow-up.
 - Mock DVR cluster tests are in place, but the real Channels DVR image is not yet part of CI. That lane is deferred because it needs license-backed setup work before it can run reliably for every build.
-- The code still uses `name` as the primary display field in several places, even though the plan called for a separate user-editable `display_name`. Migration paths preserve the value, but the full rename is deferred to avoid a late-breaking UI and API churn.
+- The primary DVR display field remains `name`; a separate user-editable `display_name` field is deferred to avoid late UI and API churn.
 - Legacy `CHANNELS_DVR_HOST` and `CHANNELS_DVR_PORT` settings still work with loud startup warnings. Full removal is deferred to v1.1 so existing deployments get a safer transition window.
 - Debug bundles and zero-telemetry behavior are implemented, and a user-supplied Sentry or GlitchTip DSN can be saved and masked, but no crash-reporting client is wired in v0.9. The default remains no phone-home telemetry.
-- The shipped Helm chart is real, but it is single replica only because ChannelWatch uses shared writable state under `/config`. Optional Ingress is available, and local `helm lint` plus default/enabled template checks passed during final polish.
+- The shipped Helm chart is single replica only because ChannelWatch uses shared writable state under `/config`. Optional Ingress is available, and local `helm lint` plus default/enabled template checks passed for the v0.9 release.
 
 ## [0.8.0] - 2026-06-19
 
@@ -149,7 +157,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/releases
-[0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases
-[0.8.0]: https://github.com/CoderLuii/ChannelWatch/releases
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.1
+[0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.0
+[0.8.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.8
 [0.7.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.7

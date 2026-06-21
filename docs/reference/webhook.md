@@ -23,7 +23,7 @@ The current sender derives `eventType` from the notification title, message, and
 | `alert.notification` | A notification includes `image_url` and no earlier rule matched. |
 | `notification` | Fallback for all other notifications. |
 
-The design memo discusses future event specific payloads such as live stream details and recording metadata. The current production payload is a notification envelope with `title`, `message`, and optional `imageUrl` inside `data`.
+Future payload versions may add event-specific fields such as live stream details and recording metadata. The v0.9 payload is a notification envelope with `title`, `message`, and optional `imageUrl` inside `data`.
 
 ## Payload schema
 
@@ -41,7 +41,7 @@ Example payload:
   "timestamp": "2026-04-26T18:30:00Z",
   "instanceName": "ChannelWatch",
   "instanceUrl": "http://localhost:8501",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "deliveryId": "8d79f4f7-5c46-4f31-b812-dc17f5c6cf1b",
   "dvr_id": "dvr_1234",
   "dvr_name": "Living Room DVR",
@@ -155,7 +155,7 @@ A per endpoint retry happens after any of these results:
 | `httpx.TimeoutException` | Yes, until 3 attempts are used. |
 | `httpx.RequestError` | Yes, until 3 attempts are used. |
 
-Current code uses fixed exponential delays of 1 second and 2 seconds. It does not add jitter. The design memo proposed jitter, but it is not implemented in `app/core/notifications/webhook.py`.
+Current code uses fixed exponential delays of 1 second and 2 seconds. It does not add jitter in `app/core/notifications/webhook.py`.
 
 Each HTTP attempt uses a 5 second timeout.
 
@@ -205,13 +205,14 @@ Use `deliveryId` to ignore duplicate deliveries. Retries can send the same paylo
 
 ### Flask receiver
 
-This Flask app validates the signature before reading the JSON payload. It is written as an app factory so importing the file does not bind a port.
+This Flask app validates the signature before reading the JSON payload. It reads the shared secret from `CHANNELWATCH_WEBHOOK_SECRET` and is written as an app factory so importing the file does not bind a port.
 
 ```text
 import hashlib
 import hmac
+import os
 
-WEBHOOK_SECRET = "replace-with-your-webhook-secret"
+WEBHOOK_SECRET = os.environ["CHANNELWATCH_WEBHOOK_SECRET"]
 
 
 def verify_channelwatch_signature(secret: str, body: bytes, signature: str) -> bool:
@@ -259,7 +260,11 @@ import crypto from "node:crypto";
 import express from "express";
 
 const app = express();
-const secret = process.env.CHANNELWATCH_WEBHOOK_SECRET || "replace-with-your-webhook-secret";
+const secret = process.env.CHANNELWATCH_WEBHOOK_SECRET;
+
+if (!secret) {
+  throw new Error("Set CHANNELWATCH_WEBHOOK_SECRET before starting the receiver.");
+}
 
 function verifyChannelWatchSignature(body, signature) {
   const expected = "sha256=" + crypto

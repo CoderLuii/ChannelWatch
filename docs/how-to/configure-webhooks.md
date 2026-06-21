@@ -16,7 +16,7 @@ Before you start, have:
 
 1. A ChannelWatch instance with access to the Settings page.
 2. A receiver URL that ChannelWatch can reach from its container or host network.
-3. A shared HMAC secret for the receiver. This guide uses `your_webhook_secret` as the placeholder.
+3. A shared HMAC secret for the receiver. The examples read it from `CHANNELWATCH_WEBHOOK_SECRET`.
 4. Python with Flask, or Node.js with Express, if you want to run one of the sample receivers below.
 
 Do not paste a real secret into docs, screenshots, tickets, or logs.
@@ -35,14 +35,14 @@ For local testing from a container, make sure the URL is reachable from the Chan
 ## Step 2: Set HMAC secret
 
 1. In the same webhook settings row, set the secret to the same value your receiver will use.
-2. For this guide, use `your_webhook_secret` in both ChannelWatch and the sample receiver.
+2. Use the same value in ChannelWatch and in the receiver's `CHANNELWATCH_WEBHOOK_SECRET` environment variable.
 3. Save the settings again.
 
 ChannelWatch skips webhook delivery when the secret is empty or still set to the masked value `****`. If you see a saved secret displayed as `****`, that is the UI mask, not the value you should copy into a receiver.
 
 ## Step 3: Run a sample receiver
 
-Run one of these receivers on a host that ChannelWatch can reach. Both examples verify `X-ChannelWatch-Signature` against the raw request body before reading the JSON payload.
+Run one of these receivers on a host that ChannelWatch can reach. Both examples verify `X-ChannelWatch-Signature` against the raw request body before reading the JSON payload. Set `CHANNELWATCH_WEBHOOK_SECRET` to the same secret saved in ChannelWatch before starting the receiver.
 
 ### Python Flask receiver
 
@@ -51,10 +51,11 @@ Save this as `receiver.py`:
 ```text
 import hashlib
 import hmac
+import os
 
 from flask import Flask, abort, request
 
-WEBHOOK_SECRET = "your_webhook_secret"
+WEBHOOK_SECRET = os.environ["CHANNELWATCH_WEBHOOK_SECRET"]
 
 
 def verify_channelwatch_signature(secret: str, body: bytes, signature: str) -> bool:
@@ -90,7 +91,7 @@ Install Flask if needed, then run:
 
 ```text
 python3 -m pip install flask
-flask --app receiver run --host 0.0.0.0 --port 9000
+CHANNELWATCH_WEBHOOK_SECRET=use-a-private-random-value flask --app receiver run --host 0.0.0.0 --port 9000
 ```
 
 Use this ChannelWatch webhook URL if the receiver is reachable on the same host and port:
@@ -108,7 +109,11 @@ const crypto = require("node:crypto");
 const express = require("express");
 
 const app = express();
-const secret = process.env.CHANNELWATCH_WEBHOOK_SECRET || "your_webhook_secret";
+const secret = process.env.CHANNELWATCH_WEBHOOK_SECRET;
+
+if (!secret) {
+  throw new Error("Set CHANNELWATCH_WEBHOOK_SECRET before starting the receiver.");
+}
 
 function verifyChannelWatchSignature(body, signature) {
   const expected = "sha256=" + crypto
@@ -146,7 +151,7 @@ Install Express if needed, then run:
 
 ```text
 npm install express
-node receiver.js
+CHANNELWATCH_WEBHOOK_SECRET=use-a-private-random-value node receiver.js
 ```
 
 Use this ChannelWatch webhook URL if the receiver is reachable on the same host and port:
@@ -169,7 +174,7 @@ Watch the receiver terminal after triggering the test alert. A successful delive
 signature ok event=test delivery=<delivery-id>
 ```
 
-If the receiver logs `signature failed`, check that ChannelWatch and the receiver use the same exact secret, such as `your_webhook_secret` during local testing. Also confirm the receiver verifies the raw request body bytes. Parsing and reserializing JSON before the HMAC check changes the signed bytes and will fail validation.
+If the receiver logs `signature failed`, check that ChannelWatch and the receiver use the same exact secret. Also confirm the receiver verifies the raw request body bytes. Parsing and reserializing JSON before the HMAC check changes the signed bytes and will fail validation.
 
 ## Troubleshoot
 

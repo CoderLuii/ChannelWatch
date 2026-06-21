@@ -2,14 +2,14 @@
 
 ## Supported versions
 
-Security fixes are provided for the current 1.x release line.
+Security fixes are provided for the current stable release line.
 
 | Version line | Supported |
 |---|---|
-| 1.x | Yes |
-| 0.x and earlier pre-release builds | No |
+| 0.9.x | Yes |
+| 0.8.x and earlier | No |
 
-If you are still on a 0.x build, upgrade before reporting a security issue unless the issue itself blocks upgrade.
+If you are still on an older build, upgrade before reporting a security issue unless the issue itself blocks upgrade.
 
 ## Reporting a vulnerability
 
@@ -230,7 +230,7 @@ The repository now ships a Helm chart, but it is intentionally single replica on
 
 That is not a temporary documentation omission. The chart itself enforces `replicaCount=1` because ChannelWatch uses shared writable state under `/config` and is not designed for concurrent writers.
 
-The final v0.9 polish pass verified the chart with `helm lint`, confirmed the default render creates no Ingress, and confirmed `--set ingress.enabled=true` renders one `networking.k8s.io/v1` Ingress. Those checks do not change the single-replica posture.
+The v0.9 chart was checked with `helm lint`, a default render with no Ingress, and an Ingress-enabled render that creates one `networking.k8s.io/v1` Ingress. Those checks do not change the single-replica posture.
 
 ## Shipped v0.9 security hardening
 
@@ -247,7 +247,7 @@ The final v0.9 polish pass verified the chart with `helm lint`, confirmed the de
 Current release posture:
 
 - images are built and published through GitHub Actions
-- provenance attestation is part of the release story
+- tagged Docker releases publish build provenance attestations
 - dependency updates are tracked in the repository
 
 Not yet claimed as complete here:

@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `0.9.0` for the v0.9.0 release
+- `0.9.1` for the v0.9.1 release
 - `0.9` for patch-line pinning
 
 ## Quick Start

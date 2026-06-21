@@ -21,7 +21,7 @@ Items here are goals, not promises.
 ### Release and supply chain follow-up
 
 - extend release hardening beyond provenance attestation
-- add image signing and SBOM publishing when the release process is ready
+- add image signing and SBOM publishing when the container publishing path supports them
 - keep dependency update coverage current for both Python and UI dependencies
 
 ### Operator experience
@@ -47,7 +47,7 @@ Items here are goals, not promises.
 ### Maintainer resilience
 
 - reduce single-maintainer risk over time
-- add more release-process documentation and backup admin coverage when practical
+- improve maintainer handoff notes and backup admin coverage when practical
 
 ## v2.0 themes
 

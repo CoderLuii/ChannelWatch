@@ -1,6 +1,6 @@
 # FastAPI endpoint reference
 
-This reference catalogs the HTTP routes registered by `app/ui/backend/main.py`, including the included `/api/v1/auth` router. `app/ui/backend/routers/` does not exist in this snapshot, so there are no external router modules to include.
+This reference catalogs the HTTP routes registered by `app/ui/backend/main.py`, including the `/api/v1/auth` routes registered by the in-file auth router. There are no separate backend router modules in the v0.9 release.
 
 Prefix note: `/api/` is the legacy v0.7 compatible surface. `/api/v1/` is the canonical v1 API namespace for new integrations.
 
@@ -166,7 +166,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.0","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.1","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -872,7 +872,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.0","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.1","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`
@@ -1219,7 +1219,7 @@ Example response:
 
 ## Feeds
 
-The canonical feed paths are under `/api/v1/feeds/`. Bare-path aliases (`/api/v1/calendar.ics`, `/api/v1/feed.rss`, `/api/v1/feed.atom`) are provided for compatibility with planning specs and external subscribers that pre-date the feed namespacing; they reuse the same handlers, query parameters, token checks, and rate limits as the canonical paths. The feed renderers are implemented in-tree with standard-library XML/date helpers and manual ICS/RSS/Atom formatting, so `icalendar` and `feedgen` are intentionally not required runtime dependencies.
+The canonical feed paths are under `/api/v1/feeds/`. Bare-path aliases (`/api/v1/calendar.ics`, `/api/v1/feed.rss`, `/api/v1/feed.atom`) are provided for older integrations and feed subscribers that pre-date the feed namespacing; they reuse the same handlers, query parameters, token checks, and rate limits as the canonical paths. The feed renderers are implemented in-tree with standard-library XML/date helpers and manual ICS/RSS/Atom formatting, so `icalendar` and `feedgen` are intentionally not required runtime dependencies.
 
 ### `GET /api/v1/feeds/calendar.ics`
 
@@ -1324,7 +1324,7 @@ Example response:
 
 ## Route coverage summary
 
-This document includes 52 HTTP endpoint entries: 46 non-hidden app endpoint headings from the route inventory plus 6 included `/api/v1/auth` router headings. The conditional `/` UI fallback is listed separately above and is intentionally not counted as an API endpoint entry. There are no WebSocket endpoints in `main.py`.
+This document includes 52 API endpoint entries: 46 canonical app endpoint headings from the current v0.9 route set, including health and metrics probe endpoints that are hidden from OpenAPI, plus 6 included `/api/v1/auth` router headings. The conditional `/` UI fallback is listed separately above and is intentionally not counted as an API endpoint entry. The 3 feed alias routes are documented as alias rows under their canonical feed endpoints. There are no WebSocket endpoints in `main.py`.
 
 ## See also
 

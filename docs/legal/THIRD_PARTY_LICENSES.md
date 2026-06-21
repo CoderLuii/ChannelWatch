@@ -1,8 +1,6 @@
 # Third-Party Licenses
 
-ChannelWatch is built on open-source software. This file lists the major runtime dependencies, their versions, and their licenses.
-
-> **CI note**: Before each release, verify this list against `pip-licenses --format=markdown` output and confirm no AGPL, SSPL, or non-commercial-only licenses have been introduced.
+ChannelWatch is built on open-source software. This file lists the major runtime dependencies, their versions, and their licenses. The dependency manifests in `deploy/requirements/runtime.txt`, `app/ui/package.json`, and `app/ui/pnpm-lock.yaml` are the authoritative dependency lists.
 
 ---
 
@@ -10,20 +8,21 @@ ChannelWatch is built on open-source software. This file lists the major runtime
 
 | Package | Version (minimum) | License | Notes |
 |---------|-------------------|---------|-------|
-| [setuptools](https://github.com/pypa/setuptools) | >=65.5.1 | MIT | Python packaging |
-| [pip](https://pip.pypa.io/) | >=23.3 | MIT | Package installer |
-| [requests](https://requests.readthedocs.io/) | >=2.31.0 | Apache 2.0 | HTTP client |
-| [httpx](https://www.python-httpx.org/) | >=0.25.0 | BSD 3-Clause | Async HTTP client (SSE streaming) |
-| [pytz](https://pythonhosted.org/pytz/) | >=2023.3 | MIT | Timezone support |
-| [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.21 | MIT | SQLite models and persistence |
-| [bcrypt](https://github.com/pyca/bcrypt/) | >=4.0.0 | Apache 2.0 | Password hashing |
-| [apprise](https://github.com/caronc/apprise) | >=1.4.0 | MIT | Multi-provider notification delivery |
-| [pydantic](https://docs.pydantic.dev/) | >=2.0.0 | MIT | Data validation and settings |
-| [fastapi](https://fastapi.tiangolo.com/) | >=0.100.0 | MIT | Web API framework |
-| [uvicorn](https://uvicorn.dev/) | >=0.20.0 | BSD 3-Clause | ASGI server |
-| [python-multipart](https://github.com/Kludex/python-multipart) | >=0.0.9 | Apache 2.0 | Multipart form parsing for FastAPI uploads |
-| [zeroconf](https://github.com/python-zeroconf/python-zeroconf) | >=0.131.0 | LGPL 2.1 | mDNS/Bonjour DVR discovery |
-| [supervisor](http://supervisord.org/) | >=4.2.0 | BSD-derived (Repoze) | Process manager inside container |
+| [setuptools](https://github.com/pypa/setuptools) | >=82.0.1 | MIT | Python packaging |
+| [pip](https://pip.pypa.io/) | >=26.1.2 | MIT | Package installer |
+| [requests](https://requests.readthedocs.io/) | >=2.34.2 | Apache 2.0 | HTTP client |
+| [httpx](https://www.python-httpx.org/) | >=0.28.1 | BSD 3-Clause | Async HTTP client |
+| [pytz](https://pythonhosted.org/pytz/) | >=2026.2 | MIT | Timezone support |
+| [pydantic](https://docs.pydantic.dev/) | >=2.13.4 | MIT | Data validation and settings |
+| [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.38 | MIT | SQLite models and persistence |
+| [bcrypt](https://github.com/pyca/bcrypt/) | >=5.0.0 | Apache 2.0 | Password hashing |
+| [cryptography](https://cryptography.io/) | >=49.0.0 | Apache 2.0 / BSD | Per-DVR API-key encryption and TLS helpers |
+| [apprise](https://github.com/caronc/apprise) | >=1.11.0 | MIT | Multi-provider notification delivery |
+| [fastapi](https://fastapi.tiangolo.com/) | >=0.138.0 | MIT | Web API framework |
+| [uvicorn](https://uvicorn.dev/) | >=0.49.0 | BSD 3-Clause | ASGI server |
+| [python-multipart](https://github.com/Kludex/python-multipart) | >=0.0.32 | Apache 2.0 | Multipart form parsing for FastAPI uploads |
+| [zeroconf](https://github.com/python-zeroconf/python-zeroconf) | >=0.149.16 | LGPL 2.1 | mDNS/Bonjour DVR discovery |
+| [supervisor](http://supervisord.org/) | >=4.3.0 | BSD-derived (Repoze) | Process manager inside container |
 
 ### Transitive dependencies (selected)
 
@@ -31,7 +30,6 @@ The packages above pull in additional transitive dependencies. Key ones with not
 
 | Package | License | Notes |
 |---------|---------|-------|
-| [cryptography](https://cryptography.io/) | Apache 2.0 / BSD | TLS, key derivation |
 | [starlette](https://www.starlette.io/) | BSD 3-Clause | ASGI toolkit (FastAPI dependency) |
 | [anyio](https://anyio.readthedocs.io/) | MIT | Async compatibility layer |
 | [certifi](https://github.com/certifi/python-certifi) | MPL 2.0 | CA certificate bundle |
@@ -57,7 +55,7 @@ The web UI is built with Next.js and React. Key frontend dependencies:
 | [Radix UI](https://www.radix-ui.com/) | MIT | Accessible UI primitives |
 | [Lucide React](https://lucide.dev/) | ISC | Icon library |
 
-A full frontend dependency list is available in `app/ui/package.json` and `app/ui/pnpm-lock.yaml`. The current dependency manifest also includes React Hook Form, Recharts, Zod, class-variance-authority, clsx, cmdk, next-themes, tailwind-merge, tailwindcss-animate, and build/test tooling such as TypeScript, Vitest, Playwright, ESLint, PostCSS, and Vite.
+A full frontend dependency list is available in `app/ui/package.json` and `app/ui/pnpm-lock.yaml`. The current dependency manifest also includes React Hook Form, Recharts, Zod, class-variance-authority, clsx, cmdk, next-themes, tailwind-merge, tw-animate-css, and build/test tooling such as TypeScript, Vitest, Playwright, ESLint, PostCSS, and Vite.
 
 ---
 
@@ -80,25 +78,17 @@ https://www.apache.org/licenses/LICENSE-2.0
 
 ---
 
-## License Audit
+## License Policy Summary
 
-Before each release, run the following to verify no prohibited licenses have been introduced:
+ChannelWatch avoids the following license categories for runtime code dependencies:
 
-```bash
-pip install pip-licenses
-pip-licenses --format=markdown --order=license
-```
-
-Prohibited license categories for this project:
 - AGPL (any version)
 - SSPL
 - Non-commercial / "free for non-commercial use" variants
 - Creative Commons licenses on code (CC-BY-NC, etc.)
 
-If any such license appears, the dependency must be replaced or the license situation resolved before release.
+Dependencies with one of these licenses need to be replaced or reviewed before they are added to the runtime surface.
 
 ---
 
-*This file is maintained manually and updated with each release. For the authoritative machine-generated list, run `pip-licenses` against the installed environment.*
-
-Last verified: 2026-04-26 against `deploy/requirements/runtime.txt` and `app/ui/package.json`.
+Last verified: 2026-06-21 against `deploy/requirements/runtime.txt` and `app/ui/package.json`.

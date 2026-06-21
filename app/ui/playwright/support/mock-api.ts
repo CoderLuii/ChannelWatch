@@ -102,7 +102,7 @@ const settings = {
 }
 
 const systemInfo = {
-  channelwatch_version: "0.9.0",
+  channelwatch_version: "0.9.1",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",

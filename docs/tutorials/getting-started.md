@@ -32,7 +32,7 @@ This tutorial uses `/opt/channelwatch` as the example install folder. Replace it
 
    Pulling first lets you catch network or Docker Hub access problems before you write any configuration. The same image name is used by the project Compose file and by the published Docker image.
 
-## Step 2: Create the config directory and minimal settings file
+## Step 2: Create the config directory
 
 1. Create a persistent config directory:
 
@@ -42,25 +42,11 @@ This tutorial uses `/opt/channelwatch` as the example install folder. Replace it
 
    ChannelWatch stores `settings.json`, logs, activity history, and per-DVR session state in `/config` inside the container. The host folder keeps that data safe when the container is replaced.
 
-2. Create `/opt/channelwatch/config/settings.json` with this minimal starting point:
+2. Do not create `settings.json` by hand for a normal fresh install.
 
-   ```json
-   {
-     "dvr_servers": [],
-     "tz": "America/New_York",
-     "log_level": 1,
-     "alert_channel_watching": true,
-     "alert_vod_watching": true,
-     "alert_disk_space": true,
-     "alert_recording_events": true,
-     "security_setup_completed": false,
-     "_version": 3
-   }
-   ```
+   On first start, ChannelWatch creates the current settings file under `/config`, then the first-run wizard walks you through secure login or trusted-network no-auth mode and DVR setup. This avoids stale schema values and keeps the web UI as the source of truth for application settings.
 
-   This file is intentionally small. It keeps alerts enabled and leaves DVR, authentication, and notification setup for the first-run wizard and Settings pages.
-
-3. Change `tz` if you want timestamps to use a different timezone.
+3. Set the `TZ` environment variable in Compose if you want timestamps to use a different timezone before first start.
 
    For every available saved setting, see [settings reference](../reference/settings.md). For one-time container bootstrap variables, see [environment variables reference](../reference/env-vars.md).
 

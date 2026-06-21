@@ -4,7 +4,7 @@ ChannelWatch exposes lightweight probe endpoints, operator diagnostics in the we
 
 ## Probe endpoints
 
-There is no root `GET /healthz` route in this snapshot. The implemented health routes are `GET /healthz/live`, `GET /healthz/ready`, and `GET /healthz/startup`. They are exempt from authentication and rate limits.
+There is no root `GET /healthz` route in v0.9. The implemented health routes are `GET /healthz/live`, `GET /healthz/ready`, and `GET /healthz/startup`. They are exempt from authentication and rate limits.
 
 ### `GET /healthz/live`
 

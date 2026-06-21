@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   repository: coderluii/channelwatch
-  tag: "0.9.0"
+  tag: "0.9.1"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

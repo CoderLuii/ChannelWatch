@@ -33,7 +33,7 @@ const baseProps = {
   activeProviderNames: ["Discord"],
   activeAlertTypes: ["Channel Watching"],
   coreProcessStatus: "Running",
-  channelwatchVersion: "0.9.1",
+  channelwatchVersion: "0.9.2",
   currentSettings: baseSettings,
   onNavigate: vi.fn(),
 }

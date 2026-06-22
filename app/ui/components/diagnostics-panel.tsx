@@ -44,6 +44,7 @@ import {
   downloadDebugBundle,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { formatDiskSizeFromGB } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import type { SystemInfo, AppSettings, DVRStatusInfo } from "@/lib/types";
@@ -444,11 +445,7 @@ export function DiagnosticsPanel() {
       return t("diagnostics.system.na");
     }
 
-    if (sizeInGB >= 1000) {
-      return (sizeInGB / 1000).toFixed(2) + " TB";
-    } else {
-      return Math.round(sizeInGB) + " GB";
-    }
+    return formatDiskSizeFromGB(sizeInGB, { gbDecimals: 0 });
   };
 
   const calculateDiskUsage = () => {
@@ -459,9 +456,9 @@ export function DiagnosticsPanel() {
     ) {
       return {
         usedGB: null,
-        usedTB: t("diagnostics.system.na"),
+        usedFormatted: t("diagnostics.system.na"),
         totalGB: null,
-        totalTB: t("diagnostics.system.na"),
+        totalFormatted: t("diagnostics.system.na"),
         freeGB: null,
       };
     }
@@ -470,17 +467,11 @@ export function DiagnosticsPanel() {
     const freeGB = systemInfo.disk_free_gb;
     const usedGB = totalGB - freeGB;
 
-    const totalTB = (totalGB / 1000).toFixed(2);
-    const usedTB = (usedGB / 1000).toFixed(2);
-
-    const totalTBFormatted = `${totalTB} TB`;
-    const usedTBFormatted = `${usedTB} TB`;
-
     return {
       usedGB,
-      usedTB: usedTBFormatted,
+      usedFormatted: formatDiskSize(usedGB),
       totalGB,
-      totalTB: totalTBFormatted,
+      totalFormatted: formatDiskSize(totalGB),
       freeGB,
       usedPercent: systemInfo.disk_usage_percent,
     };
@@ -633,8 +624,8 @@ export function DiagnosticsPanel() {
                   value:
                     diskInfo.usedGB != null
                       ? t("diagnostics.export.usedOf", {
-                          used: formatDiskSize(diskInfo.usedGB),
-                          total: String(diskInfo.totalTB),
+                          used: diskInfo.usedFormatted,
+                          total: diskInfo.totalFormatted,
                           percent: String(diskInfo.usedPercent),
                         })
                       : t("diagnostics.system.na"),
@@ -1149,8 +1140,8 @@ export function DiagnosticsPanel() {
                         {t("diagnostics.system.usedKey")}
                       </span>
                       <span>
-                        {diskInfo.usedGB
-                          ? formatDiskSize(diskInfo.usedGB)
+                        {diskInfo.usedGB != null
+                          ? diskInfo.usedFormatted
                           : t("diagnostics.system.na")}
                       </span>
                     </div>
@@ -1159,7 +1150,7 @@ export function DiagnosticsPanel() {
                         {t("diagnostics.system.freeKey")}
                       </span>
                       <span>
-                        {diskInfo.freeGB
+                        {diskInfo.freeGB != null
                           ? formatDiskSize(diskInfo.freeGB)
                           : t("diagnostics.system.na")}
                       </span>
@@ -1168,7 +1159,7 @@ export function DiagnosticsPanel() {
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.totalKey")}
                       </span>
-                      <span>{diskInfo.totalTB}</span>
+                      <span>{diskInfo.totalFormatted}</span>
                     </div>
                     {systemInfo.disk_usage_percent != null && (
                       <Progress

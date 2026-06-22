@@ -3,21 +3,51 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
 import { DiskSpaceCard, type DiskSpaceState } from "@/components/dashboard/disk-space-card"
+import { formatDiskSizeFromGB } from "@/lib/utils"
 
 const baseDiskSpace: DiskSpaceState = {
   usedPercent: 20,
   freePercent: 80,
   loading: false,
   error: null,
-  totalTB: "1.00",
-  usedTB: "0.20",
-  freeGB: "819.2",
+  totalFormatted: "1.00 TB",
+  usedFormatted: "204.8 GB",
+  freeFormatted: "819.2 GB",
   libraryShows: 0,
   libraryMovies: 0,
   libraryEpisodes: 0,
 }
 
+describe("formatDiskSizeFromGB", () => {
+  it("keeps dashboard values below 1024 GB in GB", () => {
+    expect(formatDiskSizeFromGB(819.2)).toBe("819.2 GB")
+  })
+
+  it("formats dashboard values at or above 1024 GB in TB", () => {
+    expect(formatDiskSizeFromGB(11202.56)).toBe("10.94 TB")
+    expect(formatDiskSizeFromGB(1024)).toBe("1.00 TB")
+  })
+})
+
 describe("DiskSpaceCard server severity", () => {
+  it("renders TB free values without appending a hardcoded GB unit", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(DiskSpaceCard, {
+        diskSpace: {
+          ...baseDiskSpace,
+          totalFormatted: "18.03 TB",
+          usedFormatted: "7.09 TB",
+          freeFormatted: "10.94 TB",
+        },
+        loading: false,
+        hasError: false,
+      }),
+    )
+
+    expect(html).toContain("10.94 TB Free")
+    expect(html).not.toContain("10.94 TB GB Free")
+  })
+
   it("renders backend warning severity even when local percentage is normal", () => {
     const html = renderToStaticMarkup(
       React.createElement(DiskSpaceCard, {

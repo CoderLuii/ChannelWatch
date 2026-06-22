@@ -16,4 +16,20 @@ export function formatBytes(bytes: number, decimals = 2): string {
   return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + " " + sizes[i]
 }
 
+interface DiskSizeFormatOptions {
+  gbDecimals?: number
+  tbDecimals?: number
+}
+
+export function formatDiskSizeFromGB(
+  sizeInGB: number,
+  { gbDecimals = 1, tbDecimals = 2 }: DiskSizeFormatOptions = {},
+): string {
+  if (Math.abs(sizeInGB) >= 1024) {
+    return `${(sizeInGB / 1024).toFixed(tbDecimals)} TB`
+  }
+
+  return `${sizeInGB.toFixed(gbDecimals)} GB`
+}
+
 

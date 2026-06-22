@@ -102,15 +102,15 @@ const settings = {
 }
 
 const systemInfo = {
-  channelwatch_version: "0.9.1",
+  channelwatch_version: "0.9.2",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",
   timezone: "America/New_York",
-  disk_usage_percent: 42,
-  disk_usage_gb: 420,
-  disk_total_gb: 1000,
-  disk_free_gb: 580,
+  disk_usage_percent: 39,
+  disk_usage_gb: 7260.16,
+  disk_total_gb: 18462.72,
+  disk_free_gb: 11202.56,
   disk_severity: "normal",
   log_retention_days: 14,
   start_time: "2026-04-21T10:00:00Z",
@@ -128,9 +128,9 @@ const systemInfo = {
       port: 8089,
       connected: true,
       version: "2024.12.1",
-      disk_usage_percent: 42,
-      disk_total_gb: 1000,
-      disk_free_gb: 580,
+      disk_usage_percent: 39,
+      disk_total_gb: 18462.72,
+      disk_free_gb: 11202.56,
       library_shows: 120,
       library_movies: 45,
       library_episodes: 1400,
@@ -329,7 +329,7 @@ export async function installApiMocks(page: Page) {
         dvr_name: "Main DVR",
         version_compatible: true,
         version_warning: null,
-        disk_usage_gb: 420,
+        disk_usage_gb: 7260.16,
       })
     }
     if (pathname.startsWith("/api/v1/dvrs/") && pathname.endsWith("/streams")) {

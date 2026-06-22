@@ -17,6 +17,7 @@ import {
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import { t } from "@/lib/i18n";
 import type { ActivityItem } from "@/lib/types";
+import { formatDiskSizeFromGB } from "@/lib/utils";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { UptimeCard } from "@/components/dashboard/uptime-card";
 import {
@@ -63,9 +64,9 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     freePercent: 0,
     loading: true,
     error: null,
-    totalTB: "",
-    usedTB: "",
-    freeGB: "",
+    totalFormatted: "",
+    usedFormatted: "",
+    freeFormatted: "",
     libraryShows: 0,
     libraryMovies: 0,
     libraryEpisodes: 0,
@@ -130,21 +131,17 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       const usedGB = totalGB - freeGB;
       const usedPercent = diskUsagePercent;
       const freePercent = 100 - usedPercent;
-      const totalTB = (totalGB / 1024).toFixed(2);
-      const usedTB = (usedGB / 1024).toFixed(2);
-      const freeGBFormatted =
-        freeGB < 1024 ? freeGB.toFixed(1) : (freeGB / 1024).toFixed(2);
       setDiskSpace({
         usedPercent,
         freePercent,
         loading: false,
         error: null,
-        totalTB,
-        freeGB: freeGBFormatted,
+        totalFormatted: formatDiskSizeFromGB(totalGB),
+        freeFormatted: formatDiskSizeFromGB(freeGB),
         libraryShows: libShows,
         libraryMovies: libMovies,
         libraryEpisodes: libEpisodes,
-        usedTB,
+        usedFormatted: formatDiskSizeFromGB(usedGB),
       });
     } else {
       setDiskSpace((prev: DiskSpaceState) => ({

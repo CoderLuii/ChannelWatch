@@ -11,6 +11,8 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
 
   await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
   await expect(page.getByText("1 live stream, 1 recording in progress")).toBeVisible()
+  await expect(page.getByText("10.94 TB Free")).toBeVisible()
+  await expect(page.getByText("10.94 TB GB Free")).toHaveCount(0)
 
   await page.getByRole("button", { name: "Watch History", exact: true }).click()
   await expect(page).toHaveURL(/#watch-history$/)
@@ -30,6 +32,7 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
   await page.getByRole("button", { name: "Diagnostics", exact: true }).click()
   await expect(page).toHaveURL(/#diagnostics$/)
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
+  await expect(page.getByText("10.94 TB").first()).toBeVisible()
   await expect(page.getByText("ChannelWatch started successfully")).toBeVisible()
 
   const downloadPromise = page.waitForEvent("download")

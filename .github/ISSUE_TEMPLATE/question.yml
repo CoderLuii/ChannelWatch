@@ -23,7 +23,7 @@ body:
     id: cw_version
     attributes:
       label: ChannelWatch version
-      placeholder: "e.g. 0.9.1"
+      placeholder: "e.g. 0.9.2"
     validations:
       required: true
 

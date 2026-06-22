@@ -8,6 +8,13 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.2] - 2026-06-22
+
+### Fixed
+
+- Fix the dashboard Disk Space card so large free-space values display in TB instead of being shown with a hardcoded GB label.
+- Use the same 1024-based disk size formatter for dashboard and diagnostics storage displays.
+
 ## [0.9.1] - 2026-06-21
 
 ### Fixed
@@ -157,7 +164,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.2
 [0.9.1]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.1
 [0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.0
 [0.8.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.8

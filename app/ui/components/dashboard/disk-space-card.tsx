@@ -11,9 +11,9 @@ export interface DiskSpaceState {
   freePercent: number
   loading: boolean
   error: string | null
-  totalTB: string
-  usedTB: string
-  freeGB: string
+  totalFormatted: string
+  usedFormatted: string
+  freeFormatted: string
   libraryShows: number
   libraryMovies: number
   libraryEpisodes: number
@@ -126,10 +126,10 @@ export function DiskSpaceCard({
           <div className="text-sm text-red-700 dark:text-red-400">{diskSpace.error}</div>
         ) : (
           <>
-            <div className={`text-3xl font-bold ${colors.heading}`}>{t("disk.gbFree", { value: diskSpace.freeGB })}</div>
+            <div className={`text-3xl font-bold ${colors.heading}`}>{t("disk.free", { value: diskSpace.freeFormatted })}</div>
             <div className="flex justify-between text-xs mt-0.5">
-              <span className={colors.sub}>{t("disk.tbUsed", { value: diskSpace.usedTB })}</span>
-              <span className={colors.sub}>{t("disk.tbTotal", { value: diskSpace.totalTB })}</span>
+              <span className={colors.sub}>{t("disk.used", { value: diskSpace.usedFormatted })}</span>
+              <span className={colors.sub}>{t("disk.total", { value: diskSpace.totalFormatted })}</span>
             </div>
             <Progress
               value={diskSpace.usedPercent}

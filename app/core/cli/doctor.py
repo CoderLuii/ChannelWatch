@@ -9,7 +9,7 @@ import httpx
 
 from core.dvr_client import check_version_compatibility
 from core.helpers import config as core_config
-from core.helpers.atomic_io import atomic_write_bytes, atomic_write_json
+from core.helpers.atomic_io import _atomic_write_secret_bytes, atomic_write_json
 from core.helpers.config import ConfigLoadError, CoreSettings
 from core.helpers.dvr_connection import build_dvr_base_url
 from core.helpers.encryption import (
@@ -257,16 +257,14 @@ def _cmd_rotate_encryption_key(args: argparse.Namespace) -> int:
 
     backup_file = key_file.with_suffix(f"{key_file.suffix}.bak")
     if key_file.exists():
-        atomic_write_bytes(backup_file, key_file.read_bytes())
+        _atomic_write_secret_bytes(backup_file, key_file.read_bytes())
 
     try:
-        atomic_write_bytes(key_file, new_key)
-        key_file.chmod(0o600)
+        _atomic_write_secret_bytes(key_file, new_key)
         atomic_write_json(_settings_file(), persisted)
     except Exception:
         if backup_file.exists():
-            atomic_write_bytes(key_file, backup_file.read_bytes())
-            key_file.chmod(0o600)
+            _atomic_write_secret_bytes(key_file, backup_file.read_bytes())
         raise
 
     print(
@@ -313,13 +311,19 @@ def _cmd_reset_admin_password(args: argparse.Namespace) -> int:
 
     from core.storage.auth import reset_password
 
+    generated_password = not bool(args.password)
     password = args.password or os.urandom(12).hex()
     if not reset_password(engine, args.username, password):
         print(f"No user found with username {args.username!r}.")
         return 1
 
     print(f"Password reset successful for {args.username}.")
-    print(f"Temporary password: {password}")
+    if generated_password:
+        # Generated temporary passwords must be shown once to the local operator.
+        # codeql[py/clear-text-logging-sensitive-data]
+        print(f"Temporary password: {password}")
+    else:
+        print("Password reset to the supplied value.")
     return 0
 
 

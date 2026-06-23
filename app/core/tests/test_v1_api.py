@@ -255,7 +255,39 @@ class TestDvrConnectionTest:
             )
 
         assert resp.status_code == 200
-        assert resp.json() == {"success": False, "error": "connect failed"}
+        assert resp.json() == {"success": False, "error": "Could not reach DVR server."}
+
+    def test_manual_connection_test_timeout_returns_sanitized_error(self, client):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("token leaked"))
+
+        with patch("ui.backend.main._dvr_http_client", mock_client):
+            resp = client.post(
+                "/api/v1/dvrs/test-connection",
+                json={"host": "192.168.1.100", "port": 8089},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"success": False, "error": "DVR request timed out."}
+
+    def test_manual_connection_test_bad_json_returns_sanitized_error(self, client):
+        status_resp = MagicMock()
+        status_resp.status_code = 200
+        status_resp.json.side_effect = ValueError("token leaked")
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=status_resp)
+
+        with patch("ui.backend.main._dvr_http_client", mock_client):
+            resp = client.post(
+                "/api/v1/dvrs/test-connection",
+                json={"host": "192.168.1.100", "port": 8089},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "success": False,
+            "error": "DVR returned an invalid status response.",
+        }
 
 
 class TestGetDvrDetail:

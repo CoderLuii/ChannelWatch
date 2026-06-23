@@ -276,21 +276,18 @@ class TestDeliverWithRetry:
         def deliver():
             return False
 
-        with patch(
-            "core.notifications.delivery.time.sleep",
-            side_effect=lambda d: sleep_calls.append(d),
-        ):
-            deliver_with_retry(
-                dvr_id="dvr1",
-                channel="apprise",
-                event_type="test",
-                provider_type="Apprise",
-                channel_id="apprise",
-                payload_size=50,
-                deliver_fn=deliver,
-                circuit_breaker=cb,
-                with_retry=True,
-            )
+        deliver_with_retry(
+            dvr_id="dvr1",
+            channel="apprise",
+            event_type="test",
+            provider_type="Apprise",
+            channel_id="apprise",
+            payload_size=50,
+            deliver_fn=deliver,
+            circuit_breaker=cb,
+            with_retry=True,
+            sleep_fn=lambda d: sleep_calls.append(d),
+        )
         assert sleep_calls == RETRY_DELAYS
 
     def test_exception_in_deliver_fn_counts_as_failure(self):

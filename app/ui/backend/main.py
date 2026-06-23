@@ -13,12 +13,36 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 import asyncio
 from pydantic import BaseModel
 from . import config as backend_config
 from .config import load_settings, save_settings
+from .support_report import (
+    DEFAULT_REPORT_ENDPOINT,
+    DEFAULT_REPORT_MAX_ATTACHMENT_BYTES,
+    DEFAULT_REPORT_MAX_BYTES,
+    DEFAULT_REPORT_MAX_SCREENSHOTS,
+    DEFAULT_REPORT_MAX_TOTAL_ATTACHMENT_BYTES,
+    DEFAULT_REPORT_PORTAL_URL,
+    REPORT_ALLOWED_ATTACHMENT_TYPES,
+    ReportAttachmentInvalid,
+    ReportAttachmentSummary,
+    ReportAttachmentTooLarge,
+    ReportConfigResponse,
+    ReportProblemPayload,
+    ReportPayloadInvalid,
+    ReportPayloadTooLarge,
+    ReportPreviewResponse,
+    build_offline_report_package,
+    parse_report_mode,
+    parse_report_payload,
+    render_report_preview,
+    summarize_report_attachment,
+    validate_attachment_limits,
+)
 from core.helpers.config import CONFIG_DIR as _CORE_CONFIG_DIR, ConfigLoadError
 from core.helpers.atomic_io import atomic_write_json
 from core.helpers.dvr_connection import build_dvr_base_url
@@ -272,7 +296,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 WEBUI_DIR = Path(__file__).resolve().parent
-STATIC_UI_DIR = WEBUI_DIR / "static_ui"
+_STATIC_UI_DIR_OVERRIDE = os.environ.get("CW_STATIC_UI_DIR", "").strip()
+STATIC_UI_DIR = (
+    Path(_STATIC_UI_DIR_OVERRIDE).expanduser()
+    if _STATIC_UI_DIR_OVERRIDE
+    else WEBUI_DIR / "static_ui"
+)
 
 # AUTH CONFIGURATION
 CW_DISABLE_AUTH = os.environ.get("CW_DISABLE_AUTH", "").lower() == "true"
@@ -948,7 +977,11 @@ async def discover_servers():
         ]
         return {"servers": found, "error": None}
     except Exception as exc:
-        return {"servers": [], "error": str(exc)}
+        log.warning("DVR discovery failed: %s", exc.__class__.__name__)
+        return {
+            "servers": [],
+            "error": "DVR discovery failed. Check network access and container logs.",
+        }
 
 
 class _DvrConnectionTestRequest(BaseModel):
@@ -1016,6 +1049,16 @@ def _is_safe_dvr_test_target(host: str, port: int) -> bool:
     return is_safe_url(safety_url) or _is_private_lan_dvr_host(host)
 
 
+def _safe_dvr_test_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "DVR request timed out."
+    if isinstance(exc, httpx.RequestError):
+        return "Could not reach DVR server."
+    if isinstance(exc, ValueError):
+        return "DVR returned an invalid status response."
+    return "DVR connection test failed."
+
+
 @app.post(
     "/api/v1/dvrs/test-connection",
     tags=["DVR Management"],
@@ -1046,7 +1089,8 @@ async def test_dvr_connection(body: _DvrConnectionTestRequest):
         )
         return {"success": True, "name": name, "version": version}
     except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        log.warning("DVR connection test failed: %s", exc.__class__.__name__)
+        return {"success": False, "error": _safe_dvr_test_error(exc)}
 
 
 def _settings_read_requires_auth(settings: AppSettings) -> bool:
@@ -1331,6 +1375,272 @@ async def download_debug_bundle():
     filename = f"channelwatch_debug_{ts}.zip"
     return Response(
         content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _configured_report_max_bytes() -> int:
+    raw_value = os.environ.get("CHANNELWATCH_REPORT_MAX_BYTES", "").strip()
+    if not raw_value:
+        return DEFAULT_REPORT_MAX_BYTES
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return DEFAULT_REPORT_MAX_BYTES
+    return max(1024, min(parsed, DEFAULT_REPORT_MAX_BYTES))
+
+
+def _configured_report_max_attachment_bytes() -> int:
+    raw_value = os.environ.get("CHANNELWATCH_REPORT_MAX_ATTACHMENT_BYTES", "").strip()
+    if not raw_value:
+        return DEFAULT_REPORT_MAX_ATTACHMENT_BYTES
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return DEFAULT_REPORT_MAX_ATTACHMENT_BYTES
+    return max(1024, min(parsed, DEFAULT_REPORT_MAX_ATTACHMENT_BYTES))
+
+
+def _configured_report_max_total_attachment_bytes() -> int:
+    raw_value = os.environ.get(
+        "CHANNELWATCH_REPORT_MAX_TOTAL_ATTACHMENT_BYTES", ""
+    ).strip()
+    if not raw_value:
+        return DEFAULT_REPORT_MAX_TOTAL_ATTACHMENT_BYTES
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return DEFAULT_REPORT_MAX_TOTAL_ATTACHMENT_BYTES
+    return max(1024, min(parsed, DEFAULT_REPORT_MAX_TOTAL_ATTACHMENT_BYTES))
+
+
+def _configured_report_portal_url() -> str:
+    raw_value = os.environ.get("CHANNELWATCH_REPORT_PORTAL_URL", "").strip()
+    if not raw_value:
+        return DEFAULT_REPORT_PORTAL_URL
+    parts = urlsplit(raw_value)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return DEFAULT_REPORT_PORTAL_URL
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") or "", "", ""))
+
+
+_REPORT_REQUEST_TOO_LARGE_MESSAGE = "Report request exceeds the configured size limit."
+_REPORT_PAYLOAD_REQUIRED_MESSAGE = "Report payload is required."
+_REPORT_PAYLOAD_TOO_LARGE_MESSAGE = "Report payload exceeds the configured size limit."
+_REPORT_FORM_INVALID_MESSAGE = "Report form is invalid."
+_REPORT_TOO_MANY_SCREENSHOTS_MESSAGE = "Too many screenshots were attached."
+_REPORT_DEBUG_BUNDLE_INVALID_MESSAGE = "Debug bundle attachment is invalid."
+_REPORT_ATTACHMENT_TOO_LARGE_MESSAGE = "Attachment exceeds the per-file size limit."
+_REPORT_ATTACHMENTS_TOO_LARGE_MESSAGE = "Attachments exceed the total size limit."
+
+
+def _report_error(code: str, message: str) -> HTTPException:
+    return structured_error(code, message=message)
+
+
+async def _read_report_upload(
+    upload: UploadFile,
+    *,
+    max_attachment_bytes: int,
+    max_total_attachment_bytes: int,
+    total_read: dict[str, int],
+) -> bytes:
+    data = bytearray()
+    try:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            data.extend(chunk)
+            total_read["bytes"] = total_read.get("bytes", 0) + len(chunk)
+            if len(data) > max_attachment_bytes:
+                raise _report_error(
+                    ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE,
+                    _REPORT_ATTACHMENT_TOO_LARGE_MESSAGE,
+                )
+            if total_read["bytes"] > max_total_attachment_bytes:
+                raise _report_error(
+                    ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE,
+                    _REPORT_ATTACHMENTS_TOO_LARGE_MESSAGE,
+                )
+    finally:
+        await upload.close()
+    return bytes(data)
+
+
+async def _parse_support_report_request(
+    request: Request,
+) -> tuple[ReportProblemPayload, list[tuple[ReportAttachmentSummary, bytes]]]:
+    max_bytes = _configured_report_max_bytes()
+    max_attachment_bytes = _configured_report_max_attachment_bytes()
+    max_total_attachment_bytes = _configured_report_max_total_attachment_bytes()
+    content_length = request.headers.get("content-length", "").strip()
+    if content_length:
+        try:
+            allowed_request_bytes = max_bytes + max_total_attachment_bytes + 65536
+            if int(content_length) > allowed_request_bytes:
+                raise _report_error(
+                    ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE,
+                    _REPORT_REQUEST_TOO_LARGE_MESSAGE,
+                )
+        except ValueError:
+            pass
+
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("multipart/form-data"):
+        raw_body = await request.body()
+        if len(raw_body) > max_bytes:
+            raise _report_error(
+                ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE,
+                _REPORT_PAYLOAD_TOO_LARGE_MESSAGE,
+            )
+        try:
+            return parse_report_payload(raw_body, max_bytes), []
+        except ReportPayloadTooLarge as exc:
+            raise _report_error(ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE, str(exc))
+        except ReportPayloadInvalid as exc:
+            raise _report_error(ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID, str(exc))
+
+    try:
+        form = await request.form()
+    except Exception as exc:
+        raise _report_error(
+            ErrorCode.SUPPORT_REPORT_FORM_INVALID,
+            _REPORT_FORM_INVALID_MESSAGE,
+        ) from exc
+
+    raw_payload = form.get("payload")
+    if not isinstance(raw_payload, str):
+        raise _report_error(
+            ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID,
+            _REPORT_PAYLOAD_REQUIRED_MESSAGE,
+        )
+
+    try:
+        payload = parse_report_payload(raw_payload.encode("utf-8"), max_bytes)
+    except ReportPayloadTooLarge as exc:
+        raise _report_error(ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE, str(exc))
+    except ReportPayloadInvalid as exc:
+        raise _report_error(ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID, str(exc))
+
+    attachments: list[tuple[ReportAttachmentSummary, bytes]] = []
+    total_read: dict[str, int] = {"bytes": 0}
+    screenshot_files = [
+        item for item in form.getlist("screenshots") if isinstance(item, StarletteUploadFile)
+    ]
+    if len(screenshot_files) > DEFAULT_REPORT_MAX_SCREENSHOTS:
+        raise _report_error(
+            ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID,
+            _REPORT_TOO_MANY_SCREENSHOTS_MESSAGE,
+        )
+    debug_bundle = form.get("debug_bundle")
+    if debug_bundle is not None and not isinstance(debug_bundle, StarletteUploadFile):
+        raise _report_error(
+            ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID,
+            _REPORT_DEBUG_BUNDLE_INVALID_MESSAGE,
+        )
+
+    try:
+        for upload in screenshot_files:
+            content = await _read_report_upload(
+                upload,
+                max_attachment_bytes=max_attachment_bytes,
+                max_total_attachment_bytes=max_total_attachment_bytes,
+                total_read=total_read,
+            )
+            summary = summarize_report_attachment(
+                filename=upload.filename,
+                content_type=upload.content_type,
+                content=content,
+                kind="screenshot",
+                max_attachment_bytes=max_attachment_bytes,
+            )
+            attachments.append((summary, content))
+        if isinstance(debug_bundle, StarletteUploadFile):
+            content = await _read_report_upload(
+                debug_bundle,
+                max_attachment_bytes=max_attachment_bytes,
+                max_total_attachment_bytes=max_total_attachment_bytes,
+                total_read=total_read,
+            )
+            summary = summarize_report_attachment(
+                filename=debug_bundle.filename,
+                content_type=debug_bundle.content_type,
+                content=content,
+                kind="debug_bundle",
+                max_attachment_bytes=max_attachment_bytes,
+            )
+            attachments.append((summary, content))
+        validate_attachment_limits(
+            [summary for summary, _content in attachments],
+            max_total_attachment_bytes=max_total_attachment_bytes,
+            max_screenshot_count=DEFAULT_REPORT_MAX_SCREENSHOTS,
+        )
+    except ReportAttachmentTooLarge as exc:
+        raise _report_error(ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE, str(exc))
+    except ReportAttachmentInvalid as exc:
+        raise _report_error(ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID, str(exc))
+
+    return payload, attachments
+
+
+@app.get(
+    "/api/v1/support/report-config",
+    response_model=ReportConfigResponse,
+    tags=["Support"],
+    dependencies=[require_role("operator")],
+)
+async def get_support_report_config():
+    return ReportConfigResponse(
+        mode=parse_report_mode(os.environ.get("CHANNELWATCH_REPORT_MODE")),
+        endpoint=os.environ.get("CHANNELWATCH_REPORT_ENDPOINT", "").strip()
+        or DEFAULT_REPORT_ENDPOINT,
+        portal_url=_configured_report_portal_url(),
+        max_bytes=_configured_report_max_bytes(),
+        turnstile_site_key=os.environ.get(
+            "CHANNELWATCH_TURNSTILE_SITE_KEY", ""
+        ).strip()
+        or None,
+        attachments_enabled=True,
+        max_attachment_bytes=_configured_report_max_attachment_bytes(),
+        max_total_attachment_bytes=_configured_report_max_total_attachment_bytes(),
+        max_screenshot_count=DEFAULT_REPORT_MAX_SCREENSHOTS,
+        allowed_attachment_types=REPORT_ALLOWED_ATTACHMENT_TYPES,
+    )
+
+
+@app.post(
+    "/api/v1/support/report-dry-run",
+    response_model=ReportPreviewResponse,
+    tags=["Support"],
+    dependencies=[require_role("operator")],
+)
+async def submit_support_report_dry_run(request: Request):
+    payload, attachment_files = await _parse_support_report_request(request)
+    return render_report_preview(
+        payload,
+        mode="dry-run",
+        attachments=[summary for summary, _content in attachment_files],
+    )
+
+
+@app.post(
+    "/api/v1/support/offline-package",
+    tags=["Support"],
+    dependencies=[require_role("operator")],
+)
+async def download_support_report_offline_package(request: Request):
+    payload, attachment_files = await _parse_support_report_request(request)
+    package = build_offline_report_package(
+        payload,
+        attachments=attachment_files,
+        portal_url=_configured_report_portal_url(),
+    )
+    ts = datetime.now(_tz.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"channelwatch_support_report_{ts}.zip"
+    return Response(
+        content=package,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -151,10 +151,12 @@ def deliver_with_retry(
     db_engine: Any = None,
     activity_event_id: Optional[str] = None,
     with_retry: bool = True,
+    sleep_fn: Optional[Callable[[int], None]] = None,
 ) -> bool:
     delays = RETRY_DELAYS if with_retry else []
     attempts = [0] + delays
     last_index = len(attempts) - 1
+    sleeper = sleep_fn or time.sleep
 
     for retry_count, delay in enumerate(attempts):
         if circuit_breaker.is_open(dvr_id, channel):
@@ -180,7 +182,7 @@ def deliver_with_retry(
             return False
 
         if delay > 0:
-            time.sleep(delay)
+            sleeper(delay)
 
         error_msg: Optional[str] = None
         success = False

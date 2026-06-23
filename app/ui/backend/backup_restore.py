@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-import stat
 from collections.abc import Callable
 from datetime import datetime, timezone
 from importlib import import_module
@@ -273,6 +272,10 @@ def restore_from_zip(zip_bytes: bytes, config_dir: Path) -> dict[str, Any]:
     atomic_write_bytes = cast(
         Callable[[Path, bytes], None], getattr(atomic_io, "atomic_write_bytes")
     )
+    atomic_write_secret_bytes = cast(
+        Callable[[Path, bytes], None],
+        getattr(atomic_io, "_atomic_write_secret_bytes"),
+    )
 
     manifest = validate_restore_zip(zip_bytes)
 
@@ -299,8 +302,10 @@ def restore_from_zip(zip_bytes: bytes, config_dir: Path) -> dict[str, Any]:
 
             dest = _safe_restore_destination(config_dir, filename)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(dest, zf.read(name))
+            member_bytes = zf.read(name)
             if dest.name == "encryption.key":
-                dest.chmod(stat.S_IRUSR | stat.S_IWUSR)
+                atomic_write_secret_bytes(dest, member_bytes)
+            else:
+                atomic_write_bytes(dest, member_bytes)
 
     return manifest

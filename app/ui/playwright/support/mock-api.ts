@@ -1,5 +1,73 @@
 import type { Page, Route } from "@playwright/test"
 
+const createMockDebugBundleZip = () => {
+  const prefix = "channelwatch_debug_20260622T000000Z"
+  const entries = [
+    [`${prefix}/manifest.json`, JSON.stringify({
+      bundle_type: "debug",
+      bundle_schema_version: 1,
+      created_by: "channelwatch",
+    })],
+    [`${prefix}/settings_sanitized.json`, "{}"],
+    [`${prefix}/logs/app.log`, ""],
+    [`${prefix}/health_snapshot.json`, "{}"],
+  ] as const
+
+  let offset = 0
+  const localParts: Buffer[] = []
+  const centralParts: Buffer[] = []
+  for (const [name, content] of entries) {
+    const nameBytes = Buffer.from(name)
+    const data = Buffer.from(content)
+    const localHeader = Buffer.alloc(30)
+    localHeader.writeUInt32LE(0x04034b50, 0)
+    localHeader.writeUInt16LE(20, 4)
+    localHeader.writeUInt16LE(0, 6)
+    localHeader.writeUInt16LE(0, 8)
+    localHeader.writeUInt32LE(0, 10)
+    localHeader.writeUInt32LE(0, 14)
+    localHeader.writeUInt32LE(data.length, 18)
+    localHeader.writeUInt32LE(data.length, 22)
+    localHeader.writeUInt16LE(nameBytes.length, 26)
+    localHeader.writeUInt16LE(0, 28)
+    localParts.push(localHeader, nameBytes, data)
+
+    const centralHeader = Buffer.alloc(46)
+    centralHeader.writeUInt32LE(0x02014b50, 0)
+    centralHeader.writeUInt16LE(20, 4)
+    centralHeader.writeUInt16LE(20, 6)
+    centralHeader.writeUInt16LE(0, 8)
+    centralHeader.writeUInt16LE(0, 10)
+    centralHeader.writeUInt32LE(0, 12)
+    centralHeader.writeUInt32LE(0, 16)
+    centralHeader.writeUInt32LE(data.length, 20)
+    centralHeader.writeUInt32LE(data.length, 24)
+    centralHeader.writeUInt16LE(nameBytes.length, 28)
+    centralHeader.writeUInt16LE(0, 30)
+    centralHeader.writeUInt16LE(0, 32)
+    centralHeader.writeUInt16LE(0, 34)
+    centralHeader.writeUInt16LE(0, 36)
+    centralHeader.writeUInt32LE(0, 38)
+    centralHeader.writeUInt32LE(offset, 42)
+    centralParts.push(centralHeader, nameBytes)
+    offset += localHeader.length + nameBytes.length + data.length
+  }
+
+  const centralDirectory = Buffer.concat(centralParts)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(0, 4)
+  eocd.writeUInt16LE(0, 6)
+  eocd.writeUInt16LE(entries.length, 8)
+  eocd.writeUInt16LE(entries.length, 10)
+  eocd.writeUInt32LE(centralDirectory.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  eocd.writeUInt16LE(0, 20)
+  return Buffer.concat([...localParts, centralDirectory, eocd])
+}
+
+const mockDebugBundleZip = createMockDebugBundleZip()
+
 const settings = {
   api_key: "test-api-key",
   dvr_servers: [
@@ -102,7 +170,7 @@ const settings = {
 }
 
 const systemInfo = {
-  channelwatch_version: "0.9.2",
+  channelwatch_version: "0.9.3",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",
@@ -280,6 +348,26 @@ const whoAmI = {
   role: "admin",
 }
 
+const reportConfig = {
+  mode: "dry-run",
+  endpoint: "/api/v1/support/report-dry-run",
+  portal_url: "https://channelwatch.coderluii.dev/report",
+  max_bytes: 262144,
+  turnstile_site_key: null,
+  attachments_enabled: true,
+  max_attachment_bytes: 8388608,
+  max_total_attachment_bytes: 20971520,
+  max_screenshot_count: 5,
+  allowed_attachment_types: [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/octet-stream",
+  ],
+}
+
 function json(route: Route, body: unknown) {
   return route.fulfill({
     status: 200,
@@ -314,12 +402,72 @@ export async function installApiMocks(page: Page) {
     if (pathname === "/api/v1/security/status") return json(route, securityStatus)
     if (pathname === "/api/v1/auth/setup-status") return json(route, setupStatus)
     if (pathname === "/api/v1/auth/whoami") return json(route, whoAmI)
+    if (pathname === "/api/v1/support/report-config") return json(route, reportConfig)
+    if (pathname === "/api/v1/support/offline-package") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/zip",
+        headers: {
+          "Content-Disposition": 'attachment; filename="channelwatch_support_report_test.zip"',
+        },
+        body: "offline-package",
+      })
+    }
+    if (pathname === "/api/v1/support/report-dry-run") {
+      const contentType = route.request().headers()["content-type"] || ""
+      const payload = contentType.includes("multipart/form-data")
+        ? {
+            summary: "Active Streams shows a stream but no activity appears",
+            expected: "A channel watching activity event should appear.",
+            email: "viewer@example.com",
+          }
+        : (route.request().postDataJSON() as { summary?: string; expected?: string; email?: string })
+      const attachments = contentType.includes("multipart/form-data")
+        ? [
+            {
+              filename: "channelwatch-logo.png",
+              content_type: "image/png",
+              size_bytes: 12288,
+              kind: "screenshot",
+              sha256: "a".repeat(64),
+            },
+            {
+              filename: "channelwatch_debug_test.zip",
+              content_type: "application/zip",
+              size_bytes: 2048,
+              kind: "debug_bundle",
+              sha256: "b".repeat(64),
+            },
+          ]
+        : []
+      const title = `[In-App] ${payload.summary || "Untitled report"}`
+      const body = [
+        "# ChannelWatch Support Report",
+        `## Summary\n\n${payload.summary || "Untitled report"}`,
+        `## Expected behavior\n\n${payload.expected || "Not provided."}`,
+        "## Reporter\n\n- GetChannels community: [@Matthew_Crommert](https://community.getchannels.com/u/Matthew_Crommert)",
+        "## Diagnostics\n\n| Field | Value |\n| --- | --- |\n| ChannelWatch version | 0.9.3 |\n| DVRs configured | 1 |\n| DVRs connected | 1 |\n| Core status | Running |\n| Monitoring | healthy: 1 |\n| Notification providers | Pushover |\n| Enabled feature toggles | Channel watching, Disk space, Recording events |",
+      ].join("\n\n")
+      return json(route, {
+        mode: "dry-run",
+        status: "dry-run-complete",
+        issue_title: title,
+        issue_body: body,
+        email_subject: `ChannelWatch Report - ${payload.summary || "Untitled report"}`,
+        email_body: `Private email: ${payload.email || "Not provided"}`,
+        email_html: "<h1>New ChannelWatch report</h1>",
+        email_in_public_issue: Boolean(payload.email && body.includes(payload.email)),
+        attachments,
+        attachment_total_bytes: attachments.reduce((sum, attachment) => sum + attachment.size_bytes, 0),
+        attachments_sent: false,
+      })
+    }
     if (pathname === "/api/logs") return json(route, diagnosticsLogs)
     if (pathname === "/api/logs/download") {
       return route.fulfill({ status: 200, contentType: "text/plain", body: diagnosticsLogs.lines.join("\n") })
     }
     if (pathname === "/api/v1/debug/bundle") {
-      return route.fulfill({ status: 200, contentType: "application/zip", body: "debug-bundle" })
+      return route.fulfill({ status: 200, contentType: "application/zip", body: mockDebugBundleZip })
     }
     if (pathname === "/api/health") return json(route, { ok: true })
     if (pathname.startsWith("/api/v1/dvrs/") && pathname.endsWith("/system-info")) {

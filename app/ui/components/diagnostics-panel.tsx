@@ -48,6 +48,7 @@ import { formatDiskSizeFromGB } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import type { SystemInfo, AppSettings, DVRStatusInfo } from "@/lib/types";
+import { ReportProblemDialog } from "@/components/report-problem-dialog";
 
 function getDvrDotClass(dvr: DVRStatusInfo): string {
   if (!dvr.connected) return "bg-red-500";
@@ -497,6 +498,10 @@ export function DiagnosticsPanel() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ReportProblemDialog
+            systemInfo={systemInfo}
+            appSettings={appSettings}
+          />
           <Button
             variant="outline"
             size="sm"

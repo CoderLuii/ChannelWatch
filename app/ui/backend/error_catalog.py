@@ -62,6 +62,13 @@ class ErrorCode:
     # Debug bundle
     DEBUG_BUNDLE_CREATE_FAILED = "ERR_DEBUG_BUNDLE_CREATE_FAILED"
 
+    # Support reports
+    SUPPORT_REPORT_REQUEST_TOO_LARGE = "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE"
+    SUPPORT_REPORT_PAYLOAD_INVALID = "ERR_SUPPORT_REPORT_PAYLOAD_INVALID"
+    SUPPORT_REPORT_FORM_INVALID = "ERR_SUPPORT_REPORT_FORM_INVALID"
+    SUPPORT_REPORT_ATTACHMENT_TOO_LARGE = "ERR_SUPPORT_REPORT_ATTACHMENT_TOO_LARGE"
+    SUPPORT_REPORT_ATTACHMENT_INVALID = "ERR_SUPPORT_REPORT_ATTACHMENT_INVALID"
+
     # Activity / history
     ACTIVITY_FETCH_FAILED = "ERR_ACTIVITY_FETCH_FAILED"
     ACTIVITY_CLEAR_FAILED = "ERR_ACTIVITY_CLEAR_FAILED"
@@ -349,6 +356,37 @@ _CATALOG: dict[str, CatalogEntry] = {
         http_status=500,
         message="Failed to create debug bundle.",
         remediation="Check that /config is readable and that there is enough disk space.",
+    ),
+    # Support reports ----------------------------------------------------
+    ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE: CatalogEntry(
+        code=ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE,
+        http_status=413,
+        message="Support report request is too large.",
+        remediation="Remove large attachments or send fewer screenshots, then try again.",
+    ),
+    ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID: CatalogEntry(
+        code=ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID,
+        http_status=422,
+        message="Support report details could not be validated.",
+        remediation="Review the report fields and try again.",
+    ),
+    ErrorCode.SUPPORT_REPORT_FORM_INVALID: CatalogEntry(
+        code=ErrorCode.SUPPORT_REPORT_FORM_INVALID,
+        http_status=400,
+        message="Support report upload form is invalid.",
+        remediation="Reload ChannelWatch and try submitting the report again.",
+    ),
+    ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE: CatalogEntry(
+        code=ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE,
+        http_status=413,
+        message="Support report attachment is too large.",
+        remediation="Remove large files or attach fewer screenshots, then try again.",
+    ),
+    ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID: CatalogEntry(
+        code=ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID,
+        http_status=422,
+        message="Support report attachment could not be validated.",
+        remediation="Attach PNG, JPEG, or WebP screenshots and a ChannelWatch-generated debug bundle ZIP.",
     ),
     # Generic ------------------------------------------------------------
     ErrorCode.INTERNAL_ERROR: CatalogEntry(

@@ -578,6 +578,189 @@ export async function downloadDebugBundle(): Promise<Blob> {
   return response.blob()
 }
 
+export type ReportMode = "dry-run" | "email-test" | "live"
+
+export interface ReportFeatureToggles {
+  channel_watching: boolean
+  vod_watching: boolean
+  disk_space: boolean
+  recording_events: boolean
+  stream_counter: boolean
+}
+
+export interface ReportDiagnostics {
+  channelwatch_version?: string | null
+  dvr_count: number
+  connected_dvr_count: number
+  core_status?: string | null
+  monitoring_statuses: string[]
+  notification_providers: string[]
+  feature_toggles: ReportFeatureToggles
+}
+
+export interface ReportProblemPayload {
+  summary: string
+  expected?: string | null
+  getchannels_username?: string | null
+  github_username?: string | null
+  email?: string | null
+  diagnostics: ReportDiagnostics
+  turnstile_token?: string | null
+}
+
+export interface ReportConfig {
+  mode: ReportMode
+  endpoint: string
+  portal_url?: string | null
+  max_bytes: number
+  turnstile_site_key?: string | null
+  attachments_enabled: boolean
+  max_attachment_bytes: number
+  max_total_attachment_bytes: number
+  max_screenshot_count: number
+  allowed_attachment_types: string[]
+}
+
+export interface ReportAttachmentSummary {
+  filename: string
+  content_type: string
+  size_bytes: number
+  kind: "screenshot" | "debug_bundle"
+  sha256: string
+}
+
+export interface ReportPreviewResponse {
+  mode: ReportMode
+  status: "dry-run-complete" | "email-test-ready" | "live-ready"
+  issue_title: string
+  issue_body: string
+  email_subject: string
+  email_body: string
+  email_html?: string
+  email_in_public_issue: boolean
+  attachments: ReportAttachmentSummary[]
+  attachment_total_bytes: number
+  attachments_sent: boolean
+}
+
+export interface ReportSubmissionAttachments {
+  screenshots?: File[]
+  debugBundle?: File | null
+}
+
+function base64UrlEncode(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ""
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(offset, offset + chunkSize))
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "")
+}
+
+export function createReportSupportCode(payload: ReportProblemPayload): string {
+  const envelope = {
+    schema: 1,
+    source: "channelwatch",
+    created_at: new Date().toISOString(),
+    report: payload,
+  }
+  return `CW-REPORT-v1-${base64UrlEncode(JSON.stringify(envelope))}`
+}
+
+function isSameOriginEndpoint(endpoint: string): boolean {
+  return endpoint.startsWith("/")
+}
+
+function buildReportBody(
+  payload: ReportProblemPayload,
+  attachments: ReportSubmissionAttachments = {},
+  options: { includeSupportCode?: boolean } = {},
+) {
+  const screenshotFiles = attachments.screenshots ?? []
+  const hasAttachments = screenshotFiles.length > 0 || Boolean(attachments.debugBundle)
+  const supportCode = options.includeSupportCode ? createReportSupportCode(payload) : null
+  const body = hasAttachments
+    ? new FormData()
+    : JSON.stringify(supportCode ? { support_code: supportCode } : payload)
+  if (body instanceof FormData) {
+    if (supportCode) {
+      body.append("support_code", supportCode)
+    } else {
+      body.append("payload", JSON.stringify(payload))
+    }
+    for (const file of screenshotFiles) {
+      body.append("screenshots", file, file.name)
+    }
+    if (attachments.debugBundle) {
+      body.append("debug_bundle", attachments.debugBundle, attachments.debugBundle.name)
+    }
+  }
+  return { body, hasAttachments }
+}
+
+export async function fetchReportConfig(): Promise<ReportConfig> {
+  const response = await fetch(`${API_BASE}/v1/support/report-config`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+
+  return response.json()
+}
+
+export async function submitReport(
+  endpoint: string,
+  payload: ReportProblemPayload,
+  attachments: ReportSubmissionAttachments = {},
+): Promise<ReportPreviewResponse> {
+  const sameOrigin = isSameOriginEndpoint(endpoint)
+  const { body, hasAttachments } = buildReportBody(payload, attachments, { includeSupportCode: !sameOrigin })
+  const response = await fetch(endpoint, {
+    method: "POST",
+    credentials: sameOrigin ? "same-origin" : "omit",
+    headers: {
+      ...(!hasAttachments ? { "Content-Type": "application/json" } : {}),
+      ...(sameOrigin ? authHeaders() : {}),
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    const errorPayload = await parseApiError(response)
+    throw new ApiError(errorPayload)
+  }
+
+  return response.json()
+}
+
+export async function downloadOfflineReportPackage(
+  payload: ReportProblemPayload,
+  attachments: ReportSubmissionAttachments = {},
+): Promise<Blob> {
+  const { body, hasAttachments } = buildReportBody(payload, attachments)
+  const response = await fetch(`${API_BASE}/v1/support/offline-package`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      ...(!hasAttachments ? { "Content-Type": "application/json" } : {}),
+      ...authHeaders(),
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    const errorPayload = await parseApiError(response)
+    throw new ApiError(errorPayload)
+  }
+
+  return response.blob()
+}
+
 export interface RestoreResult {
   message: string
   manifest: Record<string, unknown>

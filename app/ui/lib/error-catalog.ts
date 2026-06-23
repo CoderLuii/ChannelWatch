@@ -27,6 +27,11 @@ export const ErrorCode = {
   RESTORE_SCHEMA_AHEAD: "ERR_RESTORE_SCHEMA_AHEAD",
   RESTORE_FAILED: "ERR_RESTORE_FAILED",
   DEBUG_BUNDLE_CREATE_FAILED: "ERR_DEBUG_BUNDLE_CREATE_FAILED",
+  SUPPORT_REPORT_REQUEST_TOO_LARGE: "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE",
+  SUPPORT_REPORT_PAYLOAD_INVALID: "ERR_SUPPORT_REPORT_PAYLOAD_INVALID",
+  SUPPORT_REPORT_FORM_INVALID: "ERR_SUPPORT_REPORT_FORM_INVALID",
+  SUPPORT_REPORT_ATTACHMENT_TOO_LARGE: "ERR_SUPPORT_REPORT_ATTACHMENT_TOO_LARGE",
+  SUPPORT_REPORT_ATTACHMENT_INVALID: "ERR_SUPPORT_REPORT_ATTACHMENT_INVALID",
   ACTIVITY_FETCH_FAILED: "ERR_ACTIVITY_FETCH_FAILED",
   ACTIVITY_CLEAR_FAILED: "ERR_ACTIVITY_CLEAR_FAILED",
   ACTIVITY_DB_UNAVAILABLE: "ERR_ACTIVITY_DB_UNAVAILABLE",
@@ -190,6 +195,34 @@ const CATALOG: Record<string, CatalogEntry> = {
     message: "Failed to create debug bundle.",
     remediation:
       "Check that /config is readable and that there is enough disk space.",
+  },
+  [ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE]: {
+    code: ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE,
+    message: "Support report request is too large.",
+    remediation:
+      "Remove large attachments or send fewer screenshots, then try again.",
+  },
+  [ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID]: {
+    code: ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID,
+    message: "Support report details could not be validated.",
+    remediation: "Review the report fields and try again.",
+  },
+  [ErrorCode.SUPPORT_REPORT_FORM_INVALID]: {
+    code: ErrorCode.SUPPORT_REPORT_FORM_INVALID,
+    message: "Support report upload form is invalid.",
+    remediation: "Reload ChannelWatch and try submitting the report again.",
+  },
+  [ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE]: {
+    code: ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE,
+    message: "Support report attachment is too large.",
+    remediation:
+      "Remove large files or attach fewer screenshots, then try again.",
+  },
+  [ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID]: {
+    code: ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID,
+    message: "Support report attachment could not be validated.",
+    remediation:
+      "Attach PNG, JPEG, or WebP screenshots and a ChannelWatch-generated debug bundle ZIP.",
   },
   [ErrorCode.ACTIVITY_FETCH_FAILED]: {
     code: ErrorCode.ACTIVITY_FETCH_FAILED,

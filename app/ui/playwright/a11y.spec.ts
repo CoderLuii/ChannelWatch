@@ -37,3 +37,16 @@ for (const view of views) {
     expect(results.violations).toEqual([])
   })
 }
+
+test("axe: report problem dialog has no accessibility violations", async ({ page }) => {
+  await page.goto("/#diagnostics")
+  await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await expect(page.getByRole("dialog", { name: "Report a Problem" })).toBeVisible()
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze()
+
+  expect(results.violations).toEqual([])
+})

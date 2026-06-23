@@ -11,6 +11,8 @@ from pathlib import Path
 import os
 import stat
 
+from .atomic_io import _atomic_write_secret_bytes
+
 ENCRYPTION_KEY_FILE = Path(os.getenv("CONFIG_PATH", "/config")) / "encryption.key"
 _ALLOWED_MODE = 0o600
 FERNET_PREFIX = "fernet:"
@@ -39,8 +41,7 @@ def bootstrap_encryption_key(key_file: Path = ENCRYPTION_KEY_FILE) -> bytes:
 
     key_file.parent.mkdir(parents=True, exist_ok=True)
     key = os.urandom(32)
-    key_file.write_bytes(key)
-    key_file.chmod(_ALLOWED_MODE)
+    _atomic_write_secret_bytes(key_file, key)
     return key
 
 

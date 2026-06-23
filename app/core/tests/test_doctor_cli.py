@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -212,6 +214,9 @@ class TestDoctorRotateEncryptionKey:
         new_key = key_file.read_bytes()
         assert new_key != old_key
         assert (tmp_path / "encryption.key.bak").exists()
+        if os.name != "nt":
+            assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+            assert stat.S_IMODE((tmp_path / "encryption.key.bak").stat().st_mode) == 0o600
 
         raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
         new_ciphertexts = [server["api_key"] for server in raw["dvr_servers"]]
@@ -265,6 +270,9 @@ class TestDoctorRotateEncryptionKey:
 
         assert key_file.read_bytes() == old_key
         assert (tmp_path / "encryption.key.bak").exists()
+        if os.name != "nt":
+            assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+            assert stat.S_IMODE((tmp_path / "encryption.key.bak").stat().st_mode) == 0o600
         raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
         decrypted = decrypt_dvr_api_keys(raw["dvr_servers"], key_file)
         assert [server["api_key"] for server in decrypted] == ["secret-one"]
@@ -305,6 +313,40 @@ class TestDoctorResetAdminPassword:
 
         output = capsys.readouterr().out
         assert "Password reset successful for admin." in output
+        assert "Password reset to the supplied value." in output
+        assert "newpass" not in output
         user = get_user_by_username(engine, "admin")
         assert user.verify_password("newpass") is True
         assert get_session_by_token(engine, session.token) is None
+
+    def test_reset_admin_password_prints_generated_password_once(
+        self, tmp_path, capsys
+    ):
+        from core.cli.doctor import run
+        from core.storage.database import create_db_engine
+        from sqlmodel import SQLModel
+        from core.storage.auth import create_user, get_user_by_username
+
+        settings = {
+            "_version": 7,
+            "dvr_servers": [],
+            "rbac_enabled": True,
+            "auth_mode": "rbac",
+        }
+        (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+
+        engine = create_db_engine("sqlite:///:memory:")
+        SQLModel.metadata.create_all(engine)
+        create_user(engine, "admin", "oldpass", role="admin")
+
+        with (
+            _PatchStack(_patch_config_paths(tmp_path)),
+            patch("ui.backend.main._ensure_auth_tables", return_value=engine),
+            patch("core.cli.doctor.os.urandom", return_value=b"\x11" * 12),
+        ):
+            run(["reset-admin-password", "--username", "admin"])
+
+        output = capsys.readouterr().out
+        assert output.count("Temporary password: 111111111111111111111111") == 1
+        user = get_user_by_username(engine, "admin")
+        assert user.verify_password("111111111111111111111111") is True

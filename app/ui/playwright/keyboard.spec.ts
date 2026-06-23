@@ -55,8 +55,10 @@ test("keyboard: major view controls are reachable in a sensible order", async ({
   await tabTo(page, page.getByLabel("Filter notification log from date"), 2)
 
   await page.goto("/#diagnostics")
+  await expect(page.getByRole("button", { name: "Report a ChannelWatch problem" })).toBeVisible()
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).focus()
   await expect(page.getByRole("button", { name: "Download sanitized debug bundle" })).toBeVisible()
-  await page.getByRole("button", { name: "Download sanitized debug bundle" }).focus()
+  await tabTo(page, page.getByRole("button", { name: "Download sanitized debug bundle" }), 2)
   await tabTo(page, page.getByRole("button", { name: "Export diagnostics" }), 2)
   await tabTo(page, page.getByRole("combobox", { name: "Select number of log lines" }), 4)
 

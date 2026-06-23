@@ -845,14 +845,14 @@ class TestMigrateV6ToV7CanonicalIds:
         with patch.dict(
             os.environ,
             {
-                "CHANNELS_DVR_HOST": "dvr.example.com",
+                "CHANNELS_DVR_HOST": "dvr-host",
                 "CHANNELS_DVR_PORT": "8089",
             },
         ):
             migrate_v6_to_v7(settings)
         output = _output_text(capsys, caplog)
         assert "Migrated DVR" in output
-        assert "dvr.example.com" in output
+        assert "dvr-host" in output
         assert "dvr_id=" in output
 
     def test_per_dvr_info_log_contains_display_name(self, capsys, caplog):

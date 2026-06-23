@@ -30,6 +30,9 @@ app/ui/playwright-report/
 app/ui/test-results/
 app/ui/blob-report/
 
+# Cloudflare / Wrangler local state
+.wrangler/
+
 # Local Compose data used by examples
 deploy/compose/.compose-data/
 

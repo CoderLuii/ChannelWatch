@@ -500,6 +500,8 @@ def render_supervisor_config(app_gid: int) -> None:
     user = f"cw_{random_token(16, 12)}"
     password = random_token(32, 24)
 
+    # Supervisor requires local runtime credentials; permissions are restricted below.
+    # codeql[py/clear-text-storage-sensitive-data]
     SUPERVISOR_AUTH_FILE.write_text(
         f"user={user}\npass={password}\n",
         encoding="utf-8",
@@ -508,6 +510,8 @@ def render_supervisor_config(app_gid: int) -> None:
     rendered = template.replace("__SUPERVISOR_USER__", user).replace(
         "__SUPERVISOR_PASS__", password
     )
+    # Supervisor reads credentials from its local config; permissions are restricted below.
+    # codeql[py/clear-text-storage-sensitive-data]
     SUPERVISOR_CONF.write_text(rendered, encoding="utf-8")
 
     for path, mode in (

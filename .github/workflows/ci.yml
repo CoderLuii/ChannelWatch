@@ -1,15 +1,17 @@
-name: CI
+name: ChannelWatch - PR Validation
 
 env:
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
   pull_request:
     branches:
       - main
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   docker-build:

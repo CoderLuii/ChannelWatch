@@ -8,6 +8,24 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.3] - 2026-06-23
+
+### Added
+
+- Add a `Report a Problem` flow in Diagnostics with sanitized report previews, optional GetChannels/GitHub/email contact fields, screenshot uploads, and ChannelWatch debug-bundle ZIP validation.
+- Add a manual upload path with support codes and offline report packages for installs that cannot submit directly from the container.
+- Add the hosted report intake handoff to the ChannelWatch site for creating public issues while sending private screenshots, debug bundles, and private email details only to CoderLuii.
+
+### Changed
+
+- Point manual uploads to the hosted ChannelWatch report portal instead of requiring GitHub knowledge from reporters.
+- Keep report-intake API failures on the structured error catalog so UI errors remain consistent with the rest of the app.
+
+### Security
+
+- Keep private emails, screenshot filenames, screenshots, debug bundles, raw logs, tokens, and private config values out of the public GitHub issue body.
+- Require support-code validation for hosted report uploads and keep production verification on the hosted intake path.
+
 ## [0.9.2] - 2026-06-22
 
 ### Fixed
@@ -164,7 +182,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.2
 [0.9.1]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.1
 [0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.0

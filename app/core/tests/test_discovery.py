@@ -327,3 +327,15 @@ class TestDiscoveryScanEndpoint:
         body = resp.json()
         assert "servers" in body
         assert "error" in body
+
+    def test_legacy_endpoint_returns_sanitized_error(self, client):
+        with patch(
+            "ui.backend.main._scan_for_dvrs",
+            side_effect=RuntimeError("token leaked"),
+        ):
+            resp = client.get("/api/discover-servers")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "servers": [],
+            "error": "DVR discovery failed. Check network access and container logs.",
+        }

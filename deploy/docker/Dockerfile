@@ -32,7 +32,7 @@ FROM cgr.dev/chainguard/python:latest
 
 USER root
 
-ARG VERSION=0.9.2
+ARG VERSION=0.9.3
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 

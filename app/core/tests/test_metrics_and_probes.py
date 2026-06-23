@@ -56,7 +56,7 @@ def _mock_system_info(dvr_status=None):
     from ui.backend.main import SystemInfo, DVRStatus
 
     return SystemInfo(
-        channelwatch_version="0.9.2",
+        channelwatch_version="0.9.3",
         channels_dvr_host="192.168.1.10",
         channels_dvr_port=8089,
         channels_dvr_server_version=None,

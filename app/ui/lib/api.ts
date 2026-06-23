@@ -271,7 +271,8 @@ export async function signalContainerRestart(): Promise<{ message: string }> {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
   }
 
   return response.json()
@@ -634,6 +635,13 @@ export interface ReportSubmissionAttachments {
   debugBundle?: File | null
 }
 
+function payloadForSupportCode(payload: ReportProblemPayload): ReportProblemPayload {
+  return {
+    ...payload,
+    turnstile_token: null,
+  }
+}
+
 function base64UrlEncode(value: string): string {
   const bytes = new TextEncoder().encode(value)
   let binary = ""
@@ -649,7 +657,7 @@ export function createReportSupportCode(payload: ReportProblemPayload): string {
     schema: 1,
     source: "channelwatch",
     created_at: new Date().toISOString(),
-    report: payload,
+    report: payloadForSupportCode(payload),
   }
   return `CW-REPORT-v1-${base64UrlEncode(JSON.stringify(envelope))}`
 }
@@ -712,6 +720,7 @@ export async function submitReport(
     headers: {
       ...(!hasAttachments ? { "Content-Type": "application/json" } : {}),
       ...(sameOrigin ? authHeaders() : {}),
+      ...(!sameOrigin ? { "X-ChannelWatch-In-App-Report": "1" } : {}),
     },
     body,
   })

@@ -518,6 +518,7 @@ def _ui_csp_policy() -> str:
             "img-src 'self' https: data: blob:",
             "font-src 'self' data:",
             f"connect-src {' '.join(connect_sources)}",
+            "frame-src 'self'",
             "object-src 'none'",
             "base-uri 'self'",
             "form-action 'self'",
@@ -1629,10 +1630,7 @@ async def get_support_report_config():
         or DEFAULT_REPORT_ENDPOINT,
         portal_url=_configured_report_portal_url(),
         max_bytes=_configured_report_max_bytes(),
-        turnstile_site_key=os.environ.get(
-            "CHANNELWATCH_TURNSTILE_SITE_KEY", ""
-        ).strip()
-        or None,
+        turnstile_site_key=None,
         attachments_enabled=True,
         max_attachment_bytes=_configured_report_max_attachment_bytes(),
         max_total_attachment_bytes=_configured_report_max_total_attachment_bytes(),
@@ -4694,6 +4692,10 @@ async def _save_settings_and_signal_reload_async(settings: AppSettings) -> bool:
     return await asyncio.to_thread(_save_settings_and_signal_reload, settings)
 
 
+def _can_signal_pid_one_restart() -> bool:
+    return os.name != "nt" and os.getpid() == 1
+
+
 # CONTROL ENDPOINTS
 @app.post(
     "/api/restart_container",
@@ -4703,17 +4705,19 @@ async def _save_settings_and_signal_reload_async(settings: AppSettings) -> bool:
 )
 async def restart_container():
     """Restart ChannelWatch"""
+    server = get_supervisor_proxy()
+    can_signal_pid_one = _can_signal_pid_one_restart()
+    if not server and not can_signal_pid_one:
+        raise structured_error(ErrorCode.SUPERVISOR_NOT_AVAILABLE)
+
     try:
 
         def delayed_restart():
             try:
                 time.sleep(2)
-                server = get_supervisor_proxy()
                 if server:
                     server.supervisor.shutdown()
                     return
-
-                import signal
 
                 os.kill(1, signal.SIGTERM)
             except Exception as e:

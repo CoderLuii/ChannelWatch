@@ -39,6 +39,29 @@ const baseProps = {
 }
 
 describe("StatusPanel monitoring banner", () => {
+  it("renders startup copy instead of degraded copy before freshness is published", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(StatusPanel, {
+        ...baseProps,
+        dvrStatusList: [
+          {
+            ...baseDvr,
+            monitoring_status: "starting",
+            monitoring_ready: false,
+            monitoring_reason: "No freshness state published yet",
+            freshness_status: "starting",
+          },
+        ],
+      }),
+    )
+
+    expect(html).toContain("Monitoring starting")
+    expect(html).toContain("Monitoring starting on Living Room")
+    expect(html).toContain("after the first monitoring pass")
+    expect(html).not.toContain("Monitoring degraded")
+    expect(html).not.toContain("No freshness state published yet")
+  })
+
   it("renders a diagnose banner when DVR monitoring is stale", () => {
     const html = renderToStaticMarkup(
       React.createElement(StatusPanel, {

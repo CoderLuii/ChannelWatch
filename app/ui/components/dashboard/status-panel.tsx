@@ -17,6 +17,7 @@ function getDvrHealthConfig(status: DVRStatusInfo | undefined, isDisabled: boole
   if (!status.connected) return { dotClass: "bg-red-500", ping: false, title: t("status.dvr.notConnected") }
   if (status.monitoring_ready === false) {
     if (status.monitoring_status === "dead") return { dotClass: "bg-red-500", ping: false, title: t("status.dvr.monitoringStopped") }
+    if (status.monitoring_status === "starting") return { dotClass: "bg-amber-500", ping: false, title: t("status.dvr.monitoringStarting") }
     return { dotClass: "bg-amber-500", ping: false, title: t("status.dvr.monitoringStale") }
   }
   return { dotClass: "bg-green-500", ping: true, title: t("status.dvr.healthy") }
@@ -88,17 +89,24 @@ function buildMonitoringBanner(dvrStatusList: DVRStatusInfo[]) {
 
   const stale = degraded.filter((dvr) => dvr.monitoring_status === "stale")
   const dead = degraded.filter((dvr) => dvr.monitoring_status === "dead")
+  const starting = degraded.filter((dvr) => dvr.monitoring_status === "starting")
   const lead = stale[0] ?? dead[0] ?? degraded[0]
-  const label = stale.length
-    ? t("status.banner.stale", { name: lead.name })
-    : dead.length
-      ? t("status.banner.stopped", { name: lead.name })
-      : t("status.banner.degraded", { name: lead.name })
+  const isStartingOnly = starting.length > 0 && stale.length === 0 && dead.length === 0
+  const label = isStartingOnly
+    ? t("status.banner.starting", { name: starting[0].name })
+    : stale.length
+      ? t("status.banner.stale", { name: lead.name })
+      : dead.length
+        ? t("status.banner.stopped", { name: lead.name })
+        : t("status.banner.degraded", { name: lead.name })
   const suffix = degraded.length > 1 ? t("status.banner.more", { count: degraded.length - 1 }) : ""
 
   return {
+    tone: isStartingOnly ? "starting" : "degraded",
     label,
-    detail: lead.monitoring_reason || t("status.banner.defaultDetail"),
+    detail: isStartingOnly
+      ? t("status.banner.startingDetail")
+      : lead.monitoring_reason || t("status.banner.defaultDetail"),
     suffix,
   }
 }
@@ -120,6 +128,25 @@ export function StatusPanel({
   const alertTypeLabels = getAlertTypeLabels()
   const triggerLabels = activeAlertTypes.map(type => alertTypeLabels[type] || type)
   const monitoringBanner = buildMonitoringBanner(dvrStatusList)
+  const bannerStyle = monitoringBanner?.tone === "starting"
+    ? {
+        wrapper: "border-amber-500/40 bg-amber-950/80 text-amber-50 shadow-[0_12px_30px_rgba(146,64,14,0.18)]",
+        icon: "text-amber-200",
+        eyebrow: "text-amber-200/90",
+        suffix: "text-amber-200/80",
+        detail: "text-amber-100/85",
+        button: "border-amber-300/30 bg-amber-400/10 text-amber-50 hover:bg-amber-400/20",
+        title: t("status.monitoringStarting"),
+      }
+    : {
+        wrapper: "border-red-500/40 bg-red-950/90 text-red-50 shadow-[0_12px_30px_rgba(127,29,29,0.22)]",
+        icon: "text-red-200",
+        eyebrow: "text-red-200/90",
+        suffix: "text-red-200/80",
+        detail: "text-red-100/85",
+        button: "border-red-300/30 bg-red-400/10 text-red-50 hover:bg-red-400/20",
+        title: t("status.monitoringDegraded"),
+      }
 
   const allServers: AppSettings["dvr_servers"] = currentSettings?.dvr_servers ?? []
   const displayedServers = (selectedDvr && selectedDvr !== "all")
@@ -148,22 +175,22 @@ export function StatusPanel({
       </CardHeader>
       <CardContent className="p-0 flex-grow">
         {monitoringBanner && (
-          <div className="mx-3 mb-3 rounded-xl border border-red-500/40 bg-red-950/90 px-3 py-2.5 text-red-50 shadow-[0_12px_30px_rgba(127,29,29,0.22)]">
+          <div className={`mx-3 mb-3 rounded-xl border px-3 py-2.5 ${bannerStyle.wrapper}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 gap-2.5">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-200" />
+                <AlertTriangle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${bannerStyle.icon}`} />
                 <div className="min-w-0">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-red-200/90">{t("status.monitoringDegraded")}</div>
+                  <div className={`text-xs font-semibold uppercase tracking-[0.18em] ${bannerStyle.eyebrow}`}>{bannerStyle.title}</div>
                   <div className="mt-0.5 text-sm font-medium leading-tight">
                     {monitoringBanner.label}
-                    {monitoringBanner.suffix && <span className="text-red-200/80">{monitoringBanner.suffix}</span>}
+                    {monitoringBanner.suffix && <span className={bannerStyle.suffix}>{monitoringBanner.suffix}</span>}
                   </div>
-                  <p className="mt-1 text-xs leading-relaxed text-red-100/85">{monitoringBanner.detail}</p>
+                  <p className={`mt-1 text-xs leading-relaxed ${bannerStyle.detail}`}>{monitoringBanner.detail}</p>
                 </div>
               </div>
               <button
                 onClick={() => onNavigate?.('diagnostics')}
-                className="inline-flex items-center gap-1 rounded-full border border-red-300/30 bg-red-400/10 px-2.5 py-1 text-[11px] font-medium text-red-50 transition-colors hover:bg-red-400/20"
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${bannerStyle.button}`}
               >
                 <Stethoscope className="h-3 w-3" />
                 {t("status.diagnose")}

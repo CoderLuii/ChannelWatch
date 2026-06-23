@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useContext, createContext } from "react"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/base/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
-import { signalContainerRestart, fetchSettings, pollForRecovery, fetchSecurityStatus } from "@/lib/api"
+import { ApiError, signalContainerRestart, fetchSettings, pollForRecovery, fetchSecurityStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { useToast } from "@/hooks/use-toast"
 import { SecurityModeBadge } from "@/components/settings/security-section"
@@ -90,7 +90,8 @@ export function Header() {
       // Fire the restart request (may or may not get a response before container dies)
       try {
         await signalContainerRestart()
-      } catch {
+      } catch (error) {
+        if (error instanceof ApiError) throw error
         // Expected: container may die before response arrives
       }
 
@@ -124,10 +125,14 @@ export function Header() {
     } catch (error) {
       setOverlayState("idle")
       setIsRestarting(false)
+      const description =
+        error instanceof ApiError
+          ? [error.message, error.payload.remediation].filter(Boolean).join(" ")
+          : t("header.restartFailedDesc")
       toast({
         variant: "destructive",
         title: t("header.restartFailed"),
-        description: t("header.restartFailedDesc"),
+        description,
       })
     }
   }

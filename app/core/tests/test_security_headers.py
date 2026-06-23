@@ -143,6 +143,7 @@ class TestCSPHeaders:
         assert script_src == "script-src 'self' 'unsafe-inline'"
         assert "'unsafe-eval'" not in script_src
         assert "style-src 'self' 'unsafe-inline'" in csp
+        assert "frame-src 'self'" in csp
 
     def test_static_ui_csp_allows_configured_report_endpoint(
         self, monkeypatch, noauth_client
@@ -158,6 +159,21 @@ class TestCSPHeaders:
         )
 
         assert connect_src == "connect-src 'self' https://channelwatch.coderluii.dev"
+
+    def test_static_ui_csp_does_not_allow_turnstile_for_in_app_reports(
+        self, monkeypatch, noauth_client
+    ):
+        monkeypatch.setenv("CHANNELWATCH_REPORT_TURNSTILE_SITE_KEY", "1x00000000000000000000AA")
+
+        resp = noauth_client.get("/")
+        csp = resp.headers["content-security-policy"]
+
+        assert self._directive(csp, "script-src") == "script-src 'self' 'unsafe-inline'"
+        assert self._directive(csp, "connect-src") == "connect-src 'self'"
+        assert self._directive(csp, "frame-src") == "frame-src 'self'"
+
+        config = noauth_client.get("/api/v1/support/report-config").json()
+        assert config["turnstile_site_key"] is None
 
     def test_static_ui_csp_ignores_malformed_report_endpoint(
         self, monkeypatch, noauth_client

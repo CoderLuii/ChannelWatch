@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiError, authHeaders, cacheApiKey, clearCachedAuthState, downloadBackup, downloadDebugBundle, restoreFromBackup } from "@/lib/api"
+import { ApiError, authHeaders, cacheApiKey, clearCachedAuthState, downloadBackup, downloadDebugBundle, restoreFromBackup, signalContainerRestart } from "@/lib/api"
 import { ErrorCode } from "@/lib/error-catalog"
 
 function installBrowserAuth(csrf = "csrf-token") {
@@ -68,6 +68,26 @@ describe("backup/debug/restore API helpers", () => {
     } satisfies Partial<ApiError>)
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/debug/bundle", {
       headers: { "X-CSRF-Token": "csrf-debug" },
+    })
+  })
+
+  it("parses structured container restart errors as ApiError", async () => {
+    installBrowserAuth("csrf-restart")
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        code: ErrorCode.SUPERVISOR_NOT_AVAILABLE,
+        message: "Supervisor proxy is not available.",
+      },
+    }), { status: 503, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(signalContainerRestart()).rejects.toMatchObject({
+      name: "ApiError",
+      message: "Supervisor proxy is not available.",
+    } satisfies Partial<ApiError>)
+    expect(fetchMock).toHaveBeenCalledWith("/api/restart_container", {
+      method: "POST",
+      headers: { "X-CSRF-Token": "csrf-restart" },
     })
   })
 

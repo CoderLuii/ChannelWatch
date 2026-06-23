@@ -200,13 +200,50 @@ describe("support report API helpers", () => {
 
     const [, options] = fetchMock.mock.calls[0]
     expect(options.credentials).toBe("omit")
-    expect(options.headers).toEqual({ "Content-Type": "application/json" })
+    expect(options.headers).toEqual({
+      "Content-Type": "application/json",
+      "X-ChannelWatch-In-App-Report": "1",
+    })
     const body = JSON.parse(String(options.body))
     expect(body).toEqual({ support_code: expect.stringMatching(/^CW-REPORT-v1-/) })
     expect(decodeSupportCode(body.support_code)).toMatchObject({
       schema: 1,
       source: "channelwatch",
       report: { email: "viewer@example.com" },
+    })
+  })
+
+  it("does not send Turnstile tokens from the in-app external report flow", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          mode: "live",
+          status: "live-ready",
+          issue_title: "[In-App] Active Streams shows a stream",
+          issue_body: "report body",
+          email_subject: "ChannelWatch report: Active Streams shows a stream",
+          email_body: "private report body",
+          email_in_public_issue: false,
+          attachments: [],
+          attachment_total_bytes: 0,
+          attachments_sent: true,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await submitReport("https://channelwatch.coderluii.dev/api/reports", {
+      ...payload,
+      turnstile_token: "turnstile-test-token",
+    })
+
+    const [, options] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String(options.body))
+    expect(options.headers).toMatchObject({ "X-ChannelWatch-In-App-Report": "1" })
+    expect(body).toEqual({ support_code: expect.stringMatching(/^CW-REPORT-v1-/) })
+    expect(decodeSupportCode(body.support_code)).toMatchObject({
+      report: { turnstile_token: null },
     })
   })
 
@@ -232,17 +269,22 @@ describe("support report API helpers", () => {
     vi.stubGlobal("fetch", fetchMock)
     const screenshot = new File(["image-bytes"], "screen.png", { type: "image/png" })
 
-    await submitReport("https://channelwatch.coderluii.dev/api/reports", payload, {
-      screenshots: [screenshot],
-    })
+    await submitReport(
+      "https://channelwatch.coderluii.dev/api/reports",
+      payload,
+      {
+        screenshots: [screenshot],
+      },
+    )
 
     const [, options] = fetchMock.mock.calls[0]
     expect(options.credentials).toBe("omit")
-    expect(options.headers).toEqual({})
+    expect(options.headers).toEqual({ "X-ChannelWatch-In-App-Report": "1" })
     expect(options.body).toBeInstanceOf(FormData)
     const formData = options.body as FormData
     expect(formData.get("payload")).toBeNull()
     expect(String(formData.get("support_code"))).toMatch(/^CW-REPORT-v1-/)
+    expect(formData.get("turnstile_token")).toBeNull()
     expect(formData.getAll("screenshots")).toHaveLength(1)
   })
 

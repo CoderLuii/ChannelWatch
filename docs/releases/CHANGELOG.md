@@ -8,6 +8,22 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.6] - 2026-06-23
+
+### Changed
+
+- Keep the in-app `Report a Problem` submit path free of hosted bot verification while preserving the protected public upload portal.
+- Show the normal first monitor pass as `Monitoring starting` instead of presenting startup freshness as a degraded state.
+
+### Fixed
+
+- Allow local ChannelWatch installs to submit support-code reports to the hosted intake service without showing an in-app verification widget.
+- Return a structured restart error when supervisor control is unavailable instead of leaving the restart overlay waiting indefinitely.
+
+### Security
+
+- Keep bot verification scoped to the public report upload portal, where anonymous traffic can reach it, while continuing to validate support codes for report intake.
+
 ## [0.9.5] - 2026-06-23
 
 ### Changed
@@ -214,7 +230,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.2...v0.9.3

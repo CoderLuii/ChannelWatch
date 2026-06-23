@@ -129,6 +129,26 @@ function isExternalReportEndpoint(endpoint: string | null | undefined): boolean 
   return Boolean(endpoint && !endpoint.startsWith("/"))
 }
 
+function externalEndpointRequiresSupportCode(config: ReportConfig | null): boolean {
+  return Boolean(config && config.mode !== "dry-run" && isExternalReportEndpoint(config.endpoint))
+}
+
+function successTitle(preview: ReportPreviewResponse): string {
+  if (preview.mode === "live" && preview.attachments_sent) return t("supportReport.success.liveTitle")
+  if (preview.mode === "email-test" && preview.attachments_sent) return t("supportReport.success.emailTestTitle")
+  return t("supportReport.success.title")
+}
+
+function successDescription(preview: ReportPreviewResponse): string {
+  if (preview.mode === "live" && preview.attachments_sent) {
+    return t("supportReport.success.liveDescription")
+  }
+  if (preview.mode === "email-test" && preview.attachments_sent) {
+    return t("supportReport.success.emailTestDescription")
+  }
+  return t("supportReport.success.description")
+}
+
 function activeProviders(settings: AppSettings | null): string[] {
   if (!settings) return []
   const providers: string[] = []
@@ -616,6 +636,7 @@ function ReportPreviewCard({
 export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDialogProps) {
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
   const debugBundleInputRef = useRef<HTMLInputElement | null>(null)
+  const scrollBodyRef = useRef<HTMLDivElement | null>(null)
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<"form" | "review" | "success">("form")
   const [config, setConfig] = useState<ReportConfig | null>(null)
@@ -642,6 +663,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     () => buildDiagnostics(systemInfo, appSettings),
     [systemInfo, appSettings],
   )
+  const supportCodeRequired = externalEndpointRequiresSupportCode(config)
 
   useEffect(() => {
     if (!open) return
@@ -682,6 +704,11 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     setSupportCodeStatus("idle")
     setOfflinePackageStatus("idle")
   }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    scrollBodyRef.current?.scrollTo({ top: 0 })
+  }, [open, step])
 
   const updateField = (field: ReportField, value: string) => {
     setForm((current) => ({ ...current, [field]: value }))
@@ -810,11 +837,6 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
 
   const handleSubmit = async () => {
     if (!draftPayload) return
-    if (secureUploadRequired) {
-      setSubmitError(null)
-      setManualUploadOpen(true)
-      return
-    }
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -874,7 +896,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const activePayload = serverPreview ? null : draftPayload
   const previewTitle = serverPreview?.issue_title || (activePayload ? renderIssueTitle(activePayload) : "")
   const supportPortalUrl = config?.portal_url || defaultSupportPortalUrl
-  const secureUploadRequired = config?.mode === "live" && isExternalReportEndpoint(config.endpoint)
+  const submitButtonText = t("supportReport.review.submitDryRun")
   const attachmentRows = privateAttachmentRows(
     serverPreview?.attachments ?? null,
     screenshots,
@@ -968,7 +990,11 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
         </Button>
       </DialogTrigger>
       <DialogContent className="w-[calc(100vw-2rem)] max-w-3xl overflow-hidden p-0">
-        <div className="max-h-[88vh] overflow-x-hidden overflow-y-auto" data-testid="report-problem-scroll-body">
+        <div
+          ref={scrollBodyRef}
+          className="max-h-[88vh] overflow-x-hidden overflow-y-auto"
+          data-testid="report-problem-scroll-body"
+        >
           <div className="border-b border-border/80 bg-card/60 px-5 py-4 sm:px-6">
             <DialogHeader className="text-left">
               <div className="flex items-start gap-3 pr-8">
@@ -1328,7 +1354,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
 
             {step === "review" && draftPayload && (
               <div className="space-y-4" data-testid="report-problem-review">
-                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
                   <section className="rounded-lg border border-border bg-background">
                     <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                       <FileText className="h-4 w-4 text-primary" />
@@ -1408,9 +1434,9 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                   <div className="flex items-start gap-3">
                     <CheckCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
                     <div>
-                      <h3 className="font-semibold text-emerald-500">{t("supportReport.success.title")}</h3>
+                      <h3 className="font-semibold text-emerald-500">{successTitle(serverPreview)}</h3>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        {t("supportReport.success.description")}
+                        {successDescription(serverPreview)}
                       </p>
                     </div>
                   </div>
@@ -1476,7 +1502,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                   {t("supportReport.review.back")}
                 </Button>
                 <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
-                  {!secureUploadRequired && (
+                  {!supportCodeRequired && (
                     <Button
                       variant="outline"
                       className="w-full sm:w-auto"
@@ -1491,9 +1517,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                     {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting
                       ? t("supportReport.status.submitting")
-                      : secureUploadRequired
-                        ? t("supportReport.review.useSecureUpload")
-                        : t("supportReport.review.submitDryRun")}
+                      : submitButtonText}
                   </Button>
                 </div>
               </>

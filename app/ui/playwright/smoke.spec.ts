@@ -135,8 +135,74 @@ test("report problem shows dry-run API failures", async ({ page }) => {
 
   await expect(page.getByText("Could not submit report.")).toBeVisible()
   await expect(page.getByText("Report renderer unavailable")).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Manual upload" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Manual upload fallback" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Copy support code" })).toBeVisible()
+})
+
+test("report problem submits directly without an in-app Cloudflare check", async ({ page }) => {
+  await page.route("**/api/v1/support/report-config", async (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        mode: "live",
+        endpoint: "https://channelwatch.coderluii.dev/api/reports",
+        portal_url: "https://channelwatch.coderluii.dev/report",
+        max_bytes: 262144,
+        turnstile_site_key: "1x00000000000000000000AA",
+        attachments_enabled: true,
+        max_attachment_bytes: 8388608,
+        max_total_attachment_bytes: 20971520,
+        max_screenshot_count: 5,
+        allowed_attachment_types: [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "application/zip",
+          "application/x-zip-compressed",
+          "application/octet-stream",
+        ],
+      }),
+    })
+  })
+
+  const submittedBodies: Array<{ support_code?: string; turnstile_token?: string }> = []
+  const submittedHeaders: Array<Record<string, string>> = []
+  await page.route("https://channelwatch.coderluii.dev/api/reports", async (route) => {
+    submittedHeaders.push(route.request().headers())
+    submittedBodies.push(route.request().postDataJSON() as { support_code?: string; turnstile_token?: string })
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        mode: "live",
+        status: "live-ready",
+        issue_title: "[In-App] Direct secure upload test",
+        issue_body: "report body",
+        email_subject: "ChannelWatch Issue #123",
+        email_body: "private body",
+        email_in_public_issue: false,
+        attachments: [],
+        attachment_total_bytes: 0,
+        attachments_sent: true,
+      }),
+    })
+  })
+
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByLabel("Problem summary").fill("Direct secure upload test")
+  await page.getByRole("button", { name: "Review report" }).click()
+  await expect(page.getByText("Secure upload check")).toHaveCount(0)
+  await expect(page.getByTestId("manual-upload-panel")).toHaveCount(0)
+
+  await page.getByRole("button", { name: "Submit report" }).click()
+
+  await expect(page.getByTestId("report-problem-success")).toBeVisible()
+  await expect(page.getByText("Report submitted")).toBeVisible()
+  expect(submittedHeaders[0]?.["x-channelwatch-in-app-report"]).toBe("1")
+  expect(submittedBodies[0]?.support_code).toMatch(/^CW-REPORT-v1-/)
+  expect(submittedBodies[0]?.turnstile_token).toBeUndefined()
 })
 
 test("report problem attachments stay aligned on mobile", async ({ page }) => {

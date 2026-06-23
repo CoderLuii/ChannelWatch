@@ -348,6 +348,7 @@ class TestRestartControlEndpoints:
             patch("ui.backend.config.CONFIG_DIR", tmp_path),
             patch.object(ui_main, "CW_DISABLE_AUTH", True),
             patch.object(ui_main, "get_supervisor_proxy", return_value=None),
+            patch.object(ui_main, "_can_signal_pid_one_restart", return_value=True),
             patch.object(ui_main.time, "sleep", MagicMock()),
             patch("threading.Thread", _ImmediateThread),
             patch.object(ui_main.os, "kill") as kill_mock,
@@ -357,3 +358,27 @@ class TestRestartControlEndpoints:
 
         assert resp.status_code == 202
         kill_mock.assert_called_once_with(1, signal.SIGTERM)
+
+    def test_restart_container_returns_503_when_no_supervisor_or_pid_one(self, tmp_path):
+        import ui.backend.main as ui_main
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text('{"dvr_servers": [], "api_key": "test-key"}')
+
+        with (
+            patch("ui.backend.config.CONFIG_FILE", settings_file),
+            patch("ui.backend.config.CONFIG_DIR", tmp_path),
+            patch.object(ui_main, "CW_DISABLE_AUTH", True),
+            patch.object(ui_main, "get_supervisor_proxy", return_value=None),
+            patch.object(ui_main, "_can_signal_pid_one_restart", return_value=False),
+            patch("threading.Thread") as thread_mock,
+            patch.object(ui_main.os, "kill") as kill_mock,
+        ):
+            client = TestClient(ui_main.app, raise_server_exceptions=False)
+            resp = client.post("/api/restart_container")
+
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert detail["code"] == "ERR_SUPERVISOR_NOT_AVAILABLE"
+        thread_mock.assert_not_called()
+        kill_mock.assert_not_called()

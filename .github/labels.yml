@@ -74,10 +74,6 @@
   color: "d4c5f9"
   description: "Multi-DVR support"
 
-- name: "status/needs-triage"
-  color: "ededed"
-  description: "Awaiting maintainer review"
-
 - name: "status/more-info-needed"
   color: "fef2c0"
   description: "Waiting for reporter to provide more details"

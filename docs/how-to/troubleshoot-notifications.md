@@ -110,6 +110,7 @@ Checks:
    - It stays open for 300 seconds, then resets on the next check.
 3. Check backoff and retry behavior.
    - Native webhooks retry each endpoint up to 3 times with 1 second and 2 second waits.
+   - Live TV and DVR playback notifications use one outer Apprise attempt, so a provider rate limit should not block ongoing watch-history updates.
    - A provider-side outage can create a burst of failures before ChannelWatch quiets down.
 4. Check provider rate limits and account state.
    - Email, Slack, Telegram, Discord, and hosted webhook receivers may reject or throttle messages even when ChannelWatch settings are unchanged.

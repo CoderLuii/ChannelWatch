@@ -24,6 +24,7 @@ APPRISE_DEST_KEYS = (
     "custom",
 )
 ALL_DEST_KEYS = APPRISE_DEST_KEYS + ("webhook",)
+SINGLE_ATTEMPT_APPRISE_EVENT_TYPES = {"channel", "vod"}
 
 _ALL_ENABLED: Dict[str, bool] = {k: True for k in ALL_DEST_KEYS}
 
@@ -54,6 +55,12 @@ def _load_routing_config() -> Dict[str, Any]:
         return CoreSettings.get().notification_routing or {}
     except Exception:
         return {}
+
+
+def _should_retry_apprise(event_type: str) -> bool:
+    """Return whether the outer Apprise wrapper should retry this alert type."""
+    normalized = (event_type or "").strip().lower()
+    return normalized not in SINGLE_ATTEMPT_APPRISE_EVENT_TYPES
 
 
 class NotificationManager:
@@ -162,7 +169,7 @@ class NotificationManager:
                 circuit_breaker=self.circuit_breaker,
                 db_engine=self.db_engine,
                 activity_event_id=activity_event_id,
-                with_retry=True,
+                with_retry=_should_retry_apprise(event_type),
             )
             if success:
                 log(
@@ -263,7 +270,7 @@ class NotificationManager:
                 circuit_breaker=self.circuit_breaker,
                 db_engine=self.db_engine,
                 activity_event_id=activity_event_id,
-                with_retry=True,
+                with_retry=_should_retry_apprise(event_type),
             )
             if success:
                 log(

@@ -1,7 +1,7 @@
 name: Security Vulnerability
 description: Report a security vulnerability (private disclosure only)
 title: "[Security]: "
-labels: ["type/security", "status/needs-triage", "priority/critical"]
+labels: ["type/security", "priority/critical"]
 assignees:
   - CoderLuii
 body:

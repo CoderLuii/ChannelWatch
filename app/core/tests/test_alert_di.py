@@ -303,6 +303,146 @@ class TestVodWatchingDI:
 
 
 class TestChannelWatchingAsyncPaths:
+    def test_failed_channel_delivery_still_records_activity_and_cooldown(self):
+        from core.alerts.channel_watching import ChannelWatchingAlert
+
+        notification_manager = MagicMock()
+        notification_manager.send_notification.return_value = False
+        channel_provider = MagicMock()
+        channel_provider.get_channel_info.return_value = {
+            "name": "Channel Five",
+            "logo_url": "https://example.invalid/logo.png",
+        }
+        am = _make_am(notification_manager=notification_manager)
+
+        async def run():
+            with (
+                patch(
+                    "core.alerts.channel_watching.ChannelInfoProvider",
+                    return_value=channel_provider,
+                ),
+                patch("core.alerts.channel_watching.StreamTracker"),
+                patch("core.alerts.channel_watching.ProgramInfoProvider"),
+                patch("core.alerts.channel_watching.record_activity") as record_mock,
+            ):
+                alert = ChannelWatchingAlert(am)
+                result = await alert.process_event(
+                    "activities.set",
+                    {
+                        "Name": "1-stream-TVE-5-client-a",
+                        "Value": "Watching ch5 ABC from Living Room (192.0.2.10)",
+                    },
+                )
+
+            assert result is True
+            notification_manager.send_notification.assert_called_once()
+            record_mock.assert_called_once()
+            assert await alert.session_manager.has_session("1-stream-TVE-5-client-a")
+            assert await alert.session_manager.was_notification_sent(
+                "ch5-Living Room", within_seconds=60
+            )
+            _, call_kwargs = notification_manager.send_notification.call_args
+            assert call_kwargs["event_type"] == "channel"
+            assert call_kwargs["dvr_id"] == "dvr_test01"
+            activity_kwargs = record_mock.call_args.kwargs
+            assert activity_kwargs["dvr_id"] == "dvr_test01"
+            assert activity_kwargs["dvr_name"] == "TestDVR"
+
+        __import__("asyncio").run(run())
+
+    def test_repeated_channel_telemetry_is_suppressed_during_cooldown(self):
+        from core.alerts.channel_watching import ChannelWatchingAlert
+
+        notification_manager = MagicMock()
+        notification_manager.send_notification.return_value = False
+        channel_provider = MagicMock()
+        channel_provider.get_channel_info.return_value = {
+            "name": "Channel Five",
+            "logo_url": "https://example.invalid/logo.png",
+        }
+        am = _make_am(notification_manager=notification_manager)
+
+        async def run():
+            with (
+                patch(
+                    "core.alerts.channel_watching.ChannelInfoProvider",
+                    return_value=channel_provider,
+                ),
+                patch("core.alerts.channel_watching.StreamTracker"),
+                patch("core.alerts.channel_watching.ProgramInfoProvider"),
+                patch("core.alerts.channel_watching.record_activity") as record_mock,
+            ):
+                alert = ChannelWatchingAlert(am)
+                first = await alert.process_event(
+                    "activities.set",
+                    {
+                        "Name": "1-stream-TVE-5-client-a",
+                        "Value": "Watching ch5 ABC from Living Room (192.0.2.10)",
+                    },
+                )
+                second = await alert.process_event(
+                    "activities.set",
+                    {
+                        "Name": "1-stream-TVE-5-client-a",
+                        "Value": "Watching ch5 ABC from Living Room (192.0.2.10): buf=0% drop=0%",
+                    },
+                )
+
+            assert first is True
+            assert second is False
+            notification_manager.send_notification.assert_called_once()
+            record_mock.assert_called_once()
+
+        __import__("asyncio").run(run())
+
+    def test_channel_change_from_same_device_sends_new_alert(self):
+        from core.alerts.channel_watching import ChannelWatchingAlert
+
+        notification_manager = MagicMock()
+        notification_manager.send_notification.return_value = False
+        channel_provider = MagicMock()
+        channel_provider.get_channel_info.return_value = {
+            "logo_url": "https://example.invalid/logo.png",
+        }
+        am = _make_am(notification_manager=notification_manager)
+
+        async def run():
+            with (
+                patch(
+                    "core.alerts.channel_watching.ChannelInfoProvider",
+                    return_value=channel_provider,
+                ),
+                patch("core.alerts.channel_watching.StreamTracker"),
+                patch("core.alerts.channel_watching.ProgramInfoProvider"),
+                patch("core.alerts.channel_watching.record_activity") as record_mock,
+            ):
+                alert = ChannelWatchingAlert(am)
+                first = await alert.process_event(
+                    "activities.set",
+                    {
+                        "Name": "1-stream-TVE-5-client-a",
+                        "Value": "Watching ch5 ABC from Living Room (192.0.2.10)",
+                    },
+                )
+                second = await alert.process_event(
+                    "activities.set",
+                    {
+                        "Name": "1-stream-TVE-7-client-a",
+                        "Value": "Watching ch7 NBC from Living Room (192.0.2.10)",
+                    },
+                )
+
+            assert first is True
+            assert second is True
+            assert notification_manager.send_notification.call_count == 2
+            assert record_mock.call_count == 2
+            assert await alert.session_manager.has_session("1-stream-TVE-7-client-a")
+            assert not await alert.session_manager.has_session(
+                "1-stream-TVE-5-client-a"
+            )
+
+        __import__("asyncio").run(run())
+
     def test_independent_channel_event_is_not_blocked_by_slow_external_work(self):
         import asyncio
 

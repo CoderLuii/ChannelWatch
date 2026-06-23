@@ -75,7 +75,7 @@ Native webhooks are separate from Apprise. When webhook routing is enabled, Chan
 
 ## Retry, circuit breaker, and delivery log
 
-Every Apprise provider call is wrapped by delivery tracking with retries. Failed Apprise attempts retry after 2, 4, 8, 16, and 32 seconds. Native webhooks have their own short HTTP retry loop for each endpoint, while the outer delivery tracker records the webhook result without adding another retry series.
+Apprise provider calls are wrapped by delivery tracking. High-frequency live TV and DVR playback alerts use a single outer Apprise attempt so provider rate limits do not stall the DVR event stream. Lower-frequency recording and disk alerts retry failed Apprise attempts after 2, 4, 8, 16, and 32 seconds. Native webhooks have their own short HTTP retry loop for each endpoint, while the outer delivery tracker records the webhook result without adding another retry series.
 
 Delivery protection is per DVR and delivery channel. After five failures for the same DVR and channel, the circuit opens for five minutes. While open, ChannelWatch skips that delivery path and records the skip rather than repeatedly calling a failing provider. A later successful delivery resets the failure count.
 

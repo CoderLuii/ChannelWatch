@@ -846,6 +846,95 @@ class TestNotificationManagerIntegration:
         assert circuit_rows[0].channel == "apprise"
         assert {row.status for row in retry_rows} == {"retry"}
 
+    @pytest.mark.parametrize("event_type", ["recording", "disk"])
+    def test_low_frequency_notifications_keep_outer_apprise_retries(
+        self, engine, event_type
+    ):
+        from core.notifications.notification import NotificationManager
+
+        nm = NotificationManager(db_engine=engine)
+        mock_provider = MagicMock()
+        mock_provider.PROVIDER_TYPE = "Apprise"
+        mock_provider.is_configured.return_value = True
+        mock_provider.send_notification.return_value = False
+        nm.register_provider(mock_provider)
+
+        with patch("core.notifications.delivery.time.sleep"):
+            result = nm.send_notification(
+                "Low-frequency alert", "msg", dvr_id="dvr1", event_type=event_type
+            )
+
+        assert result is False
+        assert (
+            mock_provider.send_notification.call_count
+            == CircuitBreaker.FAILURE_THRESHOLD
+        )
+        retry_rows, retry_total = query_delivery_log(engine, status="retry")
+        circuit_rows, circuit_total = query_delivery_log(engine, status="circuit_open")
+        assert retry_total == CircuitBreaker.FAILURE_THRESHOLD
+        assert circuit_total == 1
+        assert {row.event_type for row in retry_rows} == {event_type}
+        assert circuit_rows[0].event_type == event_type
+
+    def test_channel_notifications_do_not_outer_retry_apprise_failures(self, engine):
+        from core.notifications.notification import NotificationManager
+
+        nm = NotificationManager(db_engine=engine)
+        mock_provider = MagicMock()
+        mock_provider.PROVIDER_TYPE = "Apprise"
+        mock_provider.is_configured.return_value = True
+        mock_provider.send_notification.return_value = False
+        nm.register_provider(mock_provider)
+
+        result = nm.send_notification(
+            "Watching TV", "msg", dvr_id="dvr1", event_type="channel"
+        )
+
+        assert result is False
+        mock_provider.send_notification.assert_called_once()
+        failed_rows, failed_total = query_delivery_log(engine, status="failed")
+        retry_rows, retry_total = query_delivery_log(engine, status="retry")
+        circuit_rows, circuit_total = query_delivery_log(engine, status="circuit_open")
+        assert failed_total == 1
+        assert failed_rows[0].event_type == "channel"
+        assert retry_total == 0
+        assert circuit_total == 0
+
+    def test_vod_notifications_do_not_outer_retry_apprise_failures_async(
+        self, engine
+    ):
+        from core.notifications.notification import NotificationManager
+
+        nm = NotificationManager(db_engine=engine)
+        mock_provider = MagicMock()
+        mock_provider.PROVIDER_TYPE = "Apprise"
+        mock_provider.is_configured.return_value = True
+        mock_provider.send_notification.return_value = False
+        nm.register_provider(mock_provider)
+
+        async def run_in_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        async def run():
+            with patch(
+                "core.notifications.notification.asyncio.to_thread", run_in_thread
+            ):
+                return await nm.send_notification_async(
+                    "Watching DVR Content", "msg", dvr_id="dvr1", event_type="vod"
+                )
+
+        result = asyncio.run(run())
+
+        assert result is False
+        mock_provider.send_notification.assert_called_once()
+        failed_rows, failed_total = query_delivery_log(engine, status="failed")
+        retry_rows, retry_total = query_delivery_log(engine, status="retry")
+        circuit_rows, circuit_total = query_delivery_log(engine, status="circuit_open")
+        assert failed_total == 1
+        assert failed_rows[0].event_type == "vod"
+        assert retry_total == 0
+        assert circuit_total == 0
+
 
 class TestNotificationLogEndpoint:
     def test_notification_log_endpoint_filters_and_serializes_rows(

@@ -299,17 +299,14 @@ class ChannelWatchingAlert(BaseAlert, CleanupMixin):
                     "stream_count"
                 ] = await self.stream_tracker.get_stream_count()
 
-            success = await asyncio.to_thread(self._send_alert, channel_info)
-
             await self.session_manager.add_session(
                 session_id,
                 channel_info=channel_info,
                 tracking_key=tracking_key,
             )
+            await self.session_manager.record_notification(tracking_key)
 
-            if success:
-                await self.session_manager.record_notification(tracking_key)
-
+            await asyncio.to_thread(self._send_alert, channel_info)
             return True
         except Exception as e:
             log(f"Error processing watching event: {e}")
@@ -466,15 +463,6 @@ class ChannelWatchingAlert(BaseAlert, CleanupMixin):
                 },
             )
 
-            if getattr(self.settings, "alert_channel_watching", True):
-                result = self.send_alert(
-                    title=formatted_alert["title"],
-                    message=formatted_alert["message"],
-                    image_url=formatted_alert.get("image_url"),
-                )
-            else:
-                result = False
-
             display_device = (
                 device_name if device_name != "Unknown device" else ip_address
             )
@@ -495,8 +483,19 @@ class ChannelWatchingAlert(BaseAlert, CleanupMixin):
                 extra={"stream_count": stream_count}
                 if self.stream_count_enabled and stream_count
                 else None,
+                dvr_id=getattr(self.dvr, "id", None),
+                dvr_name=getattr(self.dvr, "name", None),
                 notification_history=self._notification_history,
             )
+
+            if getattr(self.settings, "alert_channel_watching", True):
+                result = self.send_alert(
+                    title=formatted_alert["title"],
+                    message=formatted_alert["message"],
+                    image_url=formatted_alert.get("image_url"),
+                )
+            else:
+                result = False
 
             return result
         except Exception as e:

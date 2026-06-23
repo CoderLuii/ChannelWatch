@@ -8,6 +8,16 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.7] - 2026-06-23
+
+### Changed
+
+- Keep live-watch and DVR playback notifications to a single outer Apprise delivery attempt so provider rate limits do not stall the event stream.
+
+### Fixed
+
+- Record Channel Watching activity and session cooldown before provider delivery so Recent Activity stays current even when a notification provider fails or rate-limits.
+
 ## [0.9.6] - 2026-06-23
 
 ### Changed
@@ -230,7 +240,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.7...HEAD
+[0.9.7]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.3...v0.9.4

@@ -124,6 +124,10 @@ function modeLabel(mode: ReportMode): string {
   return t("supportReport.mode.dryRun")
 }
 
+function isExternalReportEndpoint(endpoint: string | null | undefined): boolean {
+  return Boolean(endpoint && !endpoint.startsWith("/"))
+}
+
 function activeProviders(settings: AppSettings | null): string[] {
   if (!settings) return []
   const providers: string[] = []
@@ -809,6 +813,11 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
 
   const handleSubmit = async () => {
     if (!draftPayload) return
+    if (secureUploadRequired) {
+      setSubmitError(null)
+      setManualUploadOpen(true)
+      return
+    }
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -868,6 +877,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const activePayload = serverPreview ? null : draftPayload
   const previewTitle = serverPreview?.issue_title || (activePayload ? renderIssueTitle(activePayload) : "")
   const supportPortalUrl = config?.portal_url || defaultSupportPortalUrl
+  const secureUploadRequired = config?.mode === "live" && isExternalReportEndpoint(config.endpoint)
   const attachmentRows = privateAttachmentRows(
     serverPreview?.attachments ?? null,
     screenshots,
@@ -1469,18 +1479,24 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                   {t("supportReport.review.back")}
                 </Button>
                 <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
-                  <Button
-                    variant="outline"
-                    className="w-full sm:w-auto"
-                    onClick={() => setManualUploadOpen((current) => !current)}
-                    disabled={submitting}
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                    {t("supportReport.manual.footerButton")}
-                  </Button>
+                  {!secureUploadRequired && (
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto"
+                      onClick={() => setManualUploadOpen((current) => !current)}
+                      disabled={submitting}
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      {t("supportReport.manual.footerButton")}
+                    </Button>
+                  )}
                   <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={submitting}>
                     {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {submitting ? t("supportReport.status.submitting") : t("supportReport.review.submitDryRun")}
+                    {submitting
+                      ? t("supportReport.status.submitting")
+                      : secureUploadRequired
+                        ? t("supportReport.review.useSecureUpload")
+                        : t("supportReport.review.submitDryRun")}
                   </Button>
                 </div>
               </>

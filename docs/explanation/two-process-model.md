@@ -18,7 +18,7 @@ v0.7 was not monolithic at the container level. The frozen v0.7 supervisor confi
 
 The older core was more monolithic inside its own process. It used a single DVR host and port, initialized one event monitor, then called `event_monitor.start_monitoring()`. Settings changes saved by the UI generally required a restart before the core picked them up.
 
-The current design keeps the two-process container model and makes it more deliberate. `deploy/config/supervisor/supervisord.conf.template` still defines `[program:core]` and `[program:ui]`, but the entrypoint now generates supervisor credentials at boot, writes the final config to `/tmp/supervisord.conf`, and launches supervisor as PID 1 through the image `CMD`. The current core can run one monitor per enabled DVR and can react to selected config changes through a `SIGHUP` reload path.
+The current design keeps the two-process container model and makes it more deliberate. `deploy/config/supervisor/supervisord.conf.template` still defines `[program:core]` and `[program:ui]`, but the entrypoint now prepares a local supervisor Unix socket, writes the final config to `/tmp/supervisord.conf`, and launches supervisor as PID 1 through the image `CMD`. The current core can run one monitor per enabled DVR and can react to selected config changes through a `SIGHUP` reload path.
 
 ## What supervisord actually starts
 
@@ -45,7 +45,7 @@ sequenceDiagram
 
     Docker->>Entrypoint: Start container with CMD supervisord
     Entrypoint->>Entrypoint: Ensure /config and settings.json
-    Entrypoint->>Entrypoint: Generate /run/channelwatch/supervisor.auth
+    Entrypoint->>Entrypoint: Prepare local supervisor Unix socket
     Entrypoint->>Entrypoint: Render /tmp/supervisord.conf
     Entrypoint->>Supervisor: exec gosu appuser supervisord
     Supervisor->>Core: autostart python -u -m core.main --stay-alive
@@ -85,7 +85,7 @@ The shared contract is persisted files under `/config`:
 * `activity_history.json` remains a fallback and compatibility path for activity history reads.
 * `channelwatch.log` and watchdog state files give the UI diagnostics and status context.
 
-There is one control channel: the UI backend talks to supervisor on `127.0.0.1:9001` using XML-RPC credentials from `/run/channelwatch/supervisor.auth`. It uses that to inspect the `core` process, restart it, shut down supervisor for container restart, or find the core PID and send `SIGHUP` for hot reload.
+There is one control channel: the UI backend talks to supervisor through a local Unix socket under the ChannelWatch runtime directory. It uses that to inspect the `core` process, restart it, shut down supervisor for container restart, or find the core PID and send `SIGHUP` for hot reload.
 
 That means the IPC model is intentionally conservative. Configuration and history are durable files. Runtime control goes through supervisor. There is no hidden in-memory bus that users need to back up or debug.
 
@@ -102,7 +102,7 @@ This is not full fault containment. Both programs still share one filesystem, on
 
 ## Trade-offs
 
-The model costs more than a single process. It loads Python twice, keeps two runtimes resident, needs supervisor configuration, and needs a small auth file so the UI can call supervisor safely. It also creates schema-drift risk because the core and UI each have config readers that must agree on `/config/settings.json`.
+The model costs more than a single process. It loads Python twice, keeps two runtimes resident, and needs supervisor configuration plus a local control socket. It also creates schema-drift risk because the core and UI each have config readers that must agree on `/config/settings.json`.
 
 The benefit is operational clarity. The core can focus on DVR event handling and alert delivery. The UI can focus on API, auth, diagnostics, and static asset serving. Restart actions are narrower, logs show which program emitted output, and supervisor gives a simple recovery loop without asking users to operate several services.
 

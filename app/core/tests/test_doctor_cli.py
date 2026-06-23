@@ -313,13 +313,13 @@ class TestDoctorResetAdminPassword:
 
         output = capsys.readouterr().out
         assert "Password reset successful for admin." in output
-        assert "Password reset to the supplied value." in output
+        assert "Password reset to the provided value." in output
         assert "newpass" not in output
         user = get_user_by_username(engine, "admin")
         assert user.verify_password("newpass") is True
         assert get_session_by_token(engine, session.token) is None
 
-    def test_reset_admin_password_prints_generated_password_once(
+    def test_reset_admin_password_prompts_without_printing_password(
         self, tmp_path, capsys
     ):
         from core.cli.doctor import run
@@ -342,11 +342,12 @@ class TestDoctorResetAdminPassword:
         with (
             _PatchStack(_patch_config_paths(tmp_path)),
             patch("ui.backend.main._ensure_auth_tables", return_value=engine),
-            patch("core.cli.doctor.os.urandom", return_value=b"\x11" * 12),
+            patch("core.cli.doctor.getpass.getpass", side_effect=["promptpass", "promptpass"]),
         ):
             run(["reset-admin-password", "--username", "admin"])
 
         output = capsys.readouterr().out
-        assert output.count("Temporary password: 111111111111111111111111") == 1
+        assert "Password reset successful for admin." in output
+        assert "promptpass" not in output
         user = get_user_by_username(engine, "admin")
-        assert user.verify_password("111111111111111111111111") is True
+        assert user.verify_password("promptpass") is True

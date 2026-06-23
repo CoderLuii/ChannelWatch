@@ -144,6 +144,36 @@ class TestCSPHeaders:
         assert "'unsafe-eval'" not in script_src
         assert "style-src 'self' 'unsafe-inline'" in csp
 
+    def test_static_ui_csp_allows_configured_report_endpoint(
+        self, monkeypatch, noauth_client
+    ):
+        monkeypatch.setenv(
+            "CHANNELWATCH_REPORT_ENDPOINT",
+            "https://channelwatch.coderluii.dev/api/reports",
+        )
+
+        resp = noauth_client.get("/")
+        connect_src = self._directive(
+            resp.headers["content-security-policy"], "connect-src"
+        )
+
+        assert connect_src == "connect-src 'self' https://channelwatch.coderluii.dev"
+
+    def test_static_ui_csp_ignores_malformed_report_endpoint(
+        self, monkeypatch, noauth_client
+    ):
+        monkeypatch.setenv(
+            "CHANNELWATCH_REPORT_ENDPOINT",
+            "https://example.com:bad/api/reports",
+        )
+
+        resp = noauth_client.get("/")
+        connect_src = self._directive(
+            resp.headers["content-security-policy"], "connect-src"
+        )
+
+        assert connect_src == "connect-src 'self'"
+
     def test_csp_restricts_default_src_to_self(self, authed_client):
         resp = authed_client.get("/api/ping")
         csp = resp.headers["content-security-policy"]

@@ -8,6 +8,24 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.4] - 2026-06-23
+
+### Changed
+
+- Use a local supervisor Unix socket for internal process control instead of generated supervisor HTTP credentials.
+- Keep Docker image publishing focused on `latest` and the exact release version tag only.
+
+### Fixed
+
+- Allow the configured report-intake endpoint in the UI content security policy so live report submission can reach the hosted intake service.
+- Route live report submissions that require hosted verification into the secure upload path instead of showing a generic browser fetch failure.
+- Keep startup and DVR target validation responses generic while logging rejected targets internally with redaction.
+
+### Security
+
+- Encrypt webhook URLs and shared secrets at rest using the existing ChannelWatch Fernet key.
+- Stop printing generated `reset-admin-password` values; omitting `--password` now uses a hidden prompt.
+
 ## [0.9.3] - 2026-06-23
 
 ### Added
@@ -182,7 +200,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.2
 [0.9.1]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.1

@@ -1,7 +1,9 @@
 # IMPORTS
+import http.client
 import os
 import signal
 import ipaddress
+import socket
 from collections import deque
 from contextlib import asynccontextmanager
 from email.utils import format_datetime
@@ -481,20 +483,47 @@ API_CSP_POLICY = "; ".join(
     ]
 )
 
-UI_CSP_POLICY = "; ".join(
-    [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline'",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' https: data: blob:",
-        "font-src 'self' data:",
-        "connect-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'self'",
-    ]
-)
+
+def _report_endpoint_csp_source() -> Optional[str]:
+    raw_endpoint = os.environ.get(
+        "CHANNELWATCH_REPORT_ENDPOINT", DEFAULT_REPORT_ENDPOINT
+    )
+    try:
+        parsed = urlsplit(raw_endpoint)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    host = parsed.hostname
+    if any(char in host for char in " \t\r\n;"):
+        return None
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    default_port = 443 if parsed.scheme == "https" else 80
+    port_suffix = f":{port}" if port and port != default_port else ""
+    return f"{parsed.scheme}://{host}{port_suffix}"
+
+
+def _ui_csp_policy() -> str:
+    connect_sources = ["'self'"]
+    report_source = _report_endpoint_csp_source()
+    if report_source and report_source not in connect_sources:
+        connect_sources.append(report_source)
+    return "; ".join(
+        [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' https: data: blob:",
+            "font-src 'self' data:",
+            f"connect-src {' '.join(connect_sources)}",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+            "frame-ancestors 'self'",
+        ]
+    )
 
 # CSRF: X-API-Key custom header is the primary CSRF defence for authenticated routes
 # (OWASP "Custom Request Headers" pattern: browsers cannot add custom headers to
@@ -833,7 +862,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 or path.startswith("/healthz")
                 or path == "/metrics"
             )
-            else UI_CSP_POLICY
+            else _ui_csp_policy()
         )
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
@@ -948,11 +977,7 @@ async def healthz_ready():
 async def healthz_startup():
     if _STARTUP_COMPLETE:
         return {"status": "ready"}
-    return Response(
-        content=json.dumps({"status": "not_ready"}),
-        status_code=503,
-        media_type="application/json",
-    )
+    return JSONResponse(status_code=503, content={"status": "not_ready"})
 
 
 @app.get("/api/discover-servers", tags=["Information"])
@@ -1045,8 +1070,13 @@ def _is_safe_dvr_test_target(host: str, port: int) -> bool:
     if ":" in host:
         return _is_allowed_ipv6_dvr_host(host)
 
+    if _is_private_lan_dvr_host(host):
+        return True
+
     safety_url = build_dvr_base_url(host, port)
-    return is_safe_url(safety_url) or _is_private_lan_dvr_host(host)
+    if is_safe_url(safety_url):
+        return True
+    return False
 
 
 def _safe_dvr_test_error(exc: Exception) -> str:
@@ -1215,14 +1245,15 @@ def _validate_persisted_dvr_servers(settings: AppSettings) -> None:
         try:
             port = int(server.get("port", 8089) or 8089)
         except (TypeError, ValueError):
-            raise structured_error(
-                ErrorCode.DVR_TEST_TARGET_REJECTED,
-                message=f"DVR host {host!r} rejected: invalid port",
-            )
+            log.warning("Rejected DVR settings target with invalid port.")
+            raise structured_error(ErrorCode.DVR_TEST_TARGET_REJECTED)
         if not _is_safe_dvr_test_target(host, port):
+            log.warning(
+                "Rejected unsafe DVR settings target: %s",
+                redact_url(build_dvr_base_url(host, port)),
+            )
             raise structured_error(
                 ErrorCode.DVR_TEST_TARGET_REJECTED,
-                message=f"DVR host {host!r} rejected: failed safety check",
             )
         server["host"] = host
         server["port"] = port
@@ -4551,35 +4582,33 @@ async def download_logs():
 
 
 # SUPERVISOR INTEGRATION
-SUPERVISOR_HOST_PORT = "127.0.0.1:9001"
 SUPERVISOR_RUNTIME_DIR = os.environ.get("CHANNELWATCH_RUNTIME_DIR", "/tmp/channelwatch")
-SUPERVISOR_AUTH_FILE = os.environ.get(
-    "CHANNELWATCH_SUPERVISOR_AUTH_FILE",
-    os.path.join(SUPERVISOR_RUNTIME_DIR, "supervisor.auth"),
+SUPERVISOR_SOCKET_FILE = os.environ.get(
+    "CHANNELWATCH_SUPERVISOR_SOCKET_FILE",
+    os.path.join(SUPERVISOR_RUNTIME_DIR, "supervisor.sock"),
 )
 
 
-def _read_supervisor_auth() -> tuple[Optional[str], Optional[str]]:
-    try:
-        with open(SUPERVISOR_AUTH_FILE, "r") as f:
-            content = f.read()
-        user = None
-        password = None
-        for line in content.splitlines():
-            if line.startswith("user="):
-                user = line.split("=", 1)[1].strip()
-            elif line.startswith("pass="):
-                password = line.split("=", 1)[1].strip()
-        return user, password
-    except (OSError, ValueError):
-        return None, None
+class _UnixSocketHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = socket_path
+
+    def connect(self):
+        unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if self.timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+            unix_socket.settimeout(self.timeout)
+        unix_socket.connect(self.socket_path)
+        self.sock = unix_socket
 
 
-def _get_supervisor_url() -> Optional[str]:
-    user, password = _read_supervisor_auth()
-    if user and password and SUPERVISOR_HOST_PORT:
-        return f"http://{user}:{password}@{SUPERVISOR_HOST_PORT}/RPC2"
-    return None
+class _UnixSocketTransport(xmlrpc.client.Transport):
+    def __init__(self, socket_path: str):
+        super().__init__()
+        self.socket_path = socket_path
+
+    def make_connection(self, host):
+        return _UnixSocketHTTPConnection(self.socket_path)
 
 
 def _supervisor_exception_summary(exc: BaseException) -> str:
@@ -4591,15 +4620,19 @@ def _supervisor_exception_summary(exc: BaseException) -> str:
 
 
 def get_supervisor_proxy():
-    url = _get_supervisor_url()
-    if not url:
+    socket_path = SUPERVISOR_SOCKET_FILE
+    if not os.path.exists(socket_path):
         print(
-            f"[WebUI Supervisor] WARNING: Supervisor authentication unavailable"
-            f" — auth file not found or unreadable: {SUPERVISOR_AUTH_FILE}"
+            f"[WebUI Supervisor] WARNING: Supervisor socket unavailable"
+            f" — socket not found or unreadable: {socket_path}"
         )
         return None
     try:
-        server = xmlrpc.client.ServerProxy(url)
+        server = xmlrpc.client.ServerProxy(
+            "http://channelwatch-supervisor/RPC2",
+            transport=_UnixSocketTransport(socket_path),
+            allow_none=True,
+        )
         return server
     except Exception as e:
         print(
@@ -4729,13 +4762,13 @@ async def restart_core_process():
         return {"message": "Restart command sent to process 'core'."}
     except ConnectionRefusedError:
         print(
-            f"[WebUI API] ERROR: Connection refused to Supervisor RPC at {SUPERVISOR_HOST_PORT}. Is it running?"
+            "[WebUI API] ERROR: Connection refused to Supervisor RPC socket. Is it running?"
         )
         raise structured_error(ErrorCode.SUPERVISOR_CONNECT_FAILED)
     except xmlrpc.client.Fault as err:
         if err.faultCode == 401:
             print(
-                f"[WebUI API] ERROR: Supervisor RPC authentication failed (401 Unauthorized). Check supervisor auth file at {SUPERVISOR_AUTH_FILE}."
+                "[WebUI API] ERROR: Supervisor RPC authentication failed (401 Unauthorized)."
             )
             raise structured_error(ErrorCode.SUPERVISOR_AUTH_FAILED)
         else:

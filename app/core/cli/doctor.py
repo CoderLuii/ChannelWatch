@@ -1,4 +1,5 @@
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -311,20 +312,28 @@ def _cmd_reset_admin_password(args: argparse.Namespace) -> int:
 
     from core.storage.auth import reset_password
 
-    generated_password = not bool(args.password)
-    password = args.password or os.urandom(12).hex()
+    password = args.password or _prompt_password()
+    if not password:
+        return 1
     if not reset_password(engine, args.username, password):
         print(f"No user found with username {args.username!r}.")
         return 1
 
     print(f"Password reset successful for {args.username}.")
-    if generated_password:
-        # Generated temporary passwords must be shown once to the local operator.
-        # codeql[py/clear-text-logging-sensitive-data]
-        print(f"Temporary password: {password}")
-    else:
-        print("Password reset to the supplied value.")
+    print("Password reset to the provided value.")
     return 0
+
+
+def _prompt_password() -> str:
+    password = getpass.getpass("New password: ")
+    confirm = getpass.getpass("Confirm new password: ")
+    if not password:
+        print("Password reset cancelled: password cannot be blank.")
+        return ""
+    if password != confirm:
+        print("Password reset cancelled: passwords did not match.")
+        return ""
+    return password
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -359,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--password",
         default="",
         metavar="PASSWORD",
-        help="Optional new password; omit to generate one",
+        help="Optional new password; omit for a hidden interactive prompt",
     )
     reset_parser.set_defaults(handler=_cmd_reset_admin_password)
 

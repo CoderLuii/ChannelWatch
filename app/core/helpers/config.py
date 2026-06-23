@@ -376,6 +376,24 @@ class CoreSettings:
             merged, file_settings
         )
 
+        from .encryption import (
+            ENCRYPTION_KEY_FILE,
+            decrypt_dvr_api_keys,
+            decrypt_webhook_credentials,
+            encrypt_dvr_api_keys,
+            encrypt_webhook_credentials,
+        )
+
+        key_file = CONFIG_DIR / ENCRYPTION_KEY_FILE.name
+        persisted_merged["dvr_servers"] = encrypt_dvr_api_keys(
+            persisted_merged.get("dvr_servers") or [],
+            key_file,
+        )
+        persisted_merged["webhooks"] = encrypt_webhook_credentials(
+            persisted_merged.get("webhooks") or [],
+            key_file,
+        )
+
         # Persist merged defaults after successful migration using atomic replacement.
         new_version = persisted_merged.get("_version", 0)
         if CONFIG_FILE.is_file() and (
@@ -383,13 +401,15 @@ class CoreSettings:
         ):
             atomic_write_json(CONFIG_FILE, persisted_merged)
 
-        from .encryption import decrypt_dvr_api_keys, ENCRYPTION_KEY_FILE
-
         persisted_merged["dvr_servers"] = _coerce_dvr_servers(
             decrypt_dvr_api_keys(
                 persisted_merged.get("dvr_servers") or [],
-                CONFIG_DIR / ENCRYPTION_KEY_FILE.name,
+                key_file,
             )
+        )
+        persisted_merged["webhooks"] = decrypt_webhook_credentials(
+            persisted_merged.get("webhooks") or [],
+            key_file,
         )
 
         cls_fields = {f.name: f for f in fields(self)}

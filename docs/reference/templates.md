@@ -46,7 +46,7 @@ These variables come from `AlertFormatter.build_context()` and are available to 
 | `{{server_name}}` | string | All alert types with a DVR object | `Living Room DVR` | DVR display name from the runtime DVR object. Use this for DVR identity in current templates. |
 | `{{server_url}}` | string | All alert types with a DVR object | `http://192.168.1.10:8089` | DVR URL built from the DVR host and port. |
 | `{{server_version}}` | string | All alert types with a DVR object | `2026.04.20.0213` | Channels DVR server version if the runtime DVR object has one. |
-| `{{channelwatch_version}}` | string | All alert types | `0.9.3` | ChannelWatch application version. |
+| `{{channelwatch_version}}` | string | All alert types | `0.9.4` | ChannelWatch application version. |
 | `{{alert_type}}` | string | All alert types | `channel_watching` | Internal alert type key. |
 | `{{alert_type_friendly}}` | string | All alert types | `Channel Watching` | Human readable alert type label. |
 | `{{timestamp}}` | string | All alert types | `2026-04-26 14:30:05` | Local render timestamp. |

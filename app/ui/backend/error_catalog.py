@@ -216,7 +216,7 @@ _CATALOG: dict[str, CatalogEntry] = {
     ErrorCode.DVR_TEST_TARGET_REJECTED: CatalogEntry(
         code=ErrorCode.DVR_TEST_TARGET_REJECTED,
         http_status=400,
-        message="DVR test target failed safety validation.",
+        message="DVR test target rejected by safety validation.",
         remediation="Use a valid Channels DVR host and port; localhost, metadata, link-local, and unsafe hosts are rejected.",
     ),
     # Settings -----------------------------------------------------------
@@ -292,8 +292,8 @@ _CATALOG: dict[str, CatalogEntry] = {
     ErrorCode.SUPERVISOR_AUTH_MISSING: CatalogEntry(
         code=ErrorCode.SUPERVISOR_AUTH_MISSING,
         http_status=503,
-        message="Supervisor authentication unavailable: auth file is missing or unreadable.",
-        remediation="Restart the container to regenerate the supervisor credentials.",
+        message="Supervisor control socket is unavailable.",
+        remediation="Restart the container to recreate the local supervisor socket.",
     ),
     ErrorCode.SUPERVISOR_CONNECT_FAILED: CatalogEntry(
         code=ErrorCode.SUPERVISOR_CONNECT_FAILED,

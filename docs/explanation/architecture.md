@@ -21,7 +21,7 @@ flowchart TD
     FastAPI --> Observability[Health, metrics, logs, debug bundle]
 ```
 
-The Docker image reflects that model. The build first exports the Next.js UI as static files, installs Python dependencies in a separate builder stage, and assembles a Python runtime image with `/app/core`, `/app/ui/backend`, the static UI, supervisor configuration, and `/config`. Runtime traffic enters through port `8501`, where uvicorn serves both `/api/*` routes and the static frontend. Supervisor listens only on `127.0.0.1:9001`, so process control is an internal container concern rather than a public service.
+The Docker image reflects that model. The build first exports the Next.js UI as static files, installs Python dependencies in a separate builder stage, and assembles a Python runtime image with `/app/core`, `/app/ui/backend`, the static UI, supervisor configuration, and `/config`. Runtime traffic enters through port `8501`, where uvicorn serves both `/api/*` routes and the static frontend. Supervisor control uses a local Unix socket inside the container, so process control is an internal container concern rather than a public service.
 
 ## Event and notification flow
 

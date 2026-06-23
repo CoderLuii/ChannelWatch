@@ -156,7 +156,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   },
   [ErrorCode.DVR_TEST_TARGET_REJECTED]: {
     code: ErrorCode.DVR_TEST_TARGET_REJECTED,
-    message: "DVR test target failed safety validation.",
+    message: "DVR test target rejected by safety validation.",
     remediation:
       "Use a valid Channels DVR host and port; localhost, metadata, link-local, and unsafe hosts are rejected.",
   },
@@ -277,8 +277,8 @@ const CATALOG: Record<string, CatalogEntry> = {
   },
   [ErrorCode.SUPERVISOR_AUTH_MISSING]: {
     code: ErrorCode.SUPERVISOR_AUTH_MISSING,
-    message: "Supervisor authentication file is missing or unreadable.",
-    remediation: "Restart the container to regenerate supervisor credentials.",
+    message: "Supervisor control socket is unavailable.",
+    remediation: "Restart the container to recreate the local supervisor socket.",
   },
   [ErrorCode.SUPERVISOR_CONNECT_FAILED]: {
     code: ErrorCode.SUPERVISOR_CONNECT_FAILED,

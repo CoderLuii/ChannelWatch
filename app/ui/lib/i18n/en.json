@@ -838,6 +838,7 @@
   "supportReport.review.privateAttachments": "Private attachments",
   "supportReport.review.noAttachments": "No screenshots or debug bundle attached.",
   "supportReport.review.submitDryRun": "Submit report",
+  "supportReport.review.useSecureUpload": "Use secure upload",
   "supportReport.review.back": "Back",
   "supportReport.review.issueTitle": "Report title",
   "supportReport.review.issueBody": "Report details",

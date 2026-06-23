@@ -5,6 +5,8 @@ Public API:
 - encrypt_value() / decrypt_value()  Fernet AEAD, "fernet:" prefix
 - encrypt_dvr_api_keys()             batch encrypt api_key in dvr_servers list
 - decrypt_dvr_api_keys()             batch decrypt api_key in dvr_servers list
+- encrypt_webhook_credentials()      batch encrypt webhook URL and secret fields
+- decrypt_webhook_credentials()      batch decrypt webhook URL and secret fields
 """
 
 from pathlib import Path
@@ -16,6 +18,7 @@ from .atomic_io import _atomic_write_secret_bytes
 ENCRYPTION_KEY_FILE = Path(os.getenv("CONFIG_PATH", "/config")) / "encryption.key"
 _ALLOWED_MODE = 0o600
 FERNET_PREFIX = "fernet:"
+WEBHOOK_CREDENTIAL_FIELDS = ("url", "secret")
 
 
 class EncryptionKeyUnavailableError(RuntimeError):
@@ -144,3 +147,88 @@ def decrypt_dvr_api_keys(
                 pass  # leave encrypted on failure rather than corrupting
         result.append(server)
     return result
+
+
+def _encrypt_mapping_fields(
+    items: list,
+    field_names: tuple[str, ...],
+    key_file: Path,
+) -> list:
+    plain = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and any(
+            item.get(field)
+            and not is_fernet_encrypted(str(item.get(field, "")))
+            for field in field_names
+        )
+    ]
+    if not plain:
+        return list(items)
+
+    try:
+        raw_key = bootstrap_encryption_key(key_file)
+    except (OSError, PermissionError) as exc:
+        raise EncryptionKeyUnavailableError(
+            f"Unable to access encryption key at {key_file}"
+        ) from exc
+
+    result = []
+    for item in items:
+        if isinstance(item, dict):
+            item = dict(item)
+            for field in field_names:
+                value = item.get(field)
+                if value and not is_fernet_encrypted(str(value)):
+                    item[field] = encrypt_value(str(value), raw_key)
+        result.append(item)
+    return result
+
+
+def _decrypt_mapping_fields(
+    items: list,
+    field_names: tuple[str, ...],
+    key_file: Path,
+) -> list:
+    encrypted = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and any(is_fernet_encrypted(str(item.get(field, ""))) for field in field_names)
+    ]
+    if not encrypted:
+        return list(items)
+
+    try:
+        raw_key = bootstrap_encryption_key(key_file)
+    except (OSError, PermissionError):
+        return list(items)
+
+    result = []
+    for item in items:
+        if isinstance(item, dict):
+            item = dict(item)
+            for field in field_names:
+                value = item.get(field)
+                if is_fernet_encrypted(str(value or "")):
+                    try:
+                        item[field] = decrypt_value(str(value), raw_key)
+                    except Exception:
+                        pass
+        result.append(item)
+    return result
+
+
+def encrypt_webhook_credentials(
+    webhooks: list, key_file: Path = ENCRYPTION_KEY_FILE
+) -> list:
+    """Return a new webhook list with URL and shared-secret fields encrypted."""
+    return _encrypt_mapping_fields(webhooks, WEBHOOK_CREDENTIAL_FIELDS, key_file)
+
+
+def decrypt_webhook_credentials(
+    webhooks: list, key_file: Path = ENCRYPTION_KEY_FILE
+) -> list:
+    """Return a new webhook list with encrypted URL and shared-secret fields decrypted."""
+    return _decrypt_mapping_fields(webhooks, WEBHOOK_CREDENTIAL_FIELDS, key_file)

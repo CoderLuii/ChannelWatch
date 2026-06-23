@@ -849,10 +849,12 @@ class TestMigrateV6ToV7CanonicalIds:
                 "CHANNELS_DVR_PORT": "8089",
             },
         ):
-            migrate_v6_to_v7(settings)
+            result = migrate_v6_to_v7(settings)
         output = _output_text(capsys, caplog)
         assert "Migrated DVR" in output
-        assert "dvr-host" in output
+        migrated = result["dvr_servers"][0]
+        assert migrated["host"] == "dvr-host"
+        assert migrated["port"] == 8089
         assert "dvr_id=" in output
 
     def test_per_dvr_info_log_contains_display_name(self, capsys, caplog):

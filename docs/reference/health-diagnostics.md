@@ -156,7 +156,7 @@ Available commands:
 * `diagnose` validates configured, enabled, non deleted DVRs. It checks TCP connectivity, reads each DVR `/status` response, checks DVR version compatibility, and verifies `/api/v1/channels` authentication behavior with the configured DVR API key when present.
 * `debug bundle` writes a sanitized debug bundle zip to the requested output path. The default output path is `channelwatch_debug_bundle.zip` in the current working directory.
 * `rotate-encryption-key` rotates the local encryption key and re-encrypts stored DVR API keys.
-* `reset-admin-password` resets an RBAC admin password when secure login is active.
+* `reset-admin-password` resets an RBAC admin password when secure login is active. Pass `--password` for automation, or omit it to enter the new password through a hidden prompt.
 
 Exit behavior:
 

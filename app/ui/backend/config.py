@@ -129,11 +129,20 @@ def load_settings() -> AppSettings:
             ) from e
 
     try:
-        from core.helpers.encryption import decrypt_dvr_api_keys, ENCRYPTION_KEY_FILE
+        from core.helpers.encryption import (
+            ENCRYPTION_KEY_FILE,
+            decrypt_dvr_api_keys,
+            decrypt_webhook_credentials,
+        )
 
+        key_file = CONFIG_DIR / ENCRYPTION_KEY_FILE.name
         settings_data["dvr_servers"] = decrypt_dvr_api_keys(
             settings_data.get("dvr_servers") or [],
-            CONFIG_DIR / ENCRYPTION_KEY_FILE.name,
+            key_file,
+        )
+        settings_data["webhooks"] = decrypt_webhook_credentials(
+            settings_data.get("webhooks") or [],
+            key_file,
         )
     except Exception:
         pass
@@ -176,11 +185,20 @@ def save_settings(settings: AppSettings):
         data = _merge_webhook_secrets(data, existing)
         data = _preserve_security_setup_marker(data, existing)
 
-        from core.helpers.encryption import encrypt_dvr_api_keys, ENCRYPTION_KEY_FILE
+        from core.helpers.encryption import (
+            ENCRYPTION_KEY_FILE,
+            encrypt_dvr_api_keys,
+            encrypt_webhook_credentials,
+        )
 
+        key_file = CONFIG_DIR / ENCRYPTION_KEY_FILE.name
         data["dvr_servers"] = encrypt_dvr_api_keys(
             data.get("dvr_servers") or [],
-            CONFIG_DIR / ENCRYPTION_KEY_FILE.name,
+            key_file,
+        )
+        data["webhooks"] = encrypt_webhook_credentials(
+            data.get("webhooks") or [],
+            key_file,
         )
 
         # Ensure _version is always present (frontend doesn't manage it)

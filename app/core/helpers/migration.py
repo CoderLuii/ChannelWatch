@@ -622,7 +622,11 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
                 to_version=CURRENT_SCHEMA_VERSION,
                 backup_path=backup_path,
             )
-        from .encryption import encrypt_dvr_api_keys, ENCRYPTION_KEY_FILE
+        from .encryption import (
+            ENCRYPTION_KEY_FILE,
+            encrypt_dvr_api_keys,
+            encrypt_webhook_credentials,
+        )
 
         key_file = config_dir / ENCRYPTION_KEY_FILE.name
         _journal_step(
@@ -635,6 +639,9 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
         )
         settings["dvr_servers"] = encrypt_dvr_api_keys(
             settings.get("dvr_servers") or [], key_file
+        )
+        settings["webhooks"] = encrypt_webhook_credentials(
+            settings.get("webhooks") or [], key_file
         )
         _journal_step(
             config_dir,

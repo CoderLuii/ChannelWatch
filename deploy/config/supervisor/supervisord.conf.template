@@ -10,12 +10,11 @@ pidfile=/tmp/supervisord.pid
 childlogdir=/tmp
 
 #-----------------------------------------------------------------------------
-# Web-based management interface
+# Local process management interface
 #-----------------------------------------------------------------------------
-[inet_http_server]
-port = 127.0.0.1:9001
-username = __SUPERVISOR_USER__
-password = __SUPERVISOR_PASS__
+[unix_http_server]
+file = __SUPERVISOR_SOCKET__
+chmod = 0600
 
 #-----------------------------------------------------------------------------
 # RPC Interfaces
@@ -24,9 +23,7 @@ password = __SUPERVISOR_PASS__
 supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 
 [supervisorctl]
-serverurl=http://127.0.0.1:9001
-username = __SUPERVISOR_USER__
-password = __SUPERVISOR_PASS__
+serverurl = unix://__SUPERVISOR_SOCKET__
 
 #-----------------------------------------------------------------------------
 # Managed services

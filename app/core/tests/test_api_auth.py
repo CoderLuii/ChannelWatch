@@ -412,8 +412,19 @@ class TestSensitiveFieldMasking:
 
         assert resp.status_code == 200
         saved = json.loads(test_settings_file.read_text())
-        assert saved["webhooks"][0]["url"] == real_url
-        assert saved["webhooks"][0]["secret"] == "hmac-secret"
+        from core.helpers.encryption import (
+            ENCRYPTION_KEY_FILE,
+            FERNET_PREFIX,
+            decrypt_webhook_credentials,
+        )
+
+        assert saved["webhooks"][0]["url"].startswith(FERNET_PREFIX)
+        assert saved["webhooks"][0]["secret"].startswith(FERNET_PREFIX)
+        decrypted = decrypt_webhook_credentials(
+            saved["webhooks"], test_settings_file.parent / ENCRYPTION_KEY_FILE.name
+        )
+        assert decrypted[0]["url"] == real_url
+        assert decrypted[0]["secret"] == "hmac-secret"
 
 
 class TestSensitiveFieldPOSTSentinel:

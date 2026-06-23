@@ -28,110 +28,119 @@ def _load_entrypoint():
     return module
 
 
-class TestEntrypointWritesAuthFile:
-    def test_entrypoint_writes_auth_file(self, tmp_path, monkeypatch):
-        auth_file = tmp_path / "channelwatch" / "supervisor.auth"
+class TestEntrypointWritesSupervisorSocketConfig:
+    def test_entrypoint_writes_socket_config_without_credentials(self, tmp_path, monkeypatch):
+        runtime_dir = tmp_path / "channelwatch"
+        socket_file = runtime_dir / "supervisor.sock"
         conf_file = tmp_path / "supervisord.conf"
         entrypoint = _load_entrypoint()
 
-        monkeypatch.setattr(entrypoint, "SUPERVISOR_AUTH_DIR", auth_file.parent)
-        monkeypatch.setattr(entrypoint, "SUPERVISOR_AUTH_FILE", auth_file)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
 
-        entrypoint.render_supervisor_config(1000)
+        entrypoint.render_supervisor_config(1000, 1000)
 
-        assert auth_file.exists()
-        assert "user=" in auth_file.read_text()
-        assert "pass=" in auth_file.read_text()
+        assert not (runtime_dir / "supervisor.auth").exists()
         rendered = conf_file.read_text()
-        assert "__SUPERVISOR_USER__" not in rendered
-        assert "__SUPERVISOR_PASS__" not in rendered
+        assert str(socket_file) in rendered
+        assert "__SUPERVISOR_SOCKET__" not in rendered
+        assert "username =" not in rendered
+        assert "password =" not in rendered
 
         if os.name != "nt":
-            assert stat.S_IMODE(auth_file.stat().st_mode) == 0o640
+            assert stat.S_IMODE(runtime_dir.stat().st_mode) == 0o700
 
-    def test_entrypoint_auth_file_uses_runtime_group_for_custom_pgid(self):
+    def test_entrypoint_socket_dir_uses_runtime_user_for_custom_ids(self):
         content = _ENTRYPOINT.read_text()
 
-        assert "chown_path(path, 0, app_gid)" in content
-        assert "(SUPERVISOR_AUTH_DIR, 0o750)" in content
-        assert "(SUPERVISOR_AUTH_FILE, 0o640)" in content
+        assert "chown_path(path, app_uid, app_gid)" in content
+        assert "(SUPERVISOR_RUNTIME_DIR, 0o700)" in content
+        assert "(SUPERVISOR_CONF, 0o640)" in content
 
     def test_rendered_supervisord_config_is_not_world_readable(
         self, tmp_path, monkeypatch
     ):
-        auth_file = tmp_path / "channelwatch" / "supervisor.auth"
+        runtime_dir = tmp_path / "channelwatch"
+        socket_file = runtime_dir / "supervisor.sock"
         conf_file = tmp_path / "supervisord.conf"
         entrypoint = _load_entrypoint()
 
-        monkeypatch.setattr(entrypoint, "SUPERVISOR_AUTH_DIR", auth_file.parent)
-        monkeypatch.setattr(entrypoint, "SUPERVISOR_AUTH_FILE", auth_file)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
 
-        entrypoint.render_supervisor_config(1000)
+        entrypoint.render_supervisor_config(1000, 1000)
 
-        assert "username =" in conf_file.read_text()
+        assert "unix_http_server" in conf_file.read_text()
         if os.name != "nt":
             assert stat.S_IMODE(conf_file.stat().st_mode) == 0o640
 
 
 class TestEntrypointDoesNotExportEnvVars:
     def test_entrypoint_does_not_export_env_vars(self, tmp_path, monkeypatch):
-        auth_file = tmp_path / "channelwatch" / "supervisor.auth"
+        runtime_dir = tmp_path / "channelwatch"
+        socket_file = runtime_dir / "supervisor.sock"
         conf_file = tmp_path / "supervisord.conf"
         entrypoint = _load_entrypoint()
 
         monkeypatch.delenv("SUPERVISOR_USER", raising=False)
         monkeypatch.delenv("SUPERVISOR_PASS", raising=False)
-        monkeypatch.setattr(entrypoint, "SUPERVISOR_AUTH_DIR", auth_file.parent)
-        monkeypatch.setattr(entrypoint, "SUPERVISOR_AUTH_FILE", auth_file)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
 
-        entrypoint.render_supervisor_config(1000)
+        entrypoint.render_supervisor_config(1000, 1000)
 
         assert os.environ.get("SUPERVISOR_USER") is None
         assert os.environ.get("SUPERVISOR_PASS") is None
 
 
-class TestMainLazyReadsAuthFile:
-    def test_supervisor_auth_file_defaults_to_tmp_runtime_dir(self):
+class TestMainUsesSupervisorSocket:
+    def test_supervisor_socket_defaults_to_tmp_runtime_dir(self):
         import ui.backend.main as ui_main
 
-        assert ui_main.SUPERVISOR_AUTH_FILE == os.path.join(
-            "/tmp/channelwatch", "supervisor.auth"
+        assert ui_main.SUPERVISOR_SOCKET_FILE == os.path.join(
+            "/tmp/channelwatch", "supervisor.sock"
         )
 
-    def test_main_lazy_reads_auth_file(self, tmp_path):
+    def test_main_creates_socket_transport_without_credentials(self, tmp_path):
         import ui.backend.main as ui_main
 
-        auth_file = tmp_path / "supervisor.auth"
-        auth_file.write_text("user=cwuser\npass=cwpass\n")
-        with patch.object(ui_main, "SUPERVISOR_AUTH_FILE", str(auth_file)):
-            url = ui_main._get_supervisor_url()
+        socket_file = tmp_path / "supervisor.sock"
+        socket_file.write_text("")
+        server = MagicMock()
+        with (
+            patch.object(ui_main, "SUPERVISOR_SOCKET_FILE", str(socket_file)),
+            patch("ui.backend.main.xmlrpc.client.ServerProxy", return_value=server) as proxy,
+        ):
+            assert ui_main.get_supervisor_proxy() is server
 
-        assert url is not None
-        assert "cwuser:cwpass" in url
-        assert url.endswith("/RPC2")
+        url = proxy.call_args.args[0]
+        transport = proxy.call_args.kwargs["transport"]
+        assert url == "http://channelwatch-supervisor/RPC2"
+        assert "@" not in url
+        assert isinstance(transport, ui_main._UnixSocketTransport)
 
     def test_supervisor_protocol_errors_are_logged_without_credentials(
         self, tmp_path, capsys
     ):
         import ui.backend.main as ui_main
 
-        auth_file = tmp_path / "supervisor.auth"
-        auth_file.write_text("user=cwuser\npass=cwpass\n")
+        socket_file = tmp_path / "supervisor.sock"
+        socket_file.write_text("")
         protocol_error = xmlrpc.client.ProtocolError(
-            "http://cwuser:cwpass@127.0.0.1:9001/RPC2",
+            "http://channelwatch-supervisor/RPC2",
             401,
             "Unauthorized",
             {},
         )
 
         with (
-            patch.object(ui_main, "SUPERVISOR_AUTH_FILE", str(auth_file)),
+            patch.object(ui_main, "SUPERVISOR_SOCKET_FILE", str(socket_file)),
             patch(
                 "ui.backend.main.xmlrpc.client.ServerProxy", side_effect=protocol_error
             ),
@@ -140,21 +149,16 @@ class TestMainLazyReadsAuthFile:
 
         output = capsys.readouterr().out
         assert "ProtocolError 401 Unauthorized" in output
-        assert "cwpass" not in output
-        assert "cwuser:cwpass" not in output
+        assert "@" not in output
 
 
 class TestMainGracefulDegrade:
     def test_main_graceful_degrade_when_file_missing(self, tmp_path):
         import ui.backend.main as ui_main
 
-        missing = str(tmp_path / "no_such_file.auth")
+        missing = str(tmp_path / "no_such_file.sock")
 
-        with patch.object(ui_main, "SUPERVISOR_AUTH_FILE", missing):
-            url = ui_main._get_supervisor_url()
-        assert url is None
-
-        with patch.object(ui_main, "SUPERVISOR_AUTH_FILE", missing):
+        with patch.object(ui_main, "SUPERVISOR_SOCKET_FILE", missing):
             proxy = ui_main.get_supervisor_proxy()
         assert proxy is None
 
@@ -167,6 +171,10 @@ class TestTemplateNoCreds:
         assert "logfile_maxbytes=0" in content
         assert "pidfile=/tmp/supervisord.pid" in content
         assert "childlogdir=/tmp" in content
+        assert "[unix_http_server]" in content
+        assert "inet_http_server" not in content
+        assert "username =" not in content
+        assert "password =" not in content
 
     def test_template_no_creds_in_program_ui_environment(self):
         content = _CONF_TEMPLATE.read_text()
@@ -191,19 +199,19 @@ class TestTemplateNoCreds:
 
 
 class TestRestartCoreDegradedResponse:
-    def test_restart_core_returns_degraded_response_when_auth_file_missing(
+    def test_restart_core_returns_degraded_response_when_socket_missing(
         self, tmp_path
     ):
         import ui.backend.main as ui_main
 
         settings_file = tmp_path / "settings.json"
         settings_file.write_text(json.dumps({"dvr_servers": [], "api_key": "test-key"}))
-        missing_auth = str(tmp_path / "no_such_file.auth")
+        missing_socket = str(tmp_path / "no_such_file.sock")
 
         with (
             patch("ui.backend.config.CONFIG_FILE", settings_file),
             patch("ui.backend.config.CONFIG_DIR", tmp_path),
-            patch.object(ui_main, "SUPERVISOR_AUTH_FILE", missing_auth),
+            patch.object(ui_main, "SUPERVISOR_SOCKET_FILE", missing_socket),
             patch.object(ui_main, "CW_DISABLE_AUTH", True),
         ):
             client = TestClient(ui_main.app, raise_server_exceptions=False)
@@ -212,9 +220,8 @@ class TestRestartCoreDegradedResponse:
         assert resp.status_code == 503
         detail = resp.json()["detail"]
         assert detail["code"] == "ERR_SUPERVISOR_AUTH_MISSING"
-        assert "Supervisor authentication unavailable" in detail["message"]
-        assert "auth file" in detail["message"]
-        assert "regenerate the supervisor credentials" in detail["remediation"]
+        assert "Supervisor control socket is unavailable" in detail["message"]
+        assert "recreate the local supervisor socket" in detail["remediation"]
 
 
 class _ImmediateThread:

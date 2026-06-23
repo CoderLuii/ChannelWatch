@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
-import secrets
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -18,8 +16,10 @@ APP_DEFAULT_TZ = "America/Los_Angeles"
 CURRENT_SCHEMA_VERSION = 7
 SUPERVISOR_TEMPLATE = Path("/etc/supervisor/conf.d/supervisord.conf.template")
 SUPERVISOR_CONF = Path("/tmp/supervisord.conf")
-SUPERVISOR_AUTH_DIR = Path(os.environ.get("CHANNELWATCH_RUNTIME_DIR", "/tmp/channelwatch"))
-SUPERVISOR_AUTH_FILE = SUPERVISOR_AUTH_DIR / "supervisor.auth"
+SUPERVISOR_RUNTIME_DIR = Path(
+    os.environ.get("CHANNELWATCH_RUNTIME_DIR", "/tmp/channelwatch")
+)
+SUPERVISOR_SOCKET = SUPERVISOR_RUNTIME_DIR / "supervisor.sock"
 
 DEFAULT_SETTINGS = {
     "dvr_servers": [],
@@ -486,46 +486,32 @@ def chown_tree(path: Path, uid: int, gid: int) -> None:
             chown_path(target, uid, gid)
 
 
-def random_token(num_bytes: int, length: int) -> str:
-    encoded = base64.urlsafe_b64encode(secrets.token_bytes(num_bytes)).decode("ascii")
-    return "".join(char for char in encoded if char.isalnum())[:length]
-
-
-def render_supervisor_config(app_gid: int) -> None:
+def render_supervisor_config(app_uid: int, app_gid: int) -> None:
     if not SUPERVISOR_TEMPLATE.is_file():
         warning(f"supervisord.conf.template not found at {SUPERVISOR_TEMPLATE}")
         return
 
-    SUPERVISOR_AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    user = f"cw_{random_token(16, 12)}"
-    password = random_token(32, 24)
+    SUPERVISOR_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        SUPERVISOR_SOCKET.unlink()
+    except FileNotFoundError:
+        pass
 
-    # Supervisor requires local runtime credentials; permissions are restricted below.
-    # codeql[py/clear-text-storage-sensitive-data]
-    SUPERVISOR_AUTH_FILE.write_text(
-        f"user={user}\npass={password}\n",
-        encoding="utf-8",
-    )
     template = SUPERVISOR_TEMPLATE.read_text(encoding="utf-8")
-    rendered = template.replace("__SUPERVISOR_USER__", user).replace(
-        "__SUPERVISOR_PASS__", password
-    )
-    # Supervisor reads credentials from its local config; permissions are restricted below.
-    # codeql[py/clear-text-storage-sensitive-data]
+    rendered = template.replace("__SUPERVISOR_SOCKET__", str(SUPERVISOR_SOCKET))
     SUPERVISOR_CONF.write_text(rendered, encoding="utf-8")
 
     for path, mode in (
-        (SUPERVISOR_AUTH_DIR, 0o750),
-        (SUPERVISOR_AUTH_FILE, 0o640),
+        (SUPERVISOR_RUNTIME_DIR, 0o700),
         (SUPERVISOR_CONF, 0o640),
     ):
-        chown_path(path, 0, app_gid)
+        chown_path(path, app_uid, app_gid)
         try:
             path.chmod(mode)
         except OSError as exc:
             warning(f"Failed to chmod {path}: {exc}")
 
-    info("Generated supervisord config with dynamic credentials")
+    info("Generated supervisord config with local Unix socket control")
 
 
 def drop_privileges(uid: int, gid: int) -> None:
@@ -566,7 +552,7 @@ def main() -> None:
     chown_tree(CONFIG_DIR, uid, gid)
     chown_tree(Path("/app"), uid, gid)
     chmod_config_tree(CONFIG_DIR)
-    render_supervisor_config(gid)
+    render_supervisor_config(uid, gid)
     prepare_standard_streams()
 
     if len(sys.argv) < 2:

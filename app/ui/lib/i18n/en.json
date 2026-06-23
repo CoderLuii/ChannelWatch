@@ -366,7 +366,7 @@
   "security.runtimeOverrideConfiguredMode": "Configured mode remains: {label}",
   "security.atRestProtection": "At-rest protection",
   "security.atRestTitle": "Per-DVR API keys are encrypted on disk",
-  "security.atRestDesc": "The encryption key lives at {path}, so this reduces accidental plaintext exposure but does not protect secrets from anyone who can already read /config.",
+  "security.atRestDesc": "The DVR key lives at {path}. New key writes require CHANNELWATCH_SECRET_STORAGE_KEY and use envelope encryption. /config still needs to be protected like credential storage.",
   "security.alert.authBypassedTitle": "Temporary runtime auth bypass is active",
   "security.alert.authBypassedDesc": "CW_DISABLE_AUTH=true disables the normal API-key and RBAC checks for this running process only. It does not rewrite the saved auth mode, so removing the override restores {label} on restart.",
   "security.alert.rbacFallbackTitle": "Legacy API key fallback is still active",

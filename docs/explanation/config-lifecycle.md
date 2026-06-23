@@ -99,11 +99,11 @@ The exact field-by-field behavior is listed in the [`settings.json` reference](.
 
 ## Encryption key handling
 
-DVR API keys are stored encrypted when the settings writer or migration path sees plaintext values. ChannelWatch stores the raw encryption key in `/config/encryption.key`, with mode `0600`. If the key is missing, startup creates it. If permissions are too broad, encryption refuses to use it.
+DVR API keys are stored encrypted when the settings writer or migration path sees plaintext values. ChannelWatch stores the DVR-key encryption key in `/config/encryption.key`, with mode `0600`. New writes to that local secret file require `CHANNELWATCH_SECRET_STORAGE_KEY` or `CHANNELWATCH_SECRET_STORAGE_KEY_FILE`, which is used to envelope-encrypt the file contents. Existing plaintext key files can still be read for migration. If permissions are too broad, encryption refuses to use the key.
 
 Reads are forgiving. If a DVR API key is encrypted but the key file cannot be read or decryption fails, the value is left unchanged rather than being corrupted. Saves are stricter because writing a plaintext API key without a safe key would weaken the stored config.
 
-Back up `/config/encryption.key` with the rest of `/config`. Without that key, existing encrypted DVR API keys cannot be decrypted after a restore.
+Back up `/config/encryption.key` with the rest of `/config`, and also preserve the `CHANNELWATCH_SECRET_STORAGE_KEY` value or secret file if the key file has been envelope-encrypted. Without the readable key material, existing encrypted DVR API keys cannot be decrypted after a restore.
 
 ## Conflict resolution between the two processes
 

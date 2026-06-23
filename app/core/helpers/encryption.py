@@ -1,7 +1,7 @@
 """Bootstrap and load the ChannelWatch encryption key.
 
 Public API:
-- bootstrap_encryption_key()         raw 32-byte key file
+- bootstrap_encryption_key()         logical 32-byte encryption key
 - encrypt_value() / decrypt_value()  Fernet AEAD, "fernet:" prefix
 - encrypt_dvr_api_keys()             batch encrypt api_key in dvr_servers list
 - decrypt_dvr_api_keys()             batch decrypt api_key in dvr_servers list
@@ -13,7 +13,12 @@ from pathlib import Path
 import os
 import stat
 
-from .atomic_io import _atomic_write_secret_bytes
+from .atomic_io import (
+    SecretStorageKeyUnavailableError,
+    _atomic_read_secret_bytes,
+    _atomic_write_secret_bytes,
+    _is_secret_envelope,
+)
 
 ENCRYPTION_KEY_FILE = Path(os.getenv("CONFIG_PATH", "/config")) / "encryption.key"
 _ALLOWED_MODE = 0o600
@@ -40,7 +45,14 @@ def bootstrap_encryption_key(key_file: Path = ENCRYPTION_KEY_FILE) -> bytes:
     """Create or load the shared encryption key for `/config/encryption.key`."""
     if key_file.exists():
         _validate_key_permissions(key_file)
-        return key_file.read_bytes()
+        stored = key_file.read_bytes()
+        key = _atomic_read_secret_bytes(key_file)
+        if not _is_secret_envelope(stored):
+            try:
+                _atomic_write_secret_bytes(key_file, key)
+            except SecretStorageKeyUnavailableError:
+                pass
+        return key
 
     key_file.parent.mkdir(parents=True, exist_ok=True)
     key = os.urandom(32)
@@ -98,7 +110,7 @@ def encrypt_dvr_api_keys(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError) as exc:
+    except (OSError, PermissionError, SecretStorageKeyUnavailableError) as exc:
         raise EncryptionKeyUnavailableError(
             f"Unable to access encryption key at {key_file}"
         ) from exc
@@ -134,7 +146,7 @@ def decrypt_dvr_api_keys(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, SecretStorageKeyUnavailableError):
         return list(dvr_servers)
 
     result = []
@@ -169,7 +181,7 @@ def _encrypt_mapping_fields(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError) as exc:
+    except (OSError, PermissionError, SecretStorageKeyUnavailableError) as exc:
         raise EncryptionKeyUnavailableError(
             f"Unable to access encryption key at {key_file}"
         ) from exc
@@ -202,7 +214,7 @@ def _decrypt_mapping_fields(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, SecretStorageKeyUnavailableError):
         return list(items)
 
     result = []

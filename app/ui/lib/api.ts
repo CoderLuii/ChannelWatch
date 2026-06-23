@@ -2,6 +2,7 @@ import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, Act
 import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
 
 const API_BASE = "/api"
+let runtimeApiKey = ""
 
 export class ApiError extends Error {
   readonly payload: ErrorPayload
@@ -35,10 +36,7 @@ function getCsrfToken(): string {
 }
 
 function getApiKey(): string {
-  if (typeof sessionStorage === "undefined") {
-    return ""
-  }
-  return sessionStorage.getItem("cw_api_key") || ""
+  return runtimeApiKey
 }
 
 function setCsrfToken(value: string) {
@@ -52,21 +50,15 @@ export function clearCachedAuthState() {
 
   if (typeof sessionStorage !== "undefined") {
     sessionStorage.removeItem("cw_csrf_token")
-    sessionStorage.removeItem("cw_api_key")
   }
-  if (typeof localStorage !== "undefined") {
-    localStorage.removeItem("cw_api_key")
-  }
+  runtimeApiKey = ""
 }
 
 export function cacheApiKey(value: string) {
   if (typeof window === "undefined") {
     return
   }
-  if (typeof sessionStorage === "undefined") {
-    return
-  }
-  sessionStorage.setItem("cw_api_key", value)
+  runtimeApiKey = value
 }
 
 function withConfiguredMode<T extends { configured_mode?: EffectiveAuthMode | null; current_mode?: EffectiveAuthMode | null; effective_mode?: EffectiveAuthMode | null }>(
@@ -134,14 +126,7 @@ export async function loginWithPassword(username: string, password: string): Pro
 
   const body = await response.json()
   if (body?.csrf_token) {
-    if (typeof window !== "undefined") {
-      if (typeof sessionStorage !== "undefined") {
-        sessionStorage.removeItem("cw_api_key")
-      }
-      if (typeof localStorage !== "undefined") {
-        localStorage.removeItem("cw_api_key")
-      }
-    }
+    runtimeApiKey = ""
     setCsrfToken(body.csrf_token)
   }
   return body
@@ -161,6 +146,7 @@ export async function completeInitialSetup(mode: AuthMode, username?: string, pa
 
   const body = await response.json()
   if (body?.csrf_token) {
+    runtimeApiKey = ""
     setCsrfToken(body.csrf_token)
   }
   return body

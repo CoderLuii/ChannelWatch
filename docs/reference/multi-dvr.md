@@ -237,7 +237,7 @@ Per-DVR API keys are encrypted at rest when settings are saved by the UI backend
 | Item | Behavior |
 |---|---|
 | Key path | `/config/encryption.key`, or `CONFIG_PATH/encryption.key` when `CONFIG_PATH` changes. |
-| Key contents | Raw 32-byte random key. |
+| Key contents | Logical 32-byte random key. New file writes require `CHANNELWATCH_SECRET_STORAGE_KEY` or `CHANNELWATCH_SECRET_STORAGE_KEY_FILE` and are stored with envelope encryption. Existing plaintext key files remain readable for migration. |
 | Permissions | Must be `0600` or stricter. The bootstrap code refuses to use a key with group or world permissions. |
 | Cipher | Fernet AEAD from `cryptography.fernet`. |
 | Stored prefix | Encrypted values are stored as `fernet:<token>`. |
@@ -245,7 +245,7 @@ Per-DVR API keys are encrypted at rest when settings are saved by the UI backend
 | Decryption timing | Core and UI settings loaders decrypt `fernet:` API keys for runtime use. |
 | Failure behavior on decrypt | Leaves encrypted values unchanged rather than corrupting config. |
 
-The key is generated at core startup before settings are loaded. Backup and restore code treats `encryption.key` as sensitive backup material because encrypted per-DVR API keys need it for recovery.
+The key is generated at core startup before settings are loaded. New key generation requires a configured secret-storage key. Backup and restore code treats `encryption.key` as sensitive backup material because encrypted per-DVR API keys need it for recovery.
 
 ## Limits and known v0.9 gaps
 

@@ -78,6 +78,7 @@ services:
       - /mnt/user/appdata/channelwatch:/config
     environment:
       TZ: America/Los_Angeles
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "99"
       PGID: "100"
     restart: unless-stopped
@@ -131,6 +132,7 @@ Useful startup variables:
 | --- | --- |
 | `TZ` | Timezone used for timestamps, for example `America/Los_Angeles`. |
 | `PUID` / `PGID` | Container file ownership for `/config`, useful on Unraid and NAS installs. |
+| `CHANNELWATCH_SECRET_STORAGE_KEY` | Required for new local secret-key writes. Set this to a unique value of at least 32 characters and keep it with your deployment secrets. |
 | `CHANNELS_DVR_SERVERS` | Optional bootstrap list for multiple DVRs, for example `Home@192.168.1.10:8089,Garage@192.168.1.11:8089`. |
 | `CHANNELS_DVR_HOST` / `CHANNELS_DVR_PORT` | Legacy single-DVR bootstrap variables. They still work, but multi-DVR setup through the UI or `CHANNELS_DVR_SERVERS` is preferred. |
 | `CW_DISABLE_AUTH` | Temporary break-glass override. Do not use it as the normal auth model. |
@@ -181,6 +183,7 @@ Security behavior in v0.9:
 - Legacy API-key compatibility remains for older installs and automation paths.
 - Sensitive settings are masked in browser API responses.
 - Webhook secrets are masked and should be rotated if exposed.
+- New local secret-key writes use envelope encryption with `CHANNELWATCH_SECRET_STORAGE_KEY`.
 - Debug bundles are sanitized before download.
 - ChannelWatch does not include a phone-home telemetry client by default.
 

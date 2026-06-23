@@ -8,6 +8,20 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.5] - 2026-06-23
+
+### Changed
+
+- Keep legacy browser API keys in memory only instead of storing them in browser session storage.
+
+### Fixed
+
+- Escape report-intake diagnostics more defensively so pasted status text cannot break the public issue preview table.
+
+### Security
+
+- Store newly written local secret files with an encrypted envelope using `CHANNELWATCH_SECRET_STORAGE_KEY`, while preserving existing installs through migration-safe reads.
+
 ## [0.9.4] - 2026-06-23
 
 ### Changed
@@ -200,7 +214,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.2

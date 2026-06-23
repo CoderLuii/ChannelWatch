@@ -10,7 +10,11 @@ import httpx
 
 from core.dvr_client import check_version_compatibility
 from core.helpers import config as core_config
-from core.helpers.atomic_io import _atomic_write_secret_bytes, atomic_write_json
+from core.helpers.atomic_io import (
+    _atomic_read_secret_bytes,
+    _atomic_write_secret_bytes,
+    atomic_write_json,
+)
 from core.helpers.config import ConfigLoadError, CoreSettings
 from core.helpers.dvr_connection import build_dvr_base_url
 from core.helpers.encryption import (
@@ -258,14 +262,14 @@ def _cmd_rotate_encryption_key(args: argparse.Namespace) -> int:
 
     backup_file = key_file.with_suffix(f"{key_file.suffix}.bak")
     if key_file.exists():
-        _atomic_write_secret_bytes(backup_file, key_file.read_bytes())
+        _atomic_write_secret_bytes(backup_file, _atomic_read_secret_bytes(key_file))
 
     try:
         _atomic_write_secret_bytes(key_file, new_key)
         atomic_write_json(_settings_file(), persisted)
     except Exception:
         if backup_file.exists():
-            _atomic_write_secret_bytes(key_file, backup_file.read_bytes())
+            _atomic_write_secret_bytes(key_file, _atomic_read_secret_bytes(backup_file))
         raise
 
     print(

@@ -12,6 +12,7 @@ services:
       - "${CHANNELWATCH_CONFIG_DIR:-./.compose-data/vm}:/config"
     environment:
       TZ: "${TZ:-America/Los_Angeles}"
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
     restart: unless-stopped

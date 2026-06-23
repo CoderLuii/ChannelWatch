@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiError, authHeaders, cacheApiKey, downloadBackup, downloadDebugBundle, restoreFromBackup } from "@/lib/api"
+import { ApiError, authHeaders, cacheApiKey, clearCachedAuthState, downloadBackup, downloadDebugBundle, restoreFromBackup } from "@/lib/api"
 import { ErrorCode } from "@/lib/error-catalog"
 
 function installBrowserAuth(csrf = "csrf-token") {
@@ -22,17 +22,19 @@ function installBrowserAuth(csrf = "csrf-token") {
 }
 
 afterEach(() => {
+  clearCachedAuthState()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe("backup/debug/restore API helpers", () => {
-  it("keeps legacy API keys in session storage for protected frontend requests", () => {
+  it("keeps API keys in memory for protected frontend requests", () => {
     installBrowserAuth("")
 
     cacheApiKey("legacy-api-key")
 
     expect(authHeaders()).toEqual({ "X-API-Key": "legacy-api-key" })
+    expect(sessionStorage.setItem).not.toHaveBeenCalled()
   })
 
   it("downloads backups from the backup endpoint with auth headers", async () => {

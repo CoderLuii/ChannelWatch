@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from core.helpers.atomic_io import _atomic_read_secret_bytes, _is_secret_envelope
 
 
 def _make_config_dir(tmp_path: Path, *, schema_version: int = 7) -> Path:
@@ -96,11 +97,28 @@ class TestCreateBackupZip:
         from ui.backend.backup_restore import create_backup_zip
 
         config_dir = _make_config_dir(tmp_path)
-        original_key = (config_dir / "encryption.key").read_bytes()
+        original_key = _atomic_read_secret_bytes(config_dir / "encryption.key")
         data = create_backup_zip(config_dir)
         zf = zipfile.ZipFile(io.BytesIO(data))
         key_name = next(n for n in zf.namelist() if n.endswith("/encryption.key"))
         assert zf.read(key_name) == original_key
+
+    def test_encrypted_key_backup_keeps_stored_envelope(self, tmp_path):
+        from core.helpers.encryption import bootstrap_encryption_key
+        from ui.backend.backup_restore import create_backup_zip
+
+        config_dir = _make_config_dir(tmp_path)
+        logical_key = bootstrap_encryption_key(config_dir / "encryption.key")
+        stored_key = (config_dir / "encryption.key").read_bytes()
+
+        data = create_backup_zip(config_dir)
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        key_name = next(n for n in zf.namelist() if n.endswith("/encryption.key"))
+        archived_key = zf.read(key_name)
+
+        assert archived_key == stored_key
+        assert archived_key != logical_key
+        assert _is_secret_envelope(archived_key)
 
     def test_missing_optional_files_do_not_fail(self, tmp_path):
         from ui.backend.backup_restore import create_backup_zip
@@ -471,6 +489,24 @@ class TestRestoreFromZip:
             return
         assert stat.S_IMODE((target / "encryption.key").stat().st_mode) == 0o600
 
+    def test_encrypted_key_restore_preserves_logical_key(self, tmp_path):
+        from core.helpers.encryption import bootstrap_encryption_key
+        from ui.backend.backup_restore import create_backup_zip, restore_from_zip
+
+        source = _make_config_dir(tmp_path / "source")
+        logical_key = bootstrap_encryption_key(source / "encryption.key")
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "settings.json").write_text('{"_version": 7, "dvr_servers": []}')
+
+        zip_bytes = create_backup_zip(source)
+
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            restore_from_zip(zip_bytes, target)
+
+        assert _atomic_read_secret_bytes(target / "encryption.key") == logical_key
+        assert _is_secret_envelope((target / "encryption.key").read_bytes())
+
     def test_pre_restore_snapshot_created(self, tmp_path):
         from ui.backend.backup_restore import create_backup_zip, restore_from_zip
 
@@ -499,7 +535,7 @@ class TestRestoreFromZip:
         original_session = (target / "session_state_dvr_abc.json").read_text(
             encoding="utf-8"
         )
-        original_key = (target / "encryption.key").read_bytes()
+        original_key = _atomic_read_secret_bytes(target / "encryption.key")
 
         (source / "settings.json").write_text(
             json.dumps(
@@ -560,7 +596,7 @@ class TestRestoreFromZip:
         assert (target / "session_state_dvr_abc.json").read_text(
             encoding="utf-8"
         ) == original_session
-        assert (target / "encryption.key").read_bytes() == original_key
+        assert _atomic_read_secret_bytes(target / "encryption.key") == original_key
 
     def test_restore_raises_on_ahead_version(self, tmp_path):
         from ui.backend.backup_restore import restore_from_zip, RestoreValidationError

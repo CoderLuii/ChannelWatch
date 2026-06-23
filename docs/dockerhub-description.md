@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `0.9.4` for the v0.9.4 release
+- `0.9.5` for the v0.9.5 release
 
 ## Quick Start
 
@@ -27,6 +27,7 @@ services:
       - ./config:/config
     environment:
       TZ: America/Los_Angeles
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "1000"
       PGID: "1000"
     restart: unless-stopped
@@ -36,7 +37,7 @@ Open `http://localhost:8501` after the container starts.
 
 ## Configuration
 
-ChannelWatch stores its settings, logs, database, backups, and encryption key under `/config`.
+ChannelWatch stores its settings, logs, database, backups, and encryption key under `/config`. Set `CHANNELWATCH_SECRET_STORAGE_KEY` to a unique value of at least 32 characters so new local secret files are written with envelope encryption.
 
 DVR setup is easiest through the web UI. For bootstrap-only deployments, `CHANNELS_DVR_SERVERS` supports comma-separated `Name@host:port` entries.
 

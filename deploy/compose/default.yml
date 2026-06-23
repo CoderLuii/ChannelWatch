@@ -20,6 +20,7 @@ services:
 
       # ── Timezone ─────────────────────────────────────────────────
       TZ: "America/New_York"
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
 
       # ── User/Group IDs (match your host user) ───────────────────
       # PUID: "1000"

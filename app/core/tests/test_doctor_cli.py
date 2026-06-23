@@ -4,6 +4,7 @@ import stat
 from unittest.mock import MagicMock, patch
 
 import pytest
+from core.helpers.atomic_io import _atomic_read_secret_bytes
 
 
 def _patch_config_paths(tmp_path):
@@ -211,7 +212,7 @@ class TestDoctorRotateEncryptionKey:
             in output
         )
 
-        new_key = key_file.read_bytes()
+        new_key = _atomic_read_secret_bytes(key_file)
         assert new_key != old_key
         assert (tmp_path / "encryption.key.bak").exists()
         if os.name != "nt":
@@ -268,7 +269,7 @@ class TestDoctorRotateEncryptionKey:
             with pytest.raises(RuntimeError, match="settings write failed"):
                 run(["rotate-encryption-key"])
 
-        assert key_file.read_bytes() == old_key
+        assert _atomic_read_secret_bytes(key_file) == old_key
         assert (tmp_path / "encryption.key.bak").exists()
         if os.name != "nt":
             assert stat.S_IMODE(key_file.stat().st_mode) == 0o600

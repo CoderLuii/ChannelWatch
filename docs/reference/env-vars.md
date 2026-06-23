@@ -240,6 +240,20 @@ Env vars are mostly startup inputs. Saved application settings live in `/config/
   - Scope: per-request when plugin loading is called without an explicit directory.
   - Related `settings.json` path: none.
 
+- `CHANNELWATCH_SECRET_STORAGE_KEY`
+  - Default: unset.
+  - Purpose: Provides the wrapping secret used to envelope-encrypt newly written local secret files such as `/config/encryption.key`.
+  - Scope: startup and any write path that creates, rotates, or restores local secret material.
+  - Related `settings.json` path: none.
+  - Operator guidance: set this to a unique value of at least 32 characters and keep it outside the repo. Existing plaintext key files can still be read for migration, but new secret writes require this value.
+
+- `CHANNELWATCH_SECRET_STORAGE_KEY_FILE`
+  - Default: unset.
+  - Purpose: Reads the wrapping secret from a mounted file instead of an environment variable.
+  - Scope: startup and any write path that creates, rotates, or restores local secret material.
+  - Related `settings.json` path: none.
+  - Operator guidance: prefer this when your container platform supports Docker/Kubernetes secrets.
+
 ## Supervisor
 
 - `PYTHONPATH`
@@ -256,6 +270,7 @@ services:
   ChannelWatch:
     environment:
       TZ: "America/New_York"
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "1000"
       PGID: "1000"
       CHANNELS_DVR_SERVERS: "Main@192.168.1.100:8089"

@@ -417,7 +417,11 @@ def _format_public_contact(payload: ReportProblemPayload) -> str:
 
 
 def _markdown_table_value(value: Any) -> str:
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    text = str(value if value is not None else "")
+    text = text.replace("\\", "\\\\").replace("|", "\\|")
+    text = re.sub(r"\r\n|\r|\n", r"\\n", text)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
 
 
 def _format_diagnostics(diagnostics: ReportDiagnostics) -> str:

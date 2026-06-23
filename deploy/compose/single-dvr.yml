@@ -14,6 +14,7 @@ services:
       CHANNELS_DVR_HOST: "${CHANNELS_DVR_HOST:-dvr-one.example.invalid}" # Single DVR hostname or IP that will be merged into dvr_servers[0] at startup.
       CHANNELS_DVR_PORT: "${CHANNELS_DVR_PORT:-8089}" # API port for CHANNELS_DVR_HOST.
       TZ: "${TZ:-America/New_York}" # IANA timezone used for UI timestamps and scheduled-event formatting.
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}" # Required for new local secret-key writes.
       PUID: "${PUID:-1000}" # Host user id that should own files written under /config.
       PGID: "${PGID:-1000}" # Host group id that should own files written under /config.
       CW_LOG_LEVEL: "${CW_LOG_LEVEL:-1}" # ChannelWatch log verbosity, 1=standard, 2=verbose.

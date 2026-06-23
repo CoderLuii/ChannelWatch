@@ -140,6 +140,19 @@ def test_support_report_redacts_email_and_secret_patterns_from_public_text():
     assert "api_key=[redacted]" in issue_body
 
 
+def test_support_report_escapes_diagnostics_markdown_table_cells():
+    diagnostics = _payload()["diagnostics"]
+    diagnostics["channelwatch_version"] = "0.9.3 | injected\r\n| bad | row |"
+    diagnostics["core_status"] = "Running\\path\nnext"
+    payload = _parse(_payload(diagnostics=diagnostics))
+
+    issue_body = render_issue_body(payload)
+
+    assert "0.9.3 \\| injected \\| bad \\| row \\|" in issue_body
+    assert "Running\\\\path next" in issue_body
+    assert "| bad | row |" not in issue_body
+
+
 def test_support_report_dry_run_preview_has_no_delivery_claims():
     payload = _parse(_payload())
 

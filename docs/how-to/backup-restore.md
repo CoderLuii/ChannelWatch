@@ -53,7 +53,7 @@ You can skip runtime noise when you are making a portable backup:
 | Temporary files | Not needed after the container restarts. |
 | Old backup archives | Keep one known good archive elsewhere instead of nesting many old archives. |
 
-Back up `/config/encryption.key` separately as well as inside full archives. ChannelWatch keeps this file with permission mode `0600`, root owned by default. Treat it as a secret. The key alone does not expose DVR API keys, but the key plus `settings.json` can decrypt encrypted per DVR keys. See [`docs/reference/multi-dvr.md`](../reference/multi-dvr.md) for how encrypted DVR keys depend on this file.
+Back up `/config/encryption.key` separately as well as inside full archives. ChannelWatch keeps this file with permission mode `0600`, root owned by default. Treat it as a secret. If you set `CHANNELWATCH_SECRET_STORAGE_KEY` or `CHANNELWATCH_SECRET_STORAGE_KEY_FILE`, preserve that wrapping secret too. The key material plus `settings.json` can decrypt encrypted per DVR keys. See [`docs/reference/multi-dvr.md`](../reference/multi-dvr.md) for how encrypted DVR keys depend on this file.
 
 ## App Backup and Restore
 

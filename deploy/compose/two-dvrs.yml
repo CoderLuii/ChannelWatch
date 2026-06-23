@@ -13,6 +13,7 @@ services:
     environment:
       CHANNELS_DVR_SERVERS: "${CHANNELS_DVR_SERVERS:-Living Room@dvr-one.example.invalid:8089,Bedroom@dvr-two.example.invalid:8089}" # Comma-separated Name@host:port list that bootstraps two DVR connections.
       TZ: "${TZ:-America/New_York}" # IANA timezone used for UI timestamps and scheduled-event formatting.
+      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}" # Required for new local secret-key writes.
       PUID: "${PUID:-1000}" # Host user id that should own files written under /config.
       PGID: "${PGID:-1000}" # Host group id that should own files written under /config.
       CW_LOG_LEVEL: "${CW_LOG_LEVEL:-1}" # ChannelWatch log verbosity, 1=standard, 2=verbose.

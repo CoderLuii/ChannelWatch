@@ -52,6 +52,7 @@ import {
   type ReportProblemPayload,
 } from "@/lib/api"
 import { t } from "@/lib/i18n"
+import { escapeMarkdownTableCell } from "@/lib/report-markdown"
 import type { AppSettings, SystemInfo } from "@/lib/types"
 
 const githubUsernamePattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
@@ -234,10 +235,6 @@ function renderPublicContact(payload: ReportProblemPayload): string {
   return lines.length > 0 ? lines.join("\n") : "- No public contact handle provided."
 }
 
-function markdownTableValue(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ")
-}
-
 function renderDiagnostics(diagnostics: ReportDiagnostics): string {
   const enabled = [
     diagnostics.feature_toggles.channel_watching ? "Channel watching" : null,
@@ -249,13 +246,13 @@ function renderDiagnostics(diagnostics: ReportDiagnostics): string {
   return [
     "| Field | Value |",
     "| --- | --- |",
-    `| ChannelWatch version | ${markdownTableValue(diagnostics.channelwatch_version || "Unknown")} |`,
+    `| ChannelWatch version | ${escapeMarkdownTableCell(diagnostics.channelwatch_version || "Unknown")} |`,
     `| DVRs configured | ${diagnostics.dvr_count} |`,
     `| DVRs connected | ${diagnostics.connected_dvr_count} |`,
-    `| Core status | ${markdownTableValue(diagnostics.core_status || "Unknown")} |`,
-    `| Monitoring | ${markdownTableValue(diagnostics.monitoring_statuses.length ? diagnostics.monitoring_statuses.join(", ") : "Not reported")} |`,
-    `| Notification providers | ${markdownTableValue(diagnostics.notification_providers.length ? diagnostics.notification_providers.join(", ") : "None reported")} |`,
-    `| Enabled feature toggles | ${markdownTableValue(enabled.length ? enabled.join(", ") : "None reported")} |`,
+    `| Core status | ${escapeMarkdownTableCell(diagnostics.core_status || "Unknown")} |`,
+    `| Monitoring | ${escapeMarkdownTableCell(diagnostics.monitoring_statuses.length ? diagnostics.monitoring_statuses.join(", ") : "Not reported")} |`,
+    `| Notification providers | ${escapeMarkdownTableCell(diagnostics.notification_providers.length ? diagnostics.notification_providers.join(", ") : "None reported")} |`,
+    `| Enabled feature toggles | ${escapeMarkdownTableCell(enabled.length ? enabled.join(", ") : "None reported")} |`,
   ].join("\n")
 }
 

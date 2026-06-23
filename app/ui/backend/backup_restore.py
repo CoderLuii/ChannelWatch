@@ -276,6 +276,9 @@ def restore_from_zip(zip_bytes: bytes, config_dir: Path) -> dict[str, Any]:
         Callable[[Path, bytes], None],
         getattr(atomic_io, "_atomic_write_secret_bytes"),
     )
+    decrypt_secret_bytes = cast(
+        Callable[[bytes], bytes], getattr(atomic_io, "_decrypt_secret_bytes")
+    )
 
     manifest = validate_restore_zip(zip_bytes)
 
@@ -304,7 +307,7 @@ def restore_from_zip(zip_bytes: bytes, config_dir: Path) -> dict[str, Any]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             member_bytes = zf.read(name)
             if dest.name == "encryption.key":
-                atomic_write_secret_bytes(dest, member_bytes)
+                atomic_write_secret_bytes(dest, decrypt_secret_bytes(member_bytes))
             else:
                 atomic_write_bytes(dest, member_bytes)
 

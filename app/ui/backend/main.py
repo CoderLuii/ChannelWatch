@@ -2534,6 +2534,11 @@ def run_startup_initialization():
             "[WebUI API] WARNING: API authentication is disabled (CW_DISABLE_AUTH=true)"
         )
 
+    try:
+        _build_update_manager().record_startup_success()
+    except Exception as exc:
+        log.warning("Could not record Update Center startup success: %s", exc)
+
     ensure_history_file_watcher_started()
 
     _purge_thread = threading.Thread(
@@ -4723,6 +4728,154 @@ async def _save_settings_and_signal_reload_async(settings: AppSettings) -> bool:
 
 def _can_signal_pid_one_restart() -> bool:
     return os.name != "nt" and os.getpid() == 1
+
+
+def _schedule_container_restart_for_update() -> bool:
+    server = get_supervisor_proxy()
+    can_signal_pid_one = _can_signal_pid_one_restart()
+    if not server and not can_signal_pid_one:
+        return False
+
+    def delayed_restart():
+        try:
+            time.sleep(2)
+            if server:
+                server.supervisor.shutdown()
+                return
+            os.kill(1, signal.SIGTERM)
+        except Exception as exc:
+            print(
+                "[WebUI API] ERROR: Failed to restart ChannelWatch after update: "
+                f"{_supervisor_exception_summary(exc)}"
+            )
+
+    restart_thread = threading.Thread(target=delayed_restart)
+    restart_thread.daemon = True
+    restart_thread.start()
+    return True
+
+
+class UpdateApplyRequest(BaseModel):
+    version: Optional[str] = None
+
+
+def _update_center_healthcheck() -> bool:
+    static_ui_dir = os.environ.get("CW_STATIC_UI_DIR", "").strip()
+    if static_ui_dir and not Path(static_ui_dir).is_dir():
+        return False
+    return bool(CORE_APP_AVAILABLE)
+
+
+def _build_update_manager():
+    from core.helpers.migration import CURRENT_SCHEMA_VERSION as _SETTINGS_SCHEMA_VERSION
+    from core.update_center import UpdateManager
+    from .backup_restore import create_backup_zip
+
+    return UpdateManager(
+        config_dir=CONFIG_DIR,
+        current_version=__version__,
+        settings_schema_version=_SETTINGS_SCHEMA_VERSION,
+        backup_callable=create_backup_zip,
+        restart_callable=_schedule_container_restart_for_update,
+        healthcheck_callable=_update_center_healthcheck,
+    )
+
+
+def _raise_update_error(exc: Exception, *, apply: bool = False, rollback: bool = False):
+    from core.update_center import (
+        UpdateBundleError,
+        UpdateCenterError,
+        UpdateLockedError,
+        UpdateManifestError,
+    )
+
+    if isinstance(exc, UpdateLockedError):
+        raise structured_error(ErrorCode.UPDATE_LOCKED)
+    if isinstance(exc, (UpdateManifestError, UpdateBundleError)):
+        raise structured_error(
+            ErrorCode.UPDATE_APPLY_FAILED if apply else ErrorCode.UPDATE_CHECK_FAILED,
+            message=str(exc),
+        )
+    if isinstance(exc, UpdateCenterError):
+        raise structured_error(
+            ErrorCode.UPDATE_ROLLBACK_FAILED if rollback else ErrorCode.UPDATE_APPLY_FAILED,
+            message=str(exc),
+        )
+    raise structured_error(
+        ErrorCode.UPDATE_ROLLBACK_FAILED if rollback else ErrorCode.UPDATE_APPLY_FAILED,
+        message="Unexpected Update Center failure.",
+    )
+
+
+@app.get(
+    "/api/v1/update/status",
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_status():
+    try:
+        return await asyncio.to_thread(_build_update_manager().status)
+    except Exception as exc:
+        log.exception("Update status failed: %s", exc)
+        _raise_update_error(exc)
+
+
+@app.post(
+    "/api/v1/update/check",
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_check():
+    try:
+        return await asyncio.to_thread(_build_update_manager().check)
+    except Exception as exc:
+        log.exception("Update check failed: %s", exc)
+        _raise_update_error(exc)
+
+
+@app.post(
+    "/api/v1/update/apply",
+    status_code=202,
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_apply(body: UpdateApplyRequest):
+    try:
+        result = await asyncio.to_thread(_build_update_manager().apply, body.version)
+    except Exception as exc:
+        log.exception("Update apply failed: %s", exc)
+        _raise_update_error(exc, apply=True)
+
+    if result.get("status") == "image_required":
+        raise structured_error(ErrorCode.UPDATE_IMAGE_REQUIRED, message=result.get("message"))
+    return result
+
+
+@app.get(
+    "/api/v1/update/jobs/{job_id}",
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_job(job_id: str):
+    status = await asyncio.to_thread(_build_update_manager().status)
+    job = status.get("last_job")
+    if not isinstance(job, dict) or job.get("job_id") != job_id:
+        raise HTTPException(status_code=404, detail="Update job not found.")
+    return job
+
+
+@app.post(
+    "/api/v1/update/rollback",
+    status_code=202,
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_rollback():
+    try:
+        return await asyncio.to_thread(_build_update_manager().rollback)
+    except Exception as exc:
+        log.exception("Update rollback failed: %s", exc)
+        _raise_update_error(exc, rollback=True)
 
 
 # CONTROL ENDPOINTS

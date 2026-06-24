@@ -9,9 +9,32 @@ import runpy
 import sys
 
 
+def _app_dir() -> Path:
+    configured = os.environ.get("CHANNELWATCH_APP_DIR", "").strip()
+    if configured:
+        return Path(configured)
+
+    image_dir = Path(os.environ.get("CHANNELWATCH_IMAGE_APP_DIR", "/app"))
+    config_dir = Path(os.environ.get("CONFIG_PATH", "/config"))
+    try:
+        sys.path.insert(0, str(image_dir))
+        from core import __version__
+        from core.helpers.migration import CURRENT_SCHEMA_VERSION
+        from core.update_center import resolve_active_app_dir
+
+        return resolve_active_app_dir(
+            config_dir=config_dir,
+            image_app_dir=image_dir,
+            image_version=__version__,
+            settings_schema_version=CURRENT_SCHEMA_VERSION,
+        ).app_dir
+    except Exception:
+        return image_dir
+
+
 def main() -> int:
     if len(sys.argv) >= 2 and sys.argv[1] == "doctor":
-        app_dir = Path(os.environ.get("CHANNELWATCH_APP_DIR", "/app"))
+        app_dir = _app_dir()
         if app_dir.is_dir():
             os.chdir(app_dir)
         python_path = os.environ.get("PYTHONPATH", "")

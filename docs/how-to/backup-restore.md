@@ -11,8 +11,9 @@ The app backup contains sensitive material. Store it somewhere private, restrict
 Back up before any change that would be painful to undo:
 
 1. Before changing the running container image or making a large settings change.
-2. On a regular schedule, such as before weekly maintenance or after known good settings changes.
-3. Before major settings edits, including DVR server changes, notification routing changes, authentication changes, provider credential changes, and manual edits to `/config/settings.json`.
+2. Before applying an app update from **Settings > Updates** if you want an extra manual restore point in addition to the automatic pre-update backup.
+3. On a regular schedule, such as before weekly maintenance or after known good settings changes.
+4. Before major settings edits, including DVR server changes, notification routing changes, authentication changes, provider credential changes, and manual edits to `/config/settings.json`.
 
 ## Manual file backup
 
@@ -44,6 +45,7 @@ Keep these files:
 | `session_state_*.json` | Per DVR alert session state. |
 | `activity_history.json` | Legacy activity history file, useful when restoring or diagnosing older installs. |
 | `backups/` | Automatic settings backups and pre restore snapshots, useful for local rollback. |
+| `channelwatch-runtime/` | In-app Update Center bundle metadata and downloaded app bundles. Useful for update rollback, but not required for restoring settings and history. |
 
 You can skip runtime noise when you are making a portable backup:
 
@@ -82,6 +84,8 @@ The app backup zip is created by the FastAPI backend and includes only the files
 | `backup_manifest.json` | Yes | Lists the files in the archive and the settings schema version. |
 
 The app backup does not include logs by default. It also does not include legacy `activity_history.json`, existing files under `/config/backups/`, debug bundles, or arbitrary extra files in `/config`. Use a manual `/config` archive when you need those files.
+
+The app backup also does not include downloaded Update Center app bundles under `/config/channelwatch-runtime/releases/`. Before applying an in-app update, ChannelWatch writes a pre-update backup zip under `/config/backups/`; rollback metadata stays under `/config/channelwatch-runtime/`. Use a manual `/config` archive if you want to preserve both app data and downloaded bundle rollback state.
 
 Security implication: the app backup can include both `settings.json` and `sensitive_keys/encryption.key`. Together, those files can decrypt encrypted per DVR API keys. Store the zip like you would store credentials.
 

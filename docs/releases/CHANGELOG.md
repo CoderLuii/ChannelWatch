@@ -8,6 +8,23 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.9] - 2026-06-24
+
+### Added
+
+- Add the in-app Update Center under Settings so compatible app-only releases can be checked, verified, backed up, applied, restarted, and rolled back from the web UI.
+- Publish signed app-bundle release assets and a signed update manifest for trusted Update Center checks.
+- Add a stable image launcher that can activate a verified app bundle and roll back to the prior runtime if activation fails.
+
+### Changed
+
+- Keep future runtime-changing releases on the normal container image update path by marking them as image-required instead of forcing unsafe in-app updates.
+- Extend the release workflow to build, sign, upload, and site-sync Update Center bundle metadata without adding extra workflow files.
+
+### Security
+
+- Verify update manifests and bundles with Ed25519 signatures, SHA256 hashes, trusted release hosts, strict bundle path checks, and a runtime ABI/schema compatibility gate.
+
 ## [0.9.8] - 2026-06-23
 
 ### Added
@@ -254,7 +271,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.9...HEAD
+[0.9.9]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.5...v0.9.6

@@ -22,7 +22,7 @@ import { t } from "@/lib/i18n"
 import { Loader2 } from "lucide-react"
 
 const VALID_VIEWS = ["overview", "watch-history", "notification-log", "settings", "diagnostics", "about"]
-const VALID_SETTINGS_TABS = ["general", "alerts", "advanced", "notifications", "security"]
+const VALID_SETTINGS_TABS = ["general", "alerts", "advanced", "notifications", "routing", "security", "backup", "updates"]
 
 function getViewFromHash(): string {
   if (typeof window === "undefined") return "overview"

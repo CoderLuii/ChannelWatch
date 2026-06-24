@@ -41,7 +41,7 @@ Example payload:
   "timestamp": "2026-04-26T18:30:00Z",
   "instanceName": "ChannelWatch",
   "instanceUrl": "http://localhost:8501",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "deliveryId": "8d79f4f7-5c46-4f31-b812-dc17f5c6cf1b",
   "dvr_id": "dvr_1234",
   "dvr_name": "Living Room DVR",

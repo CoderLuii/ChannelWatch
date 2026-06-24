@@ -300,6 +300,111 @@ export async function signalContainerRestart(): Promise<{ message: string }> {
   return response.json()
 }
 
+export interface UpdateManifestPayload {
+  version: string
+  version_tag: string
+  image_required: boolean
+  runtime_abi: string
+  settings_schema_version: number
+  release_url?: string | null
+  bundle_url?: string | null
+  highlights?: string[]
+  published_at?: string | null
+}
+
+export interface UpdateJob {
+  job_id: string
+  operation: "check" | "apply" | "rollback" | string
+  status: string
+  version?: string | null
+  message?: string | null
+  updated_at?: string | null
+  backup_path?: string | null
+  restart_required?: boolean
+  validated_at?: string | null
+  rolled_back_from?: string | null
+}
+
+export interface UpdateStatus {
+  current_version: string
+  runtime_abi: string
+  settings_schema_version: number
+  active_bundle?: Record<string, unknown> | null
+  latest?: UpdateManifestPayload | null
+  update_available: boolean
+  image_required: boolean
+  last_job?: UpdateJob | null
+  rollback_available: boolean
+  auth_disabled_warning: boolean
+}
+
+export async function fetchUpdateStatus(): Promise<UpdateStatus> {
+  const response = await fetch(`${API_BASE}/v1/update/status`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+  return response.json()
+}
+
+export async function checkForUpdate(): Promise<UpdateStatus> {
+  const response = await fetch(`${API_BASE}/v1/update/check`, {
+    method: "POST",
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+  return response.json()
+}
+
+export async function applyUpdate(version?: string): Promise<UpdateJob> {
+  const response = await fetch(`${API_BASE}/v1/update/apply`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    credentials: "same-origin",
+    body: JSON.stringify({ version: version ?? null }),
+  })
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+  return response.json()
+}
+
+export async function fetchUpdateJob(jobId: string): Promise<UpdateJob> {
+  const response = await fetch(`${API_BASE}/v1/update/jobs/${encodeURIComponent(jobId)}`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+  return response.json()
+}
+
+export async function rollbackUpdate(): Promise<UpdateJob> {
+  const response = await fetch(`${API_BASE}/v1/update/rollback`, {
+    method: "POST",
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+  return response.json()
+}
+
 export interface DiscoveredServer {
   host: string
   port: number

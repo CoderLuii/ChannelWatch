@@ -62,6 +62,13 @@ class ErrorCode:
     # Debug bundle
     DEBUG_BUNDLE_CREATE_FAILED = "ERR_DEBUG_BUNDLE_CREATE_FAILED"
 
+    # Updates
+    UPDATE_CHECK_FAILED = "ERR_UPDATE_CHECK_FAILED"
+    UPDATE_APPLY_FAILED = "ERR_UPDATE_APPLY_FAILED"
+    UPDATE_LOCKED = "ERR_UPDATE_LOCKED"
+    UPDATE_IMAGE_REQUIRED = "ERR_UPDATE_IMAGE_REQUIRED"
+    UPDATE_ROLLBACK_FAILED = "ERR_UPDATE_ROLLBACK_FAILED"
+
     # Support reports
     SUPPORT_REPORT_REQUEST_TOO_LARGE = "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE"
     SUPPORT_REPORT_PAYLOAD_INVALID = "ERR_SUPPORT_REPORT_PAYLOAD_INVALID"
@@ -356,6 +363,37 @@ _CATALOG: dict[str, CatalogEntry] = {
         http_status=500,
         message="Failed to create debug bundle.",
         remediation="Check that /config is readable and that there is enough disk space.",
+    ),
+    # Updates ------------------------------------------------------------
+    ErrorCode.UPDATE_CHECK_FAILED: CatalogEntry(
+        code=ErrorCode.UPDATE_CHECK_FAILED,
+        http_status=502,
+        message="Failed to check for updates.",
+        remediation="Check internet access from the container and try again.",
+    ),
+    ErrorCode.UPDATE_APPLY_FAILED: CatalogEntry(
+        code=ErrorCode.UPDATE_APPLY_FAILED,
+        http_status=500,
+        message="Failed to apply the update.",
+        remediation="Use Settings -> Updates to review the failure, then retry or roll back if available.",
+    ),
+    ErrorCode.UPDATE_LOCKED: CatalogEntry(
+        code=ErrorCode.UPDATE_LOCKED,
+        http_status=409,
+        message="Another update operation is already running.",
+        remediation="Wait for the current update operation to finish, then refresh the Update Center.",
+    ),
+    ErrorCode.UPDATE_IMAGE_REQUIRED: CatalogEntry(
+        code=ErrorCode.UPDATE_IMAGE_REQUIRED,
+        http_status=409,
+        message="This update requires a new container image.",
+        remediation="Update the ChannelWatch Docker/Unraid/Compose/Helm image through your normal container update path.",
+    ),
+    ErrorCode.UPDATE_ROLLBACK_FAILED: CatalogEntry(
+        code=ErrorCode.UPDATE_ROLLBACK_FAILED,
+        http_status=500,
+        message="Failed to roll back the active update.",
+        remediation="Check /config/channelwatch-runtime/rollback.json and container logs.",
     ),
     # Support reports ----------------------------------------------------
     ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE: CatalogEntry(

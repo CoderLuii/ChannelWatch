@@ -13,6 +13,7 @@ This docs tree is the home for ChannelWatch user, operator, reference, and archi
 - [configure-webhooks.md](how-to/configure-webhooks.md) - Send signed ChannelWatch alerts to an external HTTP receiver.
 - [troubleshoot-notifications.md](how-to/troubleshoot-notifications.md) - Diagnose missing, failing, or surprising notification delivery.
 - [reverse-proxy.md](how-to/reverse-proxy.md) - Publish ChannelWatch through Nginx, Caddy, Traefik, or Cloudflare Tunnel.
+- [update-channelwatch.md](how-to/update-channelwatch.md) - Use the in-app Update Center and understand image-required releases.
 - [backup-restore.md](how-to/backup-restore.md) - Back up and restore configuration, DVR state, and activity data.
 
 ## Reference
@@ -36,6 +37,7 @@ This docs tree is the home for ChannelWatch user, operator, reference, and archi
 - [two-process-model.md](explanation/two-process-model.md) - Why one container runs separate core and FastAPI processes.
 - [notification-pipeline.md](explanation/notification-pipeline.md) - How DVR activity becomes routed notifications.
 - [config-lifecycle.md](explanation/config-lifecycle.md) - How settings move from browser saves to running monitor tasks.
+- [update-model.md](explanation/update-model.md) - Why ChannelWatch uses app-bundle updates only when the container runtime is compatible.
 
 ## Diataxis quadrant guidance
 

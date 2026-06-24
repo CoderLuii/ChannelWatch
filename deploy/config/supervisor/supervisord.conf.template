@@ -29,8 +29,8 @@ serverurl = unix://__SUPERVISOR_SOCKET__
 # Managed services
 #-----------------------------------------------------------------------------
 [program:core]
-command=python -u -m core.main --stay-alive
-environment=PYTHONPATH=/app
+command=python -u /app/core/runtime_launcher.py core --stay-alive
+environment=PYTHONPATH=/app,CHANNELWATCH_ACTIVE_APP_DIR=__APP_DIR__,CHANNELWATCH_ACTIVE_STATIC_UI_DIR=__STATIC_UI_DIR__,CHANNELWATCH_APP_DIR=__APP_DIR__,CW_STATIC_UI_DIR=__STATIC_UI_DIR__
 directory=/app
 autostart=true
 autorestart=true
@@ -40,8 +40,8 @@ stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 
 [program:ui]
-command=uvicorn ui.backend.main:app --host 0.0.0.0 --port 8501 --log-level warning
-environment=PYTHONPATH="/app"
+command=python -u /app/core/runtime_launcher.py ui --host 0.0.0.0 --port 8501 --log-level warning
+environment=PYTHONPATH=/app,CHANNELWATCH_ACTIVE_APP_DIR=__APP_DIR__,CHANNELWATCH_ACTIVE_STATIC_UI_DIR=__STATIC_UI_DIR__,CHANNELWATCH_APP_DIR=__APP_DIR__,CW_STATIC_UI_DIR=__STATIC_UI_DIR__
 directory=/app
 autostart=true
 autorestart=true

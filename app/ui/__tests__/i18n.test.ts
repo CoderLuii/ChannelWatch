@@ -45,6 +45,7 @@ describe("t()", () => {
     expect(t("settings.tabs.routing")).toBe("Routing")
     expect(t("settings.tabs.security")).toBe("Security")
     expect(t("settings.tabs.backup")).toBe("Backup")
+    expect(t("settings.tabs.updates")).toBe("Updates")
   })
 
   it("resolves wizard step copy", () => {

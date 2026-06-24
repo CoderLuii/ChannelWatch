@@ -17,6 +17,7 @@ By default, ChannelWatch only talks to:
 
 - your Channels DVR server or servers
 - notification destinations you configure
+- the official public ChannelWatch update manifest when you click **Check for updates**
 - optional endpoints you explicitly provide, such as a webhook URL or your own Sentry or GlitchTip DSN
 
 If you do not configure an outbound integration, ChannelWatch does not invent one.
@@ -36,6 +37,7 @@ Common files include:
 | `session_state_<dvr_id>.json` | Per-DVR session tracking state |
 | `encryption.key` | Key used to protect per-DVR API keys at rest |
 | `backups/` | Migration backups and pre-restore snapshots |
+| `channelwatch-runtime/` | Update Center active bundle pointer, update job state, rollback metadata, and downloaded app bundles |
 
 This data is not copied to a ChannelWatch service because there is no ChannelWatch cloud service involved.
 
@@ -82,6 +84,12 @@ Sensitive fields are replaced with `****`, including:
 - `error_reporting_dsn`
 
 No debug bundle is sent automatically. You must choose to generate and download it.
+
+## Update Center checks
+
+The in-app Update Center fetches public release metadata from the official ChannelWatch docs site only when you check for updates. The request does not include DVR settings, notification settings, activity history, install identifiers, debug bundles, or telemetry payloads.
+
+If a compatible app-only update is available, ChannelWatch downloads the signed app bundle from the trusted public release URL, verifies the signature and hash locally, writes a pre-update backup under `/config/backups/`, and stores runtime metadata under `/config/channelwatch-runtime/`.
 
 ## In-app support reports
 

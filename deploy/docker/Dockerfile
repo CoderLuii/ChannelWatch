@@ -32,9 +32,10 @@ FROM cgr.dev/chainguard/python:latest
 
 USER root
 
-ARG VERSION=0.9.8
+ARG VERSION=0.9.9
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
+ARG RUNTIME_ABI=channelwatch-runtime-v1
 
 LABEL org.opencontainers.image.title="ChannelWatch"
 LABEL org.opencontainers.image.description="Self-hosted Channels DVR monitoring with multi-DVR dashboards, alerts, health checks, and notifications"
@@ -49,6 +50,9 @@ LABEL maintainer="CoderLuii"
 ENV PATH="/venv/bin:${PATH}"
 ENV PYTHONPATH="/app"
 ENV CONFIG_PATH="/config"
+ENV CHANNELWATCH_IMAGE_APP_DIR="/app"
+ENV CHANNELWATCH_RUNTIME_ABI="${RUNTIME_ABI}"
+ENV CHANNELWATCH_IMAGE_VERSION="${VERSION}"
 
 RUN ["/usr/bin/python", "-c", "from pathlib import Path; [Path(path).mkdir(parents=True, exist_ok=True) for path in ('/app/core', '/app/ui/backend/static_ui', '/app/ui/backend/static/images', '/config', '/etc/supervisor/conf.d')]"]
 
@@ -63,6 +67,8 @@ COPY app/bin/channelwatch /usr/local/bin/channelwatch
 COPY deploy/config/supervisor/supervisord.conf.template /etc/supervisor/conf.d/supervisord.conf.template
 COPY --from=ui-builder /src/out /app/ui/backend/static_ui/
 COPY app/ui/public/images /app/ui/backend/static/images/
+
+RUN ["/usr/bin/python", "-c", "import json, os; from pathlib import Path; Path('/app/channelwatch-image.json').write_text(json.dumps({'version': os.environ.get('CHANNELWATCH_IMAGE_VERSION', 'unknown'), 'runtime_abi': os.environ.get('CHANNELWATCH_RUNTIME_ABI', 'channelwatch-runtime-v1'), 'settings_schema_version': 7}, indent=2) + '\\n')"]
 
 RUN ["/usr/bin/python", "-c", "import os; os.chmod('/usr/local/bin/channelwatch', 0o755)"]
 

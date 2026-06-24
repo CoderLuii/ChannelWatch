@@ -166,7 +166,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.8","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.9","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -872,7 +872,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.8","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.9","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`
@@ -1068,6 +1068,90 @@ Example response:
 ```json
 {"message":"Restore completed. Core process hot-reloaded.","manifest":{"version":1,"created_at":"2026-04-26T00:00:00Z"}}
 ```
+
+## Update Center
+
+Update Center routes are admin-only when auth is enabled. If `CW_DISABLE_AUTH=true`, they follow the rest of the app's auth-disabled behavior: anyone who can reach the UI can run admin actions. Do not expose auth-disabled installs to untrusted networks.
+
+### `GET /api/v1/update/status`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_status` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `UpdateStatus` |
+| Status codes | 200, 401, 403, 429, 500 |
+| Rate limit applies | yes |
+
+Example request:
+
+```bash
+curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
+```
+
+Example response:
+
+```json
+{"current_version":"0.9.9","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
+```
+
+### `POST /api/v1/update/check`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_check` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `UpdateStatus` |
+| Status codes | 200, 401, 403, 409 (`ERR_UPDATE_LOCKED`), 429, 500 |
+| Rate limit applies | yes |
+
+This route fetches the trusted public ChannelWatch update manifest and stores the last trusted manifest under `/config/channelwatch-runtime/latest.json`.
+
+### `POST /api/v1/update/apply`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_apply` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `{ "version": "0.9.10" }` |
+| Response body schema | `UpdateJob` |
+| Status codes | 202, 401, 403, 409 (`ERR_UPDATE_LOCKED` or `ERR_UPDATE_IMAGE_REQUIRED`), 429, 500 |
+| Rate limit applies | yes |
+
+`apply` verifies the signed manifest, signed bundle, SHA256 digest, runtime ABI, settings schema, and bundle allowlist before writing an active bundle pointer. Compatible updates create a pre-update backup and then restart ChannelWatch.
+
+### `GET /api/v1/update/jobs/{job_id}`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_job` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `UpdateJob` |
+| Status codes | 200, 401, 403, 404, 429 |
+| Rate limit applies | yes |
+
+The route returns the persisted last job only when `{job_id}` matches the stored operation.
+
+### `POST /api/v1/update/rollback`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_rollback` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `UpdateJob` |
+| Status codes | 202, 401, 403, 409, 429, 500 |
+| Rate limit applies | yes |
+
+Rollback restores the previous active bundle pointer, or removes `active.json` to fall back to the image app, then restarts ChannelWatch.
 
 ## Auth
 
@@ -1324,7 +1408,7 @@ Example response:
 
 ## Route coverage summary
 
-This document includes 52 API endpoint entries: 46 canonical app endpoint headings from the current v0.9 route set, including health and metrics probe endpoints that are hidden from OpenAPI, plus 6 included `/api/v1/auth` router headings. The conditional `/` UI fallback is listed separately above and is intentionally not counted as an API endpoint entry. The 3 feed alias routes are documented as alias rows under their canonical feed endpoints. There are no WebSocket endpoints in `main.py`.
+This document includes 57 API endpoint entries: 51 canonical app endpoint headings from the current v0.9 route set, including health and metrics probe endpoints that are hidden from OpenAPI, plus 6 included `/api/v1/auth` router headings. The conditional `/` UI fallback is listed separately above and is intentionally not counted as an API endpoint entry. The 3 feed alias routes are documented as alias rows under their canonical feed endpoints. There are no WebSocket endpoints in `main.py`.
 
 ## See also
 

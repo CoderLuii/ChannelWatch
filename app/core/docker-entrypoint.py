@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,6 +21,8 @@ SUPERVISOR_RUNTIME_DIR = Path(
     os.environ.get("CHANNELWATCH_RUNTIME_DIR", "/tmp/channelwatch")
 )
 SUPERVISOR_SOCKET = SUPERVISOR_RUNTIME_DIR / "supervisor.sock"
+IMAGE_APP_DIR = Path(os.environ.get("CHANNELWATCH_IMAGE_APP_DIR", "/app"))
+RUNTIME_ABI = "channelwatch-runtime-v1"
 
 DEFAULT_SETTINGS = {
     "dvr_servers": [],
@@ -487,6 +490,38 @@ def chown_tree(path: Path, uid: int, gid: int) -> None:
             chown_path(target, uid, gid)
 
 
+def read_image_version() -> str:
+    init_file = IMAGE_APP_DIR / "core" / "__init__.py"
+    try:
+        content = init_file.read_text(encoding="utf-8")
+    except OSError:
+        return "0.0.0"
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', content, re.MULTILINE)
+    return match.group(1) if match else "0.0.0"
+
+
+def select_app_runtime_dir() -> Path:
+    try:
+        sys.path.insert(0, str(IMAGE_APP_DIR))
+        from core.update_center import resolve_active_app_dir
+
+        selection = resolve_active_app_dir(
+            config_dir=CONFIG_DIR,
+            image_app_dir=IMAGE_APP_DIR,
+            image_version=read_image_version(),
+            runtime_abi=RUNTIME_ABI,
+            settings_schema_version=CURRENT_SCHEMA_VERSION,
+        )
+        info(
+            "[Entrypoint] Selected ChannelWatch app runtime: "
+            f"{selection.source} ({selection.reason}) at {selection.app_dir}"
+        )
+        return selection.app_dir
+    except Exception as exc:
+        warning(f"Failed to resolve active app bundle; using image app: {exc}")
+        return IMAGE_APP_DIR
+
+
 def render_supervisor_config(app_uid: int, app_gid: int) -> None:
     if not SUPERVISOR_TEMPLATE.is_file():
         warning(f"supervisord.conf.template not found at {SUPERVISOR_TEMPLATE}")
@@ -498,8 +533,14 @@ def render_supervisor_config(app_uid: int, app_gid: int) -> None:
     except FileNotFoundError:
         pass
 
+    selected_app_dir = select_app_runtime_dir()
+    static_ui_dir = selected_app_dir / "ui" / "backend" / "static_ui"
     template = SUPERVISOR_TEMPLATE.read_text(encoding="utf-8")
-    rendered = template.replace("__SUPERVISOR_SOCKET__", str(SUPERVISOR_SOCKET))
+    rendered = (
+        template.replace("__SUPERVISOR_SOCKET__", str(SUPERVISOR_SOCKET))
+        .replace("__APP_DIR__", str(selected_app_dir))
+        .replace("__STATIC_UI_DIR__", str(static_ui_dir))
+    )
     SUPERVISOR_CONF.write_text(rendered, encoding="utf-8")
 
     for path, mode in (
@@ -551,7 +592,7 @@ def main() -> None:
     if not running_as_root():
         info("[Entrypoint] Running without root privileges; ownership repair is skipped.")
     chown_tree(CONFIG_DIR, uid, gid)
-    chown_tree(Path("/app"), uid, gid)
+    chown_tree(IMAGE_APP_DIR, uid, gid)
     chmod_config_tree(CONFIG_DIR)
     render_supervisor_config(uid, gid)
     prepare_standard_streams()

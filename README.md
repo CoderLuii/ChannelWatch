@@ -24,6 +24,7 @@ ChannelWatch is a self-hosted Channels DVR monitor that watches DVR activity, sh
 - [Multi-DVR Support](#multi-dvr-support)
 - [Security And Data](#security-and-data)
 - [Deployment Options](#deployment-options)
+- [Updating ChannelWatch](#updating-channelwatch)
 - [Troubleshooting](#troubleshooting)
 - [Project Layout](#project-layout)
 - [Support](#support)
@@ -213,6 +214,14 @@ Read more:
 The Docker image is published for `linux/amd64` and `linux/arm64`. Docker selects the matching platform automatically for normal pulls.
 
 The Helm chart is single-replica by design because ChannelWatch uses writable application state under `/config`.
+
+## Updating ChannelWatch
+
+Install v0.9.9 normally once with Docker, Unraid, Compose, or Helm. After that, open **Settings > Updates** and use the in-app Update Center for compatible app-only releases.
+
+The Update Center checks trusted public ChannelWatch release metadata, verifies signed app bundles, creates a pre-update backup, activates the update, restarts ChannelWatch, and keeps rollback available when the previous runtime can be restored. It does not add telemetry.
+
+Some releases still require a normal container image update. ChannelWatch will say **container image update required** when a release changes Python dependencies, base image packages, Supervisor/container behavior, runtime ABI, Helm assumptions, or persistent schema. See [`docs/how-to/update-channelwatch.md`](docs/how-to/update-channelwatch.md) for the full update guide.
 
 ## Troubleshooting
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
-import { AlertCircle, Archive, Bell, Check, Database, GitMerge, Loader2, RefreshCw, Save, Server, Shield } from "lucide-react"
+import { AlertCircle, Archive, Bell, Check, Database, DownloadCloud, GitMerge, Loader2, RefreshCw, Save, Server, Shield } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
 import { Badge } from "@/components/base/badge"
@@ -23,6 +23,7 @@ import { GeneralSettingsSection } from "@/components/settings/general-settings-s
 import { NotificationsSettingsSection } from "@/components/settings/notifications-settings-section"
 import { RoutingSettingsSection } from "@/components/settings/routing-settings-section"
 import { SecuritySettingsSection } from "@/components/settings/security-section"
+import { UpdateCenterSection } from "@/components/settings/update-center-section"
 import type { AppSettingsFieldKey, DvrHelpers } from "@/components/settings/dvr-field-controls"
 import type { FieldPathValue } from "react-hook-form"
 
@@ -424,6 +425,10 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
                        <Archive className="mr-2 h-4 w-4" />
                        {t("settings.tabs.backup")}
                      </TabsTrigger>
+                     <TabsTrigger value="updates" className="inline-flex items-center justify-center whitespace-nowrap rounded-none border-b-2 border-b-transparent px-4 py-2 text-sm font-medium ring-offset-background transition-all data-[state=active]:border-b-primary data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                       <DownloadCloud className="mr-2 h-4 w-4" />
+                       {t("settings.tabs.updates")}
+                     </TabsTrigger>
                    </TabsList>
                  </div>
                </div>
@@ -460,6 +465,7 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
                 <RoutingSettingsSection form={form} />
                  <SecuritySettingsSection form={form} />
                  <BackupSettingsSection />
+                 <UpdateCenterSection />
               </div>
             </Tabs>
           </div>

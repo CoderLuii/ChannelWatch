@@ -197,6 +197,16 @@ class TestTemplateNoCreds:
 
         assert section_found
 
+    def test_template_uses_image_stable_runtime_launcher(self):
+        content = _CONF_TEMPLATE.read_text()
+
+        assert "python -u /app/core/runtime_launcher.py core --stay-alive" in content
+        assert "python -u /app/core/runtime_launcher.py ui" in content
+        assert "CHANNELWATCH_ACTIVE_APP_DIR=__APP_DIR__" in content
+        assert "CHANNELWATCH_ACTIVE_STATIC_UI_DIR=__STATIC_UI_DIR__" in content
+        assert "directory=/app" in content
+        assert "command=uvicorn ui.backend.main:app" not in content
+
 
 class TestRestartCoreDegradedResponse:
     def test_restart_core_returns_degraded_response_when_socket_missing(

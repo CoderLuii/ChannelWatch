@@ -27,6 +27,11 @@ export const ErrorCode = {
   RESTORE_SCHEMA_AHEAD: "ERR_RESTORE_SCHEMA_AHEAD",
   RESTORE_FAILED: "ERR_RESTORE_FAILED",
   DEBUG_BUNDLE_CREATE_FAILED: "ERR_DEBUG_BUNDLE_CREATE_FAILED",
+  UPDATE_CHECK_FAILED: "ERR_UPDATE_CHECK_FAILED",
+  UPDATE_APPLY_FAILED: "ERR_UPDATE_APPLY_FAILED",
+  UPDATE_LOCKED: "ERR_UPDATE_LOCKED",
+  UPDATE_IMAGE_REQUIRED: "ERR_UPDATE_IMAGE_REQUIRED",
+  UPDATE_ROLLBACK_FAILED: "ERR_UPDATE_ROLLBACK_FAILED",
   SUPPORT_REPORT_REQUEST_TOO_LARGE: "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE",
   SUPPORT_REPORT_PAYLOAD_INVALID: "ERR_SUPPORT_REPORT_PAYLOAD_INVALID",
   SUPPORT_REPORT_FORM_INVALID: "ERR_SUPPORT_REPORT_FORM_INVALID",
@@ -195,6 +200,34 @@ const CATALOG: Record<string, CatalogEntry> = {
     message: "Failed to create debug bundle.",
     remediation:
       "Check that /config is readable and that there is enough disk space.",
+  },
+  [ErrorCode.UPDATE_CHECK_FAILED]: {
+    code: ErrorCode.UPDATE_CHECK_FAILED,
+    message: "Failed to check for updates.",
+    remediation: "Check internet access from the container and try again.",
+  },
+  [ErrorCode.UPDATE_APPLY_FAILED]: {
+    code: ErrorCode.UPDATE_APPLY_FAILED,
+    message: "Failed to apply the update.",
+    remediation:
+      "Use Settings -> Updates to review the failure, then retry or roll back if available.",
+  },
+  [ErrorCode.UPDATE_LOCKED]: {
+    code: ErrorCode.UPDATE_LOCKED,
+    message: "Another update operation is already running.",
+    remediation:
+      "Wait for the current update operation to finish, then refresh the Update Center.",
+  },
+  [ErrorCode.UPDATE_IMAGE_REQUIRED]: {
+    code: ErrorCode.UPDATE_IMAGE_REQUIRED,
+    message: "This update requires a new container image.",
+    remediation:
+      "Update the ChannelWatch Docker/Unraid/Compose/Helm image through your normal container update path.",
+  },
+  [ErrorCode.UPDATE_ROLLBACK_FAILED]: {
+    code: ErrorCode.UPDATE_ROLLBACK_FAILED,
+    message: "Failed to roll back the active update.",
+    remediation: "Check the Update Center status and container logs.",
   },
   [ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE]: {
     code: ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE,

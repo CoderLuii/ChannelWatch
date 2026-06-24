@@ -2,7 +2,7 @@
 
 ChannelWatch is a self-hosted monitoring and notification dashboard for Channels DVR.
 
-It watches DVR activity, recording events, VOD playback, disk space, and service health from a single container. The v0.9 release adds multi-DVR setup, first-run discovery, per-DVR status, notification routing, delivery history, backup and restore, health checks, metrics, and a maintained Unraid template.
+It watches DVR activity, recording events, VOD playback, disk space, and service health from a single container. The v0.9 release adds multi-DVR setup, first-run discovery, per-DVR status, notification routing, delivery history, backup and restore, health checks, metrics, an in-app Update Center, and a maintained Unraid template.
 
 ## Images
 
@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `0.9.8` for the v0.9.8 release
+- `0.9.9` for the v0.9.9 release
 
 ## Quick Start
 
@@ -35,6 +35,12 @@ services:
 
 Open `http://localhost:8501` after the container starts.
 
+## Updating
+
+Install v0.9.9 normally through Docker, Unraid, Compose, or Helm. After that, compatible app-only releases can be checked, verified, backed up, applied, and rolled back from **Settings > Updates**.
+
+Releases that change the container runtime still require a normal image update. ChannelWatch will show **container image update required** when that is the safe path.
+
 ## Configuration
 
 ChannelWatch stores its settings, logs, database, backups, and encryption key under `/config`. Set `CHANNELWATCH_SECRET_STORAGE_KEY` to a unique value of at least 32 characters so new local secret files are written with envelope encryption.
@@ -45,4 +51,4 @@ DVR setup is easiest through the web UI. For bootstrap-only deployments, `CHANNE
 
 - Project: https://github.com/CoderLuii/ChannelWatch
 - Support: https://github.com/CoderLuii/ChannelWatch/discussions
-- Documentation: https://github.com/CoderLuii/ChannelWatch/tree/main/docs
+- Documentation: https://channelwatch.coderluii.dev/

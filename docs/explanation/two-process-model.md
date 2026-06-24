@@ -18,7 +18,7 @@ v0.7 was not monolithic at the container level. The frozen v0.7 supervisor confi
 
 The older core was more monolithic inside its own process. It used a single DVR host and port, initialized one event monitor, then called `event_monitor.start_monitoring()`. Settings changes saved by the UI generally required a restart before the core picked them up.
 
-The current design keeps the two-process container model and makes it more deliberate. `deploy/config/supervisor/supervisord.conf.template` still defines `[program:core]` and `[program:ui]`, but the entrypoint now prepares a local supervisor Unix socket, writes the final config to `/tmp/supervisord.conf`, and launches supervisor as PID 1 through the image `CMD`. The current core can run one monitor per enabled DVR and can react to selected config changes through a `SIGHUP` reload path.
+The current design keeps the two-process container model and makes it more deliberate. `deploy/config/supervisor/supervisord.conf.template` still defines `[program:core]` and `[program:ui]`, but the entrypoint now prepares a local supervisor Unix socket, selects the image app or a verified active Update Center bundle, writes the final config to `/tmp/supervisord.conf`, and launches supervisor as PID 1 through the image `CMD`. The current core can run one monitor per enabled DVR and can react to selected config changes through a `SIGHUP` reload path.
 
 ## What supervisord actually starts
 
@@ -26,10 +26,10 @@ The shipped template defines these programs:
 
 | Program | Command | Purpose |
 |---|---|---|
-| `core` | `python -u -m core.main --stay-alive` | Runs the DVR monitoring and notification engine. |
-| `ui` | `uvicorn ui.backend.main:app --host 0.0.0.0 --port 8501 --log-level warning` | Serves the FastAPI API and the static exported Next UI. |
+| `core` | `python -u /app/core/runtime_launcher.py core --stay-alive` | Starts the image-stable launcher, then runs the selected DVR monitoring and notification engine. |
+| `ui` | `python -u /app/core/runtime_launcher.py ui --host 0.0.0.0 --port 8501 --log-level warning` | Starts the image-stable launcher, then serves the selected FastAPI API and static exported Next UI. |
 
-Both programs use `directory=/app`, set `PYTHONPATH=/app`, write stdout and stderr to the container logs, and have `autostart=true` and `autorestart=true`.
+Both programs use `directory=/app`, start with image code, write stdout and stderr to the container logs, and have `autostart=true` and `autorestart=true`. The launcher prepends the selected app directory to `PYTHONPATH` at process startup, so a compatible app bundle can run without changing the container image.
 
 That restart setting matters. With `autorestart=true`, supervisor restarts either child if it exits after reaching the running state, regardless of whether the exit code looks clean or failed. The template does not define custom `exitcodes`, `startretries`, or a group rule that shuts down the whole container when one child dies. The result is process-level recovery first: a failed core can restart without taking down the UI, and a failed UI can restart without stopping the event monitor.
 
@@ -46,10 +46,13 @@ sequenceDiagram
     Docker->>Entrypoint: Start container with CMD supervisord
     Entrypoint->>Entrypoint: Ensure /config and settings.json
     Entrypoint->>Entrypoint: Prepare local supervisor Unix socket
+    Entrypoint->>Entrypoint: Resolve image app or active update bundle
     Entrypoint->>Entrypoint: Render /tmp/supervisord.conf
     Entrypoint->>Supervisor: exec gosu appuser supervisord
-    Supervisor->>Core: autostart python -u -m core.main --stay-alive
-    Supervisor->>UI: autostart uvicorn ui.backend.main:app
+    Supervisor->>Core: autostart image runtime launcher for core
+    Supervisor->>UI: autostart image runtime launcher for UI
+    Core->>Core: import selected app runtime
+    UI->>UI: import selected app runtime
     Core-->>Supervisor: stdout and stderr logs
     UI-->>Supervisor: stdout and stderr logs
     Supervisor-->>Core: autorestart if process exits

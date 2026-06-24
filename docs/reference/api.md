@@ -166,7 +166,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.7","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.8","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -872,7 +872,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.7","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.8","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`

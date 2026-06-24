@@ -21,6 +21,10 @@ import httpx
 
 from .. import __app_name__, __version__
 from ..helpers.url_validator import build_safe_url_request, is_safe_url, redact_url
+from ..helpers.trusted_destinations import (
+    build_trusted_notification_request,
+    is_trusted_notification_destination,
+)
 from ..helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 
 
@@ -167,13 +171,30 @@ class WebhookManager:
         url = str(webhook.get("url", "")).strip()
         redacted_url = redact_url(url)
         secret = str(webhook.get("secret", "") or "")
+        trusted_destinations = getattr(
+            self.settings, "trusted_notification_destinations", []
+        )
+        destination_is_safe = is_safe_url(url)
+        destination_is_trusted = False
 
-        if not is_safe_url(url):
+        if not destination_is_safe:
+            destination_is_trusted = is_trusted_notification_destination(
+                url,
+                "webhook",
+                trusted_destinations,
+            )
+
+        if not destination_is_safe and not destination_is_trusted:
             log(
                 f"Webhook skipped for {redacted_url}: destination failed safety check",
                 level=LOG_STANDARD,
             )
             return False
+        if destination_is_trusted:
+            log(
+                f"Webhook delivery allowed for trusted local destination {redacted_url}",
+                level=LOG_STANDARD,
+            )
 
         if not secret or secret == self.MASK_VALUE:
             log(
@@ -195,7 +216,15 @@ class WebhookManager:
         }
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
-            safe_request = build_safe_url_request(url)
+            safe_request = (
+                build_trusted_notification_request(
+                    url,
+                    "webhook",
+                    trusted_destinations,
+                )
+                if destination_is_trusted
+                else build_safe_url_request(url)
+            )
             if safe_request is None:
                 log(
                     f"Webhook skipped for {redacted_url}: destination failed safety check before delivery",

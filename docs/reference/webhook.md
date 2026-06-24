@@ -41,7 +41,7 @@ Example payload:
   "timestamp": "2026-04-26T18:30:00Z",
   "instanceName": "ChannelWatch",
   "instanceUrl": "http://localhost:8501",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "deliveryId": "8d79f4f7-5c46-4f31-b812-dc17f5c6cf1b",
   "dvr_id": "dvr_1234",
   "dvr_name": "Living Room DVR",
@@ -192,6 +192,13 @@ Check `X-ChannelWatch-Signature` against the raw request body before acting on t
 ### Treat receiver URLs as external targets
 
 Webhook delivery calls the shared URL safety helper before posting. It skips destinations that use non HTTP schemes, localhost, metadata hostnames, or private, reserved, loopback, or link local IP literals, and logs the skipped URL in redacted form.
+
+Private LAN webhook receivers can be approved from **Settings > Notifications**
+with the trusted-local destination flow. The approval is exact to the
+normalized scheme, host, and port, and it applies only to notification delivery.
+It does not allow image fetching or other outbound URL fetches. Metadata,
+link-local, loopback, reserved, malformed, and unresolved destinations remain
+blocked.
 
 ### Use TLS for remote receivers
 

@@ -55,6 +55,7 @@ DEFAULT_SETTINGS = {
     "rss_feed_enabled": False,
     "rss_feed_token": "",
     "webhooks": [],
+    "trusted_notification_destinations": [],
     "rd_alert_scheduled": True,
     "rd_alert_started": True,
     "rd_alert_completed": True,

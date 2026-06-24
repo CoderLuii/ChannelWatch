@@ -48,6 +48,7 @@ from .support_report import (
 from core.helpers.config import CONFIG_DIR as _CORE_CONFIG_DIR, ConfigLoadError
 from core.helpers.atomic_io import atomic_write_json
 from core.helpers.dvr_connection import build_dvr_base_url
+from core.helpers.trusted_destinations import preview_notification_destination_safety
 from core.helpers.soft_delete_manager import (
     hard_delete_dvr as _hard_delete_dvr,
     purge_expired_dvrs as _purge_expired_dvrs,
@@ -65,6 +66,8 @@ from .schemas import (
     SecurityFeedsStatus,
     SecurityStatusResponse,
     SetupStatusResponse,
+    NotificationDestinationSafetyRequest,
+    NotificationDestinationSafetyResponse,
 )
 import secrets
 import uuid
@@ -1327,6 +1330,32 @@ async def update_settings_endpoint(settings: AppSettings):
     except Exception as e:
         print(f"[WebUI API] ERROR: Failed saving settings: {e}")
         raise structured_error(ErrorCode.SETTINGS_SAVE_FAILED)
+
+
+@app.post(
+    "/api/v1/notifications/destination-safety/preview",
+    response_model=NotificationDestinationSafetyResponse,
+    dependencies=[require_role("operator")],
+)
+async def preview_notification_destination_safety_endpoint(
+    body: NotificationDestinationSafetyRequest,
+):
+    settings = await _load_settings_async()
+    preview = await asyncio.to_thread(
+        preview_notification_destination_safety,
+        body.url,
+        body.source,
+        getattr(settings, "trusted_notification_destinations", []),
+    )
+    return NotificationDestinationSafetyResponse(
+        source=preview.source,
+        url=redact_url(preview.url),
+        normalized=preview.normalized,
+        status=preview.status,
+        message=preview.message,
+        trustable=preview.trustable,
+        trusted=preview.trusted,
+    )
 
 
 @app.post("/api/regenerate-api-key", dependencies=[require_role("admin")])

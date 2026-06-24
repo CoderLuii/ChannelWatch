@@ -1,4 +1,4 @@
-import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode } from "@/lib/types"
+import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource } from "@/lib/types"
 import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
 
 const API_BASE = "/api"
@@ -198,6 +198,28 @@ export async function saveSettings(settings: AppSettings): Promise<{ message: st
       ...authHeaders(),
     },
     body: JSON.stringify(settings),
+  })
+
+  if (!response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+
+  return response.json()
+}
+
+export async function previewNotificationDestinationSafety(
+  source: TrustedNotificationDestinationSource,
+  url: string,
+): Promise<NotificationDestinationSafetyPreview> {
+  const response = await fetch(`${API_BASE}/v1/notifications/destination-safety/preview`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify({ source, url }),
   })
 
   if (!response.ok) {

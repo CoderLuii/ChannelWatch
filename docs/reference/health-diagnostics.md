@@ -232,11 +232,24 @@ The Diagnostics view is rendered by `app/ui/components/diagnostics-panel.tsx`. T
 The page shows:
 
 * A debug bundle download button that calls `GET /api/v1/debug/bundle`.
+* A **Report a Problem** button that opens the support report flow for sanitized issue previews, optional contact handles, screenshot attachments, and ChannelWatch debug-bundle ZIP validation.
 * A diagnostics export button that downloads a local text report with system details, DVR status, health warnings, test results, and recent log lines.
 * A live log terminal backed by `GET /api/logs`, with line count selection, text filtering, level filters, pause and resume, copy, and log download through `GET /api/logs/download`.
 * System information from `GET /api/system-info`, including ChannelWatch version, timezone, core status from supervisor, uptime, log retention, active notification providers, aggregate storage, and per DVR connection and monitoring state.
 * Connectivity and notification test actions using `POST /api/run_test/{test_name_url}`.
 * Health warnings for offline DVRs, degraded monitoring, missing DVR configuration, no notification providers, and no enabled alert types.
+
+## Report a Problem flow
+
+The **Report a Problem** flow is intended for support cases where a normal issue body is not enough. It guides the operator through a sanitized report preview and keeps private attachments separate from the public issue text.
+
+Current behavior:
+
+* The public report preview includes the problem summary, expected behavior, safe contact handles, and a diagnostics summary.
+* Optional screenshots and one ChannelWatch-generated debug bundle ZIP can be attached for maintainer troubleshooting.
+* Private email addresses, attachment filenames, screenshots, debug bundle contents, raw logs, tokens, notification credentials, DVR API keys, and private config values are not placed in the public issue body.
+* If direct submit is not available, the flow can provide a support code or offline package for the hosted upload portal.
+* The in-app flow does not show a hosted bot-verification challenge; the public upload portal keeps its own verification and support-code gate.
 
 ## Source paths
 
@@ -245,6 +258,8 @@ The page shows:
 * `app/core/cli/doctor.py`, doctor CLI commands and exit behavior.
 * `app/core/helpers/debug_bundle.py`, bundle contents and sanitization.
 * `app/ui/components/diagnostics-panel.tsx`, Diagnostics UI.
+* `app/ui/components/report-problem-dialog.tsx`, report preview, attachment selection, support-code, and submit UI.
+* `app/ui/backend/support_report.py`, support report validation, sanitization, offline package, and private attachment handling.
 * `app/ui/components/dashboard.tsx`, hash based diagnostics navigation.
 * `app/ui/lib/api.ts`, frontend calls for system info, tests, and debug bundle download.
 

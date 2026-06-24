@@ -7,6 +7,7 @@ EffectiveAuthMode = Literal["api_key", "rbac", "none", "setup"]
 SecurityMode = Literal[
     "NO_AUTH", "API_KEY_ONLY", "RBAC_WITH_API_KEY_FALLBACK", "RBAC_ONLY"
 ]
+TrustedNotificationDestinationSource = Literal["apprise_custom", "webhook"]
 
 
 def BoolTrue():
@@ -126,6 +127,10 @@ class AppSettings(BaseModel):
     rss_feed_token: Optional[str] = StrEmpty()
     webhooks: list["WebhookSettings"] = Field(
         default_factory=list, description="Outbound webhook destinations"
+    )
+    trusted_notification_destinations: list["TrustedNotificationDestination"] = Field(
+        default_factory=list,
+        description="Exact local notification destinations allowed for delivery",
     )
 
     @field_validator("cw_image_source")
@@ -333,6 +338,48 @@ class WebhookSettings(BaseModel):
         if value is None:
             return ""
         return str(value)
+
+
+class TrustedNotificationDestination(BaseModel):
+    source: TrustedNotificationDestinationSource = Field(
+        description="Notification surface this trust entry applies to"
+    )
+    scheme: Literal["http", "https"] = Field(
+        description="Normalized destination scheme"
+    )
+    host: str = Field(description="Exact destination host or IP address")
+    port: int = Field(ge=1, le=65535, description="Exact destination port")
+    label: str = Field(default="", description="Optional display label")
+
+    @field_validator("host", "label", mode="before")
+    @classmethod
+    def normalize_strings(cls, value):
+        if value is None:
+            return ""
+        return str(value)
+
+    @field_validator("host")
+    @classmethod
+    def normalize_host(cls, value):
+        normalized = value.strip().lower().rstrip(".")
+        if not normalized:
+            raise ValueError("host is required")
+        return normalized
+
+
+class NotificationDestinationSafetyRequest(BaseModel):
+    source: TrustedNotificationDestinationSource
+    url: str = Field(default="")
+
+
+class NotificationDestinationSafetyResponse(BaseModel):
+    source: str
+    url: str
+    normalized: dict[str, Any] | None = None
+    status: str
+    message: str
+    trustable: bool
+    trusted: bool
 
 
 class AuthStateContract(BaseModel):

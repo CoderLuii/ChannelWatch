@@ -25,6 +25,7 @@ This docs tree is the home for ChannelWatch user, operator, reference, and archi
 - [apprise-providers.md](reference/apprise-providers.md) - Configured Apprise destinations and provider-specific fields.
 - [logs-metrics.md](reference/logs-metrics.md) - Logs, Prometheus metrics, history, and debug bundle surfaces.
 - [health-diagnostics.md](reference/health-diagnostics.md) - Probe endpoints, UI diagnostics, and doctor CLI behavior.
+- [project/PRIVACY.md](project/PRIVACY.md) - Local storage, debug bundles, in-app support reports, and sharing boundaries.
 - [multi-dvr.md](reference/multi-dvr.md) - Detailed multi-DVR configuration, identity, lifecycle, and limits.
 - [disk-monitoring.md](reference/disk-monitoring.md) - Disk polling, thresholds, severity, metrics, and alert behavior.
 - [plugins.md](reference/plugins.md) - Notification provider plugin locations, loader behavior, and safety rules.

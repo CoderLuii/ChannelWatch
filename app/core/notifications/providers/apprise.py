@@ -3,24 +3,19 @@
 import importlib
 import ipaddress
 from typing import Any, Optional, List
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 from ...helpers.url_validator import redact_url, is_safe_url
+from ...helpers.trusted_destinations import (
+    HTTP_STYLE_APPRISE_SCHEMES,
+    normalize_notification_destination,
+    is_trusted_notification_destination,
+)
 from .base import NotificationProvider
 from ...helpers.config import CoreSettings
 
 # APPRISE PROVIDER
-
-
-_HTTP_STYLE_APPRISE_SCHEMES = {
-    "json": "http",
-    "form": "http",
-    "xml": "http",
-    "jsons": "https",
-    "forms": "https",
-    "xmls": "https",
-}
 
 
 class AppriseProvider(NotificationProvider):
@@ -196,33 +191,37 @@ class AppriseProvider(NotificationProvider):
         if dest_key != "custom":
             return True
 
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return False
-
-        http_scheme = _HTTP_STYLE_APPRISE_SCHEMES.get(parsed.scheme.lower())
-        if not http_scheme:
+        normalized = normalize_notification_destination("apprise_custom", url)
+        if normalized is None:
+            try:
+                parsed = urlparse(url)
+            except Exception:
+                return False
+            if parsed.scheme.lower() in HTTP_STYLE_APPRISE_SCHEMES:
+                log(
+                    f"SSRF: dropping Apprise custom destination: {redact_url(url)} (reason: invalid HTTP-style destination)",
+                    LOG_STANDARD,
+                )
+                return False
             return True
 
-        if not parsed.hostname:
+        if is_safe_url(normalized.validation_url):
+            return True
+
+        trusted_destinations = []
+        if self.settings is not None:
+            trusted_destinations = getattr(
+                self.settings, "trusted_notification_destinations", []
+            )
+        if is_trusted_notification_destination(
+            url,
+            "apprise_custom",
+            trusted_destinations,
+        ):
             log(
-                f"SSRF: dropping Apprise custom destination: {redact_url(url)} (reason: missing host)",
+                f"SSRF: allowing trusted local Apprise custom destination: {redact_url(url)}",
                 LOG_STANDARD,
             )
-            return False
-
-        validation_url = urlunparse(
-            (
-                http_scheme,
-                parsed.netloc,
-                parsed.path or "/",
-                parsed.params,
-                parsed.query,
-                parsed.fragment,
-            )
-        )
-        if is_safe_url(validation_url):
             return True
 
         log(

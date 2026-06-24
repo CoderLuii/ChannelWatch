@@ -216,6 +216,7 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
         const normalizedData = {
           ...data,
           webhooks: Array.isArray(data.webhooks) ? data.webhooks : [],
+          trusted_notification_destinations: Array.isArray(data.trusted_notification_destinations) ? data.trusted_notification_destinations : [],
         }
 
         setEnabledProviders({
@@ -265,6 +266,7 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
       const normalizedRefreshedData = {
         ...refreshedData,
         webhooks: Array.isArray(refreshedData.webhooks) ? refreshedData.webhooks : [],
+        trusted_notification_destinations: Array.isArray(refreshedData.trusted_notification_destinations) ? refreshedData.trusted_notification_destinations : [],
       }
 
       reset(normalizedRefreshedData, {

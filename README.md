@@ -61,6 +61,7 @@ flowchart LR
 - Per-DVR status, history, notification routing, and cached version metadata.
 - Notification delivery history, retries, circuit-breaker state, and rate limiting.
 - Health, readiness, startup, metrics, backup, restore, and debug-bundle surfaces.
+- In-app problem reports from Diagnostics, including sanitized report previews, optional screenshots, and debug-bundle validation.
 
 ChannelWatch can run without notification providers while you use it as a dashboard, then send alerts later after you configure Pushover, Apprise, Discord, Slack, Telegram, email, Gotify, Matrix, webhook receivers, or another Apprise-supported destination.
 
@@ -150,6 +151,12 @@ ChannelWatch sends notifications through Apprise and built-in provider plumbing:
 | Webhooks | Signed outbound HTTP payloads for custom receivers and automations. |
 | Plugins | Optional provider plugins loaded from documented plugin locations. |
 
+Private LAN notification receivers stay blocked by default until you approve
+the exact destination in **Settings > Notifications**. This trusted-local flow
+is available for native webhooks and HTTP-style custom Apprise URLs such as
+`json://`, `form://`, and `xml://`. Image fetching and metadata, link-local,
+loopback, reserved, malformed, or unresolved destinations remain blocked.
+
 Useful references:
 
 - [`docs/reference/apprise-providers.md`](docs/reference/apprise-providers.md)
@@ -223,7 +230,9 @@ docker exec -it channelwatch channelwatch doctor diagnose
 docker exec -it channelwatch channelwatch doctor reset-admin-password --username <admin>
 ```
 
-For UI-based diagnostics, open ChannelWatch and use the Diagnostics page. It can test DVR connectivity, API behavior, notification delivery, disk checks, and debug-bundle generation.
+For UI-based diagnostics, open ChannelWatch and use the Diagnostics page. It can test DVR connectivity, API behavior, notification delivery, disk checks, debug-bundle generation, and the in-app **Report a Problem** flow.
+
+The **Report a Problem** option prepares a sanitized support report from inside ChannelWatch. It can include a public issue preview, safe diagnostics, optional contact handles, screenshots, and one ChannelWatch-generated debug bundle ZIP. Private attachments and private contact details are handled separately from the public issue text.
 
 More help:
 
@@ -256,6 +265,7 @@ ChannelWatch/
 
 ## Support
 
+- In the app, open **Diagnostics > Report a Problem** when you need to send a reproducible support report with sanitized diagnostics.
 - [GitHub Discussions](https://github.com/CoderLuii/ChannelWatch/discussions)
 - [GitHub Issues](https://github.com/CoderLuii/ChannelWatch/issues)
 - [Docker Hub](https://hub.docker.com/r/coderluii/channelwatch)

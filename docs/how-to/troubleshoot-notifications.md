@@ -36,6 +36,11 @@ Checks:
 5. For Discord embeds or Apprise notifications with images, check whether the image URL was dropped by the SSRF guard.
    - Private, loopback, link local, reserved, metadata, non-HTTP, and hostname-less image URLs are blocked.
    - When this happens, ChannelWatch should still send the text notification without the image. If text arrives but the image is missing, use a public HTTPS image URL.
+6. For local Mattermost, Gotify, n8n, Home Assistant, or other LAN receivers, use the trusted-local destination flow in **Settings > Notifications**.
+   - Native `http://` and `https://` webhooks can be trusted when they resolve to a private LAN address.
+   - HTTP-style custom Apprise URLs such as `json://`, `jsons://`, `form://`, `forms://`, `xml://`, and `xmls://` can be trusted the same way.
+   - Trust is exact to the normalized scheme, host, and port. Changing the receiver host or port requires approving the new destination.
+   - Metadata, link-local, loopback, reserved, malformed, unresolved, and image URLs remain blocked.
 
 ## Test notification works but real alerts don't
 

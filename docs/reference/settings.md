@@ -161,6 +161,14 @@ Defaults match between `AppSettings` and `CoreSettings` unless noted below. The 
 - `secret` | JSON path: `webhooks[].secret` | Type: string | Default: `""` | Description: Shared secret used for HMAC SHA256 signing. | Valid values: any string. `null` normalizes to `""`. | Env override: none. | Reload behavior: `restart-required`.
 - `enabled` | JSON path: `webhooks[].enabled` | Type: boolean | Default: `false` in schema; new UI entries start as `true`. | Description: Whether this webhook destination is active. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 
+### Trusted local notification destinations
+
+- `trusted_notification_destinations` | JSON path: `trusted_notification_destinations` | Type: array of `TrustedNotificationDestination` objects | Default: `[]` | Description: Exact local notification destinations approved from Settings. Applies only to native webhooks and HTTP-style custom Apprise URLs. | Valid values: array of objects with `source`, `scheme`, `host`, `port`, and optional `label`. | Env override: none. | Reload behavior: `restart-required`.
+- `source` | JSON path: `trusted_notification_destinations[].source` | Type: string | Default: none | Description: Notification surface the trust entry applies to. | Valid values: `webhook` or `apprise_custom`. | Env override: none. | Reload behavior: `restart-required`.
+- `scheme` | JSON path: `trusted_notification_destinations[].scheme` | Type: string | Default: none | Description: Normalized destination scheme. | Valid values: `http` or `https`. | Env override: none. | Reload behavior: `restart-required`.
+- `host` | JSON path: `trusted_notification_destinations[].host` | Type: string | Default: none | Description: Exact host or IP address approved for local notification delivery. | Valid values: private LAN host or IP address approved by the UI. Metadata, link-local, loopback, reserved, malformed, and unresolved destinations are not trustable. | Env override: none. | Reload behavior: `restart-required`.
+- `port` | JSON path: `trusted_notification_destinations[].port` | Type: integer | Default: none | Description: Exact destination port approved for local notification delivery. | Valid values: `1` through `65535`. | Env override: none. | Reload behavior: `restart-required`.
+
 ### Apprise providers
 
 - `apprise_pushover` | JSON path: `apprise_pushover` | Type: string or null | Default: `""` | Description: Pushover Apprise credential string. Sensitive on API reads. | Valid values: provider credential string, empty string, or null. | Env override: `CW_APPRISE_PUSHOVER` at bootstrap. | Reload behavior: `restart-required`.

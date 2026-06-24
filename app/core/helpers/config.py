@@ -115,6 +115,9 @@ class CoreSettings:
     rss_feed_token: Optional[str] = ""
 
     webhooks: list[dict[str, Any]] = field(default_factory=list)
+    trusted_notification_destinations: list[dict[str, Any]] = field(
+        default_factory=list
+    )
 
     # Recording Events Alert Content
     rd_alert_scheduled: bool = True

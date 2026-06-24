@@ -15,6 +15,10 @@ import { t } from "@/lib/i18n"
 import type { AppSettings } from "@/lib/types"
 
 import { DvrHelpers, DvrTabBar } from "./dvr-field-controls"
+import {
+  TrustedDestinationControl,
+  TrustedDestinationList,
+} from "./trusted-destination-control"
 
 type TemplateTitleKey = "cw_template_title" | "vod_template_title" | "rd_template_title" | "ds_template_title"
 type TemplateBodyKey = "cw_template_body" | "vod_template_body" | "rd_template_body" | "ds_template_body"
@@ -273,6 +277,7 @@ export function NotificationsSettingsSection({
               {t("notifications.webhooks.alertDescPre")}<code>X-ChannelWatch-Signature</code>{", "}<code>X-ChannelWatch-Delivery</code>{", and "}<code>X-ChannelWatch-Event</code>{t("notifications.webhooks.alertDescPost")}
             </AlertDescription>
           </Alert>
+          <TrustedDestinationList form={form} />
 
           <div className="space-y-4">
             {webhookEntries.length === 0 ? (
@@ -303,6 +308,7 @@ export function NotificationsSettingsSection({
                       <div className="space-y-2 md:col-span-2">
                         <Label htmlFor={`webhook-url-${index}`}>{t("notifications.webhooks.urlLbl")}</Label>
                         <Input id={`webhook-url-${index}`} type="url" placeholder="http://receiver.local:9000/channelwatch" value={webhook?.url || ""} onChange={(event) => updateWebhookEntry(index, "url", event.target.value)} className="h-8 text-sm" />
+                        <TrustedDestinationControl form={form} source="webhook" url={webhook?.url || ""} compact />
                       </div>
 
                       <div className="space-y-2 md:col-span-2">
@@ -420,6 +426,9 @@ export function NotificationsSettingsSection({
                             </button>
                           )}
                         </div>
+                        {key === "apprise_custom" && (
+                          <TrustedDestinationControl form={form} source="apprise_custom" url={String(value || "")} compact />
+                        )}
                       </div>
                     )}
                   </div>
@@ -629,7 +638,7 @@ export function NotificationsSettingsSection({
                     else setValue("apprise_custom", "", { shouldDirty: true })
                   }} />
                 </div>
-                {enabledProviders.custom && <div className="pl-14 space-y-3"><div className="space-y-2"><Label htmlFor="apprise_custom">{t("provider.custom.urlLbl")}</Label><div className="flex items-center gap-2"><Input id="apprise_custom" type={visibleCredentials["global_apprise_custom"] ? "text" : "password"} placeholder="service://user:pass@host.com/path" className="h-8 text-sm" {...register("apprise_custom")} /><button type="button" className="p-1 text-muted-foreground hover:text-foreground transition-colors" onClick={() => setVisibleCredentials((prev) => ({ ...prev, global_apprise_custom: !prev.global_apprise_custom }))}>{visibleCredentials["global_apprise_custom"] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div><p className="text-xs text-muted-foreground">{t("provider.custom.hint")}</p></div></div>}
+                {enabledProviders.custom && <div className="pl-14 space-y-3"><div className="space-y-2"><Label htmlFor="apprise_custom">{t("provider.custom.urlLbl")}</Label><div className="flex items-center gap-2"><Input id="apprise_custom" type={visibleCredentials["global_apprise_custom"] ? "text" : "password"} placeholder="service://user:pass@host.com/path" className="h-8 text-sm" {...register("apprise_custom")} /><button type="button" className="p-1 text-muted-foreground hover:text-foreground transition-colors" onClick={() => setVisibleCredentials((prev) => ({ ...prev, global_apprise_custom: !prev.global_apprise_custom }))}>{visibleCredentials["global_apprise_custom"] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div><p className="text-xs text-muted-foreground">{t("provider.custom.hint")}</p><TrustedDestinationControl form={form} source="apprise_custom" url={watch("apprise_custom") || ""} compact /></div></div>}
               </div>
             </>
           )}

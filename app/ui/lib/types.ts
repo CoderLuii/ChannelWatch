@@ -15,6 +15,26 @@ export interface WebhookEntry {
   enabled: boolean
 }
 
+export type TrustedNotificationDestinationSource = "apprise_custom" | "webhook"
+
+export interface TrustedNotificationDestination {
+  source: TrustedNotificationDestinationSource
+  scheme: "http" | "https"
+  host: string
+  port: number
+  label?: string
+}
+
+export interface NotificationDestinationSafetyPreview {
+  source: string
+  url: string
+  normalized: TrustedNotificationDestination | null
+  status: string
+  message: string
+  trustable: boolean
+  trusted: boolean
+}
+
 export interface AppSettings {
   // DVR Servers
   dvr_servers: DVRServer[]
@@ -64,6 +84,7 @@ export interface AppSettings {
   rss_feed_enabled: boolean
   rss_feed_token: string | null
   webhooks: WebhookEntry[]
+  trusted_notification_destinations: TrustedNotificationDestination[]
 
   // Recording Events Alert Settings
   rd_alert_scheduled: boolean

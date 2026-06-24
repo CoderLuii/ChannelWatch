@@ -215,6 +215,71 @@ def test_delivery_blocks_unsafe_webhook_urls_before_posting(unsafe_url: str):
     assert unsafe_url not in logged_messages
 
 
+def test_delivery_allows_exact_trusted_private_webhook_destination():
+    settings = type(
+        "Settings",
+        (),
+        {
+            "webhooks": [
+                {
+                    "url": "http://192.168.1.20:9000/channelwatch",
+                    "secret": "super-secret",
+                    "enabled": True,
+                }
+            ],
+            "trusted_notification_destinations": [
+                {
+                    "source": "webhook",
+                    "scheme": "http",
+                    "host": "192.168.1.20",
+                    "port": 9000,
+                }
+            ],
+        },
+    )()
+    manager = WebhookManager(settings)
+    mock_response = MagicMock()
+    mock_response.status_code = 204
+
+    with patch.object(manager, "_post", return_value=mock_response) as mock_post:
+        assert manager.send_notification("Test title", "Test message") is True
+
+    assert mock_post.called
+    assert mock_post.call_args.args[0] == "http://192.168.1.20:9000/channelwatch"
+    assert mock_post.call_args.args[2]["Host"] == "192.168.1.20:9000"
+    assert mock_post.call_args.kwargs["sni_hostname"] is None
+
+
+def test_delivery_rejects_loopback_webhook_even_when_trusted():
+    settings = type(
+        "Settings",
+        (),
+        {
+            "webhooks": [
+                {
+                    "url": "http://127.0.0.1:9000/channelwatch",
+                    "secret": "super-secret",
+                    "enabled": True,
+                }
+            ],
+            "trusted_notification_destinations": [
+                {
+                    "source": "webhook",
+                    "scheme": "http",
+                    "host": "127.0.0.1",
+                    "port": 9000,
+                }
+            ],
+        },
+    )()
+    manager = WebhookManager(settings)
+
+    with patch.object(manager, "_post") as mock_post:
+        assert manager.send_notification("Test title", "Test message") is False
+
+    mock_post.assert_not_called()
+
+
 def test_delivery_logs_redact_secret_url_on_skip_failure_timeout_and_error():
     secret_url = "https://hooks.example.test/services/token-abc?signature=secret"
     settings = type(

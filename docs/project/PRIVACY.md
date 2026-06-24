@@ -83,6 +83,21 @@ Sensitive fields are replaced with `****`, including:
 
 No debug bundle is sent automatically. You must choose to generate and download it.
 
+## In-app support reports
+
+The Diagnostics page includes **Report a Problem** for support cases that need more structure than a normal issue form.
+
+The report preview is designed to be public-safe. It can include:
+
+- problem summary
+- expected behavior
+- public contact handles
+- ChannelWatch version, DVR counts, core status, monitoring status, enabled alert toggles, and configured notification provider names
+
+Private support details are kept out of the public issue text. Screenshots, debug bundle ZIPs, private email addresses, attachment filenames, raw logs, API keys, webhook secrets, notification tokens, DVR API keys, and private config values are not published in the issue body.
+
+Direct in-app submit is operator controlled. If direct submit is not available, ChannelWatch can create a support code or offline package for the hosted upload portal. The hosted portal re-validates the support code and attachments before creating a public issue or sending private troubleshooting material.
+
 ## Backup archive versus debug bundle
 
 These are different tools and they should not be confused.

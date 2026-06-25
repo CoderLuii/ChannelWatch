@@ -8,6 +8,21 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.10] - 2026-06-25
+
+### Changed
+
+- Show v0.9.10 as container image update required because it repairs Docker entrypoint and runtime launcher behavior.
+- Run the Docker entrypoint through `/venv/bin/python` so the stable image launcher can resolve Update Center runtime state with installed dependencies.
+- Pass core launcher arguments such as `--stay-alive` through `runtime_launcher.py` while keeping unsupported UI launcher arguments rejected.
+- Treat blank DVR names as optional by falling back to the DVR host or IP during settings load, settings save, health checks, `/api/v1/dvrs`, and core DVR connections.
+
+### Fixed
+
+- Preserve settings `_version` metadata when defaults are merged so schema migration backups do not repeat after settings reloads.
+- Accept UTF-8-with-BOM `settings.json` files so Windows-edited configs do not block startup.
+- Keep v0.9.10 release notes focused on the repair instead of repeating old known-limit sections.
+
 ## [0.9.9] - 2026-06-24
 
 ### Added
@@ -271,7 +286,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.9...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.10...HEAD
+[0.9.10]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.6...v0.9.7

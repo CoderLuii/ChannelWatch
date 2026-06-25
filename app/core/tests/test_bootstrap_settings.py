@@ -14,6 +14,7 @@ _ENTRYPOINT = _APP_DIR / "core" / "docker-entrypoint.py"
 _HELM_DEPLOYMENT = (
     _REPO_DIR / "deploy" / "helm" / "channelwatch" / "templates" / "deployment.yaml"
 )
+_DOCKERFILE = _REPO_DIR / "deploy" / "docker" / "Dockerfile"
 
 
 def _load_entrypoint():
@@ -165,6 +166,14 @@ def test_helm_api_key_bootstrap_is_handled_by_entrypoint_not_partial_init_contai
     assert "initContainers:" not in deployment
     assert '"CW_API_KEY": ("api_key", str)' in entrypoint
     assert "secretRef:" in deployment
+
+
+def test_docker_entrypoint_runs_with_venv_python():
+    content = _DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        'ENTRYPOINT ["/venv/bin/python", "/app/core/docker-entrypoint.py"]' in content
+    )
 
 
 def test_helm_defaults_use_non_root_read_only_runtime_mounts():

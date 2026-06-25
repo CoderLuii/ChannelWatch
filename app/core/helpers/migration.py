@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Tuple
 from .atomic_io import atomic_copy_file, atomic_write_json
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
 from ..notifications.template_engine import TEMPLATE_SETTINGS_DEFAULTS
-from .dvr_id import canonical_dvr_id
+from .dvr_id import canonical_dvr_id, dvr_display_name
 
 CURRENT_SCHEMA_VERSION = 7
 JOURNAL_FILE_NAME = "migration.journal"
@@ -74,6 +74,8 @@ def defaults_merge(
     for key, value in saved_settings.items():
         if key in defaults:
             merged[key] = value
+    if "_version" in saved_settings:
+        merged["_version"] = saved_settings["_version"]
     return merged
 
 
@@ -150,6 +152,27 @@ def normalize_disk_alert_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     elif not isinstance(test_route_override, str):
         normalized["ds_test_route_override"] = str(test_route_override)
 
+    return normalized
+
+
+def normalize_dvr_server_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(settings)
+    servers = normalized.get("dvr_servers")
+    if not isinstance(servers, list):
+        return normalized
+
+    normalized_servers: List[Any] = []
+    for server in servers:
+        if not isinstance(server, dict):
+            normalized_servers.append(server)
+            continue
+        updated = dict(server)
+        host = str(updated.get("host", "") or "").strip()
+        if host:
+            updated["host"] = host
+            updated["name"] = dvr_display_name(updated.get("name"), host)
+        normalized_servers.append(updated)
+    normalized["dvr_servers"] = normalized_servers
     return normalized
 
 
@@ -552,11 +575,13 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
             f"Consider upgrading ChannelWatch.",
             level=LOG_STANDARD,
         )
-        return settings
+        return normalize_dvr_server_settings(settings)
 
     if version < CURRENT_SCHEMA_VERSION:
         if not settings and not settings_file.is_file():
-            return run_migrations(settings, version, CURRENT_SCHEMA_VERSION)
+            return normalize_dvr_server_settings(
+                run_migrations(settings, version, CURRENT_SCHEMA_VERSION)
+            )
 
         old_dvr_servers = list(settings.get("dvr_servers") or [])
         needs_v7_session_archival = version < 7 <= CURRENT_SCHEMA_VERSION
@@ -670,4 +695,4 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
                 backup_path=backup_path,
             )
 
-    return settings
+    return normalize_dvr_server_settings(settings)

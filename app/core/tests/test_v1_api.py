@@ -121,6 +121,17 @@ class TestListDvrs:
         assert dvr["port"] == 8089
         assert "enabled" in dvr
 
+    def test_blank_name_falls_back_to_host(self, client, settings_file):
+        data = json.loads(settings_file.read_text())
+        data["dvr_servers"][0]["name"] = ""
+        settings_file.write_text(json.dumps(data))
+
+        resp = client.get("/api/v1/dvrs")
+
+        assert resp.status_code == 200
+        dvr = next(d for d in resp.json() if d["id"] == "dvr_aaa11111")
+        assert dvr["name"] == "192.168.1.10"
+
     def test_deleted_dvrs_excluded(self, settings_file, tmp_path):
         data = json.loads(settings_file.read_text())
         data["dvr_servers"][1]["deleted_at"] = "2026-01-01T00:00:00Z"

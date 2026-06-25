@@ -48,6 +48,7 @@ from .support_report import (
 from core.helpers.config import CONFIG_DIR as _CORE_CONFIG_DIR, ConfigLoadError
 from core.helpers.atomic_io import atomic_write_json
 from core.helpers.dvr_connection import build_dvr_base_url
+from core.helpers.dvr_id import dvr_display_name
 from core.helpers.trusted_destinations import preview_notification_destination_safety
 from core.helpers.soft_delete_manager import (
     hard_delete_dvr as _hard_delete_dvr,
@@ -1261,6 +1262,7 @@ def _validate_persisted_dvr_servers(settings: AppSettings) -> None:
             )
         server["host"] = host
         server["port"] = port
+        server["name"] = dvr_display_name(server.get("name"), host)
 
 
 @app.post("/api/settings", dependencies=[require_role("operator")])
@@ -2627,7 +2629,11 @@ def _get_dvr_servers_from_settings(settings: Any):
             host = s.get("host", "")
             port = s.get("port", 8089)
             result.append(
-                (s.get("id", ""), s.get("name", host), build_dvr_base_url(host, port))
+                (
+                    s.get("id", ""),
+                    dvr_display_name(s.get("name"), host),
+                    build_dvr_base_url(host, port),
+                )
             )
     return result
 
@@ -2650,7 +2656,9 @@ def _get_enabled_dvr_records() -> list[dict[str, Any]]:
             result.append(
                 {
                     "id": server.get("id", ""),
-                    "name": server.get("name", server.get("host", "")),
+                    "name": dvr_display_name(
+                        server.get("name"), server.get("host", "")
+                    ),
                     "host": server.get("host", ""),
                     "port": int(server.get("port", 8089) or 8089),
                 }
@@ -5040,7 +5048,7 @@ async def list_dvrs_v1():
             result.append(
                 DvrListItem(
                     id=s.get("id", ""),
-                    name=s.get("name", s.get("host", "")),
+                    name=dvr_display_name(s.get("name"), s.get("host", "")),
                     host=s.get("host", ""),
                     port=s.get("port", 8089),
                     enabled=s.get("enabled", True),

@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `0.9.9` for the v0.9.9 release
+- `0.9.10` for the v0.9.10 release
 
 ## Quick Start
 
@@ -37,7 +37,9 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Install v0.9.9 normally through Docker, Unraid, Compose, or Helm. After that, compatible app-only releases can be checked, verified, backed up, applied, and rolled back from **Settings > Updates**.
+Use v0.9.10 or newer for the repaired v0.9 image line. If you pulled v0.9.9, update to v0.9.10 because it repairs the container startup path and settings migration durability.
+
+After installing a version with Update Center support through Docker, Unraid, Compose, or Helm, compatible app-only releases can be checked, verified, backed up, applied, and rolled back from **Settings > Updates**.
 
 Releases that change the container runtime still require a normal image update. ChannelWatch will show **container image update required** when that is the safe path.
 

@@ -140,3 +140,30 @@ def test_runtime_launcher_records_failed_activation_and_restores_previous_bundle
     assert job["rollback_applied"] is True
     assert job["rolled_back_from"] == "0.9.10"
     assert job["rolled_back_to"] == "0.9.9"
+
+
+def test_core_launcher_passes_option_like_args_to_core(tmp_path: Path, monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "run_core",
+        lambda args: captured.setdefault("app_args", list(args.app_args)),
+    )
+
+    assert runtime_launcher.main(["core", "--stay-alive"]) == 0
+    assert captured["app_args"] == ["--stay-alive"]
+
+
+def test_ui_launcher_rejects_unknown_args(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
+
+    try:
+        runtime_launcher.main(["ui", "--bogus"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("UI launcher accepted an unknown argument")

@@ -78,10 +78,25 @@ jobs:
             exit 1
           fi
 
+          changelog_section="$(
+            awk -v version="${VERSION}" '
+              BEGIN { heading = "^## \\[" version "\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+              $0 ~ heading { in_section = 1; print; next }
+              in_section && /^## \[/ { exit }
+              in_section { print }
+            ' docs/releases/CHANGELOG.md
+          )"
+          image_required_args=()
+          if grep -Eiq "container image update required|image-required" <<< "${changelog_section}"; then
+            image_required_args+=(--image-required)
+            echo "Release ${TAG} will be marked as container image update required."
+          fi
+
           python scripts/release/build-update-bundle.py \
             --version "${VERSION}" \
             --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
-            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}"
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
+            "${image_required_args[@]}"
 
       - name: Render and validate release body
         env:

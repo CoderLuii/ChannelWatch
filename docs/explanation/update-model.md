@@ -1,6 +1,6 @@
 # Update model
 
-ChannelWatch v0.9.9 introduces a hybrid update model:
+ChannelWatch v0.9.10 includes the repaired hybrid update model:
 
 - use the normal container update path for image and runtime changes;
 - use the in-app Update Center for compatible app-only releases.

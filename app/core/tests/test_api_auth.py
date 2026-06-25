@@ -339,6 +339,22 @@ class TestAuthenticatedAccess:
         assert saved["ics_feed_token"] == "keep-ics"
         assert saved["rss_feed_token"] == "keep-rss"
 
+    def test_post_settings_normalizes_blank_dvr_name_to_host(
+        self, client, test_settings_file
+    ):
+        payload = json.loads(test_settings_file.read_text())
+        payload["dvr_servers"][0]["name"] = "  "
+
+        resp = client.post(
+            "/api/settings",
+            json=payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert resp.status_code == 200
+        saved = json.loads(test_settings_file.read_text())
+        assert saved["dvr_servers"][0]["name"] == "192.168.1.100"
+
 
 class TestSensitiveFieldMasking:
     def test_get_settings_masks_sensitive_fields(self, client):
@@ -360,6 +376,15 @@ class TestSensitiveFieldMasking:
         data = resp.json()
         assert data["dvr_servers"][0]["host"] == "192.168.1.100"
         assert data["tz"] == "America/New_York"
+
+    def test_get_settings_accepts_utf8_bom_file(self, client, test_settings_file):
+        original = test_settings_file.read_text(encoding="utf-8")
+        test_settings_file.write_text("\ufeff" + original, encoding="utf-8")
+
+        resp = client.get("/api/settings", headers={"X-API-Key": "test-api-key-12345"})
+
+        assert resp.status_code == 200
+        assert resp.json()["tz"] == "America/New_York"
 
     def test_empty_sensitive_fields_not_masked(self, client, test_settings_file):
         settings = json.loads(test_settings_file.read_text())

@@ -27,6 +27,15 @@ def canonical_dvr_id(host: str, port: int) -> str:
     return "dvr_" + digest[:8]
 
 
+def dvr_display_name(name: object, host: object, fallback: str = "Channels DVR") -> str:
+    """Return a stable display name, falling back to host when the name is blank."""
+    display = str(name or "").strip()
+    if display:
+        return display
+    host_text = str(host or "").strip()
+    return host_text or fallback
+
+
 if __name__ == "__main__":
     import json
     import sys

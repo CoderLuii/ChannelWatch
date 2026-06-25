@@ -37,27 +37,47 @@ def main() -> int:
     )
     version_tag = metadata["versionTag"]
     highlights = metadata.get("changelogHighlights") or []
-    known_limits = metadata.get("knownLimits") or []
-    body = [
-        f"# ChannelWatch {version_tag} - Update Center",
-        "",
-        "This release adds the new in-app Update Center and keeps the normal container update path clear when a release needs a new image.",
-        "",
-        "## What's New",
-        "",
-    ]
+    if version_tag == "v0.9.10":
+        body = [
+            f"# ChannelWatch {version_tag} - Runtime and Config Repair",
+            "",
+            "This is a repair release for v0.9.9. If you pulled v0.9.9, update to v0.9.10.",
+            "",
+            "It fixes the runtime launcher/startup path, preserves settings schema metadata so migration backups do not repeat, treats blank DVR names as optional by falling back to the DVR host or IP, and accepts Windows-edited UTF-8 settings files.",
+            "",
+            "Because this repair touches Docker entrypoint and runtime behavior, it requires a normal container image update.",
+            "",
+            "## What's Fixed",
+            "",
+        ]
+    else:
+        body = [
+            f"# ChannelWatch {version_tag} - Update Center",
+            "",
+            "ChannelWatch adds the new in-app **Update Center** in Settings.",
+            "",
+            "Compatible app-only updates can now be checked, verified, backed up, applied, restarted, and rolled back from the web UI. If a future release needs a new container image because the runtime changed, ChannelWatch will say **container image update required** instead of trying to force an unsafe in-app update.",
+            "",
+            "## What's New",
+            "",
+        ]
     body.extend(f"- {item}" for item in highlights)
-    if known_limits:
-        body.extend(["", "## Known Limits", ""])
-        body.extend(f"- {item}" for item in known_limits)
     body.extend(
         [
             "",
+            "## Docs",
+            "",
+            "[ChannelWatch Official Docs Site](https://channelwatch.coderluii.dev/)",
+            "",
             "## Images",
             "",
-            f"Docker Hub: `coderluii/channelwatch:{metadata['dockerTag']}` and `coderluii/channelwatch:latest`",
+            "Docker Hub:",
+            f"`coderluii/channelwatch:{metadata['dockerTag']}`",
+            "`coderluii/channelwatch:latest`",
             "",
-            f"GHCR: `ghcr.io/coderluii/channelwatch:{metadata['dockerTag']}` and `ghcr.io/coderluii/channelwatch:latest`",
+            "GHCR:",
+            f"`ghcr.io/coderluii/channelwatch:{metadata['dockerTag']}`",
+            "`ghcr.io/coderluii/channelwatch:latest`",
         ]
     )
     text = "\n".join(body) + "\n"

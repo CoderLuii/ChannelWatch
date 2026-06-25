@@ -106,7 +106,7 @@ def load_settings() -> AppSettings:
 
     if CONFIG_FILE.is_file():
         try:
-            loaded_data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            loaded_data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
             if isinstance(loaded_data, dict):
                 settings_data = loaded_data
             else:
@@ -176,7 +176,9 @@ def save_settings(settings: AppSettings):
         existing = {}
         if CONFIG_FILE.is_file():
             try:
-                loaded_existing = json.loads(CONFIG_FILE.read_text())
+                loaded_existing = json.loads(
+                    CONFIG_FILE.read_text(encoding="utf-8-sig")
+                )
                 if isinstance(loaded_existing, dict):
                     existing = loaded_existing
             except (json.JSONDecodeError, OSError):

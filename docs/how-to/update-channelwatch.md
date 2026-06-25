@@ -1,8 +1,10 @@
 # Update ChannelWatch
 
-Install ChannelWatch v0.9.9 normally once through Docker, Unraid, Compose, or Helm. After that, use **Settings > Updates** for compatible app-only releases.
+Install ChannelWatch v0.9.10 or newer normally through Docker, Unraid, Compose, or Helm. After that, use **Settings > Updates** for compatible app-only releases.
 
 The Update Center is meant to make routine updates feel like a normal app update while keeping container-runtime changes explicit and safe.
+
+If you pulled v0.9.9, update the container image to v0.9.10 first. That repair release touches Docker entrypoint and runtime behavior, so ChannelWatch marks it as **container image update required** instead of applying it as an in-app bundle.
 
 ## Check for updates
 

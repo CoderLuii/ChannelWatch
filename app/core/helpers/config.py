@@ -9,6 +9,7 @@ from threading import Lock
 # Import custom logger
 from .logging import log, LOG_VERBOSE
 from .atomic_io import atomic_write_json
+from .dvr_id import dvr_display_name
 from ..notifications.template_engine import TEMPLATE_SETTINGS_DEFAULTS
 
 # PATHS
@@ -204,7 +205,7 @@ class CoreSettings:
         """Load settings from JSON file or return empty dict if file is missing."""
         if CONFIG_FILE.is_file():
             try:
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
             except json.JSONDecodeError as e:
                 raise ConfigLoadError(
                     _build_recovery_message(CONFIG_FILE, f"invalid JSON ({e})")
@@ -346,7 +347,11 @@ class CoreSettings:
                 connections.append(
                     DVRConnection(
                         id=server.get("id", ""),
-                        name=server.get("name", server.get("host", "Unknown")),
+                        name=dvr_display_name(
+                            server.get("name"),
+                            server.get("host"),
+                            fallback="Unknown",
+                        ),
                         host=server.get("host", ""),
                         port=server.get("port", 8089),
                         enabled=True,

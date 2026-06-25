@@ -170,7 +170,7 @@ const settings = {
 }
 
 const systemInfo = {
-  channelwatch_version: "0.9.9",
+  channelwatch_version: "0.9.10",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",
@@ -369,18 +369,18 @@ const reportConfig = {
 }
 
 const updateStatus = {
-  current_version: "0.9.9",
+  current_version: "0.9.10",
   runtime_abi: "channelwatch-runtime-v1",
   settings_schema_version: 7,
   active_bundle: null,
   latest: {
-    version: "0.9.9",
-    version_tag: "v0.9.9",
+    version: "0.9.10",
+    version_tag: "v0.9.10",
     image_required: false,
     runtime_abi: "channelwatch-runtime-v1",
     settings_schema_version: 7,
-    release_url: "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.9",
-    bundle_url: "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.9/channelwatch-app-v0.9.9.zip",
+    release_url: "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.10",
+    bundle_url: "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.10/channelwatch-app-v0.9.10.zip",
     highlights: [
       "Compatible app updates can be checked and applied from Settings > Updates.",
       "Pre-update backup, signed verification, restart activation, and rollback support are built in.",
@@ -393,7 +393,7 @@ const updateStatus = {
     job_id: "demo-update-check",
     operation: "check",
     status: "current",
-    version: "0.9.9",
+    version: "0.9.10",
     message: "ChannelWatch is up to date.",
     updated_at: "2026-06-24T00:00:00Z",
   },
@@ -442,7 +442,7 @@ export async function installApiMocks(page: Page) {
         job_id: "demo-apply",
         operation: "apply",
         status: "restarting",
-        version: "0.9.9",
+        version: "0.9.10",
         message: "Update installed. Restarting ChannelWatch to activate it.",
         restart_required: true,
       })
@@ -452,7 +452,7 @@ export async function installApiMocks(page: Page) {
         job_id: "demo-rollback",
         operation: "rollback",
         status: "restarting",
-        version: "0.9.9",
+        version: "0.9.10",
         message: "Rollback activated. Restarting ChannelWatch.",
         restart_required: true,
       })
@@ -504,7 +504,7 @@ export async function installApiMocks(page: Page) {
         `## Summary\n\n${payload.summary || "Untitled report"}`,
         `## Expected behavior\n\n${payload.expected || "Not provided."}`,
         "## Reporter\n\n- GetChannels community: [@Matthew_Crommert](https://community.getchannels.com/u/Matthew_Crommert)",
-        "## Diagnostics\n\n| Field | Value |\n| --- | --- |\n| ChannelWatch version | 0.9.9 |\n| DVRs configured | 1 |\n| DVRs connected | 1 |\n| Core status | Running |\n| Monitoring | healthy: 1 |\n| Notification providers | Pushover |\n| Enabled feature toggles | Channel watching, Disk space, Recording events |",
+        "## Diagnostics\n\n| Field | Value |\n| --- | --- |\n| ChannelWatch version | 0.9.10 |\n| DVRs configured | 1 |\n| DVRs connected | 1 |\n| Core status | Running |\n| Monitoring | healthy: 1 |\n| Notification providers | Pushover |\n| Enabled feature toggles | Channel watching, Disk space, Recording events |",
       ].join("\n\n")
       return json(route, {
         mode: "dry-run",

@@ -111,6 +111,11 @@ def main() -> int:
     parser.add_argument("--key-id", default=DEFAULT_KEY_ID)
     parser.add_argument("--bundle-url", required=True)
     parser.add_argument("--release-url", required=True)
+    parser.add_argument(
+        "--image-required",
+        action="store_true",
+        help="Mark the release as requiring a normal container image update.",
+    )
     parser.add_argument("--signing-key-env", default="CHANNELWATCH_UPDATE_SIGNING_KEY")
     args = parser.parse_args()
 
@@ -158,23 +163,31 @@ def main() -> int:
 
     digest = sha256_bytes(bundle_path)
     bundle_signature = base64.b64encode(private_key.sign(digest)).decode("ascii")
+    if args.image_required:
+        highlights = [
+            "This release requires a normal container image update.",
+            "It repairs runtime startup, settings migration metadata, Windows-edited settings files, and blank DVR names.",
+        ]
+    else:
+        highlights = [
+            "Compatible app updates can be checked and applied from Settings -> Updates.",
+            "Pre-update backup, signed bundle verification, restart activation, and rollback support are built in.",
+        ]
+
     payload = {
         "version": version,
         "version_tag": f"v{version}",
         "channel": "stable",
         "runtime_abi": RUNTIME_ABI,
         "settings_schema_version": SETTINGS_SCHEMA_VERSION,
-        "image_required": False,
+        "image_required": bool(args.image_required),
         "release_url": args.release_url,
         "bundle_url": args.bundle_url,
         "bundle_sha256": digest.hex(),
         "bundle_signature": bundle_signature,
         "key_id": args.key_id,
         "published_at": created_at,
-        "highlights": [
-            "Compatible app updates can be checked and applied from Settings -> Updates.",
-            "Pre-update backup, signed bundle verification, restart activation, and rollback support are built in.",
-        ],
+        "highlights": highlights,
     }
     manifest = {
         "schema": 1,

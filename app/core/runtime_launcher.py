@@ -154,7 +154,11 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--port", type=int, default=8501)
     ui.add_argument("--log-level", default="warning")
 
-    args = parser.parse_args(argv)
+    args, unknown_args = parser.parse_known_args(argv)
+    if args.mode == "core":
+        args.app_args.extend(unknown_args)
+    elif unknown_args:
+        parser.error(f"unrecognized arguments: {' '.join(unknown_args)}")
     app_dir = selected_app_dir()
     prepare_import_path(app_dir)
     log(f"Launching {args.mode} from {app_dir}")

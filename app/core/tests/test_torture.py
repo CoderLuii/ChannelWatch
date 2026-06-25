@@ -11,6 +11,7 @@ import pytest
 from core.helpers.dvr_id import canonical_dvr_id
 from core.helpers.migration import (
     CURRENT_SCHEMA_VERSION,
+    defaults_merge,
     migrate_settings,
     run_migrations,
 )
@@ -70,6 +71,111 @@ class TestMigrationIdempotency:
             result = migrate_settings(tmp_path, settings)
         assert result.get("_version") == CURRENT_SCHEMA_VERSION
         assert isinstance(result.get("dvr_servers"), list)
+
+    def test_defaults_merge_preserves_schema_version_metadata(self):
+        merged = defaults_merge(
+            {"_version": CURRENT_SCHEMA_VERSION, "tz": "UTC"},
+            {"dvr_servers": [], "tz": "America/New_York"},
+        )
+
+        assert merged["_version"] == CURRENT_SCHEMA_VERSION
+        assert merged["tz"] == "UTC"
+
+    def test_migrate_settings_normalizes_blank_dvr_name(self, tmp_path):
+        settings = {
+            "_version": CURRENT_SCHEMA_VERSION,
+            "dvr_servers": [
+                {
+                    "id": "dvr_blank",
+                    "name": "  ",
+                    "host": "10.10.25.75",
+                    "port": 8089,
+                    "enabled": True,
+                }
+            ],
+        }
+
+        result = migrate_settings(tmp_path, settings)
+
+        assert result["_version"] == CURRENT_SCHEMA_VERSION
+        assert result["dvr_servers"][0]["name"] == "10.10.25.75"
+
+    def test_core_settings_persists_version_and_repairs_blank_dvr_name(self, tmp_path):
+        from core.helpers import config as config_module
+        from core.helpers.config import CoreSettings
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "_version": CURRENT_SCHEMA_VERSION,
+                    "dvr_servers": [
+                        {
+                            "id": "dvr_blank",
+                            "name": "",
+                            "host": "10.10.25.75",
+                            "port": 8089,
+                            "enabled": True,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        CoreSettings._instance = None
+        try:
+            with (
+                patch.object(config_module, "CONFIG_FILE", settings_file),
+                patch.object(config_module, "CONFIG_DIR", tmp_path),
+                patch.dict(
+                    "os.environ",
+                    {"CHANNELS_DVR_HOST": "", "CHANNELS_DVR_SERVERS": ""},
+                    clear=False,
+                ),
+            ):
+                settings_obj = CoreSettings.get()
+                assert settings_obj.dvr_servers[0]["name"] == "10.10.25.75"
+        finally:
+            CoreSettings._instance = None
+
+        saved = json.loads(settings_file.read_text(encoding="utf-8"))
+        assert saved["_version"] == CURRENT_SCHEMA_VERSION
+        assert saved["dvr_servers"][0]["name"] == "10.10.25.75"
+
+    def test_core_settings_accepts_utf8_bom_settings_json(self, tmp_path):
+        from core.helpers import config as config_module
+        from core.helpers.config import CoreSettings
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(
+            "\ufeff"
+            + json.dumps(
+                {
+                    "_version": CURRENT_SCHEMA_VERSION,
+                    "dvr_servers": [],
+                    "tz": "UTC",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        CoreSettings._instance = None
+        try:
+            with (
+                patch.object(config_module, "CONFIG_FILE", settings_file),
+                patch.object(config_module, "CONFIG_DIR", tmp_path),
+                patch.dict(
+                    "os.environ",
+                    {"CHANNELS_DVR_HOST": "", "CHANNELS_DVR_SERVERS": ""},
+                    clear=False,
+                ),
+            ):
+                settings_obj = CoreSettings.get()
+        finally:
+            CoreSettings._instance = None
+
+        assert settings_obj.tz == "UTC"
 
 
 class TestSettingsTempFileHandling:

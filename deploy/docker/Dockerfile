@@ -32,7 +32,7 @@ FROM cgr.dev/chainguard/python:latest
 
 USER root
 
-ARG VERSION=0.9.9
+ARG VERSION=0.9.10
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1
@@ -78,5 +78,5 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/healthz/live', timeout=3).read()"]
 
-ENTRYPOINT ["/usr/bin/python", "/app/core/docker-entrypoint.py"]
+ENTRYPOINT ["/venv/bin/python", "/app/core/docker-entrypoint.py"]
 CMD ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"]

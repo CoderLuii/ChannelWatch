@@ -204,7 +204,7 @@ def atomic_write_json(path: Path, payload: object, *, indent: int | None = 2) ->
 
 def load_settings() -> tuple[dict, bool]:
     try:
-        loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))
         if isinstance(loaded, dict):
             return loaded, True
         warning(f"{SETTINGS_FILE} is not a JSON object; using defaults.")

@@ -52,7 +52,7 @@ def _read_settings_schema_version(config_dir: Path) -> int:
     settings_file = config_dir / "settings.json"
     if settings_file.exists():
         try:
-            data = json.loads(settings_file.read_text(encoding="utf-8"))
+            data = json.loads(settings_file.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict):
                 v = data.get("_version")
                 if isinstance(v, int):

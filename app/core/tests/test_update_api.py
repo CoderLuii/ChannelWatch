@@ -105,3 +105,21 @@ def test_update_apply_image_required_maps_to_structured_error(tmp_path: Path):
 
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "ERR_UPDATE_IMAGE_REQUIRED"
+
+
+def test_missing_update_job_uses_structured_error(tmp_path: Path):
+    import ui.backend.main as ui_main
+
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(ui_main, "_build_update_manager", return_value=FakeUpdateManager()),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        resp = client.get("/api/v1/update/jobs/missing-job")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "ERR_UPDATE_JOB_NOT_FOUND"

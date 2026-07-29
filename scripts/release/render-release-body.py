@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+from datetime import datetime
 from pathlib import Path
 
 
@@ -29,11 +30,13 @@ def main() -> int:
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
+    requested_version = args.version.strip().lstrip("v")
+    requested_tag = f"v{requested_version}"
     exporter = load_exporter()
     metadata = exporter.collect_metadata(
-        f"v{args.version.strip().lstrip('v')}",
+        requested_tag,
         args.release_url,
-        None,
+        requested_tag if requested_tag == "v0.9.10" else None,
     )
     version_tag = metadata["versionTag"]
     highlights = metadata.get("changelogHighlights") or []
@@ -51,25 +54,29 @@ def main() -> int:
             "",
         ]
     else:
-        body = [
-            f"# ChannelWatch {version_tag} - Update Center",
-            "",
-            "ChannelWatch adds the new in-app **Update Center** in Settings.",
-            "",
-            "Compatible app-only updates can now be checked, verified, backed up, applied, restarted, and rolled back from the web UI. If a future release needs a new container image because the runtime changed, ChannelWatch will say **container image update required** instead of trying to force an unsafe in-app update.",
-            "",
-            "## What's New",
-            "",
-        ]
-    body.extend(f"- {item}" for item in highlights)
+        release_date = datetime.strptime(
+            str(metadata["releaseDate"]),
+            "%Y-%m-%d",
+        ).strftime("%m/%d/%Y")
+        body = [f"## {release_date}"]
+        sections = metadata.get("changelogSections") or {"Fixed": highlights}
+        for heading in ("Added", "Changed", "Fixed", "Security"):
+            items = sections.get(heading) or []
+            if not items:
+                continue
+            body.extend(["", f"### {heading}", ""])
+            body.extend(f"- {item}" for item in items)
+    if version_tag == "v0.9.10":
+        body.extend(f"- {item}" for item in highlights)
+    heading_level = "##" if version_tag == "v0.9.10" else "###"
     body.extend(
         [
             "",
-            "## Docs",
+            f"{heading_level} Docs",
             "",
             "[ChannelWatch Official Docs Site](https://channelwatch.coderluii.dev/)",
             "",
-            "## Images",
+            f"{heading_level} Images",
             "",
             "Docker Hub:",
             f"`coderluii/channelwatch:{metadata['dockerTag']}`",

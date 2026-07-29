@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from unittest.mock import patch
 
+import pytest
+
 from core.helpers.initialize import initialize_event_monitor  # noqa: F401 — pre-initializes core.helpers to break circular import chain
 from core.engine.event_monitor import EventMonitor
 
@@ -39,7 +41,9 @@ class TestOfflineDvrBehavior:
             patch.object(
                 monitor, "_monitor_events", side_effect=ConnectionError("DVR-A offline")
             ),
-            patch("core.engine.event_monitor.time.sleep", side_effect=capture_sleep),
+            patch.object(
+                monitor, "_sleep_interruptibly", side_effect=capture_sleep
+            ),
         ):
             monitor._monitor_events_loop()
 
@@ -68,8 +72,9 @@ class TestOfflineDvrBehavior:
                 "_monitor_events",
                 side_effect=ConnectionError("DVR-A offline"),
             ),
-            patch(
-                "core.engine.event_monitor.time.sleep",
+            patch.object(
+                monitor_a,
+                "_sleep_interruptibly",
                 side_effect=lambda _: setattr(monitor_a, "running", False),
             ),
         ):
@@ -130,8 +135,9 @@ class TestOfflineDvrBehavior:
             patch.object(
                 monitor, "_monitor_events", side_effect=ConnectionError("DVR-A offline")
             ),
-            patch(
-                "core.engine.event_monitor.time.sleep",
+            patch.object(
+                monitor,
+                "_sleep_interruptibly",
                 side_effect=lambda _: setattr(monitor, "running", False),
             ),
         ):
@@ -205,7 +211,8 @@ class TestDvrRetryAfterBackoff:
 
         async def run():
             with patch("core.engine.event_monitor.httpx.AsyncClient", FakeAsyncClient):
-                await monitor._async_monitor_events()
+                with pytest.raises(ConnectionError, match="HTTP 429"):
+                    await monitor._async_monitor_events()
 
         asyncio.run(run())
 
@@ -218,6 +225,7 @@ class TestDvrRetryAfterBackoff:
 
         def fake_monitor_events() -> None:
             monitor._record_retry_after_backoff("7")
+            raise ConnectionError("rate limited")
 
         def capture_sleep(delay: float) -> None:
             sleep_calls.append(delay)
@@ -225,11 +233,13 @@ class TestDvrRetryAfterBackoff:
 
         with (
             patch.object(monitor, "_monitor_events", side_effect=fake_monitor_events),
-            patch("core.engine.event_monitor.time.sleep", side_effect=capture_sleep),
+            patch.object(
+                monitor, "_sleep_interruptibly", side_effect=capture_sleep
+            ),
         ):
             monitor._monitor_events_loop()
 
-        assert sleep_calls == [1.0]
+        assert sleep_calls == [7.0]
 
     def test_retry_after_seconds_are_clamped_to_safe_maximum(self):
         assert EventMonitor._parse_retry_after("9999") == 60.0
@@ -271,8 +281,223 @@ class TestDvrRetryAfterBackoff:
 
         with (
             patch.object(monitor, "_monitor_events", side_effect=fake_monitor_events),
-            patch("core.engine.event_monitor.time.sleep", side_effect=capture_sleep),
+            patch.object(
+                monitor, "_sleep_interruptibly", side_effect=capture_sleep
+            ),
         ):
             monitor._monitor_events_loop()
 
         assert sleep_calls == [1]
+
+    def test_normal_reconnect_delay_uses_interruptible_sleep(self):
+        monitor = EventMonitor(host="127.0.0.1")
+        monitor.running = True
+
+        with (
+            patch.object(
+                monitor, "_monitor_events", side_effect=ConnectionError("offline")
+            ),
+            patch.object(
+                monitor,
+                "_sleep_interruptibly",
+                side_effect=lambda _: setattr(monitor, "running", False),
+            ) as interruptible_sleep,
+            patch(
+                "core.engine.event_monitor.time.sleep",
+                side_effect=lambda _: setattr(monitor, "running", False),
+            ),
+        ):
+            monitor._monitor_events_loop()
+
+        interruptible_sleep.assert_called_once_with(1)
+
+    def test_healthy_attempt_resets_exponential_backoff(self):
+        monitor = EventMonitor(host="127.0.0.1")
+        monitor.running = True
+        sleep_calls: list[float] = []
+        attempts = {"count": 0}
+
+        def fake_monitor_events() -> None:
+            attempts["count"] += 1
+            if attempts["count"] == 2:
+                monitor._attempt_healthy = True
+            raise ConnectionError("connection ended")
+
+        def capture_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+            if len(sleep_calls) == 2:
+                monitor.running = False
+
+        with (
+            patch.object(monitor, "_monitor_events", side_effect=fake_monitor_events),
+            patch.object(
+                monitor, "_sleep_interruptibly", side_effect=capture_sleep
+            ),
+            patch(
+                "core.engine.event_monitor.time.sleep", side_effect=capture_sleep
+            ),
+        ):
+            monitor._monitor_events_loop()
+
+        assert sleep_calls == [1, 1]
+
+
+class TestDvrStreamFailures:
+    @staticmethod
+    def _async_client_for_status(status_code: int):
+        class FakeResponse:
+            headers = {}
+
+            def __init__(self):
+                self.status_code = status_code
+
+            async def aiter_lines(self):
+                if False:
+                    yield ""
+
+        class FakeStream:
+            async def __aenter__(self):
+                return FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, *args, **kwargs):
+                return FakeStream()
+
+        return FakeAsyncClient
+
+    @staticmethod
+    def _alert_manager():
+        class DummyAlertManager:
+            def __init__(self):
+                self.alert_instances = {}
+                self.load_count = 0
+
+            async def load_all_state(self):
+                self.load_count += 1
+
+            def create_background_tasks(self):
+                return []
+
+            async def save_all_state(self):
+                return None
+
+        return DummyAlertManager()
+
+    @pytest.mark.parametrize("status_code", [401, 503])
+    def test_non_success_response_is_disconnected(self, status_code):
+        alert_manager = self._alert_manager()
+        monitor = EventMonitor(host="127.0.0.1", alert_manager=alert_manager)
+        monitor.running = True
+
+        async def run():
+            fake_client = self._async_client_for_status(status_code)
+            with patch("core.engine.event_monitor.httpx.AsyncClient", fake_client):
+                with pytest.raises(ConnectionError, match=f"HTTP {status_code}"):
+                    await monitor._async_monitor_events()
+
+        asyncio.run(run())
+
+        assert monitor.connected is False
+
+    def test_unexpected_stream_eof_is_disconnected(self):
+        alert_manager = self._alert_manager()
+        monitor = EventMonitor(host="127.0.0.1", alert_manager=alert_manager)
+        monitor.running = True
+
+        async def run():
+            fake_client = self._async_client_for_status(200)
+            with patch("core.engine.event_monitor.httpx.AsyncClient", fake_client):
+                with pytest.raises(
+                    ConnectionError, match="event stream ended unexpectedly"
+                ):
+                    await monitor._async_monitor_events()
+
+        asyncio.run(run())
+
+        assert monitor.connected is False
+
+    def test_alert_state_loads_once_across_connection_attempts(self):
+        alert_manager = self._alert_manager()
+        monitor = EventMonitor(host="127.0.0.1", alert_manager=alert_manager)
+        monitor.running = True
+
+        async def run():
+            fake_client = self._async_client_for_status(503)
+            with patch("core.engine.event_monitor.httpx.AsyncClient", fake_client):
+                for _ in range(2):
+                    with pytest.raises(ConnectionError, match="HTTP 503"):
+                        await monitor._async_monitor_events()
+
+        asyncio.run(run())
+
+        assert alert_manager.load_count == 1
+
+    def test_failed_health_poll_closes_idle_stream(self):
+        class FakeResponse:
+            status_code = 503
+
+        class FakeClient:
+            def __init__(self):
+                self.closed = False
+
+            async def get(self, *args, **kwargs):
+                return FakeResponse()
+
+            async def aclose(self):
+                self.closed = True
+
+        class ClosableResponse:
+            def __init__(self):
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+
+        monitor = EventMonitor(host="127.0.0.1")
+        monitor.running = True
+        monitor.connected = True
+        monitor.ping_interval = 0
+        active_response = ClosableResponse()
+        client = FakeClient()
+        monitor._active_response = active_response
+        monitor._active_client = client
+
+        asyncio.run(monitor._async_keep_alive(client))
+
+        assert active_response.closed is True
+        assert client.closed is True
+        assert monitor.alerts_paused is True
+        assert monitor.dvr_status["status"] == "offline"
+
+    def test_stream_cleanup_closes_client_when_response_close_fails(self):
+        class FailingResponse:
+            async def aclose(self):
+                raise RuntimeError("response close failed")
+
+        class ClosableClient:
+            def __init__(self):
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+
+        monitor = EventMonitor(host="127.0.0.1")
+        monitor._active_response = FailingResponse()
+        client = ClosableClient()
+        monitor._active_client = client
+
+        asyncio.run(monitor._close_active_stream())
+
+        assert client.closed is True

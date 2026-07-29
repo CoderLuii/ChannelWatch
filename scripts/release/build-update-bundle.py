@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib.util
 import json
 import os
 import shutil
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_ABI = "channelwatch-runtime-v1"
 SETTINGS_SCHEMA_VERSION = 7
 DEFAULT_KEY_ID = "channelwatch-update-ed25519-2026-06"
+EXPORTER = ROOT / "scripts" / "release" / "export-site-release-metadata.py"
 BLOCKED_DIRS = {
     ".git",
     ".github",
@@ -47,6 +49,24 @@ def run_git(*args: str) -> str:
     except Exception:
         return ""
     return result.stdout.strip()
+
+
+def load_exporter():
+    spec = importlib.util.spec_from_file_location(
+        "export_site_release_metadata",
+        EXPORTER,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load release metadata exporter.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def release_highlights(version: str, exporter=None) -> list[str]:
+    source = exporter or load_exporter()
+    changelog = source.parse_changelog(version)
+    return list(changelog.get("changelogHighlights") or [])
 
 
 def load_private_key(raw: str) -> Ed25519PrivateKey:
@@ -163,16 +183,7 @@ def main() -> int:
 
     digest = sha256_bytes(bundle_path)
     bundle_signature = base64.b64encode(private_key.sign(digest)).decode("ascii")
-    if args.image_required:
-        highlights = [
-            "This release requires a normal container image update.",
-            "It repairs runtime startup, settings migration metadata, Windows-edited settings files, and blank DVR names.",
-        ]
-    else:
-        highlights = [
-            "Compatible app updates can be checked and applied from Settings -> Updates.",
-            "Pre-update backup, signed bundle verification, restart activation, and rollback support are built in.",
-        ]
+    highlights = release_highlights(version)
 
     payload = {
         "version": version,

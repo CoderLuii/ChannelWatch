@@ -8,6 +8,24 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.11] - 2026-07-29
+
+### Changed
+
+- Keep long-running Channels DVR event streams open during valid idle periods while retaining the connection timeout, health poll, retry backoff, and `Retry-After` handling.
+- Read the stream-card image preference from the existing UI settings snapshot instead of rebuilding core settings during dashboard refreshes.
+- Generate release notes and Update Center highlights from the v0.9.11 changelog, with explicit release metadata marking this as an image-required update.
+- Run the Python test suite and `compileall` before the release workflow creates a draft release.
+
+### Fixed
+
+- Stop quiet DVR event streams from entering the 1, 2, 4, 8, 16, and 32-second reconnect sequence after five seconds without an event.
+- Treat unexpected stream closure, failed health polls, and non-success responses as disconnected while keeping reconnect waits interruptible during shutdown.
+- Stop routine dashboard stream requests from repeating the `TZ` override message.
+- Return `ERR_UPDATE_JOB_NOT_FOUND` when an Update Center job ID does not match the persisted operation.
+- Replace the generated supervisor config before each container start so Update Center restarts can safely return to the image runtime.
+- Offer image-runtime rollback in the Update Center while an active app bundle is selected.
+
 ## [0.9.10] - 2026-06-25
 
 ### Changed
@@ -286,7 +304,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.10...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.11...HEAD
+[0.9.11]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.7...v0.9.8

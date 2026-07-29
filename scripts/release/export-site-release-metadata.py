@@ -131,6 +131,7 @@ def parse_changelog(version: str, tree_ref: str | None = None) -> dict[str, obje
     return {
         "releaseDate": header.group("date"),
         "changelogHighlights": highlights,
+        "changelogSections": grouped,
         "knownLimits": known_limits,
         "knownLimitsSource": known_limits_source,
         "previousReleases": previous_releases,
@@ -209,6 +210,7 @@ def collect_metadata(
         "releaseUrl": release_url
         or f"https://github.com/CoderLuii/ChannelWatch/releases/tag/{version_tag}",
         "changelogHighlights": changelog["changelogHighlights"],
+        "changelogSections": changelog["changelogSections"],
         "knownLimits": changelog["knownLimits"],
         "knownLimitsSource": changelog["knownLimitsSource"],
         "previousReleases": changelog["previousReleases"],

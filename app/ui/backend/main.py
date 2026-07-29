@@ -3891,13 +3891,7 @@ async def get_active_streams_details(response: Response):
             "image": "",
         }
 
-    if CORE_APP_AVAILABLE:
-        from core.helpers.config import CoreSettings
-
-        CoreSettings._instance = None
-        settings = _get_core_settings_sync()
-    else:
-        settings = await _load_settings_async()
+    settings = await _load_settings_async()
 
     stream_pref = (
         getattr(settings, "stream_card_image", "program") if settings else "program"
@@ -4868,7 +4862,7 @@ async def update_job(job_id: str):
     status = await asyncio.to_thread(_build_update_manager().status)
     job = status.get("last_job")
     if not isinstance(job, dict) or job.get("job_id") != job_id:
-        raise HTTPException(status_code=404, detail="Update job not found.")
+        raise structured_error(ErrorCode.UPDATE_JOB_NOT_FOUND)
     return job
 
 
@@ -5116,13 +5110,7 @@ async def get_dvr_streams_v1(dvr_id: str):
         )
     sid, sname, surl = server
 
-    if CORE_APP_AVAILABLE:
-        from core.helpers.config import CoreSettings
-
-        CoreSettings._instance = None
-        settings = await asyncio.to_thread(_get_core_settings_sync)
-    else:
-        settings = await _load_settings_async()
+    settings = await _load_settings_async()
     stream_pref = (
         getattr(settings, "stream_card_image", "program") if settings else "program"
     )

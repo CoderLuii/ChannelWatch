@@ -68,6 +68,7 @@ class ErrorCode:
     UPDATE_LOCKED = "ERR_UPDATE_LOCKED"
     UPDATE_IMAGE_REQUIRED = "ERR_UPDATE_IMAGE_REQUIRED"
     UPDATE_ROLLBACK_FAILED = "ERR_UPDATE_ROLLBACK_FAILED"
+    UPDATE_JOB_NOT_FOUND = "ERR_UPDATE_JOB_NOT_FOUND"
 
     # Support reports
     SUPPORT_REPORT_REQUEST_TOO_LARGE = "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE"
@@ -394,6 +395,12 @@ _CATALOG: dict[str, CatalogEntry] = {
         http_status=500,
         message="Failed to roll back the active update.",
         remediation="Check /config/channelwatch-runtime/rollback.json and container logs.",
+    ),
+    ErrorCode.UPDATE_JOB_NOT_FOUND: CatalogEntry(
+        code=ErrorCode.UPDATE_JOB_NOT_FOUND,
+        http_status=404,
+        message="Update job not found.",
+        remediation="Run the update operation again to create a new job.",
     ),
     # Support reports ----------------------------------------------------
     ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE: CatalogEntry(

@@ -1,8 +1,31 @@
 import asyncio
 import inspect
+import os
 import threading
+import time
 from typing import Any, cast
 from unittest.mock import MagicMock
+
+pytest_plugins = ["core.tests.fixtures.mock_dvr_cluster"]
+
+
+class _RecordingAlertManager:
+    def __init__(self):
+        self.alert_instances = {}
+        self.load_count = 0
+        self.save_count = 0
+
+    async def load_all_state(self):
+        self.load_count += 1
+
+    async def save_all_state(self):
+        self.save_count += 1
+
+    def create_background_tasks(self):
+        return []
+
+    async def process_event(self, event_type, event_data):
+        return False
 
 
 class TestAsyncRuntimeStructure:
@@ -76,6 +99,59 @@ class TestAsyncRuntimeStructure:
             assert client.closed is True
 
         asyncio.run(run())
+
+    def test_idle_sse_stays_connected_beyond_read_timeout(self, mock_dvr_cluster):
+        from core.engine.event_monitor import EventMonitor
+
+        cluster = mock_dvr_cluster(count=4, sse_keepalive_interval=None)
+        alert_managers = [_RecordingAlertManager() for _ in cluster]
+        monitors = [
+            EventMonitor(dvr=dvr, alert_manager=alert_manager)
+            for dvr, alert_manager in zip(cluster, alert_managers)
+        ]
+        threads = [
+            threading.Thread(target=monitor.start_monitoring, daemon=True)
+            for monitor in monitors
+        ]
+
+        try:
+            for thread in threads:
+                thread.start()
+            cluster.wait_for_subscriptions(4)
+            time.sleep(float(os.getenv("CHANNELWATCH_SSE_SOAK_SECONDS", "6.75")))
+
+            for dvr, monitor, alert_manager in zip(
+                cluster, monitors, alert_managers
+            ):
+                assert monitor.connected is True
+                assert dvr.subscription_count == 1
+                assert dvr.subscription_attempts == 1
+                assert alert_manager.load_count == 1
+
+            before = [monitor.stats["total_events"] for monitor in monitors]
+            for index, dvr in enumerate(cluster):
+                dvr.inject_event(
+                    "recording", name=f"idle-stream-test-{index}", value="ready"
+                )
+            deadline = time.monotonic() + 2
+            while (
+                any(
+                    monitor.stats["total_events"] == total
+                    for monitor, total in zip(monitors, before)
+                )
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
+            assert [
+                monitor.stats["total_events"] for monitor in monitors
+            ] == [total + 1 for total in before]
+        finally:
+            for monitor in monitors:
+                monitor.stop_monitoring()
+            for thread in threads:
+                thread.join(timeout=2)
+
+        assert all(thread.is_alive() is False for thread in threads)
 
 
 class TestRunMonitorsShutdown:

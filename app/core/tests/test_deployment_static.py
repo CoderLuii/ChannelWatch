@@ -26,6 +26,15 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     assert "pnpm install --frozen-lockfile" in dockerfile
 
 
+def test_dockerfile_builds_static_ui_on_native_build_platform():
+    dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "FROM --platform=$BUILDPLATFORM node:24-alpine AS ui-builder" in dockerfile
+    assert "FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/python" not in dockerfile
+
+
 def test_primary_compose_project_name_is_lowercase():
     compose = (
         _REPO_DIR / "deploy" / "compose" / "default.yml"

@@ -1,7 +1,7 @@
 #-----------------------------------------------------------------------------
 # Stage 1: UI Build
 #-----------------------------------------------------------------------------
-FROM node:24-alpine AS ui-builder
+FROM --platform=$BUILDPLATFORM node:24-alpine AS ui-builder
 
 WORKDIR /src
 
@@ -32,7 +32,7 @@ FROM cgr.dev/chainguard/python:latest
 
 USER root
 
-ARG VERSION=0.9.10
+ARG VERSION=0.9.11
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

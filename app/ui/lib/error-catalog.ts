@@ -32,6 +32,7 @@ export const ErrorCode = {
   UPDATE_LOCKED: "ERR_UPDATE_LOCKED",
   UPDATE_IMAGE_REQUIRED: "ERR_UPDATE_IMAGE_REQUIRED",
   UPDATE_ROLLBACK_FAILED: "ERR_UPDATE_ROLLBACK_FAILED",
+  UPDATE_JOB_NOT_FOUND: "ERR_UPDATE_JOB_NOT_FOUND",
   SUPPORT_REPORT_REQUEST_TOO_LARGE: "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE",
   SUPPORT_REPORT_PAYLOAD_INVALID: "ERR_SUPPORT_REPORT_PAYLOAD_INVALID",
   SUPPORT_REPORT_FORM_INVALID: "ERR_SUPPORT_REPORT_FORM_INVALID",
@@ -228,6 +229,11 @@ const CATALOG: Record<string, CatalogEntry> = {
     code: ErrorCode.UPDATE_ROLLBACK_FAILED,
     message: "Failed to roll back the active update.",
     remediation: "Check the Update Center status and container logs.",
+  },
+  [ErrorCode.UPDATE_JOB_NOT_FOUND]: {
+    code: ErrorCode.UPDATE_JOB_NOT_FOUND,
+    message: "Update job not found.",
+    remediation: "Run the update operation again to create a new job.",
   },
   [ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE]: {
     code: ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE,

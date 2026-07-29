@@ -20,7 +20,10 @@ def _make_config_dir(tmp_path: Path, *, schema_version: int = 7) -> Path:
     (config_dir / "channelwatch.db").write_bytes(b"SQLite data placeholder")
     (config_dir / "session_state_dvr_abc.json").write_text('{"last_seen": 1}')
     (config_dir / "session_state_dvr_xyz.json").write_text('{"last_seen": 2}')
-    (config_dir / "encryption.key").write_bytes(b"\xde\xad\xbe\xef" * 8)
+    key_file = config_dir / "encryption.key"
+    key_file.write_bytes(b"\xde\xad\xbe\xef" * 8)
+    if os.name != "nt":
+        key_file.chmod(0o600)
     return config_dir
 
 

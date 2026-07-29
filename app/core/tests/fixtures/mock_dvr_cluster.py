@@ -53,11 +53,13 @@ class MockDVR:
     dvr_id: str | None = None
     mdns_service_type: str = DEFAULT_SERVICE_TYPE
     mdns_properties: dict[str, str] = field(default_factory=dict)
+    sse_keepalive_interval: float | None = 0.5
     _server: ThreadingHTTPServer = field(init=False, repr=False)
     _thread: threading.Thread = field(init=False, repr=False)
     _subscriber_queues: set[queue.Queue[dict[str, Any]]] = field(init=False, repr=False)
     _subscriber_lock: threading.Lock = field(init=False, repr=False)
     _subscription_count: int = field(init=False, repr=False)
+    _subscription_attempts: int = field(init=False, repr=False)
     _running: bool = field(init=False, repr=False)
     _closed: bool = field(init=False, repr=False)
     _registered_mdns_info: Any | None = field(init=False, repr=False)
@@ -80,6 +82,7 @@ class MockDVR:
         self._subscriber_queues: set[queue.Queue[dict[str, Any]]] = set()
         self._subscriber_lock = threading.Lock()
         self._subscription_count = 0
+        self._subscription_attempts = 0
         self._running = False
         self._closed = False
         self._registered_mdns_info: Any | None = None
@@ -93,6 +96,11 @@ class MockDVR:
     def subscription_count(self) -> int:
         with self._subscriber_lock:
             return self._subscription_count
+
+    @property
+    def subscription_attempts(self) -> int:
+        with self._subscriber_lock:
+            return self._subscription_attempts
 
     def _build_default_state(self) -> dict[str, Any]:
         channels = [
@@ -154,10 +162,12 @@ class MockDVR:
                     self.wfile.flush()
                     while owner._running:
                         try:
-                            payload = event_queue.get(timeout=0.5)
+                            wait = owner.sse_keepalive_interval or 0.1
+                            payload = event_queue.get(timeout=wait)
                         except queue.Empty:
-                            self.wfile.write(b": keepalive\n\n")
-                            self.wfile.flush()
+                            if owner.sse_keepalive_interval is not None:
+                                self.wfile.write(b": keepalive\n\n")
+                                self.wfile.flush()
                             continue
                         self.wfile.write(b"data: " + _json_bytes(payload) + b"\n\n")
                         self.wfile.flush()
@@ -205,6 +215,7 @@ class MockDVR:
         with self._subscriber_lock:
             self._subscriber_queues.add(subscriber_queue)
             self._subscription_count += 1
+            self._subscription_attempts += 1
 
     def _unregister_subscriber(
         self, subscriber_queue: queue.Queue[dict[str, Any]]
@@ -329,6 +340,7 @@ class MockDVRCluster:
         port_start: int | None = None,
         api_key: str = "",
         state_factory: Any | None = None,
+        sse_keepalive_interval: float | None = 0.5,
     ) -> "MockDVRCluster":
         if count <= 0:
             raise ValueError("MockDVRCluster requires count >= 1")
@@ -345,6 +357,7 @@ class MockDVRCluster:
                 state=state,
                 server_version=f"mock-{index + 1}.0",
                 dvr_id=f"mock_dvr_{index + 1}",
+                sse_keepalive_interval=sse_keepalive_interval,
             )
             dvr.start()
             dvrs.append(dvr)

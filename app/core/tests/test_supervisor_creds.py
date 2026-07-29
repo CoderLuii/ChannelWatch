@@ -78,6 +78,31 @@ class TestEntrypointWritesSupervisorSocketConfig:
         if os.name != "nt":
             assert stat.S_IMODE(conf_file.stat().st_mode) == 0o640
 
+    def test_render_replaces_config_owned_by_previous_runtime_user(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_dir = tmp_path / "channelwatch"
+        socket_file = runtime_dir / "supervisor.sock"
+        conf_file = tmp_path / "supervisord.conf"
+        conf_file.write_text("stale config")
+        entrypoint = _load_entrypoint()
+        original_write_text = Path.write_text
+
+        def assert_replaced_before_write(path, *args, **kwargs):
+            if path == conf_file:
+                assert not path.exists()
+            return original_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
+        monkeypatch.setattr(Path, "write_text", assert_replaced_before_write)
+
+        entrypoint.render_supervisor_config(1000, 1000)
+
+        assert "unix_http_server" in conf_file.read_text()
+
 
 class TestEntrypointDoesNotExportEnvVars:
     def test_entrypoint_does_not_export_env_vars(self, tmp_path, monkeypatch):

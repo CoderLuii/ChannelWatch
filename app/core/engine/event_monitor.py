@@ -57,6 +57,8 @@ class EventMonitor:
         self._active_client: Optional[httpx.AsyncClient] = None
         self._active_response: Optional[httpx.Response] = None
         self._retry_after_delay: Optional[float] = None
+        self._attempt_healthy = False
+        self._state_loaded = False
 
         self.alerts_paused: bool = False
         self._connection_status: str = "unknown"
@@ -98,6 +100,7 @@ class EventMonitor:
     def start_monitoring(self):
         """Run event monitoring until shutdown is requested."""
         self.running = True
+        self._state_loaded = False
         try:
             self._monitor_events_loop()
         except KeyboardInterrupt:
@@ -119,12 +122,20 @@ class EventMonitor:
             pass
 
     async def _close_active_stream(self) -> None:
-        response = self._active_response
-        client = self._active_client
-        if response is not None:
-            await response.aclose()
-        if client is not None:
-            await client.aclose()
+        for label, resource in (
+            ("response", self._active_response),
+            ("client", self._active_client),
+        ):
+            if resource is None:
+                continue
+            try:
+                await resource.aclose()
+            except Exception as exc:
+                if self.running:
+                    log(
+                        f"[{self.dvr_name}] Error closing active SSE {label}: {exc}",
+                        LOG_VERBOSE,
+                    )
 
     # CONNECTION
     def _monitor_events_loop(self):
@@ -139,14 +150,18 @@ class EventMonitor:
         max_reconnect_delay = 60
 
         while self.running:
+            self._attempt_healthy = False
             try:
                 self._monitor_events()
-                # Returned without exception — connection was established and ended cleanly.
-                self.alerts_paused = False
-                self._connection_status = "online"
-                self._last_seen = time.time()
+                if self.connected:
+                    self.alerts_paused = False
+                    self._connection_status = "online"
+                if self.running:
+                    raise ConnectionError("DVR event stream ended unexpectedly")
             except Exception as e:
-                log(f"Connection error: {e}")
+                if not self.running:
+                    break
+                log(f"[{self.dvr_name}] Connection error: {e}")
                 self.alerts_paused = True
                 self._connection_status = "offline"
                 self._last_seen = time.time()
@@ -155,14 +170,13 @@ class EventMonitor:
                 break
 
             retry_after_delay = self._consume_retry_after_delay()
+            if self._attempt_healthy:
+                reconnect_delay = 1
             sleep_delay = (
                 retry_after_delay if retry_after_delay is not None else reconnect_delay
             )
-            log(f"Reconnecting in {sleep_delay}s")
-            if retry_after_delay is None:
-                time.sleep(sleep_delay)
-            else:
-                self._sleep_interruptibly(sleep_delay)
+            log(f"[{self.dvr_name}] Reconnecting in {sleep_delay}s")
+            self._sleep_interruptibly(sleep_delay)
 
             if retry_after_delay is None:
                 reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
@@ -211,13 +225,14 @@ class EventMonitor:
             return False
         self._retry_after_delay = retry_after
         log(
-            f"DVR API rate-limited; backing off {retry_after:g} seconds",
+            f"[{self.dvr_name}] DVR API rate-limited; backing off {retry_after:g} seconds",
             level=LOG_STANDARD,
         )
         return True
 
     def _mark_fresh(self, source: str) -> None:
         current_time = time.time()
+        self._attempt_healthy = True
         self.last_freshness_at = current_time
         self.last_freshness_source = source
         if source == "event":
@@ -238,11 +253,11 @@ class EventMonitor:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         }
-        # Keep the SSE connection open while still bounding idle reads so stop/hot-reload
-        # can observe ``self.running`` instead of blocking forever behind an idle stream.
-        timeout = httpx.Timeout(connect=10.0, read=5.0, write=None, pool=None)
+        timeout = httpx.Timeout(connect=10.0, read=None, write=None, pool=None)
 
-        await self.alert_manager.load_all_state()
+        if not self._state_loaded:
+            await self.alert_manager.load_all_state()
+            self._state_loaded = True
 
         background_tasks = list(self.alert_manager.create_background_tasks())
         for alert in self.alert_manager.alert_instances.values():
@@ -259,13 +274,14 @@ class EventMonitor:
                             self._record_retry_after_backoff(
                                 response.headers.get("Retry-After")
                             )
-                        log(f"Connection failed: HTTP {response.status_code}")
                         self.connected = False
-                        return
+                        raise ConnectionError(f"HTTP {response.status_code}")
 
                     self.connected = True
+                    self.alerts_paused = False
                     self._connection_status = "online"
                     self._last_seen = time.time()
+                    log(f"[{self.dvr_name}] Connected to event stream")
 
                     keep_alive_task = asyncio.create_task(
                         self._async_keep_alive(client)
@@ -278,14 +294,15 @@ class EventMonitor:
                                 line = await lines.__anext__()
                             except StopAsyncIteration:
                                 break
-                            except httpx.ReadTimeout:
-                                continue
                             if not self.running:
                                 break
                             if not line:
                                 continue
                             log(f"Event: {line}", level=LOG_VERBOSE)
                             await self._process_event_line(line)
+                    except httpx.ReadError:
+                        if self.running:
+                            raise
                     finally:
                         keep_alive_task.cancel()
                         try:
@@ -293,7 +310,9 @@ class EventMonitor:
                         except asyncio.CancelledError:
                             pass
                         self.connected = False
-                        log("Connection closed")
+                        log(f"[{self.dvr_name}] Connection closed")
+                    if self.running:
+                        raise ConnectionError("DVR event stream ended unexpectedly")
                     self._active_response = None
                 self._active_client = None
         finally:
@@ -341,18 +360,29 @@ class EventMonitor:
                         self.last_keep_alive_log = current_time
                 else:
                     log(
-                        f"Keep-alive ping failed: HTTP {response.status_code}",
+                        f"[{self.dvr_name}] Keep-alive ping failed: HTTP {response.status_code}",
                         level=LOG_VERBOSE,
                     )
                     self.last_keep_alive_log = current_time
                     self.keep_alive_success_streak = 0
+                    self.alerts_paused = True
+                    self._connection_status = "offline"
+                    await self._close_active_stream()
+                    break
 
                 self.last_ping = current_time
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                log(f"Error in keep_alive loop: {e}", LOG_STANDARD)
-                await asyncio.sleep(5)
+                if self.running:
+                    log(
+                        f"[{self.dvr_name}] Error in keep_alive loop: {e}",
+                        LOG_STANDARD,
+                    )
+                    self.alerts_paused = True
+                    self._connection_status = "offline"
+                    await self._close_active_stream()
+                break
 
     # PROCESSING
     async def _process_event_line(self, line: str):

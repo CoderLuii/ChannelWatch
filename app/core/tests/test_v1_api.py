@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
@@ -392,6 +393,67 @@ class TestDvrStreams:
         assert body["total"] == 0
         assert body["dvr_id"] == "dvr_aaa11111"
         assert body["dvr_name"] == "Living Room"
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/streams/details",
+            "/api/v1/dvrs/dvr_aaa11111/streams",
+        ],
+    )
+    def test_stream_reads_do_not_reset_core_settings(self, client, path):
+        from core.helpers.config import CoreSettings
+        from ui.backend.schemas import AppSettings
+
+        original_instance = CoreSettings._instance
+        sentinel = object()
+        CoreSettings._instance = sentinel
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=self._make_dvr_resp(activity={}))
+
+        try:
+            with (
+                patch("ui.backend.main._dvr_http_client", mock_client),
+                patch("ui.backend.main.CORE_APP_AVAILABLE", True),
+                patch(
+                    "ui.backend.main._get_core_settings_sync",
+                    return_value=SimpleNamespace(stream_card_image="program"),
+                ) as core_settings_loader,
+                patch(
+                    "ui.backend.main._load_settings_async",
+                    new_callable=AsyncMock,
+                    return_value=AppSettings(stream_card_image="none"),
+                ) as ui_settings_loader,
+                patch(
+                    "ui.backend.main._get_dvr_servers_async",
+                    new_callable=AsyncMock,
+                    return_value=[
+                        (
+                            "dvr_aaa11111",
+                            "Living Room",
+                            "http://192.168.1.10:8089",
+                        )
+                    ],
+                ),
+                patch(
+                    "ui.backend.main._get_dvr_server_by_id_async",
+                    new_callable=AsyncMock,
+                    return_value=(
+                        "dvr_aaa11111",
+                        "Living Room",
+                        "http://192.168.1.10:8089",
+                    ),
+                ),
+            ):
+                resp = client.get(path)
+        finally:
+            current_instance = CoreSettings._instance
+            CoreSettings._instance = original_instance
+
+        assert resp.status_code == 200
+        assert current_instance is sentinel
+        core_settings_loader.assert_not_called()
+        ui_settings_loader.assert_awaited_once()
 
     def test_watching_stream_counted(self, client):
         activity = {"s1": "Watching ch5 CBS from Living Room TV (10.0.0.5)"}

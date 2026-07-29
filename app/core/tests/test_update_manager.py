@@ -132,6 +132,29 @@ def test_apply_verified_bundle_records_backup_and_active_bundle(tmp_path: Path):
     assert list((tmp_path / "backups").glob("pre-update.v0.9.10.*.zip"))
 
 
+def test_image_runtime_update_advertises_rollback_until_it_is_applied(tmp_path: Path):
+    private, public = _key_pair()
+    bundle = _bundle()
+    manifest = _manifest(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.9",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        backup_callable=lambda config_dir: b"backup-bytes",
+        restart_callable=lambda: True,
+    )
+
+    manager.check()
+    manager.apply()
+
+    assert manager.status()["rollback_available"] is True
+
+    manager.rollback()
+
+    assert manager.status()["rollback_available"] is False
+
+
 def test_bundle_validation_rejects_unsafe_member():
     bad_bundle = _bundle(extra={"docs/internal.md": "private process notes"})
 

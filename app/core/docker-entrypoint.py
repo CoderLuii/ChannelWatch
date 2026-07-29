@@ -541,6 +541,10 @@ def render_supervisor_config(app_uid: int, app_gid: int) -> None:
         .replace("__APP_DIR__", str(selected_app_dir))
         .replace("__STATIC_UI_DIR__", str(static_ui_dir))
     )
+    try:
+        SUPERVISOR_CONF.unlink()
+    except FileNotFoundError:
+        pass
     SUPERVISOR_CONF.write_text(rendered, encoding="utf-8")
 
     for path, mode in (

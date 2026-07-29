@@ -559,7 +559,12 @@ class UpdateManager:
             "update_available": update_available,
             "image_required": image_required if update_available else False,
             "last_job": job if isinstance(job, dict) else None,
-            "rollback_available": isinstance(rollback, dict) and bool(rollback.get("previous_active")),
+            "rollback_available": (
+                isinstance(active, dict)
+                and bool(active.get("path"))
+                and isinstance(rollback, dict)
+                and "previous_active" in rollback
+            ),
             "auth_disabled_warning": os.environ.get("CW_DISABLE_AUTH", "").lower() == "true",
         }
 

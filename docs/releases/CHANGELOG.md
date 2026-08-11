@@ -8,6 +8,18 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.12] - 2026-08-11
+
+### Changed
+
+- Update the Python runtime, web UI libraries, build tools, container base images, and release actions to their latest stable compatible versions.
+- Install Python dependencies from reviewed constraints and pin container base images by digest so release builds use the versions tested for this update.
+- Mark v0.9.12 as container image update required because it changes Python and container dependencies.
+
+### Security
+
+- Refresh transitive frontend packages to patched releases and verify the shipped dependency trees have no known package advisories.
+
 ## [0.9.11] - 2026-07-29
 
 ### Changed
@@ -304,7 +316,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.11...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.12...HEAD
+[0.9.12]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.8...v0.9.9

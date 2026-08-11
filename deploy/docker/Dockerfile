@@ -1,7 +1,7 @@
 #-----------------------------------------------------------------------------
 # Stage 1: UI Build
 #-----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:24-alpine AS ui-builder
+FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS ui-builder
 
 WORKDIR /src
 
@@ -15,24 +15,26 @@ RUN pnpm build
 #-----------------------------------------------------------------------------
 # Stage 2: Python Dependencies
 #-----------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev AS python-deps
+FROM cgr.dev/chainguard/python:latest-dev@sha256:b08980b41611a3887dfca3823286a84b2b8557c70ec7f151265c1d53fd67c68e AS python-deps
 
 USER root
 WORKDIR /deps
 
 COPY deploy/requirements/runtime.txt ./requirements.txt
+COPY deploy/requirements/runtime.constraints.txt ./constraints.txt
 RUN apk add --no-cache tzdata \
     && python -m venv /venv \
-    && /venv/bin/pip install --no-cache-dir -r requirements.txt
+    && /venv/bin/pip install --no-cache-dir -c constraints.txt -r requirements.txt \
+    && /venv/bin/pip uninstall --yes pip setuptools
 
 #-----------------------------------------------------------------------------
 # Stage 3: Application
 #-----------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest
+FROM cgr.dev/chainguard/python:latest@sha256:e2554b2ab18fc6d3a22f249245f8a8cf866687441b38273ffd5e0f3e37009e00
 
 USER root
 
-ARG VERSION=0.9.11
+ARG VERSION=0.9.12
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { ShieldAlert, ShieldCheck, Trash2 } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
@@ -60,10 +60,9 @@ export function TrustedDestinationControl({
   const trimmedUrl = (url || "").trim()
   const normalized = preview?.normalized
 
-  const alreadyTrusted = useMemo(() => {
-    if (!normalized) return false
-    return trustedDestinations.some((entry) => sameDestination(entry, normalized))
-  }, [normalized, trustedDestinations])
+  const alreadyTrusted = Boolean(
+    normalized && trustedDestinations.some((entry) => sameDestination(entry, normalized)),
+  )
 
   useEffect(() => {
     if (!trimmedUrl || trimmedUrl.includes("****")) {

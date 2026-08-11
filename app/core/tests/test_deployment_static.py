@@ -22,8 +22,9 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     )
 
     assert "corepack enable" in dockerfile
-    assert '"packageManager": "pnpm@11.8.0+' in package_json
+    assert '"packageManager": "pnpm@11.21.0+' in package_json
     assert "pnpm install --frozen-lockfile" in dockerfile
+    assert "/venv/bin/pip uninstall --yes pip setuptools" in dockerfile
 
 
 def test_dockerfile_builds_static_ui_on_native_build_platform():
@@ -31,7 +32,11 @@ def test_dockerfile_builds_static_ui_on_native_build_platform():
         encoding="utf-8"
     )
 
-    assert "FROM --platform=$BUILDPLATFORM node:24-alpine AS ui-builder" in dockerfile
+    assert (
+        "FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:"
+        "d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 "
+        "AS ui-builder"
+    ) in dockerfile
     assert "FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/python" not in dockerfile
 
 

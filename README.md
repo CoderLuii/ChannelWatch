@@ -217,11 +217,11 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:0.9.12` or `latest` for the current v0.9 release. v0.9.12 refreshes ChannelWatch's runtime, web UI, container bases, and release dependencies.
+Use `coderluii/channelwatch:0.9.13` or `latest` for the current v0.9 release. v0.9.13 repairs live problem reporting and makes its manual fallback work without browser clipboard access.
 
 After installing a version with Update Center support through Docker, Unraid, Compose, or Helm, open **Settings > Updates** and use the in-app Update Center for compatible app-only releases.
 
-v0.9.12 requires no settings or data migration, but it does require the new container image because Python and container dependencies changed. Update through Docker, Unraid, Compose, or Helm. **Settings > Updates** will identify v0.9.12 as an image-required release.
+v0.9.13 requires no settings or data migration, but it does require the new container image because the official reporting configuration changes. Update through Docker, Unraid, Compose, or Helm. **Settings > Updates** will identify v0.9.13 as an image-required release.
 
 The Update Center checks trusted public ChannelWatch release metadata, verifies signed app bundles, creates a pre-update backup, activates the update, restarts ChannelWatch, and keeps rollback available when the previous runtime can be restored. It does not add telemetry.
 

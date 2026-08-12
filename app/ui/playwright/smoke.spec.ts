@@ -103,7 +103,7 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
   await expect(page.getByText("Private attachments")).toBeVisible()
   await expect(page.getByText("Email and attached files are shared only with CoderLuii for follow-up and troubleshooting.")).toBeVisible()
   await expect(page.getByText("viewer@example.com")).toHaveCount(0)
-  await page.getByRole("button", { name: "Submit report" }).click()
+  await page.getByRole("button", { name: "Preview report" }).click()
   await expect(page.getByTestId("report-problem-success")).toBeVisible()
   await expect(page.getByText("Dry run complete")).toBeVisible()
   await expect(page.getByText("The report and attachments were validated locally. Nothing was sent.")).toBeVisible()
@@ -131,7 +131,7 @@ test("report problem shows dry-run API failures", async ({ page }) => {
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
   await page.getByLabel("Problem summary").fill("Dry-run failure test")
   await page.getByRole("button", { name: "Review report" }).click()
-  await page.getByRole("button", { name: "Submit report" }).click()
+  await page.getByRole("button", { name: "Preview report" }).click()
 
   await expect(page.getByText("Could not submit report.")).toBeVisible()
   await expect(page.getByText("Report renderer unavailable")).toBeVisible()
@@ -201,8 +201,76 @@ test("report problem submits directly without an in-app Cloudflare check", async
   await expect(page.getByTestId("report-problem-success")).toBeVisible()
   await expect(page.getByText("Report submitted")).toBeVisible()
   expect(submittedHeaders[0]?.["x-channelwatch-in-app-report"]).toBe("1")
-  expect(submittedBodies[0]?.support_code).toMatch(/^CW-REPORT-v1-/)
+  expect(submittedBodies[0]?.support_code).toMatch(/^CW-REPORT-v2-/)
   expect(submittedBodies[0]?.turnstile_token).toBeUndefined()
+})
+
+test("report problem retries failed private delivery without creating a new draft", async ({ page }) => {
+  await page.route("**/api/v1/support/report-config", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        mode: "live",
+        endpoint: "https://channelwatch.coderluii.dev/api/reports",
+        portal_url: "https://channelwatch.coderluii.dev/report",
+        max_bytes: 262144,
+        attachments_enabled: true,
+        max_attachment_bytes: 8388608,
+        max_total_attachment_bytes: 20971520,
+        max_screenshot_count: 5,
+        allowed_attachment_types: ["image/png", "image/jpeg", "image/webp", "application/zip"],
+      }),
+    })
+  })
+
+  const supportCodes: string[] = []
+  let attempt = 0
+  await page.route("https://channelwatch.coderluii.dev/api/reports", async (route) => {
+    attempt += 1
+    const body = route.request().postDataJSON() as { support_code: string }
+    supportCodes.push(body.support_code)
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        mode: "live",
+        status: attempt === 1 ? "completed_with_private_delivery_failure" : "completed",
+        report_id: "report-stable-123",
+        issue_url: "https://github.com/CoderLuii/ChannelWatch/issues/123",
+        private_delivery_status: attempt === 1 ? "failed" : "delivered",
+        issue_title: "[In-App] Private delivery retry",
+        issue_body: "report body",
+        email_subject: "ChannelWatch Issue #123",
+        email_body: "private body",
+        email_in_public_issue: false,
+        attachments: [],
+        attachment_total_bytes: 0,
+        attachments_sent: attempt > 1,
+      }),
+    })
+  })
+
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByLabel("Problem summary").fill("Private delivery retry")
+  await page.getByRole("button", { name: "Review report" }).click()
+  await page.getByRole("button", { name: "Submit report" }).click()
+
+  await expect(page.getByTestId("report-private-delivery-warning")).toBeVisible()
+  await expect(page.getByText("Private attachments not delivered")).toBeVisible()
+  await expect(page.getByRole("link", { name: "Open GitHub issue" })).toHaveAttribute(
+    "href",
+    "https://github.com/CoderLuii/ChannelWatch/issues/123",
+  )
+  await page.getByRole("button", { name: "Retry private delivery" }).click()
+
+  await expect(page.getByTestId("report-private-delivery-warning")).toHaveCount(0)
+  await expect(page.getByText("Report submitted")).toBeVisible()
+  await expect(page.getByText("Private delivery: delivered")).toBeVisible()
+  expect(supportCodes).toHaveLength(2)
+  expect(supportCodes[0]).toMatch(/^CW-REPORT-v2-/)
+  expect(supportCodes[1]).toBe(supportCodes[0])
 })
 
 test("report problem attachments stay aligned on mobile", async ({ page }) => {

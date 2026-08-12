@@ -13,6 +13,22 @@ def test_dockerfile_healthcheck_uses_liveness_endpoint():
     assert "http://localhost:8501/api/health" not in dockerfile
 
 
+def test_official_image_enables_live_reporting_with_trusted_hosted_endpoints():
+    dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'ENV CHANNELWATCH_REPORT_MODE="live"' in dockerfile
+    assert (
+        'ENV CHANNELWATCH_REPORT_ENDPOINT="https://channelwatch.coderluii.dev/api/reports"'
+        in dockerfile
+    )
+    assert (
+        'ENV CHANNELWATCH_REPORT_PORTAL_URL="https://channelwatch.coderluii.dev/report"'
+        in dockerfile
+    )
+
+
 def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
         encoding="utf-8"

@@ -56,6 +56,37 @@ def test_release_body_for_0912_uses_dependency_copy(monkeypatch, capsys):
     assert "`coderluii/channelwatch:0.9.12`" in output
 
 
+def test_release_body_for_0913_uses_reporting_copy(monkeypatch, capsys):
+    module = _load_script(
+        "render_release_body_0913",
+        "scripts/release/render-release-body.py",
+    )
+    metadata = {
+        "versionTag": "v0.9.13",
+        "releaseDate": "2026-08-12",
+        "changelogHighlights": ["Enable reliable live problem reporting."],
+        "changelogSections": {
+            "Fixed": ["Enable reliable live problem reporting."],
+            "Security": ["Keep private support attachments out of public issues."],
+        },
+        "dockerTag": "0.9.13",
+    }
+    monkeypatch.setattr(
+        module,
+        "load_exporter",
+        lambda: SimpleNamespace(collect_metadata=lambda *args: metadata),
+    )
+    monkeypatch.setattr(sys, "argv", ["render-release-body.py", "--version", "0.9.13"])
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    assert output.startswith("# ChannelWatch v0.9.13 - Reporting reliability\n")
+    assert "## Fixed" in output
+    assert "## Security" in output
+    assert "`coderluii/channelwatch:0.9.13`" in output
+
+
 def test_release_body_preserves_0910_repair_copy(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_0910",
@@ -92,13 +123,13 @@ def test_update_bundle_highlights_come_from_changelog():
     ]
 
 
-def test_release_config_marks_0912_as_image_required():
+def test_release_config_marks_0913_as_image_required():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
     assert config == {
-        "version": "0.9.12",
+        "version": "0.9.13",
         "image_required": True,
     }
 
@@ -114,11 +145,11 @@ def test_release_version_surfaces_accept_multi_digit_patch():
         release_url=None,
     )
 
-    assert metadata["version"] == "0.9.12"
-    assert metadata["versionTag"] == "v0.9.12"
-    assert metadata["dockerTag"] == "0.9.12"
-    assert metadata["helmChartVersion"] == "0.9.12"
-    assert metadata["helmAppVersion"] == "0.9.12"
+    assert metadata["version"] == "0.9.13"
+    assert metadata["versionTag"] == "v0.9.13"
+    assert metadata["dockerTag"] == "0.9.13"
+    assert metadata["helmChartVersion"] == "0.9.13"
+    assert metadata["helmAppVersion"] == "0.9.13"
 
 
 def test_release_workflow_uses_explicit_config_and_python_gate():
@@ -130,6 +161,7 @@ def test_release_workflow_uses_explicit_config_and_python_gate():
     assert 'grep -Eiq "container image update required|image-required"' not in workflow
     assert "python -m pytest app/core/tests" in workflow
     assert "python -m compileall app/core app/ui/backend" in workflow
+    assert 'expected_heading="# ChannelWatch ${TAG} - Reporting reliability"' in workflow
     assert "GitHub Release body must start with '${expected_heading}'" in workflow
     release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
         "\n  build-and-push:",

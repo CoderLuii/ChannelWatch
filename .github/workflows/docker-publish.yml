@@ -128,7 +128,7 @@ jobs:
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --output release-body.md
           first_line="$(head -n 1 release-body.md)"
-          expected_heading="# ChannelWatch ${TAG} - Dependency maintenance"
+          expected_heading="# ChannelWatch ${TAG} - Reporting reliability"
           if [ "${first_line}" != "${expected_heading}" ]; then
             echo "::error::GitHub Release body must start with '${expected_heading}'."
             exit 1

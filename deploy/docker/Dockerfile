@@ -34,7 +34,7 @@ FROM cgr.dev/chainguard/python:latest@sha256:e2554b2ab18fc6d3a22f249245f8a8cf866
 
 USER root
 
-ARG VERSION=0.9.12
+ARG VERSION=0.9.13
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1
@@ -55,6 +55,9 @@ ENV CONFIG_PATH="/config"
 ENV CHANNELWATCH_IMAGE_APP_DIR="/app"
 ENV CHANNELWATCH_RUNTIME_ABI="${RUNTIME_ABI}"
 ENV CHANNELWATCH_IMAGE_VERSION="${VERSION}"
+ENV CHANNELWATCH_REPORT_MODE="live"
+ENV CHANNELWATCH_REPORT_ENDPOINT="https://channelwatch.coderluii.dev/api/reports"
+ENV CHANNELWATCH_REPORT_PORTAL_URL="https://channelwatch.coderluii.dev/report"
 
 RUN ["/usr/bin/python", "-c", "from pathlib import Path; [Path(path).mkdir(parents=True, exist_ok=True) for path in ('/app/core', '/app/ui/backend/static_ui', '/app/ui/backend/static/images', '/config', '/etc/supervisor/conf.d')]"]
 

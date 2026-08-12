@@ -745,7 +745,18 @@ export interface ReportAttachmentSummary {
 
 export interface ReportPreviewResponse {
   mode: ReportMode
-  status: "dry-run-complete" | "email-test-ready" | "live-ready"
+  status:
+    | "dry-run-complete"
+    | "email-test-ready"
+    | "live-ready"
+    | "received"
+    | "issue_created"
+    | "private_delivery_pending"
+    | "completed"
+    | "completed_with_private_delivery_failure"
+    | "retryable_failure"
+    | "rejected"
+    | "rate_limited"
   issue_title: string
   issue_body: string
   email_subject: string
@@ -755,6 +766,15 @@ export interface ReportPreviewResponse {
   attachments: ReportAttachmentSummary[]
   attachment_total_bytes: number
   attachments_sent: boolean
+  report_id?: string | null
+  issue_url?: string | null
+  private_delivery_status?: "not_requested" | "pending" | "delivered" | "failed" | null
+  correlation_id?: string | null
+}
+
+export interface ReportDraft {
+  reportId: string
+  supportCode: string
 }
 
 export interface ReportSubmissionAttachments {
@@ -779,14 +799,30 @@ function base64UrlEncode(value: string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "")
 }
 
-export function createReportSupportCode(payload: ReportProblemPayload): string {
+export function createReportSupportCode(
+  payload: ReportProblemPayload,
+  options: { reportId?: string; createdAt?: string } = {},
+): string {
+  const reportId = options.reportId ?? crypto.randomUUID()
   const envelope = {
-    schema: 1,
-    source: "channelwatch",
-    created_at: new Date().toISOString(),
+    schema: 2,
+    report_id: reportId,
+    created_at: options.createdAt ?? new Date().toISOString(),
     report: payloadForSupportCode(payload),
+    client: {
+      channelwatch_version: payload.diagnostics.channelwatch_version ?? "unknown",
+      submission_source: "in-app",
+    },
   }
-  return `CW-REPORT-v1-${base64UrlEncode(JSON.stringify(envelope))}`
+  return `CW-REPORT-v2-${base64UrlEncode(JSON.stringify(envelope))}`
+}
+
+export function createReportDraft(payload: ReportProblemPayload): ReportDraft {
+  const reportId = crypto.randomUUID()
+  return {
+    reportId,
+    supportCode: createReportSupportCode(payload, { reportId }),
+  }
 }
 
 function isSameOriginEndpoint(endpoint: string): boolean {
@@ -796,11 +832,13 @@ function isSameOriginEndpoint(endpoint: string): boolean {
 function buildReportBody(
   payload: ReportProblemPayload,
   attachments: ReportSubmissionAttachments = {},
-  options: { includeSupportCode?: boolean } = {},
+  options: { includeSupportCode?: boolean; supportCode?: string } = {},
 ) {
   const screenshotFiles = attachments.screenshots ?? []
   const hasAttachments = screenshotFiles.length > 0 || Boolean(attachments.debugBundle)
-  const supportCode = options.includeSupportCode ? createReportSupportCode(payload) : null
+  const supportCode = options.includeSupportCode
+    ? options.supportCode ?? createReportSupportCode(payload)
+    : null
   const body = hasAttachments
     ? new FormData()
     : JSON.stringify(supportCode ? { support_code: supportCode } : payload)
@@ -838,9 +876,13 @@ export async function submitReport(
   endpoint: string,
   payload: ReportProblemPayload,
   attachments: ReportSubmissionAttachments = {},
+  options: { supportCode?: string } = {},
 ): Promise<ReportPreviewResponse> {
   const sameOrigin = isSameOriginEndpoint(endpoint)
-  const { body, hasAttachments } = buildReportBody(payload, attachments, { includeSupportCode: !sameOrigin })
+  const { body, hasAttachments } = buildReportBody(payload, attachments, {
+    includeSupportCode: !sameOrigin,
+    supportCode: options.supportCode,
+  })
   const response = await fetch(endpoint, {
     method: "POST",
     credentials: sameOrigin ? "same-origin" : "omit",

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   ApiError,
-  createReportSupportCode,
+  createReportDraft,
   downloadOfflineReportPackage,
   fetchReportConfig,
   submitReport,
@@ -42,7 +42,7 @@ const payload: ReportProblemPayload = {
 }
 
 function decodeSupportCode(supportCode: string) {
-  const encoded = supportCode.replace("CW-REPORT-v1-", "")
+  const encoded = supportCode.replace(/^CW-REPORT-v[12]-/, "")
   const padded = encoded.padEnd(encoded.length + ((4 - (encoded.length % 4)) % 4), "=")
   return JSON.parse(atob(padded.replace(/-/g, "+").replace(/_/g, "/")))
 }
@@ -196,7 +196,10 @@ describe("support report API helpers", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
 
-    await submitReport("https://channelwatch.coderluii.dev/api/reports", payload)
+    const draft = createReportDraft(payload)
+    await submitReport("https://channelwatch.coderluii.dev/api/reports", payload, {}, {
+      supportCode: draft.supportCode,
+    })
 
     const [, options] = fetchMock.mock.calls[0]
     expect(options.credentials).toBe("omit")
@@ -205,10 +208,14 @@ describe("support report API helpers", () => {
       "X-ChannelWatch-In-App-Report": "1",
     })
     const body = JSON.parse(String(options.body))
-    expect(body).toEqual({ support_code: expect.stringMatching(/^CW-REPORT-v1-/) })
+    expect(body).toEqual({ support_code: draft.supportCode })
     expect(decodeSupportCode(body.support_code)).toMatchObject({
-      schema: 1,
-      source: "channelwatch",
+      schema: 2,
+      report_id: draft.reportId,
+      client: {
+        channelwatch_version: "0.9.3",
+        submission_source: "in-app",
+      },
       report: { email: "viewer@example.com" },
     })
   })
@@ -241,7 +248,7 @@ describe("support report API helpers", () => {
     const [, options] = fetchMock.mock.calls[0]
     const body = JSON.parse(String(options.body))
     expect(options.headers).toMatchObject({ "X-ChannelWatch-In-App-Report": "1" })
-    expect(body).toEqual({ support_code: expect.stringMatching(/^CW-REPORT-v1-/) })
+    expect(body).toEqual({ support_code: expect.stringMatching(/^CW-REPORT-v2-/) })
     expect(decodeSupportCode(body.support_code)).toMatchObject({
       report: { turnstile_token: null },
     })
@@ -283,18 +290,22 @@ describe("support report API helpers", () => {
     expect(options.body).toBeInstanceOf(FormData)
     const formData = options.body as FormData
     expect(formData.get("payload")).toBeNull()
-    expect(String(formData.get("support_code"))).toMatch(/^CW-REPORT-v1-/)
+    expect(String(formData.get("support_code"))).toMatch(/^CW-REPORT-v2-/)
     expect(formData.get("turnstile_token")).toBeNull()
     expect(formData.getAll("screenshots")).toHaveLength(1)
   })
 
-  it("creates a portable support code without contacting the network", () => {
-    const supportCode = createReportSupportCode(payload)
-    const decoded = decodeSupportCode(supportCode)
+  it("creates a schema-2 portable support code without contacting the network", () => {
+    const draft = createReportDraft(payload)
+    const decoded = decodeSupportCode(draft.supportCode)
 
     expect(decoded).toMatchObject({
-      schema: 1,
-      source: "channelwatch",
+      schema: 2,
+      report_id: draft.reportId,
+      client: {
+        channelwatch_version: "0.9.3",
+        submission_source: "in-app",
+      },
       report: {
         summary: "Active Streams shows a stream",
         email: "viewer@example.com",
@@ -303,6 +314,37 @@ describe("support report API helpers", () => {
         },
       },
     })
+  })
+
+  it("reuses one support code for retries of a finalized draft", async () => {
+    const draft = createReportDraft(payload)
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ mode: "live", status: "completed" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await submitReport("https://channelwatch.coderluii.dev/api/reports", payload, {}, {
+      supportCode: draft.supportCode,
+    })
+    await submitReport("https://channelwatch.coderluii.dev/api/reports", payload, {}, {
+      supportCode: draft.supportCode,
+    })
+
+    const submittedCodes = fetchMock.mock.calls.map(([, options]) =>
+      JSON.parse(String(options.body)).support_code,
+    )
+    expect(submittedCodes).toEqual([draft.supportCode, draft.supportCode])
+  })
+
+  it("creates a new report id when a changed draft is finalized", () => {
+    const first = createReportDraft(payload)
+    const edited = createReportDraft({ ...payload, summary: "Edited summary" })
+
+    expect(edited.reportId).not.toBe(first.reportId)
+    expect(edited.supportCode).not.toBe(first.supportCode)
   })
 
   it("downloads offline packages with multipart form data and app auth headers", async () => {

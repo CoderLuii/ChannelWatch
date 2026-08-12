@@ -39,7 +39,7 @@ import { Label } from "@/components/base/label"
 import { Textarea } from "@/components/base/textarea"
 import {
   ApiError,
-  createReportSupportCode,
+  createReportDraft,
   downloadDebugBundle,
   downloadOfflineReportPackage,
   fetchReportConfig,
@@ -47,12 +47,19 @@ import {
   type ReportAttachmentSummary,
   type ReportConfig,
   type ReportDiagnostics,
+  type ReportDraft,
   type ReportMode,
   type ReportPreviewResponse,
   type ReportProblemPayload,
 } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { escapeMarkdownTableCell } from "@/lib/report-markdown"
+import {
+  copySupportCode,
+  isPrivateDeliveryFailure,
+  reportSubmitLabelKey,
+  supportCodeDownloadFilename,
+} from "@/lib/reporting-ui"
 import type { AppSettings, SystemInfo } from "@/lib/types"
 
 const githubUsernamePattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
@@ -134,16 +141,19 @@ function externalEndpointRequiresSupportCode(config: ReportConfig | null): boole
 }
 
 function successTitle(preview: ReportPreviewResponse): string {
-  if (preview.mode === "live" && preview.attachments_sent) return t("supportReport.success.liveTitle")
-  if (preview.mode === "email-test" && preview.attachments_sent) return t("supportReport.success.emailTestTitle")
+  if (preview.mode === "live") return t("supportReport.success.liveTitle")
+  if (preview.mode === "email-test") return t("supportReport.success.emailTestTitle")
   return t("supportReport.success.title")
 }
 
 function successDescription(preview: ReportPreviewResponse): string {
-  if (preview.mode === "live" && preview.attachments_sent) {
+  if (preview.status === "completed_with_private_delivery_failure") {
+    return t("supportReport.success.privateDeliveryFailed")
+  }
+  if (preview.mode === "live") {
     return t("supportReport.success.liveDescription")
   }
-  if (preview.mode === "email-test" && preview.attachments_sent) {
+  if (preview.mode === "email-test") {
     return t("supportReport.success.emailTestDescription")
   }
   return t("supportReport.success.description")
@@ -637,6 +647,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
   const debugBundleInputRef = useRef<HTMLInputElement | null>(null)
   const scrollBodyRef = useRef<HTMLDivElement | null>(null)
+  const supportCodeFieldRef = useRef<HTMLTextAreaElement | null>(null)
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<"form" | "review" | "success">("form")
   const [config, setConfig] = useState<ReportConfig | null>(null)
@@ -645,6 +656,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const [form, setForm] = useState<ReportForm>(initialForm)
   const [errors, setErrors] = useState<Partial<Record<ReportField, string>>>({})
   const [draftPayload, setDraftPayload] = useState<ReportProblemPayload | null>(null)
+  const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null)
   const [serverPreview, setServerPreview] = useState<ReportPreviewResponse | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -654,7 +666,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const [screenshotDropActive, setScreenshotDropActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [manualUploadOpen, setManualUploadOpen] = useState(false)
-  const [supportCodeStatus, setSupportCodeStatus] = useState<"idle" | "copied" | "error">("idle")
+  const [supportCodeStatus, setSupportCodeStatus] = useState<"idle" | "copied" | "manual">("idle")
   const [offlinePackageStatus, setOfflinePackageStatus] = useState<
     "idle" | "downloading" | "downloaded" | "error"
   >("idle")
@@ -692,6 +704,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     setStep("form")
     setErrors({})
     setDraftPayload(null)
+    setReportDraft(null)
     setServerPreview(null)
     setSubmitError(null)
     setAttachmentError(null)
@@ -828,6 +841,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     }
 
     setDraftPayload(payload)
+    setReportDraft(createReportDraft(payload))
     setSubmitError(null)
     setManualUploadOpen(false)
     setSupportCodeStatus("idle")
@@ -844,6 +858,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
         config?.endpoint || "/api/v1/support/report-dry-run",
         draftPayload,
         { screenshots, debugBundle },
+        { supportCode: reportDraft?.supportCode },
       )
       if (response.email_in_public_issue) {
         throw new Error("Email was detected in the report preview.")
@@ -870,14 +885,18 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   }
 
   const handleCopySupportCode = async () => {
-    if (!draftPayload) return
+    if (!reportDraft) return
     setSupportCodeStatus("idle")
-    try {
-      await navigator.clipboard.writeText(createReportSupportCode(draftPayload))
-      setSupportCodeStatus("copied")
-    } catch {
-      setSupportCodeStatus("error")
-    }
+    const result = await copySupportCode(reportDraft.supportCode, supportCodeFieldRef.current)
+    setSupportCodeStatus(result)
+  }
+
+  const handleDownloadSupportCode = () => {
+    if (!reportDraft) return
+    downloadBlob(
+      new Blob([`${reportDraft.supportCode}\n`], { type: "text/plain;charset=utf-8" }),
+      supportCodeDownloadFilename,
+    )
   }
 
   const handleDownloadOfflinePackage = async () => {
@@ -896,13 +915,14 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const activePayload = serverPreview ? null : draftPayload
   const previewTitle = serverPreview?.issue_title || (activePayload ? renderIssueTitle(activePayload) : "")
   const supportPortalUrl = config?.portal_url || defaultSupportPortalUrl
-  const submitButtonText = t("supportReport.review.submitDryRun")
+  const submitButtonText = t(reportSubmitLabelKey(config?.mode ?? "dry-run"))
   const attachmentRows = privateAttachmentRows(
     serverPreview?.attachments ?? null,
     screenshots,
     debugBundle,
   )
   const hasAttachments = attachmentRows.length > 0
+  const privateDeliveryFailed = Boolean(serverPreview && isPrivateDeliveryFailure(serverPreview))
   const manualUploadPanel = draftPayload ? (
     <section
       className="rounded-lg border border-primary/35 bg-primary/5 p-4 text-sm"
@@ -913,13 +933,25 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold text-foreground">{t("supportReport.manual.title")}</h3>
           <p className="mt-1 text-muted-foreground">{t("supportReport.manual.description")}</p>
+          <Label htmlFor="report-support-code" className="mt-3 block text-xs font-medium uppercase text-muted-foreground">
+            {t("supportReport.manual.codeLabel")}
+          </Label>
+          <Textarea
+            ref={supportCodeFieldRef}
+            id="report-support-code"
+            readOnly
+            rows={4}
+            value={reportDraft?.supportCode ?? ""}
+            className="mt-1 resize-y font-mono text-xs"
+            data-testid="report-support-code"
+          />
           <div className="mt-3 rounded-md border border-border bg-background/70 px-3 py-2">
             <div className="text-xs font-medium uppercase text-muted-foreground">
               {t("supportReport.manual.uploadSite")}
             </div>
             <div className="mt-1 break-all text-xs text-foreground">{supportPortalUrl}</div>
           </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-3">
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Button
               type="button"
               variant="outline"
@@ -929,6 +961,16 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
             >
               <Copy className="h-4 w-4" />
               {t("supportReport.manual.copyCode")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="justify-center md:justify-start"
+              onClick={handleDownloadSupportCode}
+            >
+              <FileText className="h-4 w-4" />
+              {t("supportReport.manual.downloadCode")}
             </Button>
             <Button
               type="button"
@@ -962,8 +1004,8 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
           </p>
           <div aria-live="polite" className="mt-2 min-h-4 text-xs text-muted-foreground">
             {supportCodeStatus === "copied" && t("supportReport.manual.codeCopied")}
-            {supportCodeStatus === "error" && (
-              <span className="text-destructive">{t("supportReport.manual.codeCopyFailed")}</span>
+            {supportCodeStatus === "manual" && (
+              <span>{t("supportReport.manual.codeCopyManual")}</span>
             )}
             {offlinePackageStatus === "downloaded" && t("supportReport.manual.packageDownloaded")}
             {offlinePackageStatus === "error" && (
@@ -1430,14 +1472,52 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
 
             {step === "success" && serverPreview && draftPayload && (
               <div className="space-y-4" data-testid="report-problem-success">
-                <div className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-4">
+                <div
+                  className={
+                    privateDeliveryFailed
+                      ? "rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-4"
+                      : "rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-4"
+                  }
+                  data-testid={privateDeliveryFailed ? "report-private-delivery-warning" : undefined}
+                >
                   <div className="flex items-start gap-3">
-                    <CheckCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
+                    {privateDeliveryFailed ? (
+                      <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
+                    ) : (
+                      <CheckCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
+                    )}
                     <div>
-                      <h3 className="font-semibold text-emerald-500">{successTitle(serverPreview)}</h3>
+                      <h3 className={privateDeliveryFailed ? "font-semibold text-amber-500" : "font-semibold text-emerald-500"}>
+                        {privateDeliveryFailed
+                          ? t("supportReport.success.privateDeliveryFailedTitle")
+                          : successTitle(serverPreview)}
+                      </h3>
                       <p className="mt-1 text-sm text-muted-foreground">
                         {successDescription(serverPreview)}
                       </p>
+                      {serverPreview.report_id && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {t("supportReport.success.reference", { id: serverPreview.report_id })}
+                        </p>
+                      )}
+                      {serverPreview.private_delivery_status && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {t("supportReport.success.privateDeliveryStatus", {
+                            status: serverPreview.private_delivery_status,
+                          })}
+                        </p>
+                      )}
+                      {serverPreview.issue_url && (
+                        <a
+                          href={serverPreview.issue_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-primary underline underline-offset-4"
+                        >
+                          {t("supportReport.success.openIssue")}
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1523,7 +1603,19 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
               </>
             )}
             {step === "success" && (
-              <Button onClick={() => setOpen(false)}>{t("supportReport.success.close")}</Button>
+              <div className="flex w-full justify-end gap-2">
+                {privateDeliveryFailed && (
+                  <Button onClick={handleSubmit} disabled={submitting}>
+                    {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {submitting
+                      ? t("supportReport.status.retryingPrivateDelivery")
+                      : t("supportReport.success.retryPrivateDelivery")}
+                  </Button>
+                )}
+                <Button variant={privateDeliveryFailed ? "outline" : "default"} onClick={() => setOpen(false)}>
+                  {t("supportReport.success.close")}
+                </Button>
+              </div>
             )}
           </DialogFooter>
         </div>

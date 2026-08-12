@@ -8,6 +8,24 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.13] - 2026-08-12
+
+### Changed
+
+- Enable live problem-report submission in the official container while preserving dry-run behavior for source and development environments.
+- Make report preview, submission, delivery, retry, and fallback states explicit in the interface.
+- Mark v0.9.13 as container image update required because the official image reporting configuration changes.
+
+### Fixed
+
+- Keep report drafts and attachments available after a submission failure.
+- Display and download the support code so local browser clipboard restrictions cannot block manual reporting.
+- Accept supported ChannelWatch LAN origins on custom mapped ports and prevent retries from creating duplicate public issues.
+
+### Security
+
+- Add durable submission coordination, layered request throttling, stricter attachment validation, and automated public/private data-boundary checks.
+
 ## [0.9.12] - 2026-08-11
 
 ### Changed
@@ -316,7 +334,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.12...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.13...HEAD
+[0.9.13]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.12...v0.9.13
 [0.9.12]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.9...v0.9.10

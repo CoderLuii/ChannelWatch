@@ -1,9 +1,24 @@
-import { expect, test, type Locator, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test"
 
 import { installApiMocks } from "./support/mock-api"
 
 test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
+})
+
+test("report review works without randomUUID or network access", async ({ page, context }) => {
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByRole("button", { name: "Review report" }).click()
+  await expect(page.getByLabel("Problem summary")).toBeFocused()
+
+  await page.getByLabel("Problem summary").fill("LAN report review")
+  await page.evaluate(() => {
+    Object.defineProperty(globalThis.crypto, "randomUUID", { value: undefined, configurable: true })
+  })
+  await context.setOffline(true)
+  await page.getByRole("button", { name: "Review report" }).click()
+  await expect(page.getByTestId("report-problem-review")).toBeVisible()
 })
 
 const pasteClipboardImage = async (page: Page, selector: string, filename: string) => {
@@ -139,7 +154,7 @@ test("report problem shows dry-run API failures", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Copy support code" })).toBeVisible()
 })
 
-test("report problem submits directly without an in-app Cloudflare check", async ({ page }) => {
+test("report problem prepares anonymous proof without a visible challenge", async ({ page }) => {
   await page.route("**/api/v1/support/report-config", async (route) => {
     return route.fulfill({
       status: 200,
@@ -168,6 +183,12 @@ test("report problem submits directly without an in-app Cloudflare check", async
 
   const submittedBodies: Array<{ support_code?: string; turnstile_token?: string }> = []
   const submittedHeaders: Array<Record<string, string>> = []
+  await page.route("https://channelwatch.coderluii.dev/api/reports/challenge", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      nonce: "browser-test", expires_at: Date.now() + 60_000, route_class: "in_app",
+      difficulty: 0, key_id: "current", signature: "signed",
+    }) })
+  })
   await page.route("https://channelwatch.coderluii.dev/api/reports", async (route) => {
     submittedHeaders.push(route.request().headers())
     submittedBodies.push(route.request().postDataJSON() as { support_code?: string; turnstile_token?: string })
@@ -201,6 +222,7 @@ test("report problem submits directly without an in-app Cloudflare check", async
   await expect(page.getByTestId("report-problem-success")).toBeVisible()
   await expect(page.getByText("Report submitted")).toBeVisible()
   expect(submittedHeaders[0]?.["x-channelwatch-in-app-report"]).toBe("1")
+  expect(submittedHeaders[0]?.["x-channelwatch-report-challenge"]).toBeTruthy()
   expect(submittedBodies[0]?.support_code).toMatch(/^CW-REPORT-v2-/)
   expect(submittedBodies[0]?.turnstile_token).toBeUndefined()
 })
@@ -226,7 +248,13 @@ test("report problem retries failed private delivery without creating a new draf
 
   const supportCodes: string[] = []
   let attempt = 0
-  await page.route("https://channelwatch.coderluii.dev/api/reports", async (route) => {
+  await page.route("https://channelwatch.coderluii.dev/api/reports/challenge", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      nonce: `retry-${attempt}`, expires_at: Date.now() + 60_000, route_class: "in_app",
+      difficulty: 0, key_id: "current", signature: "signed",
+    }) })
+  })
+  const handlePrivateDelivery = async (route: Route) => {
     attempt += 1
     const body = route.request().postDataJSON() as { support_code: string }
     supportCodes.push(body.support_code)
@@ -249,7 +277,9 @@ test("report problem retries failed private delivery without creating a new draf
         attachments_sent: attempt > 1,
       }),
     })
-  })
+  }
+  await page.route("https://channelwatch.coderluii.dev/api/reports", handlePrivateDelivery)
+  await page.route("https://channelwatch.coderluii.dev/api/reports/retry-private", handlePrivateDelivery)
 
   await page.goto("/#diagnostics")
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
@@ -271,6 +301,97 @@ test("report problem retries failed private delivery without creating a new draf
   expect(supportCodes).toHaveLength(2)
   expect(supportCodes[0]).toMatch(/^CW-REPORT-v2-/)
   expect(supportCodes[1]).toBe(supportCodes[0])
+})
+
+test("provider confirmation pending is truthful and keeps the stable reference", async ({ page }) => {
+  await page.route("**/api/v1/support/report-config", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({
+      mode: "live", endpoint: "https://channelwatch.coderluii.dev/api/reports",
+      portal_url: "https://channelwatch.coderluii.dev/report", max_bytes: 262144,
+      attachments_enabled: true, max_attachment_bytes: 8388608,
+      max_total_attachment_bytes: 20971520, max_screenshot_count: 5, allowed_attachment_types: [],
+    }),
+  }))
+  await page.route("https://channelwatch.coderluii.dev/api/reports/challenge", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ nonce: "pending", expires_at: Date.now() + 60000, route_class: "in_app", difficulty: 0, key_id: "current", signature: "signed" }),
+  }))
+  await page.route("https://channelwatch.coderluii.dev/api/reports", (route) => route.fulfill({
+    status: 202, contentType: "application/json", body: JSON.stringify({ status: "provider_confirmation_pending", mode: "live", report_id: "stable-report-reference", correlation_id: "safe-correlation" }),
+  }))
+  let statusChecks = 0
+  await page.route("https://channelwatch.coderluii.dev/api/reports/status", (route) => {
+    statusChecks += 1
+    const submitted = route.request().postDataJSON() as { support_code: string }
+    expect(submitted.support_code).toMatch(/^CW-REPORT-v2-/)
+    expect(route.request().url()).not.toContain(submitted.support_code)
+    if (statusChecks === 1) return route.fulfill({
+      status: 202, contentType: "application/json", body: JSON.stringify({ status: "provider_confirmation_pending", mode: "live", report_id: "stable-report-reference" }),
+    })
+    if (statusChecks === 2) return route.fulfill({
+      status: 503, contentType: "application/json", body: JSON.stringify({ detail: { code: "REPORT_STATUS_UNAVAILABLE", message: "Status is temporarily unavailable." } }),
+    })
+    return route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({
+        status: "completed", mode: "live", report_id: "stable-report-reference",
+        issue_url: "https://github.com/CoderLuii/ChannelWatch/issues/456",
+        issue_title: "[In-App] Pending provider confirmation", issue_body: "report body",
+        email_subject: "ChannelWatch issue", email_body: "private body",
+        email_in_public_issue: false, attachments: [], attachment_total_bytes: 0,
+        attachments_sent: true, private_delivery_status: "delivered",
+      }),
+    })
+  })
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByLabel("Problem summary").fill("Pending provider confirmation")
+  await page.getByRole("button", { name: "Review report" }).click()
+  await page.getByRole("button", { name: "Submit report" }).click()
+  await expect(page.getByTestId("report-provider-confirmation-pending")).toBeVisible()
+  await expect(page.getByText("Report confirmation pending")).toBeVisible()
+  await expect(page.getByText("Report reference: stable-report-reference")).toBeVisible()
+  await expect(page.getByText("The report and attachments were validated locally. Nothing was sent.")).toHaveCount(0)
+  await expect(page.getByText("Report submitted")).toHaveCount(0)
+  await page.getByRole("button", { name: "Check report status" }).click()
+  await expect(page.getByTestId("report-provider-confirmation-pending")).toBeVisible()
+  await page.getByRole("button", { name: "Check report status" }).click()
+  await expect(page.getByText("Status is temporarily unavailable.")).toBeVisible()
+  await page.getByRole("button", { name: "Check report status" }).click()
+  await expect(page.getByText("Report submitted")).toBeVisible()
+  await expect(page.getByRole("link", { name: "Open GitHub issue" })).toHaveAttribute("href", "https://github.com/CoderLuii/ChannelWatch/issues/456")
+})
+
+test("slow secure preparation can be cancelled and keeps manual fallbacks", async ({ page }) => {
+  await page.route("**/api/v1/support/report-config", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({
+      mode: "live", endpoint: "https://channelwatch.coderluii.dev/api/reports",
+      portal_url: "https://channelwatch.coderluii.dev/report", max_bytes: 262144,
+      attachments_enabled: true, max_attachment_bytes: 8388608,
+      max_total_attachment_bytes: 20971520, max_screenshot_count: 5,
+      allowed_attachment_types: ["image/png", "image/jpeg", "image/webp", "application/zip"],
+    }),
+  }))
+  await page.route("https://channelwatch.coderluii.dev/api/reports/challenge", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({
+      nonce: "intentionally-slow", expires_at: Date.now() + 60_000, route_class: "in_app",
+      difficulty: 24, key_id: "current", signature: "signed",
+    }),
+  }))
+  let reportRequests = 0
+  await page.route("https://channelwatch.coderluii.dev/api/reports", (route) => {
+    reportRequests += 1
+    return route.abort()
+  })
+
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByLabel("Problem summary").fill("Cancel slow preparation")
+  await page.getByRole("button", { name: "Review report" }).click()
+  await page.getByRole("button", { name: "Submit report" }).click()
+  await expect(page.getByRole("button", { name: "Preparing secure submission..." })).toBeVisible()
+  await page.getByRole("button", { name: "Cancel", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Manual upload fallback" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Download support code" })).toBeVisible()
+  expect(reportRequests).toBe(0)
 })
 
 test("report problem attachments stay aligned on mobile", async ({ page }) => {

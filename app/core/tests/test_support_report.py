@@ -2,23 +2,62 @@ import json
 import io
 import zipfile
 import base64
+import struct
+import zlib
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
 
 from ui.backend.support_report import (
+    DEBUG_BUNDLE_MAX_COMPRESSION_RATIO,
+    DEBUG_BUNDLE_MAX_ENTRIES,
+    DEBUG_BUNDLE_MAX_UNCOMPRESSED_BYTES,
+    DEBUG_BUNDLE_REQUIRED_MEMBERS,
     ReportAttachmentInvalid,
     ReportPayloadInvalid,
     ReportPayloadTooLarge,
+    SCREENSHOT_MAX_DECODED_BYTES,
+    SCREENSHOT_MAX_DIMENSION,
+    SCREENSHOT_MAX_PIXELS,
     build_offline_report_package,
     parse_report_payload,
+    parse_schema2_support_code,
     render_email_html,
     render_issue_body,
     render_report_preview,
     render_support_code,
     summarize_report_attachment,
 )
+
+
+def test_support_report_attachment_policy_matches_shared_worker_fixture():
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "report_attachment_policy.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fixture == {
+        "schema": 1,
+        "images": {
+            "maximum_side": SCREENSHOT_MAX_DIMENSION,
+            "maximum_pixels": SCREENSHOT_MAX_PIXELS,
+            "maximum_decoded_bytes": SCREENSHOT_MAX_DECODED_BYTES,
+        },
+        "debug_bundle": {
+            "maximum_entries": DEBUG_BUNDLE_MAX_ENTRIES,
+            "maximum_expanded_bytes": DEBUG_BUNDLE_MAX_UNCOMPRESSED_BYTES,
+            "maximum_compression_ratio": DEBUG_BUNDLE_MAX_COMPRESSION_RATIO,
+            "required_members": sorted(DEBUG_BUNDLE_REQUIRED_MEMBERS),
+            "manifest": {
+                "bundle_type": "debug",
+                "created_by": "channelwatch",
+                "bundle_schema_version": 1,
+            },
+        },
+    }
 
 
 def _payload(**overrides):
@@ -53,7 +92,10 @@ def _parse(payload):
 
 
 def _png_bytes():
-    return b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    def chunk(name, data):
+        return struct.pack(">I", len(data)) + name + data + struct.pack(">I", zlib.crc32(name + data) & 0xFFFFFFFF)
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00\x00")) + chunk(b"IEND", b"")
 
 
 def _zip_bytes():
@@ -89,6 +131,20 @@ def _debug_zip_with_extra_file():
     return buffer.getvalue()
 
 
+def _schema2_code(payload, **overrides):
+    envelope = {
+        "schema": 2,
+        "report_id": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+        "created_at": "2026-08-13T00:00:00Z",
+        "report": payload,
+        "client": {"channelwatch_version": payload["diagnostics"].get("channelwatch_version") or "unknown", "submission_source": "in-app"},
+    }
+    envelope.update(overrides)
+    return "CW-REPORT-v2-" + base64.urlsafe_b64encode(
+        json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode()
+    ).decode().rstrip("=")
+
+
 def test_support_report_normalizes_public_usernames():
     payload = _parse(
         _payload(
@@ -104,6 +160,45 @@ def test_support_report_normalizes_public_usernames():
 def test_support_report_requires_problem_summary():
     with pytest.raises(ReportPayloadInvalid):
         _parse(_payload(summary="   "))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"created_at": None},
+        {"created_at": "not-a-date"},
+        {"created_at": "2026-08-13T12:00:00-04:00"},
+        {"created_at": (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()},
+        {"created_at": "future-beyond-limit"},
+        {"client": None},
+        {"client": {"channelwatch_version": "0.9.3", "submission_source": "portal"}},
+        {"client": {"channelwatch_version": "forged", "submission_source": "in-app"}},
+        {"client": {"channelwatch_version": "0.9.13", "submission_source": "in-app"}},
+        {"client": {"channelwatch_version": "0.9.3", "submission_source": "in-app", "extra": True}},
+    ],
+)
+def test_schema2_support_code_rejects_invalid_timestamp_or_client(overrides):
+    if overrides.get("created_at") == "future-beyond-limit":
+        overrides = {
+            **overrides,
+            "created_at": (datetime.now(timezone.utc) + timedelta(minutes=6)).isoformat(),
+        }
+    with pytest.raises(ReportPayloadInvalid):
+        parse_schema2_support_code(_schema2_code(_payload(), **overrides))
+
+
+def test_schema2_support_code_preserves_unicode_and_exact_original_code():
+    payload = _payload(summary="Canal café — 日本語 📺")
+    support_code = _schema2_code(payload)
+    decoded, envelope = parse_schema2_support_code(support_code)
+    assert decoded.summary == "Canal café — 日本語 📺"
+    package = build_offline_report_package(decoded, support_code=support_code)
+    with zipfile.ZipFile(io.BytesIO(package)) as archive:
+        assert archive.read("support-code.txt").decode("utf-8") == support_code
+    assert envelope["client"] == {
+        "channelwatch_version": "0.9.3",
+        "submission_source": "in-app",
+    }
 
 
 def test_support_report_rejects_oversized_payload_before_json_validation():
@@ -233,8 +328,18 @@ def test_support_report_offline_package_contains_validated_private_files():
         kind="debug_bundle",
     )
 
+    expected_support_code = "CW-REPORT-v2-" + base64.urlsafe_b64encode(
+        json.dumps({
+            "schema": 2,
+            "report_id": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+            "created_at": "2026-08-13T00:00:00Z",
+            "report": payload.model_dump(),
+            "client": {"channelwatch_version": "0.9.3", "submission_source": "in-app"},
+        }, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
     package_bytes = build_offline_report_package(
         payload,
+        support_code=expected_support_code,
         attachments=[
             (screenshot, png_bytes),
             (bundle, zip_bytes),
@@ -255,7 +360,7 @@ def test_support_report_offline_package_contains_validated_private_files():
     assert "private-person@example.com" not in issue_preview
     assert "screen-active-stream.png" not in issue_preview
     assert "channelwatch_debug.zip" not in issue_preview
-    assert support_code.startswith("CW-REPORT-v1-")
+    assert support_code.strip() == expected_support_code
     assert manifest["upload_url"] == "https://channelwatch.coderluii.dev/report"
     assert [item["filename"] for item in manifest["attachments"]] == [
         "screen-active-stream.png",
@@ -311,6 +416,43 @@ def test_support_report_rejects_invalid_attachment_type():
         )
 
 
+def test_support_report_rejects_oversized_image_dimensions():
+    png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + (9000).to_bytes(4, "big") + (1).to_bytes(4, "big")
+    with pytest.raises(ReportAttachmentInvalid, match="dimensions"):
+        summarize_report_attachment(
+            filename="huge.png", content_type="image/png", content=png, kind="screenshot"
+        )
+
+
+def test_support_report_rejects_truncated_png_after_valid_header():
+    with pytest.raises(ReportAttachmentInvalid, match="incomplete|truncated"):
+        summarize_report_attachment(
+            filename="truncated.png",
+            content_type="image/png",
+            content=_png_bytes()[:-8],
+            kind="screenshot",
+        )
+
+
+def test_support_report_rejects_duplicate_debug_bundle_paths():
+    buffer = io.BytesIO()
+    prefix = "channelwatch_debug_20260813T000000Z"
+    manifest = json.dumps({"bundle_type": "debug", "bundle_schema_version": 1, "created_by": "channelwatch"})
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr(f"{prefix}/manifest.json", manifest)
+        bundle.writestr(f"{prefix}/MANIFEST.JSON", manifest)
+        bundle.writestr(f"{prefix}/settings_sanitized.json", "{}")
+        bundle.writestr(f"{prefix}/logs/app.log", "")
+        bundle.writestr(f"{prefix}/health_snapshot.json", "{}")
+    with pytest.raises(ReportAttachmentInvalid, match="duplicate"):
+        summarize_report_attachment(
+            filename="channelwatch_debug.zip",
+            content_type="application/zip",
+            content=buffer.getvalue(),
+            kind="debug_bundle",
+        )
+
+
 def test_support_report_rejects_fake_debug_bundle_zip():
     with pytest.raises(ReportAttachmentInvalid):
         summarize_report_attachment(
@@ -361,9 +503,11 @@ def test_support_report_offline_package_endpoint_returns_zip():
 
     with patch("ui.backend.main.CW_DISABLE_AUTH", True):
         with TestClient(ui_main.app, raise_server_exceptions=False) as client:
+            payload = _payload()
+            support_code = _schema2_code(payload)
             response = client.post(
                 "/api/v1/support/offline-package",
-                data={"payload": json.dumps(_payload())},
+                data={"support_code": support_code},
                 files=[
                     ("screenshots", ("active-stream.png", _png_bytes(), "image/png")),
                     ("debug_bundle", ("channelwatch_debug.zip", _zip_bytes(), "application/zip")),
@@ -375,7 +519,9 @@ def test_support_report_offline_package_endpoint_returns_zip():
     with zipfile.ZipFile(io.BytesIO(response.content), "r") as package:
         names = set(package.namelist())
         issue_preview = package.read("issue-preview.md").decode("utf-8")
+        packaged_code = package.read("support-code.txt").decode("utf-8").strip()
     assert "support-code.txt" in names
     assert "manifest.json" in names
     assert "active-stream.png" not in issue_preview
     assert "channelwatch_debug.zip" not in issue_preview
+    assert packaged_code == support_code

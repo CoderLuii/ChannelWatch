@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "images": {
+    "maximum_side": 8192,
+    "maximum_pixels": 40000000,
+    "maximum_decoded_bytes": 167772160
+  },
+  "debug_bundle": {
+    "maximum_entries": 8,
+    "maximum_expanded_bytes": 20971520,
+    "maximum_compression_ratio": 100,
+    "required_members": [
+      "health_snapshot.json",
+      "logs/app.log",
+      "manifest.json",
+      "settings_sanitized.json"
+    ],
+    "manifest": {
+      "bundle_type": "debug",
+      "created_by": "channelwatch",
+      "bundle_schema_version": 1
+    }
+  }
+}

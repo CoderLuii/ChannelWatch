@@ -8,6 +8,18 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.14] - 2026-08-13
+
+### Fixed
+
+- Make problem-report review work on local-network addresses where secure browser APIs are unavailable.
+- Keep reporting status, retry, offline fallback, and validation messages accurate and actionable during network and provider failures.
+- Improve update impact detection so version-only container metadata changes do not incorrectly require a new image.
+
+### Security
+
+- Strengthen support-package validation and preserve the public/private reporting boundary across retries and recovery.
+
 ## [0.9.13] - 2026-08-12
 
 ### Changed
@@ -334,7 +346,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.13...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.14...HEAD
+[0.9.14]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.13...v0.9.14
 [0.9.13]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.12...v0.9.13
 [0.9.12]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.10...v0.9.11

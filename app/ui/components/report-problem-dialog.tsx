@@ -39,10 +39,12 @@ import { Label } from "@/components/base/label"
 import { Textarea } from "@/components/base/textarea"
 import {
   ApiError,
+  checkReportStatus,
   createReportDraft,
   downloadDebugBundle,
   downloadOfflineReportPackage,
   fetchReportConfig,
+  retryPrivateReport,
   submitReport,
   type ReportAttachmentSummary,
   type ReportConfig,
@@ -57,6 +59,7 @@ import { escapeMarkdownTableCell } from "@/lib/report-markdown"
 import {
   copySupportCode,
   isPrivateDeliveryFailure,
+  isProviderConfirmationPending,
   reportSubmitLabelKey,
   supportCodeDownloadFilename,
 } from "@/lib/reporting-ui"
@@ -141,12 +144,14 @@ function externalEndpointRequiresSupportCode(config: ReportConfig | null): boole
 }
 
 function successTitle(preview: ReportPreviewResponse): string {
+  if (isProviderConfirmationPending(preview)) return t("supportReport.pending.title")
   if (preview.mode === "live") return t("supportReport.success.liveTitle")
   if (preview.mode === "email-test") return t("supportReport.success.emailTestTitle")
   return t("supportReport.success.title")
 }
 
 function successDescription(preview: ReportPreviewResponse): string {
+  if (isProviderConfirmationPending(preview)) return t("supportReport.pending.description")
   if (preview.status === "completed_with_private_delivery_failure") {
     return t("supportReport.success.privateDeliveryFailed")
   }
@@ -647,7 +652,9 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
   const debugBundleInputRef = useRef<HTMLInputElement | null>(null)
   const scrollBodyRef = useRef<HTMLDivElement | null>(null)
+  const attachmentSectionRef = useRef<HTMLElement | null>(null)
   const supportCodeFieldRef = useRef<HTMLTextAreaElement | null>(null)
+  const submissionAbortRef = useRef<AbortController | null>(null)
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<"form" | "review" | "success">("form")
   const [config, setConfig] = useState<ReportConfig | null>(null)
@@ -665,6 +672,8 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const [debugBundleLoading, setDebugBundleLoading] = useState(false)
   const [screenshotDropActive, setScreenshotDropActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [preparingSubmission, setPreparingSubmission] = useState(false)
+  const [checkingStatus, setCheckingStatus] = useState(false)
   const [manualUploadOpen, setManualUploadOpen] = useState(false)
   const [supportCodeStatus, setSupportCodeStatus] = useState<"idle" | "copied" | "manual">("idle")
   const [offlinePackageStatus, setOfflinePackageStatus] = useState<
@@ -815,50 +824,86 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     }
   }
 
-  const handleReview = () => {
-    const parsed = reportFormSchema.safeParse(form)
-    if (!parsed.success) {
-      const nextErrors: Partial<Record<ReportField, string>> = {}
-      for (const issue of parsed.error.issues) {
-        const field = issue.path[0] as ReportField | undefined
-        if (field && !nextErrors[field]) nextErrors[field] = issue.message
+  const focusReviewBlocker = (field?: ReportField, attachment = false) => {
+    window.setTimeout(() => {
+      const fieldIds: Record<ReportField, string> = {
+        summary: "report-summary",
+        expected: "report-expected",
+        getchannels_username: "report-getchannels",
+        github_username: "report-github",
+        email: "report-email",
       }
-      setErrors(nextErrors)
-      return
-    }
+      const target = attachment
+        ? attachmentSectionRef.current
+        : field
+          ? document.getElementById(fieldIds[field])
+          : null
+      target?.scrollIntoView({ behavior: "smooth", block: "center" })
+      target?.focus({ preventScroll: true })
+    }, 0)
+  }
 
-    const payload = buildPayload(parsed.data)
-    const maxBytes = config?.max_bytes ?? 262144
-    const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).length
-    if (payloadBytes > maxBytes) {
-      setErrors({ summary: t("supportReport.error.payloadTooLarge") })
-      return
-    }
-    const attachmentValidation = validateAttachmentSelection(config, screenshots, debugBundle)
-    if (attachmentValidation) {
-      setAttachmentError(attachmentValidation)
-      return
-    }
+  const handleReview = () => {
+    try {
+      const parsed = reportFormSchema.safeParse(form)
+      if (!parsed.success) {
+        const nextErrors: Partial<Record<ReportField, string>> = {}
+        for (const issue of parsed.error.issues) {
+          const field = issue.path[0] as ReportField | undefined
+          if (field && !nextErrors[field]) nextErrors[field] = issue.message
+        }
+        setErrors(nextErrors)
+        focusReviewBlocker(Object.keys(nextErrors)[0] as ReportField | undefined)
+        return
+      }
 
-    setDraftPayload(payload)
-    setReportDraft(createReportDraft(payload))
-    setSubmitError(null)
-    setManualUploadOpen(false)
-    setSupportCodeStatus("idle")
-    setOfflinePackageStatus("idle")
-    setStep("review")
+      const payload = buildPayload(parsed.data)
+      const maxBytes = config?.max_bytes ?? 262144
+      const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).length
+      if (payloadBytes > maxBytes) {
+        setErrors({ summary: t("supportReport.error.payloadTooLarge") })
+        focusReviewBlocker("summary")
+        return
+      }
+      const attachmentValidation = validateAttachmentSelection(config, screenshots, debugBundle)
+      if (attachmentValidation) {
+        setAttachmentError(attachmentValidation)
+        focusReviewBlocker(undefined, true)
+        return
+      }
+
+      setDraftPayload(payload)
+      setReportDraft(createReportDraft(payload))
+      setSubmitError(null)
+      setManualUploadOpen(false)
+      setSupportCodeStatus("idle")
+      setOfflinePackageStatus("idle")
+      setStep("review")
+    } catch (error) {
+      setAttachmentError(
+        error instanceof Error ? error.message : t("supportReport.error.submit"),
+      )
+      focusReviewBlocker(undefined, true)
+    }
   }
 
   const handleSubmit = async () => {
     if (!draftPayload) return
     setSubmitting(true)
+    setPreparingSubmission(false)
     setSubmitError(null)
+    const abortController = new AbortController()
+    submissionAbortRef.current = abortController
     try {
       const response = await submitReport(
         config?.endpoint || "/api/v1/support/report-dry-run",
         draftPayload,
         { screenshots, debugBundle },
-        { supportCode: reportDraft?.supportCode },
+        {
+          supportCode: reportDraft?.supportCode,
+          signal: abortController.signal,
+          onChallengeProgress: () => setPreparingSubmission(true),
+        },
       )
       if (response.email_in_public_issue) {
         throw new Error("Email was detected in the report preview.")
@@ -880,7 +925,53 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
       setSubmitError(message)
       setManualUploadOpen(true)
     } finally {
+      submissionAbortRef.current = null
+      setPreparingSubmission(false)
       setSubmitting(false)
+    }
+  }
+
+  const handleRetryPrivateDelivery = async () => {
+    if (!draftPayload || !reportDraft) return
+    setSubmitting(true)
+    setPreparingSubmission(false)
+    setSubmitError(null)
+    const abortController = new AbortController()
+    submissionAbortRef.current = abortController
+    try {
+      const response = await retryPrivateReport(
+        config?.endpoint || "https://channelwatch.coderluii.dev/api/reports",
+        draftPayload,
+        { screenshots, debugBundle },
+        {
+          supportCode: reportDraft.supportCode,
+          signal: abortController.signal,
+          onChallengeProgress: () => setPreparingSubmission(true),
+        },
+      )
+      setServerPreview(response)
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : t("supportReport.error.submit"))
+    } finally {
+      submissionAbortRef.current = null
+      setPreparingSubmission(false)
+      setSubmitting(false)
+    }
+  }
+
+  const handleCheckReportStatus = async () => {
+    if (!reportDraft) return
+    setCheckingStatus(true)
+    setSubmitError(null)
+    try {
+      setServerPreview(await checkReportStatus(
+        config?.endpoint || "https://channelwatch.coderluii.dev/api/reports",
+        reportDraft.supportCode,
+      ))
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : t("supportReport.error.statusCheck"))
+    } finally {
+      setCheckingStatus(false)
     }
   }
 
@@ -903,7 +994,12 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     if (!draftPayload || offlinePackageStatus === "downloading") return
     setOfflinePackageStatus("downloading")
     try {
-      const blob = await downloadOfflineReportPackage(draftPayload, { screenshots, debugBundle })
+      if (!reportDraft) throw new Error("Report draft is unavailable.")
+      const blob = await downloadOfflineReportPackage(
+        draftPayload,
+        { screenshots, debugBundle },
+        reportDraft.supportCode,
+      )
       downloadBlob(blob, offlinePackageFilename())
       setOfflinePackageStatus("downloaded")
     } catch {
@@ -923,6 +1019,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   )
   const hasAttachments = attachmentRows.length > 0
   const privateDeliveryFailed = Boolean(serverPreview && isPrivateDeliveryFailure(serverPreview))
+  const providerConfirmationPending = Boolean(serverPreview && isProviderConfirmationPending(serverPreview))
   const manualUploadPanel = draftPayload ? (
     <section
       className="rounded-lg border border-primary/35 bg-primary/5 p-4 text-sm"
@@ -1209,7 +1306,11 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                   </div>
                 )}
 
-                <section className="space-y-3 rounded-md border border-border bg-background p-3">
+                <section
+                  ref={attachmentSectionRef}
+                  tabIndex={-1}
+                  className="space-y-3 rounded-md border border-border bg-background p-3 focus:outline-none focus:ring-2 focus:ring-destructive/60"
+                >
                   <div className="flex items-start gap-2">
                     <Paperclip className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
                     <div>
@@ -1474,20 +1575,26 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
               <div className="space-y-4" data-testid="report-problem-success">
                 <div
                   className={
-                    privateDeliveryFailed
+                    privateDeliveryFailed || providerConfirmationPending
                       ? "rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-4"
                       : "rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-4"
                   }
-                  data-testid={privateDeliveryFailed ? "report-private-delivery-warning" : undefined}
+                  data-testid={
+                    privateDeliveryFailed
+                      ? "report-private-delivery-warning"
+                      : providerConfirmationPending
+                        ? "report-provider-confirmation-pending"
+                        : undefined
+                  }
                 >
                   <div className="flex items-start gap-3">
-                    {privateDeliveryFailed ? (
+                    {privateDeliveryFailed || providerConfirmationPending ? (
                       <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
                     ) : (
                       <CheckCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
                     )}
                     <div>
-                      <h3 className={privateDeliveryFailed ? "font-semibold text-amber-500" : "font-semibold text-emerald-500"}>
+                      <h3 className={privateDeliveryFailed || providerConfirmationPending ? "font-semibold text-amber-500" : "font-semibold text-emerald-500"}>
                         {privateDeliveryFailed
                           ? t("supportReport.success.privateDeliveryFailedTitle")
                           : successTitle(serverPreview)}
@@ -1521,6 +1628,14 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                     </div>
                   </div>
                 </div>
+                {submitError && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>{t("supportReport.error.privateRetry")}</AlertTitle>
+                    <AlertDescription>{submitError}</AlertDescription>
+                  </Alert>
+                )}
+                {!providerConfirmationPending && <>
                 <section className="rounded-lg border border-border bg-background">
                   <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                     <Paperclip className="h-4 w-4 text-primary" />
@@ -1555,6 +1670,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                     <ReportPreviewCard title={serverPreview.issue_title} payload={draftPayload} />
                   </div>
                 </section>
+                </>}
               </div>
             )}
           </div>
@@ -1593,10 +1709,21 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                       {t("supportReport.manual.footerButton")}
                     </Button>
                   )}
+                  {submitting && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => submissionAbortRef.current?.abort()}
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                  )}
                   <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={submitting}>
                     {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting
-                      ? t("supportReport.status.submitting")
+                      ? preparingSubmission
+                        ? t("supportReport.status.preparing")
+                        : t("supportReport.status.submitting")
                       : submitButtonText}
                   </Button>
                 </div>
@@ -1604,15 +1731,23 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
             )}
             {step === "success" && (
               <div className="flex w-full justify-end gap-2">
+                {providerConfirmationPending && (
+                  <Button onClick={handleCheckReportStatus} disabled={checkingStatus}>
+                    {checkingStatus && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {checkingStatus
+                      ? t("supportReport.status.checking")
+                      : t("supportReport.pending.checkStatus")}
+                  </Button>
+                )}
                 {privateDeliveryFailed && (
-                  <Button onClick={handleSubmit} disabled={submitting}>
+                  <Button onClick={handleRetryPrivateDelivery} disabled={submitting}>
                     {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting
                       ? t("supportReport.status.retryingPrivateDelivery")
                       : t("supportReport.success.retryPrivateDelivery")}
                   </Button>
                 )}
-                <Button variant={privateDeliveryFailed ? "outline" : "default"} onClick={() => setOpen(false)}>
+                <Button variant={privateDeliveryFailed || providerConfirmationPending ? "outline" : "default"} onClick={() => setOpen(false)}>
                   {t("supportReport.success.close")}
                 </Button>
               </div>

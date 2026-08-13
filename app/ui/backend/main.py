@@ -41,6 +41,8 @@ from .support_report import (
     build_offline_report_package,
     parse_report_mode,
     parse_report_payload,
+    parse_schema2_support_code,
+    require_support_code_matches_payload,
     render_report_preview,
     summarize_report_attachment,
     validate_attachment_limits,
@@ -1534,7 +1536,9 @@ async def _read_report_upload(
 
 async def _parse_support_report_request(
     request: Request,
-) -> tuple[ReportProblemPayload, list[tuple[ReportAttachmentSummary, bytes]]]:
+    *,
+    accept_support_code: bool = False,
+) -> tuple[ReportProblemPayload, list[tuple[ReportAttachmentSummary, bytes]], str | None]:
     max_bytes = _configured_report_max_bytes()
     max_attachment_bytes = _configured_report_max_attachment_bytes()
     max_total_attachment_bytes = _configured_report_max_total_attachment_bytes()
@@ -1559,11 +1563,22 @@ async def _parse_support_report_request(
                 _REPORT_PAYLOAD_TOO_LARGE_MESSAGE,
             )
         try:
-            return parse_report_payload(raw_body, max_bytes), []
+            if accept_support_code:
+                decoded = json.loads(raw_body.decode("utf-8"))
+                if isinstance(decoded, dict) and isinstance(decoded.get("support_code"), str):
+                    support_code = decoded["support_code"]
+                    payload, _envelope = parse_schema2_support_code(support_code)
+                    return payload, [], support_code
+            return parse_report_payload(raw_body, max_bytes), [], None
         except ReportPayloadTooLarge as exc:
             raise _report_error(ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE, str(exc))
         except ReportPayloadInvalid as exc:
             raise _report_error(ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID, str(exc))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _report_error(
+                ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID,
+                "Report payload must be valid JSON.",
+            ) from exc
 
     try:
         form = await request.form()
@@ -1573,15 +1588,22 @@ async def _parse_support_report_request(
             _REPORT_FORM_INVALID_MESSAGE,
         ) from exc
 
+    support_code = form.get("support_code") if accept_support_code else None
     raw_payload = form.get("payload")
-    if not isinstance(raw_payload, str):
+    if not isinstance(raw_payload, str) and not isinstance(support_code, str):
         raise _report_error(
             ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID,
             _REPORT_PAYLOAD_REQUIRED_MESSAGE,
         )
 
     try:
-        payload = parse_report_payload(raw_payload.encode("utf-8"), max_bytes)
+        if isinstance(support_code, str):
+            payload, _envelope = parse_schema2_support_code(support_code)
+            if isinstance(raw_payload, str):
+                supplied_payload = parse_report_payload(raw_payload.encode("utf-8"), max_bytes)
+                require_support_code_matches_payload(support_code, supplied_payload)
+        else:
+            payload = parse_report_payload(raw_payload.encode("utf-8"), max_bytes)
     except ReportPayloadTooLarge as exc:
         raise _report_error(ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE, str(exc))
     except ReportPayloadInvalid as exc:
@@ -1645,7 +1667,7 @@ async def _parse_support_report_request(
     except ReportAttachmentInvalid as exc:
         raise _report_error(ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID, str(exc))
 
-    return payload, attachments
+    return payload, attachments, support_code if isinstance(support_code, str) else None
 
 
 @app.get(
@@ -1677,7 +1699,7 @@ async def get_support_report_config():
     dependencies=[require_role("operator")],
 )
 async def submit_support_report_dry_run(request: Request):
-    payload, attachment_files = await _parse_support_report_request(request)
+    payload, attachment_files, _support_code = await _parse_support_report_request(request)
     return render_report_preview(
         payload,
         mode="dry-run",
@@ -1691,9 +1713,17 @@ async def submit_support_report_dry_run(request: Request):
     dependencies=[require_role("operator")],
 )
 async def download_support_report_offline_package(request: Request):
-    payload, attachment_files = await _parse_support_report_request(request)
+    payload, attachment_files, support_code = await _parse_support_report_request(
+        request, accept_support_code=True
+    )
+    if support_code is None:
+        raise _report_error(
+            ErrorCode.SUPPORT_REPORT_PAYLOAD_INVALID,
+            "A finalized schema-2 support code is required.",
+        )
     package = build_offline_report_package(
         payload,
+        support_code=support_code,
         attachments=attachment_files,
         portal_url=_configured_report_portal_url(),
     )

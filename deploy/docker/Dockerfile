@@ -34,7 +34,7 @@ FROM cgr.dev/chainguard/python:latest@sha256:e2554b2ab18fc6d3a22f249245f8a8cf866
 
 USER root
 
-ARG VERSION=0.9.13
+ARG VERSION=0.9.14
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

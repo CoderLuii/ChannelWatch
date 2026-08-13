@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import re
+import struct
+import zlib
 import zipfile
 import base64
 from html import escape as html_escape
@@ -37,6 +39,10 @@ DEBUG_BUNDLE_REQUIRED_MEMBERS = frozenset(
 )
 DEBUG_BUNDLE_MAX_ENTRIES = 8
 DEBUG_BUNDLE_MAX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+SCREENSHOT_MAX_DIMENSION = 8192
+SCREENSHOT_MAX_PIXELS = 40_000_000
+SCREENSHOT_MAX_DECODED_BYTES = 160 * 1024 * 1024
+DEBUG_BUNDLE_MAX_COMPRESSION_RATIO = 100
 PUBLIC_APP_URL = "https://channelwatch.coderluii.dev"
 DEFAULT_REPORT_PORTAL_URL = f"{PUBLIC_APP_URL}/report"
 GETCHANNELS_PROFILE_BASE = "https://community.getchannels.com/u"
@@ -147,12 +153,52 @@ def _validate_debug_bundle_zip(content: bytes) -> None:
                 raise ReportAttachmentInvalid("Debug bundle ZIP expands beyond the allowed size.")
             roots: set[str] = set()
             relative_members: set[str] = set()
+            normalized_names: set[str] = set()
             for info in infos:
                 name = info.filename.replace("\\", "/")
                 if info.flag_bits & 0x1:
                     raise ReportAttachmentInvalid("Encrypted debug bundle ZIPs are not supported.")
                 if name.startswith("/") or "../" in f"/{name}" or ":" in name:
                     raise ReportAttachmentInvalid("Debug bundle ZIP contains unsafe paths.")
+                normalized = "/".join(part for part in name.split("/") if part not in {"", "."}).casefold()
+                if normalized in normalized_names:
+                    raise ReportAttachmentInvalid("Debug bundle ZIP contains duplicate paths.")
+                normalized_names.add(normalized)
+                unix_mode = (info.external_attr >> 16) & 0xFFFF
+                if (unix_mode & 0o170000) == 0o120000:
+                    raise ReportAttachmentInvalid("Debug bundle ZIP contains unsupported links.")
+                if info.file_size and info.compress_size == 0:
+                    raise ReportAttachmentInvalid("Debug bundle ZIP compression metadata is invalid.")
+                if info.compress_size and info.file_size / info.compress_size > DEBUG_BUNDLE_MAX_COMPRESSION_RATIO:
+                    raise ReportAttachmentInvalid("Debug bundle ZIP compression ratio is unsafe.")
+                offset = info.header_offset
+                if offset < 0 or offset + 30 > len(content) or content[offset:offset + 4] != b"PK\x03\x04":
+                    raise ReportAttachmentInvalid("Debug bundle ZIP headers are inconsistent.")
+                local_name_length = int.from_bytes(content[offset + 26:offset + 28], "little")
+                local_extra_length = int.from_bytes(content[offset + 28:offset + 30], "little")
+                local_flags = int.from_bytes(content[offset + 6:offset + 8], "little")
+                local_method = int.from_bytes(content[offset + 8:offset + 10], "little")
+                if local_flags != info.flag_bits or local_method != info.compress_type:
+                    raise ReportAttachmentInvalid("Debug bundle ZIP headers are inconsistent.")
+                if not local_flags & 0x8:
+                    local_crc = int.from_bytes(content[offset + 14:offset + 18], "little")
+                    local_compressed = int.from_bytes(content[offset + 18:offset + 22], "little")
+                    local_uncompressed = int.from_bytes(content[offset + 22:offset + 26], "little")
+                    if (local_crc, local_compressed, local_uncompressed) != (
+                        info.CRC,
+                        info.compress_size,
+                        info.file_size,
+                    ):
+                        raise ReportAttachmentInvalid("Debug bundle ZIP headers are inconsistent.")
+                local_name_start = offset + 30
+                local_name_end = local_name_start + local_name_length
+                if local_name_end + local_extra_length > len(content):
+                    raise ReportAttachmentInvalid("Debug bundle ZIP headers are inconsistent.")
+                local_name = content[local_name_start:local_name_end].decode(
+                    "utf-8" if info.flag_bits & 0x800 else "cp437"
+                )
+                if local_name != info.orig_filename:
+                    raise ReportAttachmentInvalid("Debug bundle ZIP headers are inconsistent.")
                 if "/" not in name:
                     raise ReportAttachmentInvalid("Debug bundle ZIP structure is invalid.")
                 root, relative = name.split("/", 1)
@@ -167,6 +213,8 @@ def _validate_debug_bundle_zip(content: bytes) -> None:
                 raise ReportAttachmentInvalid("Debug bundle ZIP is missing required ChannelWatch files.")
             if not relative_members.issubset(DEBUG_BUNDLE_REQUIRED_MEMBERS):
                 raise ReportAttachmentInvalid("Debug bundle ZIP contains unsupported files.")
+            if bundle.testzip() is not None:
+                raise ReportAttachmentInvalid("Debug bundle ZIP content is corrupt.")
             manifest_name = f"{root}/manifest.json"
             manifest_info = bundle.getinfo(manifest_name)
             if manifest_info.file_size > 16 * 1024:
@@ -181,6 +229,90 @@ def _validate_debug_bundle_zip(content: bytes) -> None:
                 raise ReportAttachmentInvalid("Debug bundle manifest is invalid.")
     except (zipfile.BadZipFile, KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ReportAttachmentInvalid("Debug bundle ZIP structure could not be validated.") from exc
+
+
+def _image_dimensions(content: bytes, image_type: str) -> tuple[int, int]:
+    try:
+        if image_type == "image/png":
+            if len(content) < 24 or content[12:16] != b"IHDR":
+                raise ValueError
+            return struct.unpack(">II", content[16:24])
+        if image_type == "image/webp":
+            chunk = content[12:16]
+            if chunk == b"VP8X" and len(content) >= 30:
+                return (1 + int.from_bytes(content[24:27], "little"), 1 + int.from_bytes(content[27:30], "little"))
+            if chunk == b"VP8 " and len(content) >= 30 and content[23:26] == b"\x9d\x01\x2a":
+                width, height = struct.unpack("<HH", content[26:30])
+                return width & 0x3FFF, height & 0x3FFF
+            if chunk == b"VP8L" and len(content) >= 25 and content[20] == 0x2F:
+                bits = int.from_bytes(content[21:25], "little")
+                return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+            raise ValueError
+        if image_type == "image/jpeg":
+            offset = 2
+            while offset + 4 <= len(content):
+                if content[offset] != 0xFF:
+                    raise ValueError
+                marker = content[offset + 1]
+                offset += 2
+                if marker in {0xD8, 0xD9}:
+                    continue
+                length = int.from_bytes(content[offset:offset + 2], "big")
+                if length < 2 or offset + length > len(content):
+                    raise ValueError
+                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
+                    if length < 7:
+                        raise ValueError
+                    return int.from_bytes(content[offset + 5:offset + 7], "big"), int.from_bytes(content[offset + 3:offset + 5], "big")
+                offset += length
+    except (IndexError, struct.error, ValueError):
+        pass
+    raise ReportAttachmentInvalid("Screenshot dimensions could not be validated.")
+
+
+def _validate_image_dimensions(content: bytes, image_type: str) -> None:
+    width, height = _image_dimensions(content, image_type)
+    pixels = width * height
+    if width <= 0 or height <= 0:
+        raise ReportAttachmentInvalid("Screenshot dimensions are invalid.")
+    if width > SCREENSHOT_MAX_DIMENSION or height > SCREENSHOT_MAX_DIMENSION:
+        raise ReportAttachmentInvalid("Screenshot dimensions exceed the allowed limit.")
+    if pixels > SCREENSHOT_MAX_PIXELS or pixels * 4 > SCREENSHOT_MAX_DECODED_BYTES:
+        raise ReportAttachmentInvalid("Screenshot decoded size exceeds the allowed limit.")
+
+
+def _validate_image_structure(content: bytes, image_type: str) -> None:
+    if image_type == "image/png":
+        offset = 8
+        saw_ihdr = False
+        saw_iend = False
+        while offset + 12 <= len(content):
+            length = int.from_bytes(content[offset:offset + 4], "big")
+            chunk_type = content[offset + 4:offset + 8]
+            end = offset + 12 + length
+            if end > len(content):
+                raise ReportAttachmentInvalid("Screenshot image is truncated.")
+            chunk_data = content[offset + 8:offset + 8 + length]
+            expected_crc = int.from_bytes(content[offset + 8 + length:end], "big")
+            if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != expected_crc:
+                raise ReportAttachmentInvalid("Screenshot image checksum is invalid.")
+            if not saw_ihdr and (chunk_type != b"IHDR" or length != 13):
+                raise ReportAttachmentInvalid("Screenshot PNG header is invalid.")
+            saw_ihdr = saw_ihdr or chunk_type == b"IHDR"
+            if chunk_type == b"IEND":
+                if length != 0 or end != len(content):
+                    raise ReportAttachmentInvalid("Screenshot PNG ending is invalid.")
+                saw_iend = True
+                break
+            offset = end
+        if not saw_ihdr or not saw_iend:
+            raise ReportAttachmentInvalid("Screenshot image is incomplete.")
+    elif image_type == "image/jpeg":
+        if len(content) < 4 or content[-2:] != b"\xff\xd9":
+            raise ReportAttachmentInvalid("Screenshot JPEG is incomplete.")
+    elif image_type == "image/webp":
+        if len(content) < 20 or int.from_bytes(content[4:8], "little") + 8 != len(content):
+            raise ReportAttachmentInvalid("Screenshot WebP container is incomplete.")
 
 
 def _detect_attachment_type(
@@ -202,16 +334,25 @@ def _detect_attachment_type(
     if suffix not in {"png", "jpg", "jpeg", "webp"}:
         raise ReportAttachmentInvalid("Screenshots must use .png, .jpg, .jpeg, or .webp.")
     if suffix == "png" and content.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
+        detected = "image/png"
+        _validate_image_dimensions(content, detected)
+        _validate_image_structure(content, detected)
+        return detected
     if suffix in {"jpg", "jpeg"} and content.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
+        detected = "image/jpeg"
+        _validate_image_dimensions(content, detected)
+        _validate_image_structure(content, detected)
+        return detected
     if (
         suffix == "webp"
         and len(content) >= 12
         and content[:4] == b"RIFF"
         and content[8:12] == b"WEBP"
     ):
-        return "image/webp"
+        detected = "image/webp"
+        _validate_image_dimensions(content, detected)
+        _validate_image_structure(content, detected)
+        return detected
     raise ReportAttachmentInvalid("Screenshot image could not be validated.")
 
 
@@ -840,16 +981,75 @@ def render_support_code(
     return f"CW-REPORT-v1-{encoded}"
 
 
+def parse_schema2_support_code(support_code: str) -> tuple[ReportProblemPayload, dict[str, Any]]:
+    prefix = "CW-REPORT-v2-"
+    if not support_code.startswith(prefix):
+        raise ReportPayloadInvalid("Offline packages require a finalized schema-2 support code.")
+    encoded = support_code[len(prefix):]
+    try:
+        padded = encoded + ("=" * ((4 - len(encoded) % 4) % 4))
+        envelope = json.loads(base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8"))
+        if not isinstance(envelope, dict) or envelope.get("schema") != 2:
+            raise ValueError("invalid schema")
+        report_id = envelope.get("report_id")
+        if not isinstance(report_id, str) or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            report_id,
+            re.I,
+        ):
+            raise ValueError("invalid report id")
+        created_at_raw = envelope.get("created_at")
+        if not isinstance(created_at_raw, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)",
+            created_at_raw,
+        ):
+            raise ValueError("invalid UTC timestamp")
+        created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        age = now - created_at
+        if age.total_seconds() > 30 * 24 * 60 * 60 or age.total_seconds() < -5 * 60:
+            raise ValueError("expired or future support code")
+        client = envelope.get("client")
+        if not isinstance(client, dict) or set(client) != {
+            "channelwatch_version",
+            "submission_source",
+        }:
+            raise ValueError("invalid client metadata")
+        version = client.get("channelwatch_version")
+        if not isinstance(version, str) or not re.fullmatch(
+            r"(?:\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?|unknown)", version
+        ):
+            raise ValueError("invalid client version")
+        if client.get("submission_source") != "in-app":
+            raise ValueError("invalid submission source")
+        report = ReportProblemPayload.model_validate(envelope.get("report"))
+        expected_version = report.diagnostics.channelwatch_version or "unknown"
+        if version != expected_version:
+            raise ValueError("client version does not match report diagnostics")
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
+        raise ReportPayloadInvalid("Support code could not be validated.") from exc
+    return report, envelope
+
+
+def require_support_code_matches_payload(
+    support_code: str, payload: ReportProblemPayload
+) -> None:
+    decoded_payload, _envelope = parse_schema2_support_code(support_code)
+    if decoded_payload.model_dump(mode="json") != payload.model_dump(mode="json"):
+        raise ReportPayloadInvalid("Support code does not match the finalized report.")
+
+
 def build_offline_report_package(
     payload: ReportProblemPayload,
     *,
+    support_code: str,
     attachments: list[tuple[ReportAttachmentSummary, bytes]] | None = None,
     portal_url: str = DEFAULT_REPORT_PORTAL_URL,
 ) -> bytes:
     attachments = attachments or []
     created_at = datetime.now(timezone.utc).isoformat()
     summaries = [summary for summary, _content in attachments]
-    support_code = render_support_code(payload, created_at=created_at)
+    require_support_code_matches_payload(support_code, payload)
     issue_title = render_issue_title(payload)
     issue_body = render_issue_body(payload)
     attachment_entries: list[dict[str, Any]] = []

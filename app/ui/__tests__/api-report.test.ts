@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   ApiError,
+  checkReportStatus,
   createReportDraft,
   downloadOfflineReportPackage,
   fetchReportConfig,
+  retryPrivateReport,
   submitReport,
   type ReportProblemPayload,
 } from "@/lib/api"
@@ -45,6 +47,17 @@ function decodeSupportCode(supportCode: string) {
   const encoded = supportCode.replace(/^CW-REPORT-v[12]-/, "")
   const padded = encoded.padEnd(encoded.length + ((4 - (encoded.length % 4)) % 4), "=")
   return JSON.parse(atob(padded.replace(/-/g, "+").replace(/_/g, "/")))
+}
+
+function challengeResponse() {
+  return new Response(JSON.stringify({
+    nonce: "test-nonce",
+    expires_at: Date.now() + 60_000,
+    route_class: "in_app",
+    difficulty: 0,
+    key_id: "current",
+    signature: "test-signature",
+  }), { status: 200, headers: { "Content-Type": "application/json" } })
 }
 
 afterEach(() => {
@@ -188,7 +201,7 @@ describe("support report API helpers", () => {
       attachment_total_bytes: 0,
       attachments_sent: true,
     }
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockResolvedValueOnce(challengeResponse()).mockResolvedValue(
       new Response(JSON.stringify(responseBody), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -201,12 +214,13 @@ describe("support report API helpers", () => {
       supportCode: draft.supportCode,
     })
 
-    const [, options] = fetchMock.mock.calls[0]
+    const [, options] = fetchMock.mock.calls[1]
     expect(options.credentials).toBe("omit")
-    expect(options.headers).toEqual({
+    expect(options.headers).toMatchObject({
       "Content-Type": "application/json",
       "X-ChannelWatch-In-App-Report": "1",
     })
+    expect(options.headers["X-ChannelWatch-Report-Challenge"]).toBeTruthy()
     const body = JSON.parse(String(options.body))
     expect(body).toEqual({ support_code: draft.supportCode })
     expect(decodeSupportCode(body.support_code)).toMatchObject({
@@ -220,8 +234,76 @@ describe("support report API helpers", () => {
     })
   })
 
+  it("stops before report upload when challenge preparation fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: { code: "REPORT_CHALLENGE_UNAVAILABLE", message: "Secure preparation unavailable." },
+    }), { status: 503, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(submitReport("https://channelwatch.coderluii.dev/api/reports", payload))
+      .rejects.toThrow("Secure preparation unavailable.")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe("https://channelwatch.coderluii.dev/api/reports/challenge")
+  })
+
+  it("retries private delivery on the dedicated route with the same support code", async () => {
+    const draft = createReportDraft(payload)
+    const screenshot = new File(["image-bytes"], "same-screen.png", { type: "image/png" })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(challengeResponse())
+      .mockResolvedValue(new Response(JSON.stringify({
+        mode: "live", status: "private_delivery_exhausted", report_id: draft.reportId,
+        detail: { code: "PRIVATE_DELIVERY_EXHAUSTED", message: "Private delivery retry limit reached" },
+      }), { status: 409, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(retryPrivateReport(
+      "https://channelwatch.coderluii.dev/api/reports",
+      payload,
+      { screenshots: [screenshot] },
+      { supportCode: draft.supportCode },
+    )).rejects.toThrow("Private delivery retry limit reached")
+    expect(fetchMock.mock.calls[1][0]).toBe("https://channelwatch.coderluii.dev/api/reports/retry-private")
+    const retryBody = fetchMock.mock.calls[1][1].body as FormData
+    expect(retryBody.get("support_code")).toBe(draft.supportCode)
+    expect(retryBody.getAll("screenshots")).toHaveLength(1)
+    expect((retryBody.get("screenshots") as File).name).toBe("same-screen.png")
+  })
+
+  it.each([
+    ["provider_confirmation_pending", 202],
+    ["completed", 200],
+  ])("checks report status by POST body without putting the code in the URL (%s)", async (status, httpStatus) => {
+    const draft = createReportDraft(payload)
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      mode: "live", status, report_id: draft.reportId,
+    }), { status: httpStatus, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(checkReportStatus(
+      "https://channelwatch.coderluii.dev/api/reports",
+      draft.supportCode,
+    )).resolves.toMatchObject({ status, report_id: draft.reportId })
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toBe("https://channelwatch.coderluii.dev/api/reports/status")
+    expect(String(url)).not.toContain(draft.supportCode)
+    expect(options.method).toBe("POST")
+    expect(JSON.parse(String(options.body))).toEqual({ support_code: draft.supportCode })
+  })
+
+  it("keeps status-check failures structured and retryable", async () => {
+    const draft = createReportDraft(payload)
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: { code: "REPORT_STATUS_UNAVAILABLE", message: "Status is temporarily unavailable." },
+    }), { status: 503, headers: { "Content-Type": "application/json" } })))
+    await expect(checkReportStatus(
+      "https://channelwatch.coderluii.dev/api/reports",
+      draft.supportCode,
+    )).rejects.toThrow("Status is temporarily unavailable.")
+  })
+
   it("does not send Turnstile tokens from the in-app external report flow", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockResolvedValueOnce(challengeResponse()).mockResolvedValue(
       new Response(
         JSON.stringify({
           mode: "live",
@@ -245,7 +327,7 @@ describe("support report API helpers", () => {
       turnstile_token: "turnstile-test-token",
     })
 
-    const [, options] = fetchMock.mock.calls[0]
+    const [, options] = fetchMock.mock.calls[1]
     const body = JSON.parse(String(options.body))
     expect(options.headers).toMatchObject({ "X-ChannelWatch-In-App-Report": "1" })
     expect(body).toEqual({ support_code: expect.stringMatching(/^CW-REPORT-v2-/) })
@@ -267,7 +349,7 @@ describe("support report API helpers", () => {
       attachment_total_bytes: 0,
       attachments_sent: true,
     }
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockResolvedValueOnce(challengeResponse()).mockResolvedValue(
       new Response(JSON.stringify(responseBody), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -284,9 +366,9 @@ describe("support report API helpers", () => {
       },
     )
 
-    const [, options] = fetchMock.mock.calls[0]
+    const [, options] = fetchMock.mock.calls[1]
     expect(options.credentials).toBe("omit")
-    expect(options.headers).toEqual({ "X-ChannelWatch-In-App-Report": "1" })
+    expect(options.headers).toMatchObject({ "X-ChannelWatch-In-App-Report": "1" })
     expect(options.body).toBeInstanceOf(FormData)
     const formData = options.body as FormData
     expect(formData.get("payload")).toBeNull()
@@ -316,10 +398,32 @@ describe("support report API helpers", () => {
     })
   })
 
+  it("creates a standards-compliant report id when randomUUID is unavailable", () => {
+    const originalCrypto = globalThis.crypto
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        return bytes
+      },
+    })
+
+    const draft = createReportDraft(payload)
+
+    expect(draft.reportId).toBe("00010203-0405-4607-8809-0a0b0c0d0e0f")
+    vi.stubGlobal("crypto", originalCrypto)
+  })
+
+  it("fails clearly when Web Crypto is unavailable", () => {
+    const originalCrypto = globalThis.crypto
+    vi.stubGlobal("crypto", undefined)
+    expect(() => createReportDraft(payload)).toThrow("secure random values")
+    vi.stubGlobal("crypto", originalCrypto)
+  })
+
   it("reuses one support code for retries of a finalized draft", async () => {
     const draft = createReportDraft(payload)
-    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
-      new Response(JSON.stringify({ mode: "live", status: "completed" }), {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(
+      String(url).endsWith("/challenge") ? challengeResponse() : new Response(JSON.stringify({ mode: "live", status: "completed" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -333,7 +437,7 @@ describe("support report API helpers", () => {
       supportCode: draft.supportCode,
     })
 
-    const submittedCodes = fetchMock.mock.calls.map(([, options]) =>
+    const submittedCodes = fetchMock.mock.calls.filter(([url]) => !String(url).endsWith("/challenge")).map(([, options]) =>
       JSON.parse(String(options.body)).support_code,
     )
     expect(submittedCodes).toEqual([draft.supportCode, draft.supportCode])
@@ -359,10 +463,11 @@ describe("support report API helpers", () => {
     const screenshot = new File(["image-bytes"], "screen.png", { type: "image/png" })
     const debugBundle = new File(["zip-bytes"], "channelwatch_debug.zip", { type: "application/zip" })
 
+    const draft = createReportDraft(payload)
     const result = await downloadOfflineReportPackage(payload, {
       screenshots: [screenshot],
       debugBundle,
-    })
+    }, draft.supportCode)
 
     expect(result.type).toBe("application/zip")
     const [url, options] = fetchMock.mock.calls[0]
@@ -371,6 +476,7 @@ describe("support report API helpers", () => {
     expect(options.credentials).toBe("same-origin")
     expect(options.headers).toEqual({ "X-CSRF-Token": "csrf-package" })
     expect(options.body).toBeInstanceOf(FormData)
+    expect((options.body as FormData).get("support_code")).toBe(draft.supportCode)
   })
 
   it("reports structured dry-run errors as ApiError", async () => {

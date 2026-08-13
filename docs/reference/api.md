@@ -166,7 +166,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.13","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.14","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -872,7 +872,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.13","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.14","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`
@@ -1094,7 +1094,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
 Example response:
 
 ```json
-{"current_version":"0.9.13","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
+{"current_version":"0.9.14","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
 ```
 
 ### `POST /api/v1/update/check`
@@ -1118,7 +1118,7 @@ This route fetches the trusted public ChannelWatch update manifest and stores th
 | Function | `update_apply` |
 | Auth requirement | api_key or RBAC session |
 | RBAC role required | admin |
-| Request body schema | `{ "version": "0.9.13" }` |
+| Request body schema | `{ "version": "0.9.14" }` |
 | Response body schema | `UpdateJob` |
 | Status codes | 202, 401, 403, 409 (`ERR_UPDATE_LOCKED` or `ERR_UPDATE_IMAGE_REQUIRED`), 429, 500 |
 | Rate limit applies | yes |

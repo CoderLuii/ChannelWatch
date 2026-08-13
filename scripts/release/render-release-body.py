@@ -53,12 +53,8 @@ def main() -> int:
             "## What's Fixed",
             "",
         ]
-    elif version_tag in {"v0.9.12", "v0.9.13"}:
-        title = (
-            "Dependency maintenance"
-            if version_tag == "v0.9.12"
-            else "Reporting reliability"
-        )
+    elif version_tag in {"v0.9.12", "v0.9.13", "v0.9.14"}:
+        title = {"v0.9.12": "Dependency maintenance", "v0.9.13": "Reporting reliability", "v0.9.14": "Reporting and update reliability"}[version_tag]
         body = [f"# ChannelWatch {version_tag} - {title}"]
         sections = metadata.get("changelogSections") or {"Changed": highlights}
         for heading in ("Added", "Changed", "Fixed", "Security"):
@@ -82,7 +78,7 @@ def main() -> int:
             body.extend(f"- {item}" for item in items)
     if version_tag == "v0.9.10":
         body.extend(f"- {item}" for item in highlights)
-    heading_level = "##" if version_tag in {"v0.9.10", "v0.9.12", "v0.9.13"} else "###"
+    heading_level = "##" if version_tag in {"v0.9.10", "v0.9.12", "v0.9.13", "v0.9.14"} else "###"
     body.extend(
         [
             "",

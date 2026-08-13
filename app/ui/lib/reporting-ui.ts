@@ -18,6 +18,10 @@ export function isPrivateDeliveryFailure(result: {
   )
 }
 
+export function isProviderConfirmationPending(result: { status?: string | null }): boolean {
+  return result.status === "provider_confirmation_pending"
+}
+
 interface SelectableCodeField {
   focus(): void
   select(): void

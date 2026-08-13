@@ -1,5 +1,6 @@
 import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource } from "@/lib/types"
 import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
+import { encodeReportChallengeProof, solveReportChallenge, type ReportChallenge } from "@/lib/report-proof"
 
 const API_BASE = "/api"
 let runtimeApiKey = ""
@@ -752,6 +753,7 @@ export interface ReportPreviewResponse {
     | "received"
     | "issue_created"
     | "private_delivery_pending"
+    | "provider_confirmation_pending"
     | "completed"
     | "completed_with_private_delivery_failure"
     | "retryable_failure"
@@ -782,6 +784,19 @@ export interface ReportSubmissionAttachments {
   debugBundle?: File | null
 }
 
+function createReportId(): string {
+  const webCrypto = globalThis.crypto
+  if (!webCrypto?.getRandomValues) {
+    throw new Error("This browser cannot generate secure random values. Use a current browser or download the report details manually.")
+  }
+  if (typeof webCrypto.randomUUID === "function") return webCrypto.randomUUID()
+  const bytes = webCrypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 function payloadForSupportCode(payload: ReportProblemPayload): ReportProblemPayload {
   return {
     ...payload,
@@ -803,7 +818,7 @@ export function createReportSupportCode(
   payload: ReportProblemPayload,
   options: { reportId?: string; createdAt?: string } = {},
 ): string {
-  const reportId = options.reportId ?? crypto.randomUUID()
+  const reportId = options.reportId ?? createReportId()
   const envelope = {
     schema: 2,
     report_id: reportId,
@@ -818,7 +833,7 @@ export function createReportSupportCode(
 }
 
 export function createReportDraft(payload: ReportProblemPayload): ReportDraft {
-  const reportId = crypto.randomUUID()
+  const reportId = createReportId()
   return {
     reportId,
     supportCode: createReportSupportCode(payload, { reportId }),
@@ -876,9 +891,33 @@ export async function submitReport(
   endpoint: string,
   payload: ReportProblemPayload,
   attachments: ReportSubmissionAttachments = {},
-  options: { supportCode?: string } = {},
+  options: {
+    supportCode?: string
+    signal?: AbortSignal
+    onChallengeProgress?: (attempts: number) => void
+  } = {},
 ): Promise<ReportPreviewResponse> {
   const sameOrigin = isSameOriginEndpoint(endpoint)
+  let proofHeader: string | null = null
+  if (!sameOrigin) {
+    const challengeUrl = new URL("/api/reports/challenge", endpoint).toString()
+    const challengeResponse = await fetch(challengeUrl, {
+      method: "POST",
+      credentials: "omit",
+      headers: { "X-ChannelWatch-In-App-Report": "1" },
+      signal: options.signal,
+    })
+    if (!challengeResponse.ok) {
+      const errorPayload = await parseApiError(challengeResponse)
+      throw new ApiError(errorPayload)
+    }
+    const challenge = await challengeResponse.json() as ReportChallenge
+    const proof = await solveReportChallenge(challenge, {
+      signal: options.signal,
+      onProgress: options.onChallengeProgress,
+    })
+    proofHeader = encodeReportChallengeProof(proof)
+  }
   const { body, hasAttachments } = buildReportBody(payload, attachments, {
     includeSupportCode: !sameOrigin,
     supportCode: options.supportCode,
@@ -890,8 +929,10 @@ export async function submitReport(
       ...(!hasAttachments ? { "Content-Type": "application/json" } : {}),
       ...(sameOrigin ? authHeaders() : {}),
       ...(!sameOrigin ? { "X-ChannelWatch-In-App-Report": "1" } : {}),
+      ...(proofHeader ? { "X-ChannelWatch-Report-Challenge": proofHeader } : {}),
     },
     body,
+    signal: options.signal,
   })
 
   if (!response.ok) {
@@ -902,11 +943,45 @@ export async function submitReport(
   return response.json()
 }
 
+export async function retryPrivateReport(
+  endpoint: string,
+  payload: ReportProblemPayload,
+  attachments: ReportSubmissionAttachments,
+  options: { supportCode: string; signal?: AbortSignal; onChallengeProgress?: (attempts: number) => void },
+): Promise<ReportPreviewResponse> {
+  const retryEndpoint = new URL("/api/reports/retry-private", endpoint).toString()
+  return submitReport(retryEndpoint, payload, attachments, options)
+}
+
+export async function checkReportStatus(
+  endpoint: string,
+  supportCode: string,
+  signal?: AbortSignal,
+): Promise<ReportPreviewResponse> {
+  const statusEndpoint = new URL("/api/reports/status", endpoint).toString()
+  const response = await fetch(statusEndpoint, {
+    method: "POST",
+    credentials: "omit",
+    headers: {
+      "Content-Type": "application/json",
+      "X-ChannelWatch-In-App-Report": "1",
+    },
+    body: JSON.stringify({ support_code: supportCode }),
+    signal,
+  })
+  if (!response.ok) throw new ApiError(await parseApiError(response))
+  return response.json()
+}
+
 export async function downloadOfflineReportPackage(
   payload: ReportProblemPayload,
   attachments: ReportSubmissionAttachments = {},
+  supportCode: string,
 ): Promise<Blob> {
-  const { body, hasAttachments } = buildReportBody(payload, attachments)
+  const { body, hasAttachments } = buildReportBody(payload, attachments, {
+    includeSupportCode: true,
+    supportCode,
+  })
   const response = await fetch(`${API_BASE}/v1/support/offline-package`, {
     method: "POST",
     credentials: "same-origin",

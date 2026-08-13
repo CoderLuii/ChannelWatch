@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   copySupportCode,
   isPrivateDeliveryFailure,
+  isProviderConfirmationPending,
   reportSubmitLabelKey,
   supportCodeDownloadFilename,
 } from "@/lib/reporting-ui"
@@ -69,5 +70,10 @@ describe("reporting UI behavior", () => {
     expect(
       isPrivateDeliveryFailure({ status: "completed", private_delivery_status: "delivered" }),
     ).toBe(false)
+  })
+
+  it("classifies provider confirmation as pending, never completed", () => {
+    expect(isProviderConfirmationPending({ status: "provider_confirmation_pending" })).toBe(true)
+    expect(isProviderConfirmationPending({ status: "completed" })).toBe(false)
   })
 })

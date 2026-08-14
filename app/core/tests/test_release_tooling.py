@@ -104,6 +104,27 @@ def test_release_body_for_0914_uses_reporting_and_update_copy(monkeypatch, capsy
     assert "`coderluii/channelwatch:0.9.14`" in output
 
 
+def test_release_body_for_0915_uses_update_and_reporting_copy(monkeypatch, capsys):
+    module = _load_script("render_release_body_0915", "scripts/release/render-release-body.py")
+    metadata = {
+        "versionTag": "v0.9.15", "releaseDate": "2026-08-14",
+        "changelogHighlights": ["Improve update restart recovery and report privacy."],
+        "changelogSections": {
+            "Fixed": ["Improve update restart recovery."],
+            "Security": ["Strengthen public report previews."],
+        },
+        "dockerTag": "0.9.15",
+    }
+    monkeypatch.setattr(module, "load_exporter", lambda: SimpleNamespace(collect_metadata=lambda *args: metadata))
+    monkeypatch.setattr(sys, "argv", ["render-release-body.py", "--version", "0.9.15"])
+    assert module.main() == 0
+    output = capsys.readouterr().out
+    assert output.startswith("# ChannelWatch v0.9.15 - Update and reporting reliability\n")
+    assert "## Fixed" in output
+    assert "## Security" in output
+    assert "`coderluii/channelwatch:0.9.15`" in output
+
+
 def test_release_body_preserves_0910_repair_copy(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_0910",
@@ -140,13 +161,13 @@ def test_update_bundle_highlights_come_from_changelog():
     ]
 
 
-def test_release_config_marks_0914_as_bundle_compatible():
+def test_release_config_marks_0915_as_bundle_compatible():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
     assert config == {
-        "version": "0.9.14",
+        "version": "0.9.15",
         "image_required": False,
     }
 
@@ -162,11 +183,11 @@ def test_release_version_surfaces_accept_multi_digit_patch():
         release_url=None,
     )
 
-    assert metadata["version"] == "0.9.14"
-    assert metadata["versionTag"] == "v0.9.14"
-    assert metadata["dockerTag"] == "0.9.14"
-    assert metadata["helmChartVersion"] == "0.9.14"
-    assert metadata["helmAppVersion"] == "0.9.14"
+    assert metadata["version"] == "0.9.15"
+    assert metadata["versionTag"] == "v0.9.15"
+    assert metadata["dockerTag"] == "0.9.15"
+    assert metadata["helmChartVersion"] == "0.9.15"
+    assert metadata["helmAppVersion"] == "0.9.15"
 
 
 def test_release_workflow_uses_explicit_config_and_python_gate():
@@ -178,7 +199,7 @@ def test_release_workflow_uses_explicit_config_and_python_gate():
     assert 'grep -Eiq "container image update required|image-required"' not in workflow
     assert "python -m pytest app/core/tests" in workflow
     assert "python -m compileall app/core app/ui/backend" in workflow
-    assert 'expected_heading="# ChannelWatch ${TAG} - Reporting and update reliability"' in workflow
+    assert 'expected_heading="# ChannelWatch ${TAG} - Update and reporting reliability"' in workflow
     assert "GitHub Release body must start with '${expected_heading}'" in workflow
     release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
         "\n  build-and-push:",
@@ -257,14 +278,14 @@ def test_release_impact_classifier_ignores_version_only_package_and_helm_changes
         "scripts/release/classify-release-impact.py",
     )
     before = {
-        "app/ui/package.json": '{"version":"0.9.13","dependencies":{"next":"16.3.0"}}',
-        "deploy/helm/channelwatch/Chart.yaml": "version: 0.9.13\nappVersion: 0.9.13\nname: channelwatch\n",
-        "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.13\n  pullPolicy: IfNotPresent\n",
-    }
-    after = {
         "app/ui/package.json": '{"version":"0.9.14","dependencies":{"next":"16.3.0"}}',
         "deploy/helm/channelwatch/Chart.yaml": "version: 0.9.14\nappVersion: 0.9.14\nname: channelwatch\n",
         "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.14\n  pullPolicy: IfNotPresent\n",
+    }
+    after = {
+        "app/ui/package.json": '{"version":"0.9.15","dependencies":{"next":"16.3.0"}}',
+        "deploy/helm/channelwatch/Chart.yaml": "version: 0.9.15\nappVersion: 0.9.15\nname: channelwatch\n",
+        "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.15\n  pullPolicy: IfNotPresent\n",
     }
 
     result = module.classify_changes(before, after)
@@ -278,12 +299,12 @@ def test_release_impact_classifier_detects_dependency_and_helm_runtime_changes()
         "scripts/release/classify-release-impact.py",
     )
     before = {
-        "app/ui/package.json": '{"version":"0.9.13","dependencies":{"next":"16.3.0"}}',
-        "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.13\n  pullPolicy: IfNotPresent\n",
+        "app/ui/package.json": '{"version":"0.9.14","dependencies":{"next":"16.3.0"}}',
+        "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.14\n  pullPolicy: IfNotPresent\n",
     }
     after = {
-        "app/ui/package.json": '{"version":"0.9.14","dependencies":{"next":"16.4.0"}}',
-        "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.14\n  pullPolicy: Always\n",
+        "app/ui/package.json": '{"version":"0.9.15","dependencies":{"next":"16.4.0"}}',
+        "deploy/helm/channelwatch/values.yaml": "image:\n  tag: 0.9.15\n  pullPolicy: Always\n",
     }
 
     result = module.classify_changes(before, after)
@@ -297,15 +318,15 @@ def test_release_impact_classifier_detects_dependency_and_helm_runtime_changes()
 
 def test_release_impact_classifier_ignores_only_docker_version_default():
     module = _load_script("classify_docker_version", "scripts/release/classify-release-impact.py")
-    before = {"deploy/docker/Dockerfile": "FROM scratch\nARG VERSION=0.9.13\nLABEL version=$VERSION\n"}
-    after = {"deploy/docker/Dockerfile": "FROM scratch\nARG VERSION=0.9.14\nLABEL version=$VERSION\n"}
+    before = {"deploy/docker/Dockerfile": "FROM scratch\nARG VERSION=0.9.14\nLABEL version=$VERSION\n"}
+    after = {"deploy/docker/Dockerfile": "FROM scratch\nARG VERSION=0.9.15\nLABEL version=$VERSION\n"}
     assert module.classify_changes(before, after).image_required is False
 
 
 def test_release_impact_classifier_detects_other_dockerfile_changes():
     module = _load_script("classify_docker_runtime", "scripts/release/classify-release-impact.py")
-    before = {"deploy/docker/Dockerfile": "FROM scratch\nARG VERSION=0.9.13\n"}
-    after = {"deploy/docker/Dockerfile": "FROM busybox\nARG VERSION=0.9.14\n"}
+    before = {"deploy/docker/Dockerfile": "FROM scratch\nARG VERSION=0.9.14\n"}
+    after = {"deploy/docker/Dockerfile": "FROM busybox\nARG VERSION=0.9.15\n"}
     result = module.classify_changes(before, after)
     assert result.image_required is True
     assert result.triggering_paths == ("deploy/docker/Dockerfile",)
@@ -323,3 +344,6 @@ def test_release_workflow_gates_declared_impact_and_live_manifest():
     assert "Verify live stable update manifest" in workflow
     assert "verify-live-update-manifest.py" in workflow
     assert "- sync-site" in workflow
+    live_job = workflow.split("  verify-live-update-manifest:", 1)[1]
+    assert '--attempts "90"' in live_job
+    assert '--interval "10"' in live_job

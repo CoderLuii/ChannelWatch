@@ -302,10 +302,6 @@ class TestDvrRetryAfterBackoff:
                 "_sleep_interruptibly",
                 side_effect=lambda _: setattr(monitor, "running", False),
             ) as interruptible_sleep,
-            patch(
-                "core.engine.event_monitor.time.sleep",
-                side_effect=lambda _: setattr(monitor, "running", False),
-            ),
         ):
             monitor._monitor_events_loop()
 
@@ -332,9 +328,6 @@ class TestDvrRetryAfterBackoff:
             patch.object(monitor, "_monitor_events", side_effect=fake_monitor_events),
             patch.object(
                 monitor, "_sleep_interruptibly", side_effect=capture_sleep
-            ),
-            patch(
-                "core.engine.event_monitor.time.sleep", side_effect=capture_sleep
             ),
         ):
             monitor._monitor_events_loop()

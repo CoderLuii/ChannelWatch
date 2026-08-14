@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import re
 import struct
@@ -11,7 +12,7 @@ from html import escape as html_escape
 from hashlib import sha256
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, unquote_plus, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -53,13 +54,134 @@ CHANNELWATCH_LOGO_DATA_URI = f"data:image/png;base64,{CHANNELWATCH_LOGO_BASE64}"
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _GITHUB_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _GETCHANNELS_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_PUBLIC_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
+_PUBLIC_EMAIL_RE = re.compile(r'"[^"\r\n]+"@[^\s<>()]+|[^\s<>()@]+@[^\s<>()]+', re.I)
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(api[_-]?key|token|secret|password|passwd|webhook|dsn)\s*[:=]\s*([^\s,;]+)"
+    r"(?i)\b(api[\s_-]*key|access[\s_-]*token|refresh[\s_-]*token|"
+    r"client[\s_-]*secret|private[\s_-]*key|authorization|credential|token|"
+    r"secret|password|passwd|webhook|dsn)\b\s*(?:(?:is)\b\s*|[:=]\s*)"
+    r"(?:(?:bearer|basic|token)\s+)?([^\s,;]+)"
 )
+_BEARER_CREDENTIAL_RE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
+_BASIC_CREDENTIAL_RE = re.compile(
+    r"(?i)\bbasic\s+((?:[a-z0-9+/]{4})*"
+    r"(?:[a-z0-9+/]{4}|[a-z0-9+/]{2}==|[a-z0-9+/]{3}=))"
+    r"(?=$|[\s,;.!?'\"])",
+)
+_QUOTED_SENSITIVE_HEADER_RE = re.compile(r"(['\"])\b(proxy-authorization|authorization|set-cookie|cookie)\s*:[^\r\n]*?\1", re.I)
+_UNCLOSED_SENSITIVE_HEADER_RE = re.compile(r"(['\"])\b(proxy-authorization|authorization|set-cookie|cookie)\s*:[^\r\n]*$", re.I | re.M)
+_SENSITIVE_HEADER_RE = re.compile(r"(^|[^'\"])\b(proxy-authorization|authorization|set-cookie|cookie)\s*[:=][^\r\n]*", re.I | re.M)
+_STRUCTURED_SENSITIVE_KEY = (
+    r"api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|"
+    r"private[_ -]?key|authorization|credential|token|secret|password|passwd|webhook|dsn"
+)
+_QUOTED_SENSITIVE_VALUE_RE = re.compile(
+    rf"(['\"])({_STRUCTURED_SENSITIVE_KEY})\1\s*:\s*"
+    rf"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\[[^\]\r\n]*\]|\{{[^}}\r\n]*\}}|[^,}}\r\n]+)", re.I
+)
+_UNQUOTED_KEY_QUOTED_VALUE_RE = re.compile(
+    rf"\b({_STRUCTURED_SENSITIVE_KEY})\b\s*(?:(?:is)\b\s*|[:=]\s*)"
+    rf"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')", re.I
+)
+_XML_SENSITIVE_VALUE_RE = re.compile(rf"<({_STRUCTURED_SENSITIVE_KEY})>[^<\r\n]*</\1>", re.I)
+_STRUCTURED_ASSIGNMENT_RE = re.compile(
+    rf"(?<![\w-])(?:(?P<double>\"(?:\\.|[^\"\\\r\n])*\")|"
+    rf"(?P<single>'(?:''|[^'\r\n])*')|(?P<plain>[A-Za-z][A-Za-z0-9_./-]{{0,127}}))"
+    rf"(?:[ \t]*(?P<operator>=>|:=|[:=])[ \t]*|[ \t]+(?P<word_operator>is)[ \t]+)",
+    re.I,
+)
+_QUERY_ASSIGNMENT_RE = re.compile(
+    r'''(?P<prefix>[?&;])(?P<key>[^=&;#\s"'`,}\])]+)=(?P<value>[^&;#\s"'`,}\])]*?)'''
+    r"(?=$|[&;#\s\"'`,}\])])"
+)
+_LEGACY_STRUCTURED_SCALAR_KEY_RE = re.compile(
+    rf"(?:{_STRUCTURED_SENSITIVE_KEY}|proxy-authorization|set-cookie|cookie)", re.I
+)
+_EXPLICIT_YAML_KEY_INDICATOR_RE = re.compile(
+    r"^(?P<indent>[ \t]*)\?(?P<tail>[^\r\n]*)(?:\r?\n|$)", re.M
+)
+_SENSITIVE_STRUCTURED_COMPONENTS = {
+    "apikey",
+    "accesstoken",
+    "refreshtoken",
+    "clientsecret",
+    "privatekey",
+    "signingkey",
+    "webhookurl",
+    "accesskeyid",
+    "awsaccesskeyid",
+    "googleaccessid",
+    "keypairid",
+    "sig",
+    "signature",
+    "authorization",
+    "auth",
+    "credential",
+    "credentials",
+    "token",
+    "tokens",
+    "secret",
+    "secrets",
+    "password",
+    "passwd",
+    "webhook",
+    "dsn",
+    "cookie",
+    "cookies",
+    "session",
+    "sessions",
+}
+_SENSITIVE_STRUCTURED_PHRASES = {
+    ("access", "key"),
+    ("access", "id"),
+    ("account", "key"),
+    ("key", "pair", "id"),
+    ("secret", "key"),
+    ("api", "key"),
+    ("private", "key"),
+    ("signing", "key"),
+    ("access", "token"),
+    ("refresh", "token"),
+    ("client", "secret"),
+}
+_SAFE_STRUCTURED_METADATA_SUFFIXES = {"count", "counts", "policy", "policies"}
+_SENSITIVE_FUSED_STRUCTURED_SUFFIXES = (
+    "keypairid",
+    "apikey",
+    "privatekey",
+    "signingkey",
+    "webhookurl",
+    "dsn",
+    "accesskeyid",
+    "accessid",
+    "accesskey",
+    "accountkey",
+    "secretkey",
+    "authkey",
+    "sessionid",
+    "signature",
+    "credentials",
+    "credential",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+)
+_MAX_EMBEDDED_JSON_CANDIDATES = 64
+_MAX_EMBEDDED_JSON_CHARS = 64 * 1024
 _LONG_SECRET_RE = re.compile(r"\b[A-Za-z0-9_-]{32,}\b")
-
-
+_PUBLIC_URL_RE = re.compile(r'''https?://[^\s<>()"'`,}]+''', re.I)
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+_PRIVATE_IPV4_RE = re.compile(
+    r"\b(?:10|127)\.(?:\d{1,3}\.){2}\d{1,3}\b|"
+    r"\b169\.254\.(?:\d{1,3}\.)\d{1,3}\b|"
+    r"\b172\.(?:1[6-9]|2\d|3[01])\.(?:\d{1,3}\.)\d{1,3}\b|"
+    r"\b192\.168\.(?:\d{1,3}\.)\d{1,3}\b"
+)
+_IPV6_CANDIDATE_RE = re.compile(
+    r"(?:(?:[0-9a-f]{1,4}:){2,}[0-9a-f:.]*|[0-9a-f]{1,4}::[0-9a-f:.]*|::[0-9a-f:.]+)"
+    r"(?:%[a-z0-9_.~-]+)?(?:/\d{1,3})?",
+    re.I,
+)
 class ReportPayloadTooLarge(ValueError):
     pass
 
@@ -120,10 +242,794 @@ def normalize_email(value: Any) -> str | None:
     return text
 
 
+def _parse_whatwg_ipv4(address_text: str) -> ipaddress.IPv4Address | None:
+    parts = address_text.split(".")
+    if not 1 <= len(parts) <= 4 or any(not part for part in parts):
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        lowered = part.lower()
+        if lowered.startswith("0x"):
+            digits, base = lowered[2:], 16
+            if not digits or not re.fullmatch(r"[0-9a-f]+", digits):
+                return None
+        elif len(part) > 1 and part.startswith("0"):
+            digits, base = part[1:], 8
+            if not digits or not re.fullmatch(r"[0-7]+", digits):
+                return None
+        else:
+            digits, base = part, 10
+            if not digits.isdecimal():
+                return None
+        numbers.append(int(digits, base))
+    if any(number > 255 for number in numbers[:-1]):
+        return None
+    if numbers[-1] >= 256 ** (5 - len(numbers)):
+        return None
+    value = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        value += number << (8 * (3 - index))
+    return ipaddress.IPv4Address(value)
+
+
+def _is_private_hostname(hostname: str | None) -> bool:
+    normalized = (
+        (hostname or "")
+        .lower()
+        .translate(str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."}))
+        .strip("[]")
+        .removesuffix(".")
+    )
+    if normalized in {"localhost", "::1"} or normalized.endswith(".local"):
+        return True
+    address_text = normalized.split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(address_text)
+    except ValueError:
+        address = _parse_whatwg_ipv4(address_text)
+        if address is None:
+            if re.fullmatch(r"(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+))*", address_text):
+                return True
+            return False
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped:
+            return _is_private_hostname(str(address.ipv4_mapped))
+        return address.is_loopback or address.is_link_local or address in ipaddress.ip_network("fc00::/7")
+    first, second = int(str(address).split(".")[0]), int(str(address).split(".")[1])
+    return (
+        first in {10, 127}
+        or (first == 169 and second == 254)
+        or (first == 172 and 16 <= second <= 31)
+        or (first == 192 and second == 168)
+    )
+
+
+def _classify_private_ipv6(address_text: str) -> bool | None:
+    address_text = address_text.split("/", 1)[0].split("%", 1)[0]
+    try:
+        address = ipaddress.IPv6Address(address_text)
+    except ValueError:
+        if "." not in address_text or ":" not in address_text:
+            return None
+        prefix, dotted_tail = address_text.rsplit(":", 1)
+        parts = dotted_tail.split(".")
+        if len(parts) != 4 or any(not part.isdecimal() for part in parts):
+            return None
+        octets = [int(part, 10) for part in parts]
+        if any(octet > 255 for octet in octets):
+            return None
+        normalized = f"{prefix}:{(octets[0] << 8) | octets[1]:x}:{(octets[2] << 8) | octets[3]:x}"
+        try:
+            address = ipaddress.IPv6Address(normalized)
+        except ValueError:
+            return None
+    if address.ipv4_mapped:
+        return _is_private_hostname(str(address.ipv4_mapped))
+    return address.is_loopback or address.is_link_local or address in ipaddress.ip_network("fc00::/7")
+
+
+def _redact_private_ipv6_candidate(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    address_text = candidate
+    punctuation = ""
+    while address_text:
+        classification = _classify_private_ipv6(address_text)
+        if classification is not None:
+            return f"[redacted-private-address]{punctuation}" if classification else candidate
+        if address_text[-1] not in ".:":
+            return candidate
+        punctuation = address_text[-1] + punctuation
+        address_text = address_text[:-1]
+    return candidate
+
+
+def _redact_standalone_basic(match: re.Match[str]) -> str:
+    try:
+        decoded = base64.b64decode(match.group(1), validate=True)
+    except (ValueError, TypeError):
+        return match.group(0)
+    return "[redacted-credential]" if b":" in decoded else match.group(0)
+
+
+def _is_sensitive_query_key(key: str) -> bool:
+    if re.search(r"%(?![0-9A-Fa-f]{2})", key):
+        return True
+    try:
+        decoded = unquote_plus(key)
+    except (UnicodeDecodeError, ValueError):
+        return True
+    normalized = re.sub(r"[^a-z0-9]", "", decoded.lower())
+    return normalized in {"code", "key", "policy", "expires"} or _is_sensitive_structured_key(decoded)
+
+
+def _redact_sensitive_query_fragments(value: str) -> str:
+    def redact(match: re.Match[str]) -> str:
+        if len(match.group("key")) <= 256 and not _is_sensitive_query_key(match.group("key")):
+            return match.group(0)
+        raw_value = match.group("value")
+        suffix_match = re.search(r"[.!?]+$", raw_value)
+        suffix = suffix_match.group(0) if suffix_match else ""
+        return f"{match.group('prefix')}{match.group('key')}=[redacted]{suffix}"
+
+    return _QUERY_ASSIGNMENT_RE.sub(
+        redact,
+        value,
+    )
+
+
+def _sanitize_public_url(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    punctuation = ""
+    while raw.endswith((".", "!")):
+        punctuation = raw[-1] + punctuation
+        raw = raw[:-1]
+    try:
+        parsed = urlsplit(raw)
+        if parsed.username or parsed.password or _is_private_hostname(parsed.hostname):
+            return f"[redacted-private-url]{punctuation}"
+        query = urlencode(
+            [
+                (key, "[redacted]" if _is_sensitive_query_key(key) else value)
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            ],
+            doseq=True,
+        )
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, "")).replace(
+            "%5Bredacted%5D", "[redacted]"
+        ) + punctuation
+    except ValueError:
+        return f"[redacted-url]{punctuation}"
+
+
+def _find_balanced_value_end(value: str, start: int) -> int | None:
+    pairs = {"{": "}", "[": "]"}
+    opening = value[start]
+    closing = pairs.get(opening)
+    if not closing:
+        return None
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(start, len(value)):
+        character = value[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in "'\"":
+            quote = character
+        elif character == opening:
+            depth += 1
+        elif character == closing:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _indented_continuation_end(value: str, line_end: int, base_indent: int) -> int:
+    if line_end >= len(value):
+        return line_end
+    cursor = line_end + (2 if value.startswith("\r\n", line_end) else 1)
+    end = line_end
+    while cursor <= len(value):
+        next_end = value.find("\n", cursor)
+        next_end = len(value) if next_end < 0 else next_end
+        line = value[cursor:next_end].rstrip("\r")
+        indent = len(line) - len(line.lstrip(" \t"))
+        if line.strip() and indent <= base_indent:
+            break
+        end = next_end
+        if next_end >= len(value):
+            break
+        cursor = next_end + 1
+    return end
+
+
+def _indentationless_sequence_end(value: str, line_end: int, base_indent: int) -> int:
+    if line_end >= len(value):
+        return line_end
+    cursor = line_end + 1
+    end = line_end
+    pending_end = line_end
+    saw_sequence = False
+    while cursor <= len(value):
+        next_end = value.find("\n", cursor)
+        next_end = len(value) if next_end < 0 else next_end
+        line = value[cursor:next_end].rstrip("\r")
+        stripped = line.lstrip(" \t")
+        indent = len(line) - len(stripped)
+        if indent == 0 and stripped in {"---", "..."}:
+            break
+        if not stripped or stripped.startswith("#"):
+            pending_end = next_end
+        elif indent == base_indent and re.match(r"-(?:[ \t]|$)", stripped):
+            saw_sequence = True
+            end = next_end
+        elif saw_sequence and indent > base_indent:
+            end = next_end
+        else:
+            break
+        if saw_sequence and pending_end > end:
+            end = pending_end
+        if next_end >= len(value):
+            break
+        cursor = next_end + 1
+    return end if saw_sequence else line_end
+
+
+def _strip_yaml_node_properties(value: str) -> tuple[str, int, bool]:
+    cursor = 0
+    found = False
+    while cursor < len(value):
+        whitespace_end = cursor
+        while whitespace_end < len(value) and value[whitespace_end] in " \t":
+            whitespace_end += 1
+        token_start = whitespace_end
+        if token_start >= len(value) or value[token_start] not in "!&":
+            break
+        if value.startswith("!<", token_start):
+            token_end = value.find(">", token_start + 2)
+            if token_end < 0:
+                return "", len(value), True
+            token_end += 1
+        else:
+            token_end = token_start + 1
+            while token_end < len(value) and value[token_end] not in " \t":
+                token_end += 1
+        if token_end == token_start + 1:
+            break
+        found = True
+        cursor = token_end
+    while cursor < len(value) and value[cursor] in " \t":
+        cursor += 1
+    if value.startswith("#", cursor):
+        return "", len(value), found
+    return value[cursor:], cursor, found
+
+
+def _is_sensitive_structured_key(value: str) -> bool:
+    separated = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", value)
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", separated)
+    components = [component.lower() for component in re.findall(r"[A-Za-z0-9]+", separated)]
+    compact = "".join(components)
+    if (
+        not components
+        or components[-1] in _SAFE_STRUCTURED_METADATA_SUFFIXES
+        or (
+            len(components) == 1
+            and compact.endswith(tuple(_SAFE_STRUCTURED_METADATA_SUFFIXES))
+        )
+    ):
+        return False
+    if any(component in _SENSITIVE_STRUCTURED_COMPONENTS for component in components):
+        return True
+    if len(components) == 1 and compact.endswith(_SENSITIVE_FUSED_STRUCTURED_SUFFIXES):
+        return True
+    return any(
+        components[index : index + len(phrase)] == list(phrase)
+        for phrase in _SENSITIVE_STRUCTURED_PHRASES
+        for index in range(len(components) - len(phrase) + 1)
+    )
+
+
+def _decode_yaml_double_quoted_key(value: str) -> str | None:
+    if len(value) > 512:
+        return None
+    escapes = {
+        "0": "\0",
+        "a": "\a",
+        "b": "\b",
+        "t": "\t",
+        "n": "\n",
+        "v": "\v",
+        "f": "\f",
+        "r": "\r",
+        "e": "\x1b",
+        " ": " ",
+        '"': '"',
+        "/": "/",
+        "\\": "\\",
+        "N": "\u0085",
+        "_": "\u00a0",
+        "L": "\u2028",
+        "P": "\u2029",
+    }
+    decoded: list[str] = []
+    cursor = 0
+    while cursor < len(value):
+        character = value[cursor]
+        if character != "\\":
+            if ord(character) < 0x20:
+                return None
+            decoded.append(character)
+            cursor += 1
+            continue
+        if cursor + 1 >= len(value):
+            return None
+        escape = value[cursor + 1]
+        if escape in escapes:
+            decoded.append(escapes[escape])
+            cursor += 2
+            continue
+        width = {"x": 2, "u": 4, "U": 8}.get(escape)
+        if width is None or cursor + 2 + width > len(value):
+            return None
+        digits = value[cursor + 2 : cursor + 2 + width]
+        if not re.fullmatch(r"[0-9A-Fa-f]+", digits):
+            return None
+        codepoint = int(digits, 16)
+        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+            return None
+        decoded.append(chr(codepoint))
+        cursor += 2 + width
+    return "".join(decoded)
+
+
+def _decode_yaml_quoted_key(value: str) -> tuple[str | None, bool]:
+    if value.startswith('"'):
+        if len(value) < 2 or not value.endswith('"'):
+            return None, True
+        decoded = _decode_yaml_double_quoted_key(value[1:-1])
+        return decoded, decoded is None
+    if value.startswith("'"):
+        if len(value) < 2 or not value.endswith("'") or len(value) > 512:
+            return None, True
+        inner = value[1:-1]
+        decoded: list[str] = []
+        cursor = 0
+        while cursor < len(inner):
+            if inner[cursor] != "'":
+                decoded.append(inner[cursor])
+                cursor += 1
+            elif cursor + 1 < len(inner) and inner[cursor + 1] == "'":
+                decoded.append("'")
+                cursor += 2
+            else:
+                return None, True
+        return "".join(decoded), False
+    return value, False
+
+
+def _is_sensitive_yaml_explicit_key(value: str) -> bool:
+    semantic, _, _ = _strip_yaml_node_properties(value.strip())
+    semantic = re.sub(r"[ \t]+#[^\r\n]*$", "", semantic).strip()
+    decoded, malformed = _decode_yaml_quoted_key(semantic)
+    return malformed or (decoded is not None and _is_sensitive_structured_key(decoded))
+
+
+def _structured_assignment_is_sensitive(match: re.Match[str]) -> bool:
+    quoted = match.group("double") or match.group("single")
+    if quoted is None:
+        decoded, malformed = match.group("plain") or "", False
+    else:
+        decoded, malformed = _decode_yaml_quoted_key(quoted)
+    if malformed or decoded is None:
+        return True
+    if match.group("word_operator"):
+        separated = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", decoded)
+        separated = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", separated)
+        components = [component.lower() for component in re.findall(r"[A-Za-z0-9]+", separated)]
+        composite_shape = bool(re.search(r"[_./-]|[a-z0-9][A-Z]", decoded))
+        fused_shape = (
+            len(components) == 1
+            and components[0] not in _SENSITIVE_STRUCTURED_COMPONENTS
+            and components[0].endswith(_SENSITIVE_FUSED_STRUCTURED_SUFFIXES)
+        )
+        if not composite_shape and not fused_shape:
+            return False
+    return _is_sensitive_structured_key(decoded)
+
+
+def _explicit_yaml_value_end(value: str, rhs_start: int, line_end: int, base_indent: int) -> int:
+    rhs = value[rhs_start:line_end].rstrip("\r")
+    stripped_rhs = rhs.lstrip()
+    value_start = rhs_start + len(rhs) - len(stripped_rhs)
+    semantic_rhs, property_offset, had_properties = _strip_yaml_node_properties(stripped_rhs)
+    semantic_start = value_start + property_offset
+    if semantic_rhs.startswith(("{", "[")):
+        return _find_balanced_value_end(value, semantic_start) or len(value)
+    sequence_end = _indentationless_sequence_end(value, line_end, base_indent) if not semantic_rhs else line_end
+    continuation_end = max(_indented_continuation_end(value, line_end, base_indent), sequence_end)
+    yaml_marker = re.fullmatch(r"(?:[|>][+-]?\d?|[|>]\d?[+-]?)", semantic_rhs)
+    if yaml_marker or continuation_end > line_end or not semantic_rhs or had_properties:
+        return continuation_end if continuation_end > line_end else line_end
+    return line_end
+
+
+def _redact_explicit_yaml_sensitive_values(value: str) -> str:
+    cursor = 0
+    while match := _EXPLICIT_YAML_KEY_INDICATOR_RE.search(value, cursor):
+        base_indent = len(match.group("indent"))
+        tail = match.group("tail").strip()
+        key_end = match.end()
+        sensitive = bool(tail and not tail.startswith("#") and _is_sensitive_yaml_explicit_key(tail))
+        if not tail or tail.startswith("#"):
+            line_cursor = match.end()
+            while line_cursor <= len(value):
+                next_end = value.find("\n", line_cursor)
+                next_end = len(value) if next_end < 0 else next_end
+                line = value[line_cursor:next_end].rstrip("\r")
+                stripped = line.lstrip(" \t")
+                indent = len(line) - len(stripped)
+                if not stripped or stripped.startswith("#"):
+                    if next_end >= len(value):
+                        break
+                    line_cursor = next_end + 1
+                    continue
+                if indent > base_indent:
+                    sensitive = _is_sensitive_yaml_explicit_key(stripped)
+                    key_end = next_end + (1 if next_end < len(value) else 0)
+                break
+        if not sensitive:
+            cursor = match.end()
+            continue
+
+        line_cursor = key_end
+        colon_start: int | None = None
+        rhs_start: int | None = None
+        line_end = len(value)
+        while line_cursor <= len(value):
+            next_end = value.find("\n", line_cursor)
+            next_end = len(value) if next_end < 0 else next_end
+            line = value[line_cursor:next_end].rstrip("\r")
+            stripped = line.lstrip(" \t")
+            indent = len(line) - len(stripped)
+            if not stripped or stripped.startswith("#"):
+                if next_end >= len(value):
+                    break
+                line_cursor = next_end + 1
+                continue
+            if indent == base_indent and re.match(r":(?:[ \t]|$)", stripped):
+                colon_start = line_cursor
+                colon_offset = indent + 1
+                while colon_offset < len(line) and line[colon_offset] in " \t":
+                    colon_offset += 1
+                rhs_start = line_cursor + colon_offset
+                line_end = next_end
+            break
+        start = match.start() + base_indent
+        end = len(value) if colon_start is None or rhs_start is None else _explicit_yaml_value_end(
+            value, rhs_start, line_end, base_indent
+        )
+        value = f"{value[:start]}[redacted-structured-data]{value[end:]}"
+        cursor = start + len("[redacted-structured-data]")
+    return value
+
+
+def _redact_complete_json(value: str) -> str | None:
+    trimmed = value.strip()
+    if not (
+        (trimmed.startswith("{") and trimmed.endswith("}"))
+        or (trimmed.startswith("[") and trimmed.endswith("]"))
+    ):
+        return None
+    try:
+        parsed = json.loads(trimmed)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    def redact(node: Any) -> tuple[Any, bool]:
+        if isinstance(node, dict):
+            changed = False
+            result: dict[str, Any] = {}
+            for key, child in node.items():
+                if _is_sensitive_structured_key(key):
+                    result[key] = "[redacted]"
+                    changed = True
+                else:
+                    result[key], child_changed = redact(child)
+                    changed = changed or child_changed
+            return result, changed
+        if isinstance(node, list):
+            changed = False
+            result = []
+            for child in node:
+                redacted_child, child_changed = redact(child)
+                result.append(redacted_child)
+                changed = changed or child_changed
+            return result, changed
+        if isinstance(node, str):
+            redacted_string = _redact_structured_sensitive_values(node)
+            return redacted_string, redacted_string != node
+        return node, False
+
+    redacted, changed = redact(parsed)
+    if changed and isinstance(parsed, dict) and all(_is_sensitive_structured_key(key) for key in parsed):
+        return "[redacted-structured-data]"
+    return json.dumps(redacted, ensure_ascii=False, separators=(",", ":")) if changed else value
+
+
+def _redact_embedded_json(value: str) -> str:
+    cursor = 0
+    attempts = 0
+    while cursor < len(value):
+        candidates = [index for opening in "[{" if (index := value.find(opening, cursor)) >= 0]
+        if not candidates:
+            break
+        start = min(candidates)
+        attempts += 1
+        if attempts > _MAX_EMBEDDED_JSON_CANDIDATES:
+            return f"{value[:start]}[redacted-structured-data]"
+        end = _find_balanced_value_end(value, start)
+        if end is None:
+            cursor = start + 1
+            continue
+        if end - start > _MAX_EMBEDDED_JSON_CHARS:
+            value = f"{value[:start]}[redacted-structured-data]{value[end:]}"
+            cursor = start + len("[redacted-structured-data]")
+            continue
+        candidate = value[start:end]
+        redacted = _redact_complete_json(candidate)
+        if redacted is None:
+            cursor = start + 1
+            continue
+        if redacted != candidate:
+            value = f"{value[:start]}{redacted}{value[end:]}"
+            cursor = start + len(redacted)
+        else:
+            cursor = end
+    return value
+
+
+def _xml_token_end(value: str, start: int) -> int | None:
+    quote: str | None = None
+    for index in range(start + 1, len(value)):
+        character = value[index]
+        if quote:
+            if character == quote:
+                quote = None
+        elif character in "'\"":
+            quote = character
+        elif character == ">":
+            return index + 1
+    return None
+
+
+def _next_sensitive_xml_open(value: str, cursor: int) -> tuple[int, int, str] | None:
+    while cursor < len(value):
+        token_start = value.find("<", cursor)
+        if token_start < 0:
+            return None
+        if value.startswith("<!--", token_start):
+            end = value.find("-->", token_start + 4)
+            if end < 0:
+                return None
+            cursor = end + 3
+            continue
+        if value.startswith("<![CDATA[", token_start):
+            end = value.find("]]>", token_start + 9)
+            if end < 0:
+                return None
+            cursor = end + 3
+            continue
+        if value.startswith("<?", token_start):
+            end = value.find("?>", token_start + 2)
+            if end < 0:
+                return None
+            cursor = end + 2
+            continue
+        token_end = _xml_token_end(value, token_start)
+        if token_end is None:
+            return None
+        token = value[token_start:token_end]
+        name_match = re.match(r"<\s*([A-Za-z_][\w.:-]*)", token)
+        if name_match and _is_sensitive_structured_key(name_match.group(1).rsplit(":", 1)[-1]):
+            return token_start, token_end, name_match.group(1)
+        cursor = token_end
+    return None
+
+
+def _sensitive_xml_element_end(value: str, start: int, opening_end: int, tag: str) -> int:
+    if re.search(r"/\s*>$", value[start:opening_end]):
+        return opening_end
+    depth = 1
+    cursor = opening_end
+    while cursor < len(value):
+        token_start = value.find("<", cursor)
+        if token_start < 0:
+            return len(value)
+        if value.startswith("<!--", token_start):
+            end = value.find("-->", token_start + 4)
+            cursor = len(value) if end < 0 else end + 3
+            continue
+        if value.startswith("<![CDATA[", token_start):
+            end = value.find("]]>", token_start + 9)
+            cursor = len(value) if end < 0 else end + 3
+            continue
+        if value.startswith("<?", token_start):
+            end = value.find("?>", token_start + 2)
+            cursor = len(value) if end < 0 else end + 2
+            continue
+        token_end = _xml_token_end(value, token_start)
+        if token_end is None:
+            return len(value)
+        token = value[token_start:token_end]
+        name_match = re.match(r"<\s*(/?)\s*([A-Za-z_][\w.:-]*)", token)
+        if name_match and name_match.group(2) == tag:
+            if name_match.group(1):
+                depth -= 1
+                if depth == 0:
+                    return token_end
+            elif not re.search(r"/\s*>$", token):
+                depth += 1
+        cursor = token_end
+    return len(value)
+
+
+def _redact_sensitive_xml(value: str) -> str:
+    cursor = 0
+    while opening := _next_sensitive_xml_open(value, cursor):
+        start, opening_end, tag = opening
+        end = _sensitive_xml_element_end(value, start, opening_end, tag)
+        value = f"{value[:start]}[redacted-structured-data]{value[end:]}"
+        cursor = start + len("[redacted-structured-data]")
+    return value
+
+
+def _redact_structured_sensitive_values(value: str) -> str:
+    parsed_json = _redact_complete_json(value)
+    if parsed_json is not None:
+        return parsed_json
+    value = _redact_embedded_json(value)
+    value = _redact_sensitive_query_fragments(value)
+    value = _redact_sensitive_xml(value)
+    value = _redact_explicit_yaml_sensitive_values(value)
+    root_container = value.strip().startswith(("{", "[")) and value.strip().endswith(("}", "]"))
+    cursor = 0
+    while match := _STRUCTURED_ASSIGNMENT_RE.search(value, cursor):
+        if not _structured_assignment_is_sensitive(match):
+            cursor = match.end()
+            continue
+        rhs_start = match.end()
+        existing_redaction = next(
+            (
+                marker
+                for marker in ('"[redacted]"', "'[redacted]'", "[redacted]")
+                if value.startswith(marker, rhs_start)
+            ),
+            None,
+        )
+        if existing_redaction is not None:
+            cursor = rhs_start + len(existing_redaction)
+            continue
+        line_start = value.rfind("\n", 0, match.start()) + 1
+        newline = value.find("\n", rhs_start)
+        line_end = len(value) if newline < 0 else newline
+        rhs = value[rhs_start:line_end].rstrip("\r")
+        stripped_rhs = rhs.lstrip()
+        value_start = rhs_start + len(rhs) - len(stripped_rhs)
+        prefix = value[line_start:match.start()]
+        if re.search(r"\b(?:proxy-authorization|authorization|set-cookie|cookie)\s*[:=]", prefix, re.I):
+            cursor = match.end()
+            continue
+        base_indent = len(prefix) - len(prefix.lstrip(" \t"))
+        structural_line = re.fullmatch(r"[ \t]*(?:-[ \t]+)?", prefix) is not None
+        plain_key = match.group("plain")
+        operator = (match.group("operator") or match.group("word_operator") or "").lower()
+        credential_prefix = re.match(r"(?:Bearer|Basic|Token)[ \t]+", stripped_rhs, re.I) is not None
+        inline_assignment = operator != ":" or credential_prefix
+        needs_composite_scalar_redaction = structural_line and (
+            plain_key is None or _LEGACY_STRUCTURED_SCALAR_KEY_RE.fullmatch(plain_key) is None
+        ) and not inline_assignment
+        composite_key = plain_key is None or _LEGACY_STRUCTURED_SCALAR_KEY_RE.fullmatch(plain_key) is None
+        end: int | None = None
+        multiline = False
+
+        semantic_rhs, property_offset, had_yaml_properties = _strip_yaml_node_properties(stripped_rhs)
+        semantic_start = value_start + property_offset
+        triple = "\"\"\"" if semantic_rhs.startswith("\"\"\"") else "'''" if semantic_rhs.startswith("'''") else None
+        heredoc = re.fullmatch(r"<<(-?)([A-Za-z_][\w-]*)[ \t]*", semantic_rhs)
+        if heredoc:
+            allow_indent = bool(heredoc.group(1))
+            delimiter = re.escape(heredoc.group(2))
+            terminator = re.compile(
+                rf"^{r'[ \t]*' if allow_indent else ''}{delimiter}[ \t]*\r?$",
+                re.M,
+            ).search(value, line_end + 1)
+            end = len(value) if terminator is None else terminator.end()
+            multiline = True
+        elif triple:
+            closing = value.find(triple, semantic_start + 3)
+            end = len(value) if closing < 0 else closing + 3
+            multiline = "\n" in value[semantic_start:end]
+        elif semantic_rhs.startswith(("{", "[")):
+            end = _find_balanced_value_end(value, semantic_start)
+            multiline = end is None or "\n" in value[semantic_start:end]
+            end = len(value) if end is None else end
+        else:
+            sequence_end = _indentationless_sequence_end(value, line_end, base_indent) if not semantic_rhs else line_end
+            continuation_end = max(_indented_continuation_end(value, line_end, base_indent), sequence_end)
+            has_continuation = continuation_end > line_end and structural_line
+            yaml_marker = re.fullmatch(r"(?:[|>][+-]?\d?|[|>]\d?[+-]?)", semantic_rhs)
+            if yaml_marker or has_continuation or not semantic_rhs:
+                end = continuation_end if has_continuation else line_end
+                multiline = has_continuation
+            elif had_yaml_properties:
+                end = line_end
+            elif needs_composite_scalar_redaction:
+                end = line_end
+
+        if end is None:
+            if composite_key and (not structural_line or inline_assignment):
+                inline_end: int | None = None
+                if stripped_rhs.startswith('"'):
+                    quoted = re.match(r'"(?:\\.|[^"\\])*"', stripped_rhs)
+                    inline_end = value_start + quoted.end() if quoted else line_end
+                elif stripped_rhs.startswith("'"):
+                    quoted = re.match(r"'(?:''|[^'])*'", stripped_rhs)
+                    inline_end = value_start + quoted.end() if quoted else line_end
+                else:
+                    token = re.match(
+                        r"(?:Bearer|Basic|Token)[ \t]+[^\s,;&]+|[^\s,;&]+",
+                        stripped_rhs,
+                        re.I,
+                    )
+                    inline_end = value_start + token.end() if token else None
+                    while inline_end and inline_end > value_start and value[inline_end - 1] in ".!?":
+                        inline_end -= 1
+                if inline_end and inline_end > value_start:
+                    value = f"{value[:value_start]}[redacted]{value[inline_end:]}"
+                    cursor = value_start + len("[redacted]")
+                    continue
+            cursor = match.end()
+            continue
+        if root_container and multiline:
+            return "[redacted-structured-data]"
+        value = f"{value[:match.start()]}[redacted-structured-data]{value[end:]}"
+        cursor = match.start() + len("[redacted-structured-data]")
+    return value
+
+
 def redact_public_text(value: str) -> str:
-    redacted = _PUBLIC_EMAIL_RE.sub("[redacted-email]", value)
-    redacted = _SECRET_ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}=[redacted]", redacted)
+    redacted = _redact_structured_sensitive_values(value)
+    redacted = re.sub(r"^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*(?:\r?\n|$)", "", redacted, flags=re.M)
+    redacted = re.sub(r"!\[([^\]]*)\]\s*\[[^\]]*\]", r"\1 [image removed]", redacted)
+    redacted = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1 [image removed]", redacted)
+    redacted = re.sub(r"!\[([^\]]+)\](?!\s*[\[(])", r"\1 [image removed]", redacted)
+    redacted = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", redacted)
+    redacted = _PUBLIC_URL_RE.sub(_sanitize_public_url, redacted)
+    redacted = _PUBLIC_EMAIL_RE.sub("[redacted-email]", redacted)
+    redacted = _QUOTED_SENSITIVE_VALUE_RE.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(1)}:"[redacted]"', redacted)
+    redacted = _UNQUOTED_KEY_QUOTED_VALUE_RE.sub(lambda m: f'{m.group(1)}=[redacted]', redacted)
+    redacted = _XML_SENSITIVE_VALUE_RE.sub(lambda m: f"<{m.group(1)}>[redacted]</{m.group(1)}>", redacted)
+    redacted = _QUOTED_SENSITIVE_HEADER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}=[redacted]{m.group(1)}", redacted)
+    redacted = _UNCLOSED_SENSITIVE_HEADER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}=[redacted]", redacted)
+    redacted = _SENSITIVE_HEADER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}=[redacted]", redacted)
+    redacted = _SECRET_ASSIGNMENT_RE.sub(lambda m: m.group(0) if m.group(2).startswith("[redacted]") else f"{m.group(1)}=[redacted]", redacted)
+    redacted = _BEARER_CREDENTIAL_RE.sub("bearer=[redacted]", redacted)
+    redacted = _BASIC_CREDENTIAL_RE.sub(_redact_standalone_basic, redacted)
+    redacted = _IPV6_CANDIDATE_RE.sub(_redact_private_ipv6_candidate, redacted)
+    redacted = _PRIVATE_IPV4_RE.sub("[redacted-private-address]", redacted)
+    redacted = _JWT_RE.sub("[redacted-secret]", redacted)
     redacted = _LONG_SECRET_RE.sub("[redacted-secret]", redacted)
+    redacted = redacted.replace("<", "&lt;").replace(">", "&gt;")
+    redacted = re.sub(r"@(?=[A-Za-z0-9_-])", "@\u200b", redacted)
+    redacted = re.sub(r"#(?=\d)", "#\u200b", redacted)
     return redacted
 
 
@@ -588,17 +1494,22 @@ def _format_diagnostics(diagnostics: ReportDiagnostics) -> str:
         if diagnostics.notification_providers
         else "None reported"
     )
+    def public_value(value: Any, fallback: str) -> str:
+        cleaned = redact_public_text(_clean_single_line(value) or fallback)
+        cleaned = _PUBLIC_URL_RE.sub("[redacted-url]", cleaned)
+        return _markdown_table_value(cleaned)
+
     return "\n".join(
         [
             "| Field | Value |",
             "| --- | --- |",
-            f"| ChannelWatch version | {_markdown_table_value(diagnostics.channelwatch_version or 'Unknown')} |",
+            f"| ChannelWatch version | {public_value(diagnostics.channelwatch_version, 'Unknown')} |",
             f"| DVRs configured | {diagnostics.dvr_count} |",
             f"| DVRs connected | {diagnostics.connected_dvr_count} |",
-            f"| Core status | {_markdown_table_value(diagnostics.core_status or 'Unknown')} |",
-            f"| Monitoring | {_markdown_table_value(monitoring)} |",
-            f"| Notification providers | {_markdown_table_value(providers)} |",
-            f"| Enabled feature toggles | {_markdown_table_value(', '.join(enabled_toggles) if enabled_toggles else 'None reported')} |",
+            f"| Core status | {public_value(diagnostics.core_status, 'Unknown')} |",
+            f"| Monitoring | {public_value(monitoring, 'Not reported')} |",
+            f"| Notification providers | {public_value(providers, 'None reported')} |",
+            f"| Enabled feature toggles | {public_value(', '.join(enabled_toggles), 'None reported')} |",
         ]
     )
 

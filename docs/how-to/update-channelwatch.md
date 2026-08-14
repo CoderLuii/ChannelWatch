@@ -6,7 +6,7 @@ The Update Center is meant to make routine updates feel like a normal app update
 
 If you pulled v0.9.9, update the container image to v0.9.10 first. That repair release touches Docker entrypoint and runtime behavior, so ChannelWatch marks it as **container image update required** instead of applying it as an in-app bundle.
 
-v0.9.14 requires no settings or data migration and can be installed directly through **Settings > Updates** without replacing the container image. Docker, Unraid, Compose, and Helm updates remain available if preferred.
+v0.9.15 requires no settings or data migration and can be installed directly through **Settings > Updates** from v0.9.14 without replacing the container image. The first transition from v0.9.14 may require one manual browser refresh after ChannelWatch restarts. Docker, Unraid, Compose, and Helm updates remain available if preferred.
 
 ## Check for updates
 
@@ -30,7 +30,7 @@ When an app-only update is available, the Update Center:
 8. restarts ChannelWatch through Supervisor or the container restart fallback;
 9. records the activation result in the update job state.
 
-Refresh the page after the restart if your browser does not reconnect automatically.
+ChannelWatch versions that include the reconnect improvement wait for the target runtime and reload the page automatically. When updating from v0.9.14 to v0.9.15, refresh the page manually if the older browser code does not reconnect after the restart.
 
 ## Roll back
 

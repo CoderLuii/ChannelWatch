@@ -24,7 +24,7 @@ function getDvrHealthConfig(status: DVRStatusInfo | undefined, isDisabled: boole
 }
 
 const coreStatusConfig: Record<string, { color: string; bgClass: string; dotClass: string }> = {
-  Running: { color: "text-white", bgClass: "bg-green-700 hover:bg-green-800", dotClass: "bg-green-600" },
+  Running: { color: "text-white", bgClass: "bg-green-800 hover:bg-green-900", dotClass: "bg-green-600" },
   Stopped: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
   Starting: { color: "text-amber-50", bgClass: "bg-amber-600 hover:bg-amber-700", dotClass: "bg-amber-500" },
   Backoff: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
@@ -252,7 +252,7 @@ export function StatusPanel({
                   </div>
                   <Badge
                     variant={isConnected ? "default" : "secondary"}
-                    className={isConnected ? "bg-green-700 text-white hover:bg-green-800" : isDisabled ? "" : "bg-red-700 text-white dark:bg-red-600"}
+                    className={isConnected ? "bg-green-800 text-white hover:bg-green-900" : isDisabled ? "" : "bg-red-700 text-white dark:bg-red-600"}
                   >
                     {isDisabled ? t("status.badge.disabled") : isConnected ? t("status.badge.connected") : t("status.badge.notConnected")}
                   </Badge>

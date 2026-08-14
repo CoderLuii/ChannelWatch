@@ -55,7 +55,12 @@ import {
   type ReportProblemPayload,
 } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { escapeMarkdownTableCell } from "@/lib/report-markdown"
+import {
+  escapeMarkdownTableCell,
+  publicDiagnosticsRows,
+  publicDiagnosticValue,
+  redactPublicText,
+} from "@/lib/report-markdown"
 import {
   copySupportCode,
   isPrivateDeliveryFailure,
@@ -219,16 +224,6 @@ function buildDiagnostics(
   }
 }
 
-function redactPublicText(value: string): string {
-  return value
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
-    .replace(
-      /\b(api[_-]?key|token|secret|password|passwd|webhook|dsn)\s*[:=]\s*([^\s,;]+)/gi,
-      (_match, key) => `${key}=[redacted]`,
-    )
-    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted-secret]")
-}
-
 function renderIssueTitle(payload: ReportProblemPayload): string {
   const summary = redactPublicText(payload.summary)
   return `[In-App] ${summary.length > 90 ? `${summary.slice(0, 87).trim()}...` : summary}`
@@ -281,13 +276,13 @@ function renderDiagnostics(diagnostics: ReportDiagnostics): string {
   return [
     "| Field | Value |",
     "| --- | --- |",
-    `| ChannelWatch version | ${escapeMarkdownTableCell(diagnostics.channelwatch_version || "Unknown")} |`,
+    `| ChannelWatch version | ${escapeMarkdownTableCell(publicDiagnosticValue(diagnostics.channelwatch_version, "Unknown"))} |`,
     `| DVRs configured | ${diagnostics.dvr_count} |`,
     `| DVRs connected | ${diagnostics.connected_dvr_count} |`,
-    `| Core status | ${escapeMarkdownTableCell(diagnostics.core_status || "Unknown")} |`,
-    `| Monitoring | ${escapeMarkdownTableCell(diagnostics.monitoring_statuses.length ? diagnostics.monitoring_statuses.join(", ") : "Not reported")} |`,
-    `| Notification providers | ${escapeMarkdownTableCell(diagnostics.notification_providers.length ? diagnostics.notification_providers.join(", ") : "None reported")} |`,
-    `| Enabled feature toggles | ${escapeMarkdownTableCell(enabled.length ? enabled.join(", ") : "None reported")} |`,
+    `| Core status | ${escapeMarkdownTableCell(publicDiagnosticValue(diagnostics.core_status, "Unknown"))} |`,
+    `| Monitoring | ${escapeMarkdownTableCell(publicDiagnosticValue(diagnostics.monitoring_statuses.join(", "), "Not reported"))} |`,
+    `| Notification providers | ${escapeMarkdownTableCell(publicDiagnosticValue(diagnostics.notification_providers.join(", "), "None reported"))} |`,
+    `| Enabled feature toggles | ${escapeMarkdownTableCell(publicDiagnosticValue(enabled.join(", "), "None reported"))} |`,
   ].join("\n")
 }
 
@@ -302,21 +297,7 @@ function renderIssueBody(payload: ReportProblemPayload): string {
 }
 
 function diagnosticsRows(diagnostics: ReportDiagnostics): Array<[string, string]> {
-  const enabled = [
-    diagnostics.feature_toggles.channel_watching ? "Channel watching" : null,
-    diagnostics.feature_toggles.vod_watching ? "VOD" : null,
-    diagnostics.feature_toggles.disk_space ? "Disk space" : null,
-    diagnostics.feature_toggles.recording_events ? "Recordings" : null,
-    diagnostics.feature_toggles.stream_counter ? "Stream counter" : null,
-  ].filter(Boolean)
-  return [
-    ["Version", diagnostics.channelwatch_version || "Unknown"],
-    ["DVRs", `${diagnostics.connected_dvr_count} connected of ${diagnostics.dvr_count}`],
-    ["Core", diagnostics.core_status || "Unknown"],
-    ["Monitoring", diagnostics.monitoring_statuses.join(", ") || "Not reported"],
-    ["Providers", diagnostics.notification_providers.join(", ") || "None reported"],
-    ["Feature toggles", enabled.join(", ") || "None reported"],
-  ]
+  return publicDiagnosticsRows(diagnostics)
 }
 
 function fieldError(errors: Partial<Record<ReportField, string>>, field: ReportField): string | undefined {

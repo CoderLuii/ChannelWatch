@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { TabsContent } from "@/components/base/tabs"
 import { ApiError, applyUpdate, checkForUpdate, fetchUpdateJob, fetchUpdateStatus, rollbackUpdate, type UpdateJob, type UpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
+import { applyUpdateAndReconnect } from "@/lib/update-reconnect"
 
 type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling"
 
@@ -106,13 +107,26 @@ export function UpdateCenterSection() {
 
   const handleApply = async () => {
     if (!latest?.version) return
+    const targetVersion = latest.version
     setBusy("applying")
     setError(null)
     setRemediation(null)
     try {
-      const nextJob = await applyUpdate(latest.version)
-      setJob(nextJob)
-      if (!nextJob.restart_required) setBusy("idle")
+      const nextJob = await applyUpdateAndReconnect(targetVersion, {
+        apply: async (version) => {
+          const startedJob = await applyUpdate(version)
+          if (startedJob.restart_required) {
+            setBusy("polling")
+          } else {
+            setJob(startedJob)
+          }
+          return startedJob
+        },
+        fetchStatus: fetchUpdateStatus,
+        reload: () => window.location.reload(),
+        isRejectedUpdate: (err) => err instanceof ApiError,
+      })
+      if (nextJob && !nextJob.restart_required) setBusy("idle")
     } catch (err) {
       setError(updateErrorMessage(err))
       setRemediation(updateErrorRemediation(err))

@@ -8,6 +8,21 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.15] - 2026-08-14
+
+### Changed
+
+- Allow the release workflow to wait through normal site-deployment timing before it verifies the stable Update Center metadata.
+
+### Fixed
+
+- Make browsers running this version wait for a compatible update restart to finish, confirm the target bundle is active, and then reload the interface.
+- Remove embedded credentials, private network addresses, secret-like values, unsafe links, and unintended mentions from the public problem-report preview.
+
+### Security
+
+- Strengthen the public/private boundary for problem reports before report text leaves ChannelWatch.
+
 ## [0.9.14] - 2026-08-13
 
 ### Fixed
@@ -346,7 +361,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.14...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.15...HEAD
+[0.9.15]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.14...v0.9.15
 [0.9.14]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.13...v0.9.14
 [0.9.13]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.12...v0.9.13
 [0.9.12]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.11...v0.9.12

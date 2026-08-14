@@ -128,7 +128,7 @@ jobs:
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --output release-body.md
           first_line="$(head -n 1 release-body.md)"
-          expected_heading="# ChannelWatch ${TAG} - Reporting and update reliability"
+          expected_heading="# ChannelWatch ${TAG} - Update and reporting reliability"
           if [ "${first_line}" != "${expected_heading}" ]; then
             echo "::error::GitHub Release body must start with '${expected_heading}'."
             exit 1
@@ -461,4 +461,6 @@ jobs:
             --version "${{ steps.release.outputs.version }}" \
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${GITHUB_REF_NAME}" \
             --bundle-sha256 "${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}" \
-            --image-required "${{ steps.release.outputs.image_required }}"
+            --image-required "${{ steps.release.outputs.image_required }}" \
+            --attempts "90" \
+            --interval "10"

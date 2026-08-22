@@ -76,6 +76,7 @@ class TestWatchdogSnapshot:
                         "connected": True,
                         "task_alive": True,
                         "task_done": False,
+                        "monitor_registered": True,
                         "monitor_running": True,
                         "monitoring_status": "healthy",
                         "freshness_status": "healthy",
@@ -91,6 +92,73 @@ class TestWatchdogSnapshot:
 
         assert summary["ready"] is True
         assert summary["status"] == "ready"
+
+    def test_retry_supervisor_without_registered_monitor_is_immediately_degraded(self):
+        watchdog = Watchdog(stale_threshold_seconds=300)
+        monitor = _monitor()
+        watchdog.mark_fresh(monitor, "poll", timestamp=100.0)
+
+        alive_supervisor = MagicMock()
+        alive_supervisor.done.return_value = False
+
+        snapshot = watchdog.snapshot(
+            {"dvr_aaa11111": alive_supervisor}, {}, now=101.0
+        )
+        dvr = snapshot["dvrs"][0]
+
+        assert dvr["task_alive"] is True
+        assert dvr["monitor_registered"] is False
+        assert dvr["monitor_running"] is False
+        assert dvr["monitoring_status"] == "reconnecting"
+        assert dvr["ready"] is False
+        assert snapshot["healthy"] is False
+
+    def test_registered_but_stopped_monitor_is_not_ready_with_fresh_timestamp(self):
+        watchdog = Watchdog(stale_threshold_seconds=300)
+        monitor = _monitor()
+        watchdog.mark_fresh(monitor, "poll", timestamp=100.0)
+        monitor.running = False
+
+        alive_supervisor = MagicMock()
+        alive_supervisor.done.return_value = False
+
+        dvr = watchdog.snapshot(
+            {"dvr_aaa11111": alive_supervisor},
+            {"dvr_aaa11111": monitor},
+            now=101.0,
+        )["dvrs"][0]
+
+        assert dvr["monitor_registered"] is True
+        assert dvr["monitor_running"] is False
+        assert dvr["monitoring_status"] == "dead"
+        assert dvr["ready"] is False
+
+    def test_summary_rejects_legacy_snapshot_without_monitor_registration(self):
+        summary = summarize_enabled_dvrs(
+            [
+                {
+                    "id": "dvr_aaa11111",
+                    "name": "Living Room",
+                    "host": "192.168.1.10",
+                    "port": 8089,
+                }
+            ],
+            {
+                "dvrs": [
+                    {
+                        "id": "dvr_aaa11111",
+                        "task_alive": True,
+                        "monitor_running": True,
+                        "monitoring_status": "healthy",
+                        "ready": True,
+                    }
+                ]
+            },
+            now=120.0,
+        )
+
+        assert summary["ready"] is False
+        assert summary["dvrs"][0]["ready"] is False
 
 
 class TestHotReloadVerification:
@@ -125,13 +193,15 @@ class TestHotReloadVerification:
                     task = await main_mod._start_verified_dvr_task(
                         monitor, verification_timeout=1.0
                     )
-                    await task
+                    await asyncio.gather(task, return_exceptions=True)
 
                 watchdog.attach_monitor.assert_called_once_with(monitor)
                 watchdog.persist.assert_called()
                 notify_failure.assert_awaited_once_with(monitor, "timed out")
-                assert main_mod._dvr_tasks[monitor.dvr.id] is task
-                assert main_mod._dvr_monitors[monitor.dvr.id] is monitor
+                assert monitor.dvr.id not in main_mod._dvr_tasks
+                assert monitor.dvr.id not in main_mod._dvr_monitors
+                assert task.done()
+                watchdog.remove_dvr.assert_called_once_with(monitor.dvr.id)
             finally:
                 main_mod._dvr_tasks = original_tasks
                 main_mod._dvr_monitors = original_monitors

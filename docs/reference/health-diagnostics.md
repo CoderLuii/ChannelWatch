@@ -55,38 +55,15 @@ What it checks:
 
 ### `GET /healthz/ready`
 
-`/healthz/ready` is the readiness probe. It reads enabled DVR records from settings, reads the persisted watchdog snapshot, then summarizes whether every enabled, non deleted DVR monitor is ready.
+`/healthz/ready` is the readiness probe. It reads enabled DVR records from settings and the persisted watchdog snapshot, then reports whether every enabled, non deleted DVR monitor is ready without exposing DVR details.
 
 Ready response shape:
 
 ```json
-{
-  "status": "ready",
-  "ready": true,
-  "dvrs": [
-    {
-      "id": "main",
-      "name": "Main DVR",
-      "monitoring_status": "healthy",
-      "freshness_status": "healthy",
-      "connected": true,
-      "reason": "Freshness updates are current",
-      "last_freshness_at": "2026-04-26T00:00:00+00:00",
-      "freshness_age_seconds": 12.0,
-      "version": "2026.04.20.0213",
-      "version_compatible": true,
-      "version_warning": null
-    }
-  ],
-  "stale_threshold_seconds": 300,
-  "tested_version_range": {
-    "min": "2024.01.01",
-    "max": "2026.04.20"
-  }
-}
+{"status":"ready","ready":true}
 ```
 
-Degraded responses use the same shape with `"status":"degraded"` and `"ready":false`.
+Degraded responses use the same two-field shape with `"status":"degraded"` and `"ready":false`.
 
 Status codes:
 
@@ -99,7 +76,7 @@ What it checks:
 * The core watchdog snapshot from `/config/watchdog_status.json` through `load_watchdog_snapshot()`.
 * Per DVR freshness and monitor state as last published by the core process.
 * DVR connection state only as recorded in the watchdog snapshot. The readiness route does not make live DVR HTTP calls.
-* Tested Channels DVR version range is included for context. Per-DVR `version`, `version_compatible`, and `version_warning` fields may be present when recent cached version data exists, but the route does not perform a live version check.
+* The returned payload contains only `status` and `ready`. It does not expose DVR names, IDs, addresses, versions, timestamps, monitor reasons, or tested-version ranges.
 
 What it does not check directly:
 
@@ -107,7 +84,7 @@ What it does not check directly:
 * It does not query supervisor.
 * It does not directly inspect the core process. Core health is inferred from the watchdog state it publishes.
 
-`GET /api/health` is a legacy health route with a smaller response. It uses the same monitoring summary, returns `200` when ready, and returns `503` with `"status":"degraded"` when monitoring is not ready.
+`GET /api/health` is the authenticated detailed monitoring route when authentication is configured. It uses the same monitoring summary, returns `200` when ready, and returns `503` with `"status":"degraded"` when monitoring is not ready. Its response includes DVR IDs, DVR names, monitoring states, reasons, and notification-routing diagnostics; it still makes no live DVR calls.
 
 ## Kubernetes style probes
 
@@ -136,7 +113,9 @@ Behavior:
 * Readiness goes green only when the watchdog summary says all enabled DVR monitors are ready. A stale, missing, or dead monitor returns `503` and should remove the pod from service.
 * Startup stays `503` until backend startup finishes, then returns `200`.
 
-These routes are unauthenticated. They are also exempt from the standard API rate limiter.
+These three `/healthz/*` routes are unauthenticated. They are also exempt from the standard API rate limiter. Use authenticated `/api/health` or the Diagnostics page when the operator needs per-DVR detail.
+
+The bundled single-replica Helm chart sets `service.publishNotReadyAddresses=true`. Monitoring readiness therefore remains visible on the Pod without making the setup and diagnostics UI unreachable through the Service when no DVR is configured or an enabled DVR is degraded. Operators who deliberately want Kubernetes to remove a NotReady pod from Service endpoints can set `service.publishNotReadyAddresses=false`, but must provide another path to the UI during first-run setup and degraded monitoring.
 
 ## `channelwatch doctor` CLI
 

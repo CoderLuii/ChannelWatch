@@ -5,62 +5,58 @@ delivery retry persistence, circuit-breaker checks, and optional webhook
 delivery for each alert notification.
 """
 
-import asyncio
+from dataclasses import dataclass
+from queue import Empty, Full, Queue
+import threading
+import time
 from typing import Any, Dict, List, Optional, Set
 
 from ..helpers.logging import log, LOG_STANDARD
 from .providers.base import NotificationProvider
 from .rate_limiter import RateLimiter
 from .delivery import CircuitBreaker, deliver_with_retry, estimate_payload_size
+from .routing import ALL_DEST_KEYS as ALL_DEST_KEYS
+from .routing import APPRISE_DEST_KEYS, resolve_notification_routing
 
-APPRISE_DEST_KEYS = (
-    "pushover",
-    "discord",
-    "email",
-    "telegram",
-    "slack",
-    "gotify",
-    "matrix",
-    "custom",
-)
-ALL_DEST_KEYS = APPRISE_DEST_KEYS + ("webhook",)
-SINGLE_ATTEMPT_APPRISE_EVENT_TYPES = {"channel", "vod"}
-
-_ALL_ENABLED: Dict[str, bool] = {k: True for k in ALL_DEST_KEYS}
+SINGLE_ATTEMPT_APPRISE_EVENT_TYPES = {"channel", "runtime", "vod"}
 
 
 def _resolve_routing(
     dvr_id: str, event_type: str, routing_config: Dict[str, Any]
 ) -> Dict[str, bool]:
-    if (
-        not isinstance(routing_config, dict)
-        or not routing_config
-        or not dvr_id
-        or not event_type
-    ):
-        return dict(_ALL_ENABLED)
-    dvr_routing = routing_config.get(dvr_id)
-    if not isinstance(dvr_routing, dict):
-        return dict(_ALL_ENABLED)
-    event_routing = dvr_routing.get(event_type)
-    if not isinstance(event_routing, dict):
-        return dict(_ALL_ENABLED)
-    return {k: bool(event_routing.get(k, True)) for k in ALL_DEST_KEYS}
+    return resolve_notification_routing(dvr_id, event_type, routing_config)
 
 
-def _load_routing_config() -> Dict[str, Any]:
+def _load_routing_config() -> Any:
     try:
         from ..helpers.config import CoreSettings
 
-        return CoreSettings.get().notification_routing or {}
+        routing = CoreSettings.get().notification_routing
+        # Only the deliberate legacy absence representations enable every
+        # destination.  Other falsy values are malformed and must reach the
+        # resolver unchanged so it can fail closed.
+        if routing is None or (isinstance(routing, dict) and not routing):
+            return {}
+        return routing
     except Exception:
-        return {}
+        # A settings read failure is not equivalent to the deliberate legacy
+        # empty mapping. Return an invalid sentinel so resolution fails closed.
+        return None
 
 
 def _should_retry_apprise(event_type: str) -> bool:
     """Return whether the outer Apprise wrapper should retry this alert type."""
     normalized = (event_type or "").strip().lower()
     return normalized not in SINGLE_ATTEMPT_APPRISE_EVENT_TYPES
+
+
+@dataclass(frozen=True)
+class _QueuedNotification:
+    title: str
+    message: str
+    kwargs: dict[str, Any]
+    dedupe_key: Optional[str]
+    terminal: bool = False
 
 
 class NotificationManager:
@@ -72,16 +68,30 @@ class NotificationManager:
     """
 
     def __init__(
-        self, rate_limit: int = 20, rate_window: int = 300, db_engine: Any = None
+        self,
+        rate_limit: int = 20,
+        rate_window: int = 300,
+        db_engine: Any = None,
+        rate_limiter: Optional[RateLimiter] = None,
+        delivery_queue_size: int = 256,
     ):
         self.providers: Dict[str, NotificationProvider] = {}
         self.webhook_manager: Optional[Any] = None
-        self.rate_limiter = RateLimiter(
-            max_notifications=rate_limit,
-            window_seconds=rate_window,
+        self.rate_limiter = rate_limiter or RateLimiter(
+            max_notifications=rate_limit, window_seconds=rate_window
         )
         self.circuit_breaker = CircuitBreaker()
         self.db_engine = db_engine
+        self._provider_delivery_lock = threading.Lock()
+        self._delivery_queue: Queue[Any] = Queue(
+            maxsize=max(1, int(delivery_queue_size))
+        )
+        self._queue_state_lock = threading.Lock()
+        self._queued_dedupe_keys: set[str] = set()
+        self._delivery_worker: Optional[threading.Thread] = None
+        self._queue_accepting = True
+        self._queue_sentinel = object()
+        self._queue_dropped = 0
 
     def register_provider(self, provider: NotificationProvider) -> bool:
         """Register a notification provider by its provider type.
@@ -118,21 +128,43 @@ class NotificationManager:
             if provider.is_configured()
         ]
 
-    def send_notification(self, title: str, message: str, **kwargs) -> bool:
-        """Send one notification through all routed destinations.
+    def _has_configured_destinations(self) -> bool:
+        has_webhooks = bool(
+            self.webhook_manager and self.webhook_manager.is_configured()
+        )
+        return bool(self.get_active_providers() or has_webhooks)
 
-        The title, message, DVR id, event type, and optional activity metadata
-        are checked against rate limits and routing settings before delivery.
-        The return value is ``True`` if any configured destination succeeds.
-        """
+    @staticmethod
+    def _dedupe_key(kwargs: dict[str, Any]) -> Optional[str]:
+        raw_key = kwargs.get("notification_dedupe_key") or kwargs.get(
+            "activity_event_id"
+        )
+        if raw_key in (None, ""):
+            return None
+        return "|".join(
+            (
+                str(kwargs.get("dvr_id", "")),
+                str(kwargs.get("event_type", "")),
+                str(raw_key),
+            )
+        )
+
+    def _iter_apprise_destinations(
+        self,
+        provider: NotificationProvider,
+        allowed_apprise: Optional[Set[str]],
+    ) -> list[tuple[str, str]]:
+        enumerator = getattr(type(provider), "notification_destinations", None)
+        if not callable(enumerator):
+            return [("apprise", "apprise")]
+        return list(provider.notification_destinations(allowed_apprise))
+
+    def _deliver_notification(self, title: str, message: str, **kwargs) -> bool:
+        """Perform one delivery in the caller or the owned queue worker."""
         has_webhooks = bool(
             self.webhook_manager and self.webhook_manager.is_configured()
         )
         if not self.providers and not has_webhooks:
-            return False
-
-        if not self.rate_limiter.allow():
-            log(f"Notification suppressed by rate limiter: {title}", level=LOG_STANDARD)
             return False
 
         dvr_id = kwargs.get("dvr_id", "")
@@ -142,73 +174,82 @@ class NotificationManager:
 
         allowed_apprise: Optional[Set[str]] = None
         if dvr_id and event_type:
-            allowed_apprise = {k for k in APPRISE_DEST_KEYS if routing.get(k, True)}
+            allowed_apprise = {k for k in APPRISE_DEST_KEYS if routing.get(k, False)}
 
         payload_size = estimate_payload_size(title, message, **kwargs)
 
         overall_success = False
 
-        for provider_type, provider in self.providers.items():
-            if not provider.is_configured():
-                continue
-            send_kwargs = dict(kwargs)
-            if allowed_apprise is not None:
-                send_kwargs["allowed_apprise_destinations"] = allowed_apprise
+        with self._provider_delivery_lock:
+            for provider_type, provider in self.providers.items():
+                if not provider.is_configured():
+                    continue
+                send_kwargs = dict(kwargs)
+                if allowed_apprise is not None:
+                    send_kwargs["allowed_apprise_destinations"] = allowed_apprise
 
-            def _call(p=provider, sk=send_kwargs):
-                return p.send_notification(title, message, **sk)
+                destinations = self._iter_apprise_destinations(
+                    provider, allowed_apprise
+                )
+                for destination_id, destination_key in destinations:
+                    destination_kwargs = dict(send_kwargs)
+                    if destination_id != "apprise":
+                        destination_kwargs["apprise_destination_id"] = destination_id
 
-            success = deliver_with_retry(
-                dvr_id=dvr_id,
-                channel="apprise",
-                event_type=event_type,
-                provider_type=provider_type,
-                channel_id="apprise",
-                payload_size=payload_size,
-                deliver_fn=_call,
-                circuit_breaker=self.circuit_breaker,
-                db_engine=self.db_engine,
-                activity_event_id=activity_event_id,
-                with_retry=_should_retry_apprise(event_type),
-            )
-            if success:
+                    def _call(p=provider, sk=destination_kwargs):
+                        return p.send_notification(title, message, **sk)
+
+                    success = deliver_with_retry(
+                        dvr_id=dvr_id,
+                        channel="apprise",
+                        event_type=event_type,
+                        provider_type=provider_type,
+                        channel_id=destination_id,
+                        payload_size=payload_size,
+                        deliver_fn=_call,
+                        circuit_breaker=self.circuit_breaker,
+                        db_engine=self.db_engine,
+                        activity_event_id=activity_event_id,
+                        with_retry=_should_retry_apprise(event_type),
+                    )
+                    if success:
+                        log(
+                            f"Notification sent via {provider_type}/{destination_key}: {title}",
+                            level=LOG_STANDARD,
+                        )
+                        overall_success = True
+                    else:
+                        log(
+                            f"Notification failed via {provider_type}/{destination_key}: {title}",
+                            level=LOG_STANDARD,
+                        )
+
+            wm = self.webhook_manager
+            if wm is not None and has_webhooks and routing.get("webhook", False):
+
+                def _webhook_call(w=wm):
+                    return w.send_notification(title, message, **kwargs)
+
+                success = deliver_with_retry(
+                    dvr_id=dvr_id,
+                    channel="webhook",
+                    event_type=event_type,
+                    provider_type="webhook",
+                    channel_id="webhook",
+                    payload_size=payload_size,
+                    deliver_fn=_webhook_call,
+                    circuit_breaker=self.circuit_breaker,
+                    db_engine=self.db_engine,
+                    activity_event_id=activity_event_id,
+                    with_retry=False,
+                )
+                if success:
+                    overall_success = True
+            elif has_webhooks and dvr_id and event_type:
                 log(
-                    f"Notification sent via {provider_type}: {title}",
+                    f"Notification skipped (routing): {dvr_id}/{event_type} → webhook disabled",
                     level=LOG_STANDARD,
                 )
-                overall_success = True
-            else:
-                log(
-                    f"Notification failed via {provider_type}: {title}",
-                    level=LOG_STANDARD,
-                )
-
-        wm = self.webhook_manager
-        if wm is not None and has_webhooks and routing.get("webhook", True):
-
-            def _webhook_call(w=wm):
-                return w.send_notification(title, message, **kwargs)
-
-            success = deliver_with_retry(
-                dvr_id=dvr_id,
-                channel="webhook",
-                event_type=event_type,
-                provider_type="webhook",
-                channel_id="",
-                payload_size=payload_size,
-                deliver_fn=_webhook_call,
-                circuit_breaker=self.circuit_breaker,
-                db_engine=self.db_engine,
-                activity_event_id=activity_event_id,
-                with_retry=False,
-            )
-            if success:
-                overall_success = True
-        elif has_webhooks and dvr_id and event_type:
-            log(
-                f"Notification skipped (routing): {dvr_id}/{event_type} → webhook disabled",
-                level=LOG_STANDARD,
-            )
 
         active_destinations = len(self.get_active_providers()) + (
             1 if has_webhooks else 0
@@ -220,105 +261,265 @@ class NotificationManager:
             )
 
         return overall_success
+
+    def send_notification(self, title: str, message: str, **kwargs) -> bool:
+        """Synchronously deliver one rate-limited notification."""
+        if not self._has_configured_destinations():
+            return False
+        if not self.rate_limiter.allow():
+            log(f"Notification suppressed by rate limiter: {title}", level=LOG_STANDARD)
+            return False
+        return self._deliver_notification(title, message, **kwargs)
+
+    def _ensure_delivery_worker_locked(self) -> bool:
+        """Start the worker while the caller holds ``_queue_state_lock``."""
+        if not self._queue_accepting:
+            return False
+        if self._delivery_worker is None or not self._delivery_worker.is_alive():
+            worker = threading.Thread(
+                target=self._delivery_worker_loop,
+                name=f"channelwatch-notifications-{id(self):x}",
+                daemon=True,
+            )
+            try:
+                worker.start()
+            except RuntimeError as exc:
+                log(
+                    f"Notification queue worker failed to start: {type(exc).__name__}",
+                    level=LOG_STANDARD,
+                )
+                self._delivery_worker = None
+                return False
+            self._delivery_worker = worker
+        return True
+
+    def _delivery_worker_loop(self) -> None:
+        while True:
+            request = self._delivery_queue.get()
+            terminal_request = False
+            try:
+                if request is self._queue_sentinel:
+                    return
+                terminal_request = bool(
+                    isinstance(request, _QueuedNotification) and request.terminal
+                )
+                try:
+                    self._deliver_notification(
+                        request.title,
+                        request.message,
+                        **request.kwargs,
+                    )
+                except BaseException as exc:
+                    # This is the terminal boundary of an owned daemon thread.
+                    # A provider must not strand later work or shutdown markers,
+                    # even if it raises SystemExit or another BaseException.
+                    log(
+                        f"Notification queue worker error: {type(exc).__name__}",
+                        level=LOG_STANDARD,
+                    )
+            finally:
+                if isinstance(request, _QueuedNotification) and request.dedupe_key:
+                    with self._queue_state_lock:
+                        self._queued_dedupe_keys.discard(request.dedupe_key)
+                self._delivery_queue.task_done()
+            if terminal_request:
+                with self._queue_state_lock:
+                    if self._delivery_worker is threading.current_thread():
+                        self._delivery_worker = None
+                return
+
+    def enqueue_notification(self, title: str, message: str, **kwargs) -> bool:
+        """Accept work without waiting for provider retries.
+
+        Overflow drops the newest request. Only requests with an explicit
+        ``notification_dedupe_key`` or ``activity_event_id`` are deduplicated;
+        unrelated alerts are never guessed to be duplicates.
+        """
+        if not self._has_configured_destinations():
+            return False
+        dedupe_key = self._dedupe_key(kwargs)
+        with self._queue_state_lock:
+            if not self._queue_accepting:
+                return False
+            if dedupe_key and dedupe_key in self._queued_dedupe_keys:
+                log(
+                    f"Notification skipped (duplicate queued work): {title}",
+                    level=LOG_STANDARD,
+                )
+                return True
+            # Start the worker before consuming a global rate token or
+            # accepting queue state, so thread-start failure is a clean reject.
+            if not self._ensure_delivery_worker_locked():
+                return False
+            # Enqueues are serialized by ``_queue_state_lock`` and the worker
+            # only removes items, so a non-full queue cannot become full before
+            # this caller's put. Reject overflow before consuming an
+            # installation-wide rate-limit token.
+            if self._delivery_queue.full():
+                self._queue_dropped += 1
+                log(
+                    f"Notification queue full; newest notification dropped: {title}",
+                    level=LOG_STANDARD,
+                )
+                return False
+            if not self.rate_limiter.allow():
+                log(
+                    f"Notification suppressed by rate limiter: {title}",
+                    level=LOG_STANDARD,
+                )
+                return False
+            request = _QueuedNotification(title, message, dict(kwargs), dedupe_key)
+            try:
+                self._delivery_queue.put_nowait(request)
+            except Full:
+                # Defensive only: normal producers are serialized above and
+                # shutdown cannot publish its sentinel while this lock is held.
+                self._queue_dropped += 1
+                log(
+                    f"Notification queue full; newest notification dropped: {title}",
+                    level=LOG_STANDARD,
+                )
+                return False
+            if dedupe_key:
+                self._queued_dedupe_keys.add(dedupe_key)
+        return True
+
+    def enqueue_terminal_notification(
+        self, title: str, message: str, **kwargs
+    ) -> bool:
+        """Atomically accept one final notice and close this manager's queue.
+
+        Once accepted, ordinary queued work is discarded and the owned worker
+        attempts this request exactly once before exiting. The method never
+        waits for provider I/O, so monitor reload and shutdown remain bounded.
+        Acceptance does not guarantee remote receipt: routing, provider
+        behavior, and the remote service still determine delivery success.
+        """
+        if not self._has_configured_destinations():
+            return False
+        dedupe_key = self._dedupe_key(kwargs)
+        with self._queue_state_lock:
+            if not self._queue_accepting:
+                return False
+            if not self._ensure_delivery_worker_locked():
+                return False
+            if not self.rate_limiter.allow():
+                log(
+                    f"Notification suppressed by rate limiter: {title}",
+                    level=LOG_STANDARD,
+                )
+                return False
+
+            # No producer or shutdown path can mutate the queue while this
+            # state lock is held. The worker may already own one in-flight
+            # request, but every still-pending request is stale monitor work.
+            while True:
+                try:
+                    queued = self._delivery_queue.get_nowait()
+                except Empty:
+                    break
+                if isinstance(queued, _QueuedNotification) and queued.dedupe_key:
+                    self._queued_dedupe_keys.discard(queued.dedupe_key)
+                self._delivery_queue.task_done()
+
+            terminal_request = _QueuedNotification(
+                title,
+                message,
+                dict(kwargs),
+                dedupe_key,
+                terminal=True,
+            )
+            try:
+                self._delivery_queue.put_nowait(terminal_request)
+            except Full:  # pragma: no cover - producers are serialized above.
+                log(
+                    f"Terminal notification queue handoff failed: {title}",
+                    level=LOG_STANDARD,
+                )
+                return False
+            if dedupe_key:
+                self._queued_dedupe_keys.add(dedupe_key)
+            # Publish the terminal state only after the final item is queued.
+            # Repeated shutdown then observes instead of draining this request.
+            self._queue_accepting = False
+        return True
 
     async def send_notification_async(self, title: str, message: str, **kwargs) -> bool:
-        """Send one notification without blocking the asyncio event loop."""
-        has_webhooks = bool(
-            self.webhook_manager and self.webhook_manager.is_configured()
-        )
-        if not self.providers and not has_webhooks:
-            return False
+        """Queue one notification and return whether the queue accepted it."""
+        return self.enqueue_notification(title, message, **kwargs)
 
-        if not self.rate_limiter.allow():
-            log(f"Notification suppressed by rate limiter: {title}", level=LOG_STANDARD)
-            return False
+    def wait_for_delivery_queue(self, timeout: float = 5.0) -> bool:
+        """Wait for queued and in-flight work; intended for tests and drains."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            with self._delivery_queue.mutex:
+                unfinished = self._delivery_queue.unfinished_tasks
+            if unfinished == 0:
+                return True
+            time.sleep(0.01)
+        with self._delivery_queue.mutex:
+            return self._delivery_queue.unfinished_tasks == 0
 
-        dvr_id = kwargs.get("dvr_id", "")
-        event_type = kwargs.get("event_type", "")
-        routing = _resolve_routing(dvr_id, event_type, _load_routing_config())
-        activity_event_id = kwargs.get("activity_event_id")
+    def shutdown_delivery_queue(
+        self, *, drain: bool = False, timeout: float = 1.0
+    ) -> bool:
+        """Stop accepting work and bound shutdown time.
 
-        allowed_apprise: Optional[Set[str]] = None
-        if dvr_id and event_type:
-            allowed_apprise = {k for k in APPRISE_DEST_KEYS if routing.get(k, True)}
+        Reload and shutdown default to dropping pending work. In-flight provider
+        calls cannot be interrupted safely and may finish in the daemon worker,
+        but they never hold up process or monitor shutdown.
+        """
+        with self._queue_state_lock:
+            first_shutdown = self._queue_accepting
+            if not first_shutdown and self._delivery_worker is None:
+                return True
+            self._queue_accepting = False
 
-        payload_size = estimate_payload_size(title, message, **kwargs)
+        worker = self._delivery_worker
+        if not first_shutdown:
+            # A prior shutdown or terminal handoff already owns queue closure.
+            # Repeated callers only observe the worker; they never dequeue the
+            # terminal request or duplicate a shutdown marker.
+            if worker is None:
+                return True
+            worker.join(timeout=max(0.0, timeout))
+            stopped = not worker.is_alive()
+            if stopped:
+                with self._queue_state_lock:
+                    if self._delivery_worker is worker:
+                        self._delivery_worker = None
+            return stopped
 
-        overall_success = False
+        if drain:
+            self.wait_for_delivery_queue(timeout=timeout)
 
-        for provider_type, provider in self.providers.items():
-            if not provider.is_configured():
-                continue
-            send_kwargs = dict(kwargs)
-            if allowed_apprise is not None:
-                send_kwargs["allowed_apprise_destinations"] = allowed_apprise
+        while True:
+            try:
+                queued = self._delivery_queue.get_nowait()
+            except Empty:
+                break
+            if isinstance(queued, _QueuedNotification) and queued.dedupe_key:
+                with self._queue_state_lock:
+                    self._queued_dedupe_keys.discard(queued.dedupe_key)
+            self._delivery_queue.task_done()
 
-            def _call(p=provider, sk=send_kwargs):
-                return p.send_notification(title, message, **sk)
-
-            # Providers are intentionally sync for plugin compatibility; run
-            # the existing retry/delivery loop in a worker thread.
-            success = await asyncio.to_thread(
-                deliver_with_retry,
-                dvr_id=dvr_id,
-                channel="apprise",
-                event_type=event_type,
-                provider_type=provider_type,
-                channel_id="apprise",
-                payload_size=payload_size,
-                deliver_fn=_call,
-                circuit_breaker=self.circuit_breaker,
-                db_engine=self.db_engine,
-                activity_event_id=activity_event_id,
-                with_retry=_should_retry_apprise(event_type),
-            )
-            if success:
-                log(
-                    f"Notification sent via {provider_type}: {title}",
-                    level=LOG_STANDARD,
-                )
-                overall_success = True
-            else:
-                log(
-                    f"Notification failed via {provider_type}: {title}",
-                    level=LOG_STANDARD,
-                )
-
-        wm = self.webhook_manager
-        if wm is not None and has_webhooks and routing.get("webhook", True):
-
-            def _webhook_call(w=wm):
-                return w.send_notification(title, message, **kwargs)
-
-            success = await asyncio.to_thread(
-                deliver_with_retry,
-                dvr_id=dvr_id,
-                channel="webhook",
-                event_type=event_type,
-                provider_type="webhook",
-                channel_id="",
-                payload_size=payload_size,
-                deliver_fn=_webhook_call,
-                circuit_breaker=self.circuit_breaker,
-                db_engine=self.db_engine,
-                activity_event_id=activity_event_id,
-                with_retry=False,
-            )
-            if success:
-                overall_success = True
-        elif has_webhooks and dvr_id and event_type:
+        if worker is None:
+            return True
+        try:
+            self._delivery_queue.put_nowait(self._queue_sentinel)
+        except Full:
             log(
-                f"Notification skipped (routing): {dvr_id}/{event_type} → webhook disabled",
+                "Notification queue could not accept shutdown marker",
                 level=LOG_STANDARD,
             )
+            return False
+        worker.join(timeout=max(0.0, timeout))
+        stopped = not worker.is_alive()
+        if stopped:
+            with self._queue_state_lock:
+                self._delivery_worker = None
+        return stopped
 
-        active_destinations = len(self.get_active_providers()) + (
-            1 if has_webhooks else 0
-        )
-        if not overall_success and active_destinations > 0:
-            log(
-                f"Notification failed for all configured providers (Title: {title}).",
-                level=LOG_STANDARD,
-            )
-
-        return overall_success
+    @property
+    def delivery_queue_dropped(self) -> int:
+        return self._queue_dropped

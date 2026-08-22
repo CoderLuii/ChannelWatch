@@ -21,6 +21,7 @@ export const ErrorCode = {
   DVR_NOT_DELETED: "ERR_DVR_NOT_DELETED",
   DVR_CONNECTION_FAILED: "ERR_DVR_CONNECTION_FAILED",
   DVR_TEST_TARGET_REJECTED: "ERR_DVR_TEST_TARGET_REJECTED",
+  SETTINGS_VALIDATION_FAILED: "ERR_SETTINGS_VALIDATION_FAILED",
   SETTINGS_SAVE_FAILED: "ERR_SETTINGS_SAVE_FAILED",
   BACKUP_CREATE_FAILED: "ERR_BACKUP_CREATE_FAILED",
   RESTORE_INVALID_ZIP: "ERR_RESTORE_INVALID_ZIP",
@@ -171,6 +172,11 @@ const CATALOG: Record<string, CatalogEntry> = {
     message: "Failed to save settings.",
     remediation:
       "Check that /config is writable inside the container and try again.",
+  },
+  [ErrorCode.SETTINGS_VALIDATION_FAILED]: {
+    code: ErrorCode.SETTINGS_VALIDATION_FAILED,
+    message: "Settings validation failed.",
+    remediation: "Correct the reported settings fields and try saving again.",
   },
   [ErrorCode.BACKUP_CREATE_FAILED]: {
     code: ErrorCode.BACKUP_CREATE_FAILED,

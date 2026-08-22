@@ -23,7 +23,11 @@ def canonical_dvr_id(host: str, port: int) -> str:
     IPv6 is case-insensitive; hostnames are not normalized.
     """
     normalized = _normalize_host(host)
-    digest = hashlib.md5(f"{normalized}:{port}".encode("utf-8")).hexdigest()
+    # This is a backward-compatible, non-security identifier contract. Changing
+    # the digest would orphan persisted DVR routing and history references.
+    digest = hashlib.md5(
+        f"{normalized}:{port}".encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
     return "dvr_" + digest[:8]
 
 

@@ -52,6 +52,10 @@ from core.helpers.atomic_io import atomic_write_json
 from core.helpers.dvr_connection import build_dvr_base_url
 from core.helpers.dvr_id import dvr_display_name
 from core.helpers.trusted_destinations import preview_notification_destination_safety
+from core.notifications.routing import (
+    normalize_notification_routing,
+    notification_routing_diagnostics,
+)
 from core.helpers.soft_delete_manager import (
     hard_delete_dvr as _hard_delete_dvr,
     purge_expired_dvrs as _purge_expired_dvrs,
@@ -76,7 +80,9 @@ import secrets
 import uuid
 import json
 from datetime import datetime, timedelta, timezone as _tz
-import xmlrpc.client
+# Supervisor XML-RPC is available only through a mode-0600 local Unix socket;
+# no untrusted network XML reaches this parser.
+import xmlrpc.client  # nosec B411
 import httpx
 from typing import Optional, List, Dict, Any, cast
 import time
@@ -139,6 +145,7 @@ try:
     log.debug("Attempting imports from webui/main.py (PYTHONPATH=/app)")
     from core import __version__, __app_name__
     from core.helpers.config import get_settings as _get_core_settings_sync
+    from core.update_center import UpdateRestartError as _UpdateRestartError
 
     async def get_core_settings() -> Optional[Any]:
         try:
@@ -161,6 +168,9 @@ except ImportError as e:
         f"Could not import core app components for testing: {e}. Test endpoints will be disabled."
     )
     CORE_APP_AVAILABLE = False
+
+    class _UpdateRestartError(Exception):
+        """Fallback type used only when the core package is unavailable."""
 
     async def get_core_settings() -> Optional[Any]:
         return None
@@ -194,7 +204,7 @@ try:
     )
 except ImportError:
     MIN_TESTED_DVR_VERSION = "2024.01.01"
-    MAX_TESTED_DVR_VERSION = "2026.04.20"
+    MAX_TESTED_DVR_VERSION = "2026.08.07"
 
     def _check_dvr_version_compat(version_str: str) -> dict[str, Any]:
         if not version_str or not isinstance(version_str, str):
@@ -319,7 +329,156 @@ AUTH_MODE_CACHE: Optional[EffectiveAuthMode] = None
 API_KEY_FALLBACK_ALLOWED: bool = False
 _auth_settings_signature: Optional[tuple[str, int, int]] = None
 _AUTH_STATE_LOCK = threading.Lock()
+_AUTH_SETUP_LOCK = threading.Lock()
 _auth_db_engine = None
+
+
+def _parse_trusted_proxy_networks(
+    raw_value: str,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """Parse exact proxy IPs/CIDRs; invalid entries are ignored fail-closed."""
+
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw_entry in raw_value.split(","):
+        entry = raw_entry.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            log.warning("Ignoring invalid CW_TRUSTED_PROXIES entry: %r", entry)
+    return tuple(networks)
+
+
+_TRUSTED_PROXY_NETWORKS = _parse_trusted_proxy_networks(
+    os.environ.get("CW_TRUSTED_PROXIES", "")
+)
+
+
+def _direct_peer_address(
+    request: Request,
+) -> Optional[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    host = request.client.host if request.client and request.client.host else ""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _request_uses_trusted_proxy(request: Request) -> bool:
+    peer = _direct_peer_address(request)
+    return peer is not None and any(peer in network for network in _TRUSTED_PROXY_NETWORKS)
+
+
+def _forwarded_parameters(request: Request) -> dict[str, str]:
+    """Return the first RFC 7239 Forwarded hop from a trusted direct peer."""
+
+    if not _request_uses_trusted_proxy(request):
+        return {}
+    first_hop = request.headers.get("Forwarded", "").split(",", 1)[0]
+    parameters: dict[str, str] = {}
+    for item in first_hop.split(";"):
+        key, separator, value = item.partition("=")
+        if not separator:
+            continue
+        parameters[key.strip().lower()] = value.strip().strip('"')
+    return parameters
+
+
+def _parse_forwarded_client(value: str) -> Optional[str]:
+    candidate = value.strip().strip('"')
+    if not candidate or candidate.lower() == "unknown" or candidate.startswith("_"):
+        return None
+    if candidate.startswith("["):
+        closing = candidate.find("]")
+        if closing < 0:
+            return None
+        candidate = candidate[1:closing]
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
+
+
+def _effective_client_host(request: Request) -> str:
+    """Resolve a rate-limit identity without trusting arbitrary proxy headers."""
+
+    direct_host = (
+        request.client.host if request.client and request.client.host else "unknown"
+    )
+    if not _request_uses_trusted_proxy(request):
+        return direct_host
+
+    standard_for = _parse_forwarded_client(
+        _forwarded_parameters(request).get("for", "")
+    )
+    if standard_for:
+        return standard_for
+
+    first_xff = request.headers.get("X-Forwarded-For", "").split(",", 1)[0]
+    return _parse_forwarded_client(first_xff) or direct_host
+
+
+def _trusted_forwarded_scheme(request: Request) -> Optional[str]:
+    if not _request_uses_trusted_proxy(request):
+        return None
+    standard_proto = _forwarded_parameters(request).get("proto", "").lower()
+    if standard_proto in {"http", "https"}:
+        return standard_proto
+    x_forwarded_proto = (
+        request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+    )
+    return x_forwarded_proto if x_forwarded_proto in {"http", "https"} else None
+
+
+def _effective_request_scheme(request: Request) -> str:
+    """Return the externally visible HTTP scheme after trusted-proxy validation."""
+
+    forwarded_scheme = _trusted_forwarded_scheme(request)
+    if forwarded_scheme is not None:
+        return forwarded_scheme
+    direct_scheme = request.url.scheme.lower()
+    return direct_scheme if direct_scheme in {"http", "https"} else ""
+
+
+def _normalized_http_origin(value: str) -> Optional[tuple[str, str, int]]:
+    """Normalize an HTTP origin to its scheme, host, and effective port."""
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    if (
+        scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, parsed.hostname.lower(), port
+
+
+def _request_origin_matches(request: Request, origin: str) -> bool:
+    """Compare a supplied Origin with the validated effective request origin."""
+
+    effective_scheme = _effective_request_scheme(request)
+    host = request.headers.get("Host", "").strip()
+    if not effective_scheme or not host:
+        return False
+    supplied_origin = _normalized_http_origin(origin)
+    request_origin = _normalized_http_origin(f"{effective_scheme}://{host}")
+    return (
+        supplied_origin is not None
+        and request_origin is not None
+        and supplied_origin == request_origin
+    )
 
 
 def _settings_file_signature() -> tuple[str, int, int]:
@@ -392,6 +551,7 @@ def require_role(minimum_role: str):
                 message=f"Requires {minimum_role} role or higher",
             )
 
+    setattr(_role_check, "channelwatch_minimum_role", minimum_role)
     return Depends(_role_check)
 
 
@@ -444,7 +604,6 @@ async def verify_api_key(request: Request):
 # SECURITY MIDDLEWARE
 AUTH_EXEMPT_PATHS = {
     "/api/ping",
-    "/api/health",
     "/healthz/ready",
     "/healthz/live",
     "/healthz/startup",
@@ -470,6 +629,16 @@ RATE_LIMIT_EXEMPT_PATHS = {
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_READ_REQUESTS = 120
 RATE_LIMIT_WRITE_REQUESTS = 30
+
+
+def _middleware_auth_exempt(method: str, path: str) -> bool:
+    """Return the explicit middleware auth policy for API contract checks."""
+
+    return (
+        path in AUTH_EXEMPT_PATHS
+        or any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES)
+        or (method.upper(), path) in AUTH_EXEMPT_ROUTES
+    )
 
 # CSP: API routes stay strict because inline scripts are irrelevant there. The
 # packaged static Next.js UI needs inline script bootstrap chunks emitted by
@@ -535,8 +704,9 @@ def _ui_csp_policy() -> str:
 # CSRF: X-API-Key custom header is the primary CSRF defence for authenticated routes
 # (OWASP "Custom Request Headers" pattern: browsers cannot add custom headers to
 # cross-origin fetch without CORS preflight; allow_origins=[] rejects all preflights).
-# When CW_DISABLE_AUTH=true auth is bypassed, so an explicit Origin check is applied
-# to state-changing methods to block naive cross-site form/fetch submissions.
+# When authentication is bypassed by the runtime override or the effective
+# persisted setup/no-auth state, an explicit Origin check is applied to
+# state-changing methods to block naive cross-site form/fetch submissions.
 CSRF_PROTECTED_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 
 
@@ -743,9 +913,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         limit = (
             RATE_LIMIT_WRITE_REQUESTS if is_write_request else RATE_LIMIT_READ_REQUESTS
         )
-        client_host = (
-            request.client.host if request.client and request.client.host else "unknown"
-        )
+        client_host = _effective_client_host(request)
         bucket = "write" if is_write_request else "read"
         key = f"{client_host}:{bucket}"
 
@@ -774,16 +942,19 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         method = request.method
         _is_api_path = path.startswith("/api/")
         _is_auth_path = _is_api_path or path == "/metrics"
-        _is_exempt = (
-            path in AUTH_EXEMPT_PATHS
-            or any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES)
-            or (method, path) in AUTH_EXEMPT_ROUTES
+        _is_exempt = _middleware_auth_exempt(method, path)
+        _is_state_changing_api = (
+            _is_api_path and method.upper() in CSRF_PROTECTED_METHODS
         )
 
         auth_mode: Optional[EffectiveAuthMode] = None
         api_key = ""
         legacy_api_key_fallback = False
-        if _is_auth_path and not CW_DISABLE_AUTH and not _is_exempt:
+        if (
+            _is_auth_path
+            and not CW_DISABLE_AUTH
+            and (not _is_exempt or _is_state_changing_api)
+        ):
             (
                 auth_mode,
                 api_key,
@@ -843,20 +1014,22 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             ):
                 return _structured_error_response(ErrorCode.AUTH_CSRF_INVALID)
 
-        if (
-            CW_DISABLE_AUTH
-            and method.upper() in CSRF_PROTECTED_METHODS
-            and _is_api_path
-            and path not in AUTH_EXEMPT_PATHS
-        ):
+        authentication_bypassed = CW_DISABLE_AUTH or auth_mode in {
+            None,
+            "none",
+            "setup",
+        }
+        # First-admin setup remains intentionally public while recovering from
+        # an RBAC-with-zero-users commit gap. Its persisted mode is already
+        # ``rbac``, so protect the setup entrypoint independently of the mode
+        # snapshot instead of treating that recovery request as authenticated.
+        unauthenticated_setup = path == "/api/v1/auth/setup"
+        if (authentication_bypassed or unauthenticated_setup) and _is_state_changing_api:
             origin = request.headers.get("Origin", "")
-            if origin:
-                host = request.headers.get("Host", "")
-                origin_host = origin.split("://", 1)[-1].rstrip("/")
-                if origin_host != host:
-                    return _structured_error_response(
-                        ErrorCode.AUTH_CROSS_SITE_REJECTED
-                    )
+            if origin and not _request_origin_matches(request, origin):
+                return _structured_error_response(
+                    ErrorCode.AUTH_CROSS_SITE_REJECTED
+                )
 
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -926,6 +1099,7 @@ async def ping():
 @app.get("/api/health")
 async def health():
     summary = await asyncio.to_thread(_get_monitoring_health_summary)
+    settings = await _load_settings_async()
     payload = {
         "status": "ok" if summary["ready"] else "degraded",
         "ready": summary["ready"],
@@ -938,6 +1112,10 @@ async def health():
             }
             for entry in summary["dvrs"]
         ],
+        "notification_routing_diagnostics": notification_routing_diagnostics(
+            getattr(settings, "notification_routing", {}),
+            getattr(settings, "dvr_servers", []),
+        ),
     }
     if summary["ready"]:
         return payload
@@ -955,25 +1133,6 @@ async def healthz_ready():
     payload = {
         "status": "ready" if summary["ready"] else "degraded",
         "ready": summary["ready"],
-        "dvrs": [
-            {
-                "id": entry["id"],
-                "name": entry["name"],
-                "monitoring_status": entry["monitoring_status"],
-                "freshness_status": entry["freshness_status"],
-                "connected": entry["connected"],
-                **_get_cached_dvr_version_status(entry["id"]),
-                "reason": entry["reason"],
-                "last_freshness_at": entry["last_freshness_at"],
-                "freshness_age_seconds": entry["freshness_age_seconds"],
-            }
-            for entry in summary["dvrs"]
-        ],
-        "stale_threshold_seconds": summary["stale_threshold_seconds"],
-        "tested_version_range": {
-            "min": MIN_TESTED_DVR_VERSION,
-            "max": MAX_TESTED_DVR_VERSION,
-        },
     }
     if summary["ready"]:
         return payload
@@ -1325,6 +1484,16 @@ async def update_settings_endpoint(settings: AppSettings):
             not in {"rbac", "none"}
         ):
             settings.api_key = existing.api_key
+        try:
+            settings.notification_routing = normalize_notification_routing(
+                settings.notification_routing,
+                settings.dvr_servers,
+            )
+        except ValueError as exc:
+            raise structured_error(
+                ErrorCode.SETTINGS_VALIDATION_FAILED,
+                message=str(exc),
+            ) from exc
         _validate_persisted_dvr_servers(settings)
         await _save_settings_and_signal_reload_async(settings)
         _refresh_runtime_auth_state(settings)
@@ -2091,10 +2260,9 @@ def _resolve_auth_state(settings: Optional[AppSettings] = None) -> _ResolvedAuth
 
 
 def _should_use_secure_cookies(request: Request) -> bool:
-    forwarded = request.headers.get("X-Forwarded-Proto", "").strip().lower()
-    if forwarded:
-        return forwarded == "https"
-    return request.url.scheme == "https"
+    if request.url.scheme == "https":
+        return True
+    return _trusted_forwarded_scheme(request) == "https"
 
 
 def _compute_security_mode(
@@ -2566,11 +2734,6 @@ def run_startup_initialization():
             "[WebUI API] WARNING: API authentication is disabled (CW_DISABLE_AUTH=true)"
         )
 
-    try:
-        _build_update_manager().record_startup_success()
-    except Exception as exc:
-        log.warning("Could not record Update Center startup success: %s", exc)
-
     ensure_history_file_watcher_started()
 
     _purge_thread = threading.Thread(
@@ -2593,6 +2756,23 @@ def run_startup_initialization():
                 log.warning("Failed to migrate delivery schema: %s", _mig_exc)
 
     global _STARTUP_COMPLETE
+    _STARTUP_COMPLETE = False
+
+    try:
+        _build_update_manager().record_startup_success(
+            component="ui",
+            running_version=__version__,
+            activation_id=os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
+            healthy=_update_center_healthcheck(),
+        )
+    except _UpdateRestartError as exc:
+        # The selected runtime has already rolled back. Do not publish UI
+        # startup for a generation that is no longer selected; propagating
+        # lets Supervisor restart this process from the restored runtime.
+        log.critical("Terminal Update Center UI restart failure: %s", exc)
+        raise
+    except Exception as exc:
+        log.warning("Could not record Update Center startup success: %s", exc)
     _STARTUP_COMPLETE = True
 
 
@@ -4758,32 +4938,26 @@ async def _save_settings_and_signal_reload_async(settings: AppSettings) -> bool:
     return await asyncio.to_thread(_save_settings_and_signal_reload, settings)
 
 
-def _can_signal_pid_one_restart() -> bool:
-    return os.name != "nt" and os.getpid() == 1
-
-
 def _schedule_container_restart_for_update() -> bool:
-    server = get_supervisor_proxy()
-    can_signal_pid_one = _can_signal_pid_one_restart()
-    if not server and not can_signal_pid_one:
+    """Synchronously hand a coordinated restart to verified Supervisor.
+
+    UpdateManager snapshots runtime selection before invoking this callback and
+    restores that snapshot when the restart cannot be accepted. Returning true
+    before a delayed worker actually signals Supervisor would defeat that
+    transaction, so this adapter uses the image-stable direct-parent check and
+    reports success only after ``os.kill`` accepts SIGTERM.
+    """
+
+    try:
+        from core.runtime_launcher import request_container_restart
+
+        request_container_restart()
+    except Exception as exc:
+        print(
+            "[WebUI API] ERROR: Failed to request the coordinated ChannelWatch "
+            f"restart: {_supervisor_exception_summary(exc)}"
+        )
         return False
-
-    def delayed_restart():
-        try:
-            time.sleep(2)
-            if server:
-                server.supervisor.shutdown()
-                return
-            os.kill(1, signal.SIGTERM)
-        except Exception as exc:
-            print(
-                "[WebUI API] ERROR: Failed to restart ChannelWatch after update: "
-                f"{_supervisor_exception_summary(exc)}"
-            )
-
-    restart_thread = threading.Thread(target=delayed_restart)
-    restart_thread.daemon = True
-    restart_thread.start()
     return True
 
 
@@ -4830,11 +5004,15 @@ def _raise_update_error(exc: Exception, *, apply: bool = False, rollback: bool =
         )
     if isinstance(exc, UpdateCenterError):
         raise structured_error(
-            ErrorCode.UPDATE_ROLLBACK_FAILED if rollback else ErrorCode.UPDATE_APPLY_FAILED,
+            ErrorCode.UPDATE_ROLLBACK_FAILED
+            if rollback
+            else (ErrorCode.UPDATE_APPLY_FAILED if apply else ErrorCode.UPDATE_CHECK_FAILED),
             message=str(exc),
         )
     raise structured_error(
-        ErrorCode.UPDATE_ROLLBACK_FAILED if rollback else ErrorCode.UPDATE_APPLY_FAILED,
+        ErrorCode.UPDATE_ROLLBACK_FAILED
+        if rollback
+        else (ErrorCode.UPDATE_APPLY_FAILED if apply else ErrorCode.UPDATE_CHECK_FAILED),
         message="Unexpected Update Center failure.",
     )
 
@@ -4919,42 +5097,14 @@ async def update_rollback():
 )
 async def restart_container():
     """Restart ChannelWatch"""
-    server = get_supervisor_proxy()
-    can_signal_pid_one = _can_signal_pid_one_restart()
-    if not server and not can_signal_pid_one:
+    restart_started = await asyncio.to_thread(
+        _schedule_container_restart_for_update
+    )
+    if not restart_started:
         raise structured_error(ErrorCode.SUPERVISOR_NOT_AVAILABLE)
-
-    try:
-
-        def delayed_restart():
-            try:
-                time.sleep(2)
-                if server:
-                    server.supervisor.shutdown()
-                    return
-
-                os.kill(1, signal.SIGTERM)
-            except Exception as e:
-                print(
-                    "[WebUI API] ERROR: Failed to restart ChannelWatch: "
-                    f"{_supervisor_exception_summary(e)}"
-                )
-
-        import threading
-
-        restart_thread = threading.Thread(target=delayed_restart)
-        restart_thread.daemon = True
-        restart_thread.start()
-
-        return {
-            "message": "Restart initiated. The application will be unavailable for a few moments."
-        }
-    except Exception as e:
-        print(
-            "[WebUI API] ERROR: Failed to prepare ChannelWatch restart: "
-            f"{_supervisor_exception_summary(e)}"
-        )
-        raise structured_error(ErrorCode.RESTART_FAILED)
+    return {
+        "message": "Restart initiated. The application will be unavailable for a few moments."
+    }
 
 
 @app.post(
@@ -5793,6 +5943,17 @@ async def auth_login(body: _LoginRequest, response: Response, request: Request):
 
 @_auth_router.post("/logout")
 async def auth_logout(request: Request, response: Response):
+    if RBAC_ENABLED and not CW_DISABLE_AUTH:
+        if not await _request_has_valid_session_async(request):
+            raise structured_error(ErrorCode.AUTH_UNAUTHENTICATED)
+        csrf_header = request.headers.get("X-CSRF-Token", "")
+        csrf_expected = str(getattr(request.state, "auth_session_csrf", "") or "")
+        if (
+            not csrf_header
+            or not csrf_expected
+            or not secrets.compare_digest(csrf_header, csrf_expected)
+        ):
+            raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
     token = request.cookies.get("channelwatch_session", "")
     await asyncio.to_thread(_auth_logout_sync, token)
     response.delete_cookie("channelwatch_session")
@@ -5846,6 +6007,13 @@ class _AuthSetupResult(BaseModel):
 
 
 def _auth_setup_sync(body: _SetupRequest) -> _AuthSetupResult:
+    """Serialize the complete first-run decision and settings handoff."""
+
+    with _AUTH_SETUP_LOCK:
+        return _auth_setup_locked(body)
+
+
+def _auth_setup_locked(body: _SetupRequest) -> _AuthSetupResult:
     settings = load_settings()
     current_mode = _effective_auth_mode(settings)
     if current_mode == "api_key":
@@ -5870,22 +6038,23 @@ def _auth_setup_sync(body: _SetupRequest) -> _AuthSetupResult:
         if engine is None:
             raise structured_error(ErrorCode.AUTH_DB_UNAVAILABLE)
         from core.storage.auth import (
-            get_user_count as _guc3,
-            create_user as _cu2,
-            get_user_by_username as _guu3,
-            create_session as _cs3,
+            create_first_admin_session as _create_first_admin_session,
+            FirstAdminExistsError as _FirstAdminExistsError,
         )
 
-        if _guc3(engine) > 0:
-            raise structured_error(ErrorCode.AUTH_ADMIN_EXISTS)
-        _cu2(engine, body.username, body.password, role="admin")
-        user = _guu3(engine, body.username)
-        session = _cs3(engine, user.id)
         settings.rbac_enabled = True
         settings.auth_mode = "rbac"
         settings.security_setup_completed = True
         settings.api_key = ""
-        save_settings(settings)
+        try:
+            _user, session = _create_first_admin_session(
+                engine,
+                body.username,
+                body.password,
+                persist_settings=lambda: save_settings(settings),
+            )
+        except _FirstAdminExistsError:
+            raise structured_error(ErrorCode.AUTH_ADMIN_EXISTS)
         return _AuthSetupResult(
             mode="rbac",
             settings=settings,

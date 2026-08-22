@@ -1,6 +1,8 @@
+import asyncio
 import json
 import importlib
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +14,7 @@ from sqlmodel import select
 
 from core.helpers.config import ConfigLoadError
 from core.helpers.migration import CURRENT_SCHEMA_VERSION, migrate_settings
+from core.update_center import UpdateRestartError
 from core.storage import (
     ActivityEvent,
     create_all_tables,
@@ -32,6 +35,24 @@ V6_SETTINGS = {
     "api_key": "",
     "webhooks": [],
 }
+
+
+def test_runtime_umask_keeps_atomic_config_replacements_private(tmp_path):
+    from core.helpers.atomic_io import atomic_write_json
+
+    original_umask = os.umask(0o027)
+    try:
+        settings_file = tmp_path / "settings.json"
+        runtime_file = tmp_path / "channelwatch-runtime" / "active.json"
+
+        atomic_write_json(settings_file, {"api_key": "test-only"})
+        atomic_write_json(runtime_file, {"version": "0.9.16"})
+
+        assert stat.S_IMODE(settings_file.stat().st_mode) == 0o640
+        assert stat.S_IMODE(runtime_file.parent.stat().st_mode) == 0o750
+        assert stat.S_IMODE(runtime_file.stat().st_mode) == 0o640
+    finally:
+        os.umask(original_umask)
 
 
 def test_core_settings_corrupt_json_fails_closed(tmp_path):
@@ -324,6 +345,50 @@ def test_backend_startup_propagates_config_load_error():
             main_mod.run_startup_initialization()
 
     mock_load.assert_not_called()
+
+
+def test_backend_lifespan_rejects_terminal_update_restart_failure():
+    import ui.backend.main as main_mod
+
+    settings = AppSettings()
+    record_calls = []
+
+    class FailingManager:
+        def record_startup_success(self, **kwargs):
+            record_calls.append(kwargs)
+            raise UpdateRestartError("restart handoff failed")
+
+    async def attempt_startup():
+        yielded = False
+        with pytest.raises(UpdateRestartError, match="restart handoff failed"):
+            async with main_mod.lifespan(main_mod.app):
+                yielded = True
+        return yielded
+
+    with (
+        patch.object(main_mod, "CORE_APP_AVAILABLE", False),
+        patch.object(main_mod, "RBAC_ENABLED", False),
+        patch.object(main_mod, "CW_DISABLE_AUTH", False),
+        patch.object(main_mod, "_STORAGE_AVAILABLE", False),
+        patch.object(main_mod, "_STARTUP_COMPLETE", True),
+        patch.object(main_mod, "load_settings", return_value=settings),
+        patch.object(main_mod, "_refresh_runtime_auth_state"),
+        patch.object(main_mod, "ensure_history_file_watcher_started"),
+        patch.object(main_mod.threading, "Thread"),
+        patch.object(main_mod, "_build_update_manager", return_value=FailingManager()),
+    ):
+        yielded = asyncio.run(attempt_startup())
+        assert main_mod._STARTUP_COMPLETE is False
+
+    assert yielded is False
+    assert record_calls == [
+        {
+            "component": "ui",
+            "running_version": main_mod.__version__,
+            "activation_id": os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
+            "healthy": False,
+        }
+    ]
 
 
 def test_migrate_settings_recovers_from_started_journal_via_backup(tmp_path):

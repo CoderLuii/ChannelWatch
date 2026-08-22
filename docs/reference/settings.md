@@ -200,7 +200,7 @@ Defaults match between `AppSettings` and `CoreSettings` unless noted below. The 
 
 ### Notification routing
 
-- `notification_routing` | JSON path: `notification_routing` | Type: object | Default: `{}` | Description: Per DVR, per event type routing for Apprise and webhook destinations. Missing keys default to enabled. | Valid values: object shaped as `dvr_id -> event_type -> destination -> boolean`; event keys in the UI are `channel`, `vod`, `recording`, and `disk`. | Env override: none. | Reload behavior: `restart-required`.
+- `notification_routing` | JSON path: `notification_routing` | Type: object | Default: `{}` | Description: Per DVR, per event type routing for Apprise and webhook destinations. An empty routing configuration, or a DVR/event mapping with no explicit route, preserves the legacy all-enabled behavior. Within an explicit event mapping, omitted destinations default to disabled. | Valid values: object shaped as `dvr_id -> event_type -> destination -> boolean`; event keys in the UI are `channel`, `vod`, `recording`, and `disk`. | Env override: none. | Reload behavior: `restart-required`.
 
 > **Field naming note**: The persisted settings field is `notification_routing`. The UI may describe the same feature as notification routing or a routing matrix, but the settings file always uses `notification_routing`.
 

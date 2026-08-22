@@ -31,3 +31,7 @@ Public License v2.1 (LGPL 2.1):
 
 For a complete list of third-party dependencies and their licenses, see
 docs/legal/THIRD_PARTY_LICENSES.md in this repository.
+
+Complete applicable copyleft license texts and the exact source/rebuild map
+are distributed under /licenses/channelwatch/copyleft in the container and
+under licenses/copyleft in the app-update archive.

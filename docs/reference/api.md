@@ -52,7 +52,7 @@ Example response:
 | Field | Value |
 | --- | --- |
 | Function | `health` |
-| Auth requirement | none |
+| Auth requirement | api_key or RBAC session when configured |
 | RBAC role required | none |
 | Request body schema | `none` |
 | Response body schema | `object` |
@@ -62,14 +62,16 @@ Example response:
 Example request:
 
 ```bash
-curl -sS "$BASE_URL/api/health"
+curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/health"
 ```
 
 Example response:
 
 ```json
-{"status":"ok","ready":true,"dvrs":[]}
+{"status":"ok","ready":true,"dvrs":[],"notification_routing_diagnostics":[]}
 ```
+
+This is the authenticated detailed monitoring surface. Its `dvrs` entries include DVR IDs, names, monitor states, and reasons. Routing diagnostics identify stale DVR IDs and unknown destination keys. No live DVR request is made while rendering this response.
 
 ### `GET /healthz/live`
 
@@ -116,10 +118,10 @@ curl -sS "$BASE_URL/healthz/ready"
 Example response:
 
 ```json
-{"status":"ready","ready":true,"dvrs":[{"id":"main","name":"Main DVR","monitoring_status":"healthy","freshness_status":"healthy","connected":true,"reason":"Freshness updates are current","last_freshness_at":"2026-04-26T00:00:00+00:00","freshness_age_seconds":12.0,"version":"2026.04.20.0213","version_compatible":true,"version_warning":null}],"stale_threshold_seconds":300,"tested_version_range":{"min":"2024.01.01","max":"2026.04.20"}}
+{"status":"ready","ready":true}
 ```
 
-Per-DVR `version`, `version_compatible`, and `version_warning` values are cached from existing DVR health/version checks. The readiness route still stays lightweight and does not make a fresh DVR HTTP call just to populate those fields.
+This unauthenticated response deliberately contains only `status` and `ready`. DVR names, IDs, addresses, versions, timestamps, monitor reasons, and tested-version ranges remain available only through authenticated diagnostics. The readiness route does not make a live DVR HTTP call.
 
 ### `GET /healthz/startup`
 
@@ -166,7 +168,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.15","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.16","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -189,8 +191,10 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/metrics"
 
 Example response:
 
-```json
-{"content_type":"text/plain","example":"channelwatch_uptime_seconds 123"}
+```text
+# HELP channelwatch_uptime_seconds ChannelWatch process uptime in seconds
+# TYPE channelwatch_uptime_seconds gauge
+channelwatch_uptime_seconds 123
 ```
 
 ### `GET /api/v1/security/status`
@@ -872,7 +876,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.15","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.16","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`
@@ -1094,7 +1098,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
 Example response:
 
 ```json
-{"current_version":"0.9.15","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
+{"current_version":"0.9.16","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
 ```
 
 ### `POST /api/v1/update/check`
@@ -1118,7 +1122,7 @@ This route fetches the trusted public ChannelWatch update manifest and stores th
 | Function | `update_apply` |
 | Auth requirement | api_key or RBAC session |
 | RBAC role required | admin |
-| Request body schema | `{ "version": "0.9.15" }` |
+| Request body schema | `{ "version": "0.9.16" }` |
 | Response body schema | `UpdateJob` |
 | Status codes | 202, 401, 403, 409 (`ERR_UPDATE_LOCKED` or `ERR_UPDATE_IMAGE_REQUIRED`), 429, 500 |
 | Rate limit applies | yes |

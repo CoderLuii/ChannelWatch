@@ -23,6 +23,12 @@ class TestErrorCodeConstants:
     def test_settings_save_failed(self):
         assert ErrorCode.SETTINGS_SAVE_FAILED == "ERR_SETTINGS_SAVE_FAILED"
 
+    def test_settings_validation_failed(self):
+        assert (
+            ErrorCode.SETTINGS_VALIDATION_FAILED
+            == "ERR_SETTINGS_VALIDATION_FAILED"
+        )
+
     def test_all_codes_are_strings(self):
         codes = [
             v

@@ -2,7 +2,6 @@
 
 Use this guide to publish ChannelWatch through Nginx, Caddy, Traefik, or Cloudflare Tunnel while keeping the application on its normal internal port, `8501`.
 
-
 This guide uses `your-domain.example.com` as the public host and `127.0.0.1:8501` as the local ChannelWatch target. Replace only those placeholders.
 
 ## When you need a reverse proxy
@@ -29,9 +28,18 @@ X-Forwarded-Host: your-domain.example.com
 Host: your-domain.example.com
 ```
 
+Then explicitly trust only the address or network from which ChannelWatch receives proxy traffic:
+
+```yaml
+environment:
+  CW_TRUSTED_PROXIES: "172.20.0.5/32"
+```
+
+`CW_TRUSTED_PROXIES` accepts comma-separated exact IPs and CIDRs and defaults to empty. ChannelWatch ignores `Forwarded` and `X-Forwarded-*` when the direct peer is not in this list. Use the proxy container IP, Docker network CIDR, ingress-controller Pod CIDR, or loopback address that ChannelWatch actually sees—not the public client network. Keep the allowlist as narrow as your deployment permits.
+
 Important security behavior:
 
-1. `X-Forwarded-Proto` matters for RBAC sessions. ChannelWatch marks session cookies as `Secure` when the request is HTTPS or when `X-Forwarded-Proto` is `https`.
+1. A validated forwarded scheme matters for RBAC sessions. ChannelWatch marks session cookies as `Secure` when the request is HTTPS or when a trusted proxy reports `https`.
 2. CORS preflights are closed by design. Do not split the UI and API across different origins.
 3. RBAC session writes use `X-CSRF-Token`. Keep ChannelWatch on one public origin so the UI can read the token and send it back on state changing API requests.
 4. This build does not expose `TRUSTED_HOSTS`, `CORS_ORIGINS`, or a trusted host middleware setting. Do not add fake env vars to compose files.
@@ -76,7 +84,8 @@ server {
 
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Overwrite client-supplied forwarding headers at this trust boundary.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
 
@@ -87,6 +96,8 @@ server {
 ```
 
 TLS terminates at Nginx. Keep the upstream target as plain HTTP unless you have added TLS inside the ChannelWatch container yourself.
+
+When Nginx runs on the same host, set `CW_TRUSTED_PROXIES=127.0.0.1/32` if the upstream connection reaches ChannelWatch over loopback. When it runs in Docker, use the exact Nginx container address or a narrowly scoped Docker network CIDR. Ensure Nginx overwrites forwarding headers as shown so an internet client cannot prepend a false rate-limit identity.
 
 Basic auth add-on hint:
 
@@ -165,6 +176,8 @@ services:
     environment:
       CHANNELWATCH_INSTANCE_URL: "https://your-domain.example.com"
       CW_DISABLE_AUTH: "false"
+      # Replace with the Traefik container IP or dedicated proxy-network CIDR.
+      CW_TRUSTED_PROXIES: "172.20.0.0/24"
     labels:
       - traefik.enable=true
       - traefik.http.routers.channelwatch.rule=Host(`your-domain.example.com`)
@@ -182,6 +195,8 @@ volumes:
 ```
 
 Traefik sets `X-Forwarded-For` and `Host` for proxied requests. The middleware pins `X-Forwarded-Proto` and `X-Forwarded-Host` to the public HTTPS origin. Websocket upgrades are supported by Traefik automatically.
+
+Put Traefik and ChannelWatch on a dedicated Docker network and narrow `CW_TRUSTED_PROXIES` to that network. If another proxy or CDN is in front of Traefik, also configure Traefik's entrypoint `forwardedHeaders.trustedIPs`; do not enable `forwardedHeaders.insecure`.
 
 Basic auth add-on hint:
 
@@ -220,6 +235,8 @@ service: http://channelwatch:8501
 
 Cloudflare sets forwarded headers for tunnel traffic. The `httpHostHeader` line keeps the upstream `Host` aligned with the public hostname. Websocket proxying is supported by Cloudflare Tunnel, and no extra ChannelWatch setting is needed for the current UI.
 
+Set `CW_TRUSTED_PROXIES` to the exact `cloudflared` container IP or its dedicated internal network CIDR. Do not place Cloudflare's public edge ranges in this setting: ChannelWatch's direct peer is `cloudflared`, not the remote edge. If `cloudflared` reaches an intermediate Nginx or Traefik instance, trust only that intermediate proxy and configure it to accept Cloudflare forwarding headers only from Cloudflare's published edge ranges.
+
 TLS terminates at Cloudflare by default. If you also use TLS between `cloudflared` and an upstream reverse proxy, change the `service` URL to `https://...` and configure certificate verification for that upstream.
 
 Basic auth and SSO add-on hint: use Cloudflare Access policies for the hostname. This protects the public route before requests reach ChannelWatch, but it is separate from ChannelWatch's own auth system.
@@ -243,6 +260,9 @@ ingress:
     - secretName: channelwatch-tls
       hosts:
         - your-domain.example.com
+config:
+  # Replace with the ingress-controller Pod or node CIDR seen by ChannelWatch.
+  trustedProxies: "10.42.0.0/24"
 ```
 
 The chart renders a `networking.k8s.io/v1` Ingress and supports custom annotations, multiple hosts/paths, and TLS. ChannelWatch remains a single-replica app because `/config` is writable application state.
@@ -268,7 +288,8 @@ The chart renders a `networking.k8s.io/v1` Ingress and supports custom annotatio
 | --- | --- |
 | Browser gets `401` on API calls | Confirm ChannelWatch auth is configured and the browser is sending either the RBAC session cookie or `X-API-Key`. Also check that an outer basic auth prompt is not blocking `/api/*` after the UI loads. |
 | Browser gets `403` when saving settings | Keep the UI and API on the same origin. Do not strip `X-CSRF-Token`, cookies, `Host`, or forwarded headers. Do not disable CSRF checks. |
-| Login works on HTTP but fails on HTTPS | Send `X-Forwarded-Proto: https` from the proxy so secure cookies are set correctly. |
+| Login works on HTTP but fails on HTTPS | Send `X-Forwarded-Proto: https` from the proxy and add only that direct proxy to `CW_TRUSTED_PROXIES` so secure cookies are set correctly. |
+| All clients share one rate-limit bucket | Confirm the direct proxy is trusted and supplies a valid client IP in `Forwarded` or `X-Forwarded-For`. Do not broaden the trust CIDR to compensate for a proxy configuration error. |
 | Mixed content warning | Access ChannelWatch through `https://your-domain.example.com`, not an old `http://` bookmark. If webhook payload links matter, set `CHANNELWATCH_INSTANCE_URL` to the HTTPS URL. |
 | Websocket upgrade fails | The current UI does not depend on browser websockets, but generic reverse proxy health checks may still test upgrades. Keep the Nginx `Upgrade` and `Connection` headers, or use Caddy, Traefik, or Cloudflare Tunnel defaults. |
 | Redirect loop | Check that only the public proxy redirects HTTP to HTTPS. The upstream target should usually stay `http://127.0.0.1:8501`. |

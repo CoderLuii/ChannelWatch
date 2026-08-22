@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `0.9.15` for the v0.9.15 release
+- `0.9.16` for the v0.9.16 release
 
 ## Quick Start
 
@@ -37,11 +37,11 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v0.9.15 or `latest` for the current v0.9 release. It improves Update Center restart recovery and strengthens the privacy of public problem-report previews.
+Use v0.9.16 or `latest` for the current v0.9 release. It keeps monitoring alive through empty and offline startup states, coordinates Update Center activation across core and UI, tightens proxy/auth/health privacy boundaries, and repairs the Helm secret contract.
 
 After installing a version with Update Center support through Docker, Unraid, Compose, or Helm, compatible app-only releases can be checked, verified, backed up, applied, and rolled back from **Settings > Updates**.
 
-v0.9.15 requires no settings or data migration and can be installed through **Settings > Updates** from v0.9.14 without replacing the container image. The first transition from v0.9.14 may require one manual browser refresh after ChannelWatch restarts. Docker, Unraid, Compose, and Helm updates remain available if preferred.
+v0.9.16 requires a normal container image update because it changes the image-stable launcher, entrypoint privilege handling, lifecycle coordination, and deployment contract. The Update Center intentionally reports this release as **container image update required**.
 
 Releases that change the container runtime still require a normal image update. ChannelWatch will show **container image update required** when that is the safe path.
 
@@ -56,3 +56,16 @@ DVR setup is easiest through the web UI. For bootstrap-only deployments, `CHANNE
 - Project: https://github.com/CoderLuii/ChannelWatch
 - Support: https://github.com/CoderLuii/ChannelWatch/discussions
 - Documentation: https://channelwatch.coderluii.dev/
+
+## License and release verification
+
+ChannelWatch is MIT-licensed. The image carries the project license, notice,
+third-party inventory, complete applicable copyleft license texts, and the
+exact corresponding-source/rebuild map under `/licenses/channelwatch`. Exact
+amd64 and arm64 SPDX/CycloneDX SBOMs and a checksum manifest covering every
+other attached artifact are included with the corresponding GitHub Release.
+
+- License: https://github.com/CoderLuii/ChannelWatch/blob/main/LICENSE
+- Third-party licenses: https://github.com/CoderLuii/ChannelWatch/blob/main/docs/legal/THIRD_PARTY_LICENSES.md
+- Corresponding source: https://github.com/CoderLuii/ChannelWatch/blob/main/docs/legal/CORRESPONDING_SOURCE.md
+- Releases and SBOMs: https://github.com/CoderLuii/ChannelWatch/releases

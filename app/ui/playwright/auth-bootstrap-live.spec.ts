@@ -24,24 +24,11 @@ async function openSecuritySettings(
     await skipButton.click()
   }
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible()
-  await expect(page.getByRole("tab", { name: "Security" })).toHaveAttribute("data-state", "active")
-}
-
-async function logoutThroughBackend(page: import("@playwright/test").Page) {
-  await page.evaluate(async () => {
-    const csrfToken = window.sessionStorage.getItem("cw_csrf_token") || ""
-    const response = await window.fetch("/api/v1/auth/logout", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: csrfToken ? { "X-CSRF-Token": csrfToken } : {},
-    })
-
-    if (!response.ok) {
-      throw new Error(`Logout failed with status ${response.status}`)
-    }
-
-    window.sessionStorage.removeItem("cw_csrf_token")
-  })
+  const securityTab = page.getByRole("tab", { name: "Security" })
+  if (await securityTab.getAttribute("data-state") !== "active") {
+    await securityTab.click()
+  }
+  await expect(securityTab).toHaveAttribute("data-state", "active")
 }
 
 test("live auth bootstrap covers fresh secure setup", async ({ page, baseURL }) => {
@@ -61,13 +48,13 @@ test("live auth bootstrap covers fresh secure setup", async ({ page, baseURL }) 
   await expect(page.getByTestId("security-runtime-override-banner")).toHaveCount(0)
   await expect(page.getByTestId("security-create-login-btn")).toHaveCount(0)
 
-  await logoutThroughBackend(page)
-  await page.goto(`${secureBaseURL}/`)
+  await page.getByRole("button", { name: "Sign out" }).click()
   await expect(page.getByTestId("auth-login-shell")).toBeVisible()
   await page.getByLabel("Username").fill(secureSetupUsername)
   await page.getByLabel("Password").fill(secureSetupPassword)
   await page.getByRole("button", { name: "Sign in" }).click()
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByTestId("auth-login-shell")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible()
 })
 
 test("live auth bootstrap covers setup, no-auth reversal, logout, and login", async ({ page, baseURL }) => {
@@ -103,15 +90,15 @@ test("live auth bootstrap covers setup, no-auth reversal, logout, and login", as
   await expect(page.getByTestId("security-create-login-btn")).toHaveCount(0)
   await expect(page.getByTestId("security-runtime-override-banner")).toHaveCount(0)
 
-  await logoutThroughBackend(page)
-  await page.goto("/")
+  await page.getByRole("button", { name: "Sign out" }).click()
   await expect(page.getByTestId("auth-login-shell")).toBeVisible()
 
   await page.getByLabel("Username").fill(bootstrapUsername)
   await page.getByLabel("Password").fill(bootstrapPassword)
   await page.getByRole("button", { name: "Sign in" }).click()
 
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByTestId("auth-login-shell")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible()
 
   await openSecuritySettings(page)
   await expect(page.getByTestId("security-auth-mode-select")).toBeVisible()

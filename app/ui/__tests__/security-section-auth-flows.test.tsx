@@ -77,6 +77,7 @@ describe("Security section auth flows", () => {
     expect(src).toContain('data-testid="security-create-login-btn"')
     expect(src).toContain('data-testid="security-bootstrap-username"')
     expect(src).toContain('data-testid="security-bootstrap-password"')
+    expect(src).toContain('window.dispatchEvent(new CustomEvent("channelwatch-auth-state-changed"))')
   })
 
   it("legacy badge is restricted to api key states", () => {

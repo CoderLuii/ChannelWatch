@@ -108,10 +108,10 @@ When RBAC is enabled, ChannelWatch issues a `channelwatch_session` cookie.
 Current cookie behavior:
 
 - `HttpOnly`
-- `Secure` when ChannelWatch sees HTTPS directly or via `X-Forwarded-Proto: https`
+- `Secure` when ChannelWatch sees HTTPS directly or a validated forwarded HTTPS scheme from a direct peer listed in `CW_TRUSTED_PROXIES`
 - `SameSite=Strict`
 
-For TLS deployments behind a reverse proxy, make sure the proxy forwards `X-Forwarded-Proto: https`; plain HTTP requests intentionally do not receive the `Secure` cookie attribute.
+`CW_TRUSTED_PROXIES` defaults to empty. For TLS deployments behind a reverse proxy, list only the exact proxy IP addresses or narrowly scoped CIDRs that can connect directly to ChannelWatch, and configure that proxy to replace client-supplied forwarding headers before it sends `Forwarded` or `X-Forwarded-Proto: https`. Forwarding headers from any untrusted direct peer are ignored. Plain HTTP requests intentionally do not receive the `Secure` cookie attribute.
 
 Mutating requests made under a logged-in session must also present the matching `X-CSRF-Token`.
 
@@ -132,7 +132,6 @@ The backend sends security headers on responses, including:
 - `X-Frame-Options: SAMEORIGIN`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy` with camera, microphone, and geolocation disabled
-
 
 ## Encryption at rest
 
@@ -172,7 +171,6 @@ That is why the backup flow is admin-only, and why backup archives should be tre
 If you need to share data for troubleshooting, prefer the debug bundle described in [`docs/project/PRIVACY.md`](../docs/project/PRIVACY.md).
 
 ## SSRF protections
-
 
 Outbound webhook receivers should still be treated as trusted destinations. The webhook reference documents HMAC signing, retry behavior, receiver verification examples, and receiver URL guidance in [`docs/reference/webhook.md`](../docs/reference/webhook.md).
 
@@ -233,7 +231,6 @@ That is not a temporary documentation omission. The chart itself enforces `repli
 The v0.9 chart was checked with `helm lint`, a default render with no Ingress, and an Ingress-enabled render that creates one `networking.k8s.io/v1` Ingress. Those checks do not change the single-replica posture.
 
 ## Shipped v0.9 security hardening
-
 
 - generated supervisor credentials at container start instead of public hardcoded credentials
 - masked sensitive settings returned by `GET /api/settings`

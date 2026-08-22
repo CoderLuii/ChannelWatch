@@ -201,4 +201,4 @@ For privacy questions, use the GitHub repository discussions or issues for non-s
 
 - [`docs/reference/health-diagnostics.md`](../reference/health-diagnostics.md) for debug bundle sanitization details.
 
-*Last updated: April 2026*
+Last updated: April 2026

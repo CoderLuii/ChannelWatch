@@ -42,6 +42,13 @@ spec:
                 name: {{ include "channelwatch.configMapName" . }}
             - secretRef:
                 name: {{ include "channelwatch.secretName" . }}
+          env:
+            - name: CHANNELWATCH_SECRET_STORAGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "channelwatch.secretName" . }}
+                  key: CHANNELWATCH_SECRET_STORAGE_KEY
+                  optional: false
           ports:
             - name: http
               containerPort: 8501

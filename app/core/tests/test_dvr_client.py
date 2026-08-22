@@ -94,7 +94,7 @@ class TestCheckVersionCompatibility:
         assert result["warning"] is None
 
     def test_full_timestamp_at_max_boundary_is_compatible(self):
-        result = check_version_compatibility("2026.04.20.0213")
+        result = check_version_compatibility("2026.08.07.0346")
         assert result["compatible"] is True
         assert result["warning"] is None
 

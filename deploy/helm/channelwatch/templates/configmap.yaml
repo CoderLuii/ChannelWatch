@@ -13,6 +13,7 @@ data:
   PGID: {{ .Values.config.pgid | quote }}
   CW_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   CW_DISABLE_AUTH: {{ .Values.config.disableAuth | quote }}
+  CW_TRUSTED_PROXIES: {{ .Values.config.trustedProxies | quote }}
   CW_ALERT_CHANNEL_WATCHING: {{ .Values.config.alertChannelWatching | quote }}
   CW_ALERT_VOD_WATCHING: {{ .Values.config.alertVodWatching | quote }}
   CW_ALERT_DISK_SPACE: {{ .Values.config.alertDiskSpace | quote }}

@@ -156,7 +156,7 @@ export interface AppSettings {
 
   rbac_enabled?: boolean
   auth_mode?: AuthMode | ""
-  notification_routing: Record<string, Record<string, Record<string, boolean>>>
+  notification_routing: Record<string, Record<string, Record<string, boolean> | null> | null>
 }
 
 export interface AboutInfo {

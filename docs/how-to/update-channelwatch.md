@@ -6,7 +6,7 @@ The Update Center is meant to make routine updates feel like a normal app update
 
 If you pulled v0.9.9, update the container image to v0.9.10 first. That repair release touches Docker entrypoint and runtime behavior, so ChannelWatch marks it as **container image update required** instead of applying it as an in-app bundle.
 
-v0.9.15 requires no settings or data migration and can be installed directly through **Settings > Updates** from v0.9.14 without replacing the container image. The first transition from v0.9.14 may require one manual browser refresh after ChannelWatch restarts. Docker, Unraid, Compose, and Helm updates remain available if preferred.
+v0.9.16 requires a normal container image update because it changes the image-stable launcher, entrypoint privilege handling, monitor lifecycle, and Helm deployment contract. The Update Center reports this release as **container image update required** and does not attempt an unsafe app-only activation.
 
 ## Check for updates
 

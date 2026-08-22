@@ -2,7 +2,6 @@
 
 ChannelWatch runs two long-lived programs in one Docker container because the monitoring loop and the web API have different jobs, different failure modes, and different restart needs. The container is still the deployable unit users run, but inside it `supervisord` keeps the monitoring core and the FastAPI UI backend separate.
 
-
 ## The short version
 
 The core process listens to Channels DVR events, builds alert state, writes activity, and sends notifications. The UI backend serves the static web app, exposes `/api/*`, reads and writes settings, reports health, and sends restart or reload requests to the core.

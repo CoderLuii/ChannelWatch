@@ -1,0 +1,18 @@
+{
+  "config": {
+    // Existing documentation intentionally uses long lines for tables,
+    // command examples, release notes, and generated API inventories.
+    "MD013": false,
+    // Changelog sections repeat standard headings under different releases.
+    "MD024": { "siblings_only": true },
+    // Reference pages intentionally show copyable endpoint URLs.
+    "MD034": false,
+    // Preserve compact generated dependency and compatibility tables.
+    "MD060": false
+  },
+  "ignores": [
+    "app/ui/.next/**",
+    "app/ui/node_modules/**",
+    "dist/**"
+  ]
+}

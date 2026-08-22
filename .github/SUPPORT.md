@@ -38,6 +38,7 @@ If you disable persisted no-auth later, the install returns to secure-login setu
 Compose and env can start the container and seed an empty config, but the UI remains the long-term source of truth for auth and normal app settings.
 
 **Where are the logs?**
+
 - Container stdout: `docker logs channelwatch`
 - Persistent log: `/config/channelwatch.log` inside the container (or your mapped volume)
 - Debug bundle: `docker exec channelwatch channelwatch doctor debug bundle` (if available in your version)
@@ -62,6 +63,7 @@ Search before posting. Your question has probably been asked before.
 The issue tracker is for **confirmed bugs and feature requests**. It's not a support forum.
 
 Before opening a bug report:
+
 1. Confirm you're on the latest version (`docker pull coderluii/channelwatch:latest`)
 2. Check that the issue isn't already reported
 3. Collect your logs and compose snippet

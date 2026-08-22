@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 import time
 import httpx
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ class EventMonitor:
         alert_manager=None,
         server_version: Optional[str] = None,
         dvr=None,
+        validation_only: bool = False,
     ):
         """Initializes event monitor with server connection parameters and alert system."""
         # Configuration
@@ -43,6 +45,7 @@ class EventMonitor:
         self.alert_manager = alert_manager
         self.server_version = server_version
         self.event_url = f"{self.base_url}/events"
+        self.validation_only = bool(validation_only)
 
         # State
         self.running = False
@@ -59,6 +62,14 @@ class EventMonitor:
         self._retry_after_delay: Optional[float] = None
         self._attempt_healthy = False
         self._state_loaded = False
+        # A monitor attempt is single-use.  The worker thread and the asyncio
+        # supervisor can race during startup, so ``running`` alone cannot carry
+        # stop intent: a worker that has entered start_monitoring() but has not
+        # published ``running = True`` could otherwise overwrite a concurrent
+        # stop request.  Serialize the transition and keep stop intent sticky.
+        self._lifecycle_lock = threading.Lock()
+        self._start_claimed = False
+        self._stop_requested = False
 
         self.alerts_paused: bool = False
         self._connection_status: str = "unknown"
@@ -99,20 +110,34 @@ class EventMonitor:
     # MONITORING
     def start_monitoring(self):
         """Run event monitoring until shutdown is requested."""
-        self.running = True
-        self._state_loaded = False
+        with self._lifecycle_lock:
+            if self._stop_requested or self._start_claimed:
+                return
+            self._start_claimed = True
+            self.running = True
+            self._state_loaded = False
         try:
             self._monitor_events_loop()
         except KeyboardInterrupt:
             log("KeyboardInterrupt received, shutting down...")
-            self.running = False
         finally:
+            # ``running`` is authoritative readiness/watchdog state.  The
+            # underlying loop may return unexpectedly without calling
+            # stop_monitoring(), so never leave a terminated monitor marked
+            # active.
+            with self._lifecycle_lock:
+                self.running = False
             log("Monitoring loop finished.")
 
     def stop_monitoring(self) -> None:
         """Request monitoring shutdown and wake an idle SSE read if one is active."""
-        self.running = False
-        loop = self._monitor_loop
+        with self._lifecycle_lock:
+            first_request = not self._stop_requested
+            self._stop_requested = True
+            self.running = False
+            loop = self._monitor_loop
+        if not first_request:
+            return
         if loop is None or not loop.is_running():
             return
 
@@ -242,7 +267,7 @@ class EventMonitor:
 
     async def _async_monitor_events(self):
         self._monitor_loop = asyncio.get_running_loop()
-        if self.alert_manager is None:
+        if self.alert_manager is None and not self.validation_only:
             raise RuntimeError(
                 "EventMonitor requires an alert manager before monitoring events"
             )
@@ -255,14 +280,16 @@ class EventMonitor:
         }
         timeout = httpx.Timeout(connect=10.0, read=None, write=None, pool=None)
 
-        if not self._state_loaded:
+        if not self.validation_only and not self._state_loaded:
             await self.alert_manager.load_all_state()
             self._state_loaded = True
 
-        background_tasks = list(self.alert_manager.create_background_tasks())
-        for alert in self.alert_manager.alert_instances.values():
-            if hasattr(alert, "create_background_tasks"):
-                background_tasks.extend(alert.create_background_tasks())
+        background_tasks = []
+        if not self.validation_only:
+            background_tasks = list(self.alert_manager.create_background_tasks())
+            for alert in self.alert_manager.alert_instances.values():
+                if hasattr(alert, "create_background_tasks"):
+                    background_tasks.extend(alert.create_background_tasks())
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -324,7 +351,22 @@ class EventMonitor:
                     await task
                 except asyncio.CancelledError:
                     pass
-            await self.alert_manager.save_all_state()
+            if not self.validation_only:
+                await self.alert_manager.save_all_state()
+            if not self.validation_only and not self.running:
+                notification_manager = getattr(
+                    self.alert_manager, "notification_manager", None
+                )
+                shutdown_queue = getattr(
+                    type(notification_manager), "shutdown_delivery_queue", None
+                )
+                if callable(shutdown_queue):
+                    await asyncio.to_thread(
+                        shutdown_queue,
+                        notification_manager,
+                        drain=False,
+                        timeout=1.0,
+                    )
 
     async def _async_keep_alive(self, client: httpx.AsyncClient):
         while self.running and self.connected:
@@ -406,6 +448,12 @@ class EventMonitor:
 
     async def _process_event(self, event_data: Dict[str, Any]):
         try:
+            # Replacement probes validate only that the desired DVR's SSE
+            # connection produces fresh data.  The existing healthy monitor
+            # remains the sole owner of alerts, activity, and persisted state
+            # until the probe has stopped and promotion begins.
+            if self.validation_only:
+                return
             if self.alert_manager is None:
                 raise RuntimeError(
                     "EventMonitor requires an alert manager before processing events"

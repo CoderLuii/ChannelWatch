@@ -106,13 +106,20 @@ def _login(client, username, password):
     return resp.cookies.get("channelwatch_session"), resp.json()["csrf_token"]
 
 
+def _with_session_cookie(client: TestClient, token: str | None) -> TestClient:
+    """Select exactly one browser session through the client's persistent jar."""
+    assert token
+    client.cookies.clear()
+    client.cookies.set("channelwatch_session", token)
+    return client
+
+
 class TestViewerForbiddenOnWrites:
     def test_viewer_403_on_post_settings(self, rbac_client, viewer_user, auth_engine):
         token, csrf = _login(rbac_client, "viewer_alice", "pass1")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/settings",
             json={"dvr_servers": []},
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 403
@@ -125,9 +132,8 @@ class TestViewerForbiddenOnWrites:
         self, rbac_client, viewer_user, auth_engine
     ):
         token, csrf = _login(rbac_client, "viewer_alice", "pass1")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/clear-activity-history",
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 403
@@ -136,9 +142,8 @@ class TestViewerForbiddenOnWrites:
         self, rbac_client, viewer_user, auth_engine
     ):
         token, csrf = _login(rbac_client, "viewer_alice", "pass1")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/restart_container",
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 403
@@ -147,18 +152,16 @@ class TestViewerForbiddenOnWrites:
         self, rbac_client, viewer_user, auth_engine
     ):
         token, csrf = _login(rbac_client, "viewer_alice", "pass1")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/regenerate-api-key",
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 403
 
     def test_viewer_403_on_dvr_soft_delete(self, rbac_client, viewer_user, auth_engine):
         token, csrf = _login(rbac_client, "viewer_alice", "pass1")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/dvrs/fake-id/soft-delete",
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 403
@@ -169,10 +172,9 @@ class TestOperatorAllowedOnOperatorRoutes:
         self, rbac_client, operator_user, auth_engine
     ):
         token, csrf = _login(rbac_client, "op_bob", "pass2")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/settings",
             json={"dvr_servers": []},
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 200
@@ -181,9 +183,8 @@ class TestOperatorAllowedOnOperatorRoutes:
         self, rbac_client, operator_user, auth_engine
     ):
         token, csrf = _login(rbac_client, "op_bob", "pass2")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/regenerate-api-key",
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 403
@@ -192,10 +193,9 @@ class TestOperatorAllowedOnOperatorRoutes:
 class TestAdminAllowedOnAllRoutes:
     def test_admin_200_on_post_settings(self, rbac_client, admin_user, auth_engine):
         token, csrf = _login(rbac_client, "admin_carol", "pass3")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/settings",
             json={"dvr_servers": []},
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 200
@@ -204,14 +204,13 @@ class TestAdminAllowedOnAllRoutes:
         self, rbac_client, admin_user, auth_engine
     ):
         token, csrf = _login(rbac_client, "admin_carol", "pass3")
-        resp = rbac_client.post(
+        resp = _with_session_cookie(rbac_client, token).post(
             "/api/clear-activity-history",
-            cookies={"channelwatch_session": token},
             headers={"X-CSRF-Token": csrf},
         )
-        assert resp.status_code != 403, (
-            f"Role check incorrectly blocked admin: {resp.json()}"
-        )
+        assert (
+            resp.status_code != 403
+        ), f"Role check incorrectly blocked admin: {resp.json()}"
 
 
 class TestApiKeyBypassesRoleCheck:
@@ -359,12 +358,9 @@ class TestSetupEndpoint:
                 },
             )
 
-            whoami_resp = client.get(
-                "/api/v1/auth/whoami",
-                cookies={
-                    "channelwatch_session": resp.cookies.get("channelwatch_session", "")
-                },
-            )
+            whoami_resp = _with_session_cookie(
+                client, resp.cookies.get("channelwatch_session", "")
+            ).get("/api/v1/auth/whoami")
 
         assert resp.status_code == 201
         body = resp.json()

@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -71,6 +72,91 @@ def get_last_notification_title(notification_manager):
 
 
 class TestDiskSpaceAlertSemantics:
+    def test_disk_fetch_uses_httpx_and_returns_normalized_payload(
+        self, alert_factory
+    ):
+        alert, _notification_manager = alert_factory()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "disk": {"free": 40 * GIB, "total": 100 * GIB},
+            "path": "/shares/TV",
+        }
+
+        with patch("core.alerts.disk_space.httpx.get", return_value=response) as get:
+            disk_info = alert._get_disk_info()
+
+        get.assert_called_once_with(alert.api_url, timeout=3)
+        assert disk_info == {
+            "free": 40 * GIB,
+            "total": 100 * GIB,
+            "path": "/shares/TV",
+        }
+
+    def test_terminal_stop_interrupts_owned_threads_and_cannot_resurrect(
+        self, alert_factory
+    ):
+        alert, _notification_manager = alert_factory()
+        first_check = threading.Event()
+        alert.check_interval = 0.01
+        alert.health_check_interval = 0.01
+
+        def record_check():
+            first_check.set()
+
+        with patch.object(alert, "_check_disk_space", side_effect=record_check) as check:
+            assert alert.start_monitoring() is True
+            assert alert._start_health_checker() is True
+            assert first_check.wait(timeout=1.0)
+            monitoring_thread = alert.monitoring_thread
+            health_checker_thread = alert.health_checker_thread
+
+            alert.stop_monitoring()
+            calls_after_stop = check.call_count
+            time.sleep(0.05)
+
+        assert alert.running is False
+        assert alert._shutdown_event.is_set()
+        assert monitoring_thread is not None and not monitoring_thread.is_alive()
+        assert health_checker_thread is not None and not health_checker_thread.is_alive()
+        assert check.call_count == calls_after_stop
+        assert alert.start_monitoring() is False
+        assert alert._start_health_checker() is False
+
+    def test_health_checker_recovers_only_a_nonterminal_dead_poller(
+        self, alert_factory
+    ):
+        alert, _notification_manager = alert_factory()
+        recovered = threading.Event()
+        attempts = 0
+        attempts_lock = threading.Lock()
+        alert.health_check_interval = 0.01
+
+        def controlled_loop():
+            nonlocal attempts
+            with attempts_lock:
+                attempts += 1
+                current_attempt = attempts
+            if current_attempt == 1:
+                with alert._lifecycle_lock:
+                    alert.running = False
+                return
+            recovered.set()
+            alert._shutdown_event.wait()
+            with alert._lifecycle_lock:
+                alert.running = False
+
+        with patch.object(alert, "_monitoring_loop", side_effect=controlled_loop):
+            assert alert.start_monitoring() is True
+            assert alert._start_health_checker() is True
+            assert recovered.wait(timeout=1.0)
+            assert attempts == 2
+            alert.stop_monitoring()
+
+        assert alert._shutdown_event.is_set()
+        assert alert.running is False
+        assert attempts == 2
+
     def test_estimate_time_to_threshold_uses_first_or_boundary(self, alert_factory):
         alert, _notification_manager = alert_factory()
         alert.percent_threshold = 10

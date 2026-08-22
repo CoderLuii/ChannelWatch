@@ -53,12 +53,13 @@ def main() -> int:
             "## What's Fixed",
             "",
         ]
-    elif version_tag in {"v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15"}:
+    elif version_tag in {"v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"}:
         title = {
             "v0.9.12": "Dependency maintenance",
             "v0.9.13": "Reporting reliability",
             "v0.9.14": "Reporting and update reliability",
             "v0.9.15": "Update and reporting reliability",
+            "v0.9.16": "Monitoring, update, and deployment reliability",
         }[version_tag]
         body = [f"# ChannelWatch {version_tag} - {title}"]
         sections = metadata.get("changelogSections") or {"Changed": highlights}
@@ -83,7 +84,7 @@ def main() -> int:
             body.extend(f"- {item}" for item in items)
     if version_tag == "v0.9.10":
         body.extend(f"- {item}" for item in highlights)
-    heading_level = "##" if version_tag in {"v0.9.10", "v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15"} else "###"
+    heading_level = "##" if version_tag in {"v0.9.10", "v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"} else "###"
     body.extend(
         [
             "",
@@ -102,6 +103,27 @@ def main() -> int:
             "`ghcr.io/coderluii/channelwatch:latest`",
         ]
     )
+    if version_tag == "v0.9.16":
+        asset_base = (
+            "https://github.com/CoderLuii/ChannelWatch/releases/download/"
+            f"{version_tag}"
+        )
+        body.extend(
+            [
+                "",
+                "## License and verification",
+                "",
+                "ChannelWatch is MIT-licensed. The container and app-update bundle "
+                "include the project notices, applicable complete copyleft license "
+                "texts, and an exact corresponding-source map.",
+                "",
+                f"- [Third-party license inventory]({asset_base}/channelwatch-{version_tag}-THIRD-PARTY-LICENSES.md)",
+                f"- [Corresponding-source and rebuild map]({asset_base}/channelwatch-{version_tag}-CORRESPONDING-SOURCE.md)",
+                f"- [Complete copyleft license texts]({asset_base}/channelwatch-{version_tag}-COPYLEFT-LICENSES.zip)",
+                f"- [Release asset checksums]({asset_base}/channelwatch-{version_tag}-SHA256SUMS.txt)",
+                "- Exact amd64 and arm64 SPDX and CycloneDX SBOMs are attached below; every other attached asset is covered by the checksum manifest.",
+            ]
+        )
     text = "\n".join(body) + "\n"
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")

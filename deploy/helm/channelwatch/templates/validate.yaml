@@ -4,3 +4,28 @@
 {{- if not .Values.persistence.enabled -}}
 {{- fail "ChannelWatch requires persistence.enabled=true because /config must be backed by a PersistentVolumeClaim." -}}
 {{- end -}}
+{{- $existingSecret := .Values.secretConfig.existingSecret | trim -}}
+{{- $secretStorageKey := .Values.secretConfig.secretStorageKey | trim -}}
+{{- $managedSecretValues := list
+      $secretStorageKey
+      (.Values.secretConfig.apiKey | trim)
+      (.Values.secretConfig.adminUser | trim)
+      (.Values.secretConfig.adminPass | trim)
+      (.Values.secretConfig.appriseDiscord | trim)
+      (.Values.secretConfig.apprisePushover | trim)
+      (.Values.secretConfig.appriseTelegram | trim)
+      (.Values.secretConfig.appriseEmail | trim)
+      (.Values.secretConfig.appriseEmailTo | trim)
+      (.Values.secretConfig.appriseSlack | trim)
+      (.Values.secretConfig.appriseGotify | trim)
+      (.Values.secretConfig.appriseMatrix | trim)
+      (.Values.secretConfig.appriseCustom | trim) -}}
+{{- if $existingSecret -}}
+  {{- range $managedSecretValues -}}
+    {{- if . -}}
+      {{- fail "secretConfig.existingSecret cannot be combined with chart-managed secretConfig values. Put CHANNELWATCH_SECRET_STORAGE_KEY and any optional ChannelWatch credentials in the existing Secret." -}}
+    {{- end -}}
+  {{- end -}}
+{{- else if lt (len $secretStorageKey) 32 -}}
+{{- fail "secretConfig.secretStorageKey must contain at least 32 non-whitespace characters when secretConfig.existingSecret is empty." -}}
+{{- end -}}

@@ -175,6 +175,31 @@ class AppriseProvider(NotificationProvider):
         """Verifies that Apprise is initialized with at least one service URL."""
         return bool(self.apprise and self.urls)
 
+    def _enumerated_url_entries(self) -> list[tuple[str, str, str]]:
+        """Return non-secret stable identities for configured destinations."""
+        ordinals: dict[str, int] = {}
+        enumerated: list[tuple[str, str, str]] = []
+        for destination_key, url in self.url_entries:
+            ordinal = ordinals.get(destination_key, 0) + 1
+            ordinals[destination_key] = ordinal
+            destination_id = (
+                destination_key
+                if ordinal == 1
+                else f"{destination_key}:{ordinal}"
+            )
+            enumerated.append((destination_id, destination_key, url))
+        return enumerated
+
+    def notification_destinations(
+        self, allowed: Optional[set[str]] = None
+    ) -> list[tuple[str, str]]:
+        """Describe concrete delivery targets without exposing their URLs."""
+        return [
+            (destination_id, destination_key)
+            for destination_id, destination_key, _url in self._enumerated_url_entries()
+            if allowed is None or destination_key in allowed
+        ]
+
     def _destination_summary(self, urls: List[str]) -> str:
         service_counts: dict[str, int] = {}
         for url in urls:
@@ -263,11 +288,16 @@ class AppriseProvider(NotificationProvider):
             return False
 
         allowed: Optional[set] = kwargs.get("allowed_apprise_destinations")
+        selected_destination_id = kwargs.get("apprise_destination_id")
 
         active_entries = [
             (dest_key, url)
-            for dest_key, url in self.url_entries
-            if allowed is None or dest_key in allowed
+            for destination_id, dest_key, url in self._enumerated_url_entries()
+            if (allowed is None or dest_key in allowed)
+            and (
+                selected_destination_id is None
+                or destination_id == selected_destination_id
+            )
         ]
 
         if not active_entries:

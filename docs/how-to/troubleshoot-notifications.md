@@ -128,8 +128,9 @@ Symptom: one DVR sends alerts, but another enabled DVR stays silent.
 
 Checks:
 
-1. Check `/healthz/ready`.
-   - The readiness response includes one entry per enabled DVR monitor with `id`, `name`, `monitoring_status`, `freshness_status`, `connected`, `reason`, and freshness timestamps.
+1. Check `/healthz/ready`, then authenticate and inspect `/api/health` or the Diagnostics page.
+   - The unauthenticated readiness response contains only aggregate `status` and `ready` fields.
+   - Authenticated `/api/health` includes one entry per enabled DVR monitor with its ID, name, monitoring state, and reason.
    - If the silent DVR is stale, missing, dead, or disconnected in this response, fix DVR connectivity before provider routing.
 2. Check the Diagnostics page for per DVR connection and monitoring state. It uses the same health and system information surfaces operators normally need.
 3. Open `GET /api/v1/notification-log?offset=0&limit=50` and filter mentally by `dvr_id`.

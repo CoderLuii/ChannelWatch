@@ -1,0 +1,11 @@
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - deploy/docker/Dockerfile
+    expired_at: 2027-02-01
+    statement: >-
+      The entrypoint must start as root only to repair configurable /config
+      ownership, then it clears supplemental groups and verifies the requested
+      effective UID and GID before starting ChannelWatch. Container integration
+      tests require the final process identity to be non-root and the root
+      filesystem to be read-only.

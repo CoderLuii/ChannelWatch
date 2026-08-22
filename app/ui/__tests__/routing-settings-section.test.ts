@@ -136,7 +136,7 @@ describe("RoutingSettingsSection rendered behavior", () => {
     vi.stubGlobal("React", React)
   })
 
-  it("renders active DVR/destinations, defaults missing routes on, toggles, and resets", () => {
+  it("renders active DVR/destinations, resolves explicit routes fail-closed, toggles, and resets", () => {
     const setValue = vi.fn()
     const form = {
       watch: (name?: keyof AppSettings) => (name ? settings[name] : settings),
@@ -152,11 +152,29 @@ describe("RoutingSettingsSection rendered behavior", () => {
     expect(view.getByText("Webhook")).toBeTruthy()
 
     const switches = view.getAllByRole("switch")
+    // Channel has no explicit event map, so it retains the legacy all-on default.
     expect(switches[0].props["aria-checked"]).toBe("true")
+    // Disk has an explicit partial map; its omitted Pushover destination is off.
+    expect(switches[6].props["aria-checked"]).toBe("false")
     fireClick(switches[0])
     expect(setValue).toHaveBeenCalledWith(
       "notification_routing",
-      { living: { disk: { webhook: false }, channel: { pushover: false } } },
+      {
+        living: {
+          disk: { webhook: false },
+          channel: {
+            pushover: false,
+            discord: true,
+            email: true,
+            telegram: true,
+            slack: true,
+            gotify: true,
+            matrix: true,
+            custom: true,
+            webhook: true,
+          },
+        },
+      },
       { shouldDirty: true },
     )
 
@@ -170,7 +188,75 @@ describe("notification routing matrix helpers", () => {
     expect(activeRoutingServers(settings.dvr_servers).map((server) => server.id)).toEqual(["living"])
     expect(activeRoutingDestinations(settings).map((dest) => dest.key)).toEqual(["pushover", "webhook"])
     expect(getRoutingValue({}, "living", "disk", "webhook")).toBe(true)
-    expect(setRoutingValue({}, "living", "disk", "webhook", false)).toEqual({ living: { disk: { webhook: false } } })
+    expect(getRoutingValue(routingState, "living", "disk", "pushover")).toBe(false)
+    expect(setRoutingValue({}, "living", "disk", "webhook", false)).toEqual({
+      living: {
+        disk: {
+          pushover: true,
+          discord: true,
+          email: true,
+          telegram: true,
+          slack: true,
+          gotify: true,
+          matrix: true,
+          custom: true,
+          webhook: false,
+        },
+      },
+    })
+    expect(setRoutingValue(routingState, "living", "disk", "pushover", true)).toEqual({
+      living: {
+        disk: {
+          pushover: true,
+          discord: false,
+          email: false,
+          telegram: false,
+          slack: false,
+          gotify: false,
+          matrix: false,
+          custom: false,
+          webhook: false,
+        },
+      },
+    })
     expect(resetDvrRouting(routingState, "living")).toEqual({})
+  })
+
+  it("fails closed for explicit null routes and repairs the selected route on toggle", () => {
+    const nullDvrRoute: RoutingState = { living: null }
+    expect(getRoutingValue(nullDvrRoute, "living", "channel", "discord")).toBe(false)
+    expect(setRoutingValue(nullDvrRoute, "living", "channel", "discord", true)).toEqual({
+      living: {
+        channel: {
+          pushover: false,
+          discord: true,
+          email: false,
+          telegram: false,
+          slack: false,
+          gotify: false,
+          matrix: false,
+          custom: false,
+          webhook: false,
+        },
+      },
+    })
+
+    const nullEventRoute: RoutingState = { living: { channel: null } }
+    expect(getRoutingValue(nullEventRoute, "living", "channel", "discord")).toBe(false)
+    expect(setRoutingValue(nullEventRoute, "living", "channel", "discord", true)).toEqual({
+      living: {
+        channel: {
+          pushover: false,
+          discord: true,
+          email: false,
+          telegram: false,
+          slack: false,
+          gotify: false,
+          matrix: false,
+          custom: false,
+          webhook: false,
+        },
+      },
+    })
   })
 })

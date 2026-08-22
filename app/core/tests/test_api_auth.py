@@ -93,9 +93,10 @@ class TestUnauthenticatedAccess:
         resp = client.get("/api/ping")
         assert resp.status_code == 200
 
-    def test_health_no_auth_required(self, client):
+    def test_detailed_health_requires_auth(self, client):
         resp = client.get("/api/health")
-        assert resp.status_code == 503
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["code"] == "ERR_AUTH_INVALID_KEY"
 
     def test_get_settings_requires_auth_when_api_key_configured(self, client):
         resp = client.get("/api/settings")
@@ -268,6 +269,122 @@ class TestAuthenticatedAccess:
             headers={"X-API-Key": "test-api-key-12345"},
         )
         assert resp.status_code == 200
+
+    def test_invalid_routing_save_is_structured_and_preserves_last_valid_file(
+        self, client, test_settings_file
+    ):
+        original_bytes = test_settings_file.read_bytes()
+        payload = json.loads(original_bytes)
+        payload["notification_routing"] = {
+            "stale-dvr": {"channel": {"discord": True}}
+        }
+
+        resp = client.post(
+            "/api/settings",
+            json=payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["code"] == "ERR_SETTINGS_VALIDATION_FAILED"
+        assert "stale or unknown DVR id" in detail["message"]
+        assert test_settings_file.read_bytes() == original_bytes
+
+    def test_partial_routing_save_is_normalized_fail_closed(
+        self, client, test_settings_file
+    ):
+        payload = json.loads(test_settings_file.read_text())
+        payload["notification_routing"] = {
+            "dvr_test": {"channel": {"discord": True}}
+        }
+
+        resp = client.post(
+            "/api/settings",
+            json=payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert resp.status_code == 200
+        saved_route = json.loads(test_settings_file.read_text())["notification_routing"]
+        assert saved_route["dvr_test"]["channel"]["discord"] is True
+        assert saved_route["dvr_test"]["channel"]["webhook"] is False
+
+    @pytest.mark.parametrize(
+        "invalid_routing",
+        [
+            {"dvr_test": None},
+            {"dvr_test": {"channel": None}},
+        ],
+    )
+    def test_explicit_null_routing_save_is_structured_and_preserves_last_valid_file(
+        self, client, test_settings_file, invalid_routing
+    ):
+        original_bytes = test_settings_file.read_bytes()
+        payload = json.loads(original_bytes)
+        payload["notification_routing"] = invalid_routing
+
+        resp = client.post(
+            "/api/settings",
+            json=payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["code"] == "ERR_SETTINGS_VALIDATION_FAILED"
+        assert "routing must be an object" in detail["message"]
+        assert test_settings_file.read_bytes() == original_bytes
+
+    def test_legacy_stale_routing_remains_readable(
+        self, client, test_settings_file
+    ):
+        persisted = json.loads(test_settings_file.read_text())
+        persisted["notification_routing"] = {
+            "removed-dvr": {"channel": {"discord": "legacy-invalid"}}
+        }
+        test_settings_file.write_text(json.dumps(persisted))
+
+        resp = client.get(
+            "/api/settings",
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["notification_routing"] == persisted["notification_routing"]
+
+        health_resp = client.get(
+            "/api/health",
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+        assert health_resp.status_code in {200, 503}
+        diagnostics = health_resp.json()["notification_routing_diagnostics"]
+        assert diagnostics
+        assert "stale or unknown DVR id" in diagnostics[0]
+
+    def test_legacy_null_event_routing_remains_readable_with_diagnostics(
+        self, client, test_settings_file
+    ):
+        persisted = json.loads(test_settings_file.read_text())
+        persisted["notification_routing"] = {"dvr_test": {"channel": None}}
+        test_settings_file.write_text(json.dumps(persisted))
+
+        resp = client.get(
+            "/api/settings",
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["notification_routing"] == persisted["notification_routing"]
+
+        health_resp = client.get(
+            "/api/health",
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+        assert health_resp.status_code in {200, 503}
+        diagnostics = health_resp.json()["notification_routing_diagnostics"]
+        assert diagnostics
+        assert "routing must be an object" in diagnostics[0]
 
     def test_invalid_key_rejected(self, client):
         resp = client.get(

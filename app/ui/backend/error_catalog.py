@@ -51,6 +51,7 @@ class ErrorCode:
     DVR_TEST_TARGET_REJECTED = "ERR_DVR_TEST_TARGET_REJECTED"
 
     # Settings
+    SETTINGS_VALIDATION_FAILED = "ERR_SETTINGS_VALIDATION_FAILED"
     SETTINGS_SAVE_FAILED = "ERR_SETTINGS_SAVE_FAILED"
 
     # Backup / restore
@@ -228,6 +229,12 @@ _CATALOG: dict[str, CatalogEntry] = {
         remediation="Use a valid Channels DVR host and port; localhost, metadata, link-local, and unsafe hosts are rejected.",
     ),
     # Settings -----------------------------------------------------------
+    ErrorCode.SETTINGS_VALIDATION_FAILED: CatalogEntry(
+        code=ErrorCode.SETTINGS_VALIDATION_FAILED,
+        http_status=422,
+        message="Settings validation failed.",
+        remediation="Correct the reported settings fields and try saving again.",
+    ),
     ErrorCode.SETTINGS_SAVE_FAILED: CatalogEntry(
         code=ErrorCode.SETTINGS_SAVE_FAILED,
         http_status=500,

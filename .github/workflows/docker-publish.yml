@@ -14,8 +14,10 @@ on:
       - 'v*'
 
 concurrency:
-  group: docker-${{ github.ref }}
-  cancel-in-progress: true
+  group: channelwatch-release-publication
+  cancel-in-progress: false
+
+permissions: {}
 
 env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
@@ -38,6 +40,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Reject stale release tag
+        run: >-
+          python scripts/release/verify-release-candidate.py
+          --tag "${GITHUB_REF_NAME}"
+          --sha "${GITHUB_SHA}"
+          --main-ref origin/main
 
       - name: Parse version
         id: version
@@ -49,17 +70,18 @@ jobs:
 
       - name: Verify CHANGELOG entry
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
           raw_ref="${GITHUB_REF_NAME}"
-          version="${{ steps.version.outputs.version }}"
           if [[ ! "${raw_ref}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must use vX.Y.Z format, got ${raw_ref}."
             exit 1
           fi
-          version_re="${version//./\\.}"
+          version_re="${VERSION//./\\.}"
           if ! grep -Eq "^## \\[${version_re}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" docs/releases/CHANGELOG.md; then
-            echo "::error::docs/releases/CHANGELOG.md has no release heading for ${version}. Add '## [${version}] - YYYY-MM-DD' before tagging."
+            echo "::error::docs/releases/CHANGELOG.md has no release heading for ${VERSION}. Add '## [${VERSION}] - YYYY-MM-DD' before tagging."
             exit 1
           fi
 
@@ -117,6 +139,43 @@ jobs:
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             "${image_required_args[@]}"
 
+      - name: Verify generated update assets
+        env:
+          EXPECTED_CHANNEL: stable
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+          EXPECTED_RUNTIME_ABI: channelwatch-runtime-v1
+          EXPECTED_SETTINGS_SCHEMA_VERSION: "7"
+          RELEASE_SOURCE_ROOT: ${{ github.workspace }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          expected_image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
+          if [ "${expected_image_required}" != "true" ] && [ "${expected_image_required}" != "false" ]; then
+            echo "::error::release-config.json image_required must be true or false."
+            exit 1
+          fi
+          python scripts/release/verify-update-assets.py \
+            --manifest "dist/update/channelwatch-update-${TAG}.json" \
+            --bundle "dist/update/channelwatch-app-${TAG}.zip" \
+            --expected-version "${VERSION}" \
+            --expected-channel "${EXPECTED_CHANNEL}" \
+            --expected-runtime-abi "${EXPECTED_RUNTIME_ABI}" \
+            --expected-settings-schema-version "${EXPECTED_SETTINGS_SCHEMA_VERSION}" \
+            --expected-image-required "${expected_image_required}" \
+            --expected-git-sha "${EXPECTED_GIT_SHA}" \
+            --expected-release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
+            --expected-bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
+            --source-root "${RELEASE_SOURCE_ROOT}"
+
+      - name: Verify release VEX
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: >-
+          python scripts/release/verify-vex.py
+          --document "deploy/security/channelwatch-${TAG}.openvex.json"
+          --expected-version "${VERSION}"
+
       - name: Render and validate release body
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -128,7 +187,7 @@ jobs:
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --output release-body.md
           first_line="$(head -n 1 release-body.md)"
-          expected_heading="# ChannelWatch ${TAG} - Update and reporting reliability"
+          expected_heading="# ChannelWatch ${TAG} - Monitoring, update, and deployment reliability"
           if [ "${first_line}" != "${expected_heading}" ]; then
             echo "::error::GitHub Release body must start with '${expected_heading}'."
             exit 1
@@ -140,7 +199,20 @@ jobs:
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${TAG}\" or (.draft and .name == \"${TAG}\")) | .id" | head -n 1)"
+          release_json=""
+          if ! release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then
+            # gh api writes the JSON 404 body to stdout. Clear it so a missing
+            # release is not mistaken for an existing immutable publication.
+            release_json=""
+          fi
+          if [ -n "${release_json}" ] && [ "$(jq -r '.draft' <<<"${release_json}")" != "true" ]; then
+            echo "::error::Release ${TAG} is already published and is immutable."
+            exit 1
+          fi
+          release_id="$(jq -r '.id // empty' <<<"${release_json}")"
+          if [ -z "${release_id}" ]; then
+            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.draft and .tag_name == \"${TAG}\") | .id" | head -n 1)"
+          fi
           if [ -n "${release_id}" ]; then
             jq -n \
               --arg tag_name "${TAG}" \
@@ -155,6 +227,7 @@ jobs:
           else
             gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
               --title "${TAG}" \
               --notes-file release-body.md \
               --draft
@@ -170,11 +243,12 @@ jobs:
         run: |
           bundle="dist/update/channelwatch-app-${TAG}.zip"
           manifest="dist/update/channelwatch-update-${TAG}.json"
-          if [ ! -f "${bundle}" ] || [ ! -f "${manifest}" ]; then
+          vex="deploy/security/channelwatch-${TAG}.openvex.json"
+          if [ ! -f "${bundle}" ] || [ ! -f "${manifest}" ] || [ ! -f "${vex}" ]; then
             echo "::error::Expected update assets were not created."
             exit 1
           fi
-          gh release upload "${TAG}" "${bundle}" "${manifest}" --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" "${bundle}" "${manifest}" "${vex}" --repo "${GITHUB_REPOSITORY}" --clobber
           bundle_sha="$(sha256sum "${bundle}" | awk '{print $1}')"
           {
             echo "bundle_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip"
@@ -187,7 +261,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-update-bundle-and-release
     permissions:
-      contents: read
+      contents: write
       packages: write
       attestations: write
       id-token: write
@@ -197,6 +271,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Parse version
         id: version
@@ -211,7 +286,6 @@ jobs:
         shell: bash
         run: |
           raw_ref="${GITHUB_REF_NAME}"
-          version="${{ steps.version.outputs.version }}"
           if [[ ! "${raw_ref}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must use vX.Y.Z format, got ${raw_ref}."
             exit 1
@@ -248,19 +322,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -272,28 +333,324 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
 
-      - name: Build and push
-        id: build
+      - name: Build exact multi-architecture archive for release scan
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: deploy/docker/Dockerfile
           platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          push: false
+          tags: channelwatch:release-scan
+          outputs: type=oci,dest=${{ runner.temp }}/channelwatch-release.oci,tar=false
+          provenance: false
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             GIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: true
+
+      - name: Scan exact release candidate images
+        env:
+          OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            trivy image \
+              --input "${OCI_LAYOUT}" \
+              --platform "${platform}" \
+              --scanners vuln,secret,misconfig \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1
+          done
+
+      - name: Install pinned Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.51.0
+
+      - name: Download and verify existing draft release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="dist/release"
+          mkdir -p "${release_dir}"
+          # GitHub's release-by-tag endpoint returns 404 for draft releases.
+          # Resolve the exact draft from the authenticated release list instead.
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          release_json="$(jq -c --arg tag "${TAG}" \
+            '[.[] | select(.draft == true and .tag_name == $tag)]' \
+            <<<"${releases_json}")"
+          if [ "$(jq 'length' <<<"${release_json}")" != "1" ]; then
+            echo "::error::Exactly one draft release for ${TAG} is required."
+            exit 1
+          fi
+          release_json="$(jq -c '.[0]' <<<"${release_json}")"
+          if [ "$(jq -r '.draft' <<<"${release_json}")" != "true" ] || \
+             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
+            echo "::error::Signed assets must come from the matching exact-SHA draft release."
+            exit 1
+          fi
+          for asset in \
+            "channelwatch-app-${TAG}.zip" \
+            "channelwatch-update-${TAG}.json" \
+            "channelwatch-${TAG}.openvex.json"; do
+            gh release download "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset}" \
+              --dir "${release_dir}"
+            if [ ! -s "${release_dir}/${asset}" ]; then
+              echo "::error::Required draft release asset is missing: ${asset}"
+              exit 1
+            fi
+          done
+
+      - name: Generate and verify exact-image license assets
+        env:
+          OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
+          SYFT_CMD: ${{ steps.syft.outputs.cmd }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="dist/release"
+          mkdir -p "${release_dir}"
+
+          for platform in linux/amd64 linux/arm64; do
+            arch="${platform#linux/}"
+            spdx="${release_dir}/channelwatch-${TAG}-${arch}.spdx.json"
+            cyclonedx="${release_dir}/channelwatch-${TAG}-${arch}.cyclonedx.json"
+            "${SYFT_CMD}" scan \
+              --platform "${platform}" \
+              "oci-dir:${OCI_LAYOUT}" \
+              --output "spdx-json=${spdx}" \
+              --output "cyclonedx-json=${cyclonedx}"
+            jq -e \
+              '.spdxVersion == "SPDX-2.3" and
+               (.packages | length > 0) and
+               any(.packages[]; .name == "zeroconf")' \
+              "${spdx}" >/dev/null
+            jq -e \
+              '.bomFormat == "CycloneDX" and
+               (.components | length > 0) and
+               any(.components[]; .name == "zeroconf")' \
+              "${cyclonedx}" >/dev/null
+          done
+
+          cp LICENSE "${release_dir}/channelwatch-${TAG}-LICENSE.txt"
+          cp docs/legal/NOTICE "${release_dir}/channelwatch-${TAG}-NOTICE.txt"
+          cp docs/legal/THIRD_PARTY_LICENSES.md \
+            "${release_dir}/channelwatch-${TAG}-THIRD-PARTY-LICENSES.md"
+          cp docs/legal/CORRESPONDING_SOURCE.md \
+            "${release_dir}/channelwatch-${TAG}-CORRESPONDING-SOURCE.md"
+          python scripts/release/copyleft_licenses.py \
+            --output-dir "${RUNNER_TEMP}/channelwatch-copyleft-licenses" \
+            --source-map docs/legal/CORRESPONDING_SOURCE.md \
+            --archive "${release_dir}/channelwatch-${TAG}-COPYLEFT-LICENSES.zip"
+
+          for required_asset in \
+            "channelwatch-app-${TAG}.zip" \
+            "channelwatch-update-${TAG}.json" \
+            "channelwatch-${TAG}.openvex.json" \
+            "channelwatch-${TAG}-amd64.spdx.json" \
+            "channelwatch-${TAG}-amd64.cyclonedx.json" \
+            "channelwatch-${TAG}-arm64.spdx.json" \
+            "channelwatch-${TAG}-arm64.cyclonedx.json" \
+            "channelwatch-${TAG}-LICENSE.txt" \
+            "channelwatch-${TAG}-NOTICE.txt" \
+            "channelwatch-${TAG}-THIRD-PARTY-LICENSES.md" \
+            "channelwatch-${TAG}-CORRESPONDING-SOURCE.md" \
+            "channelwatch-${TAG}-COPYLEFT-LICENSES.zip"; do
+            if [ ! -s "${release_dir}/${required_asset}" ]; then
+              echo "::error::Required checksummed release asset is missing: ${required_asset}"
+              exit 1
+            fi
+          done
+          checksum_file="${release_dir}/channelwatch-${TAG}-SHA256SUMS.txt"
+          checksum_name="$(basename "${checksum_file}")"
+          checksum_tmp="${RUNNER_TEMP}/${checksum_name}"
+          (
+            cd "${release_dir}"
+            find . -maxdepth 1 -type f ! -name "${checksum_name}" \
+              -print0 | sort -z | xargs -0 sha256sum > "${checksum_tmp}"
+            sha256sum --check "${checksum_tmp}"
+          )
+          mv "${checksum_tmp}" "${checksum_file}"
+          if [ "$(wc -l < "${checksum_file}" | tr -d ' ')" != "12" ]; then
+            echo "::error::Release checksum manifest must cover all 12 non-checksum assets."
+            exit 1
+          fi
+
+      - name: Attach verified license and SBOM assets to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          release_json="$(jq -c --arg tag "${TAG}" \
+            '[.[] | select(.draft == true and .tag_name == $tag)]' \
+            <<<"${releases_json}")"
+          if [ "$(jq 'length' <<<"${release_json}")" != "1" ]; then
+            echo "::error::Exactly one draft release for ${TAG} is required."
+            exit 1
+          fi
+          release_json="$(jq -c '.[0]' <<<"${release_json}")"
+          if [ "$(jq -r '.draft' <<<"${release_json}")" != "true" ]; then
+            echo "::error::License assets may only be attached to the matching draft release."
+            exit 1
+          fi
+          if [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
+            echo "::error::Draft release target does not match ${GITHUB_SHA}."
+            exit 1
+          fi
+          gh release upload "${TAG}" dist/release/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+          expected_assets="${RUNNER_TEMP}/channelwatch-expected-release-assets.txt"
+          actual_assets="${RUNNER_TEMP}/channelwatch-actual-release-assets.txt"
+          find dist/release -maxdepth 1 -type f -exec basename {} \; \
+            | sort > "${expected_assets}"
+          release_id="$(jq -r '.id' <<<"${release_json}")"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            --jq '.assets[].name' | sort > "${actual_assets}"
+          if ! diff -u "${expected_assets}" "${actual_assets}"; then
+            echo "::error::Draft release contains an unexpected or missing asset."
+            exit 1
+          fi
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Publish the scanned images and assemble exact manifests
+        id: publish
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+          OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
+          SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:64ac45c5a1c01230896fbae960b2213e32a5040e4009b83b5f5cbf31a35f61c3 # v1.22.2
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          skopeo_cmd() {
+            docker run --rm \
+              --volume "${OCI_LAYOUT}:/work/channelwatch.oci:ro" \
+              --volume "${DOCKER_CONFIG}:/auth:ro" \
+              "${SKOPEO_IMAGE}" "$@"
+          }
+
+          root_index="$(cat "${OCI_LAYOUT}/index.json")"
+          image_index_digest="$(jq -er '
+            if .schemaVersion == 2 and
+               (.manifests | length) == 1 and
+               .manifests[0].mediaType == "application/vnd.oci.image.index.v1+json" and
+               (.manifests[0].digest | test("^sha256:[0-9a-f]{64}$"))
+            then .manifests[0].digest
+            else error("OCI layout does not reference exactly one nested image index")
+            end
+          ' <<<"${root_index}")"
+          image_index_blob="${OCI_LAYOUT}/blobs/sha256/${image_index_digest#sha256:}"
+          if [ ! -f "${image_index_blob}" ]; then
+            echo "::error::Scanned OCI layout is missing its nested image-index blob."
+            exit 1
+          fi
+          archive_raw="$(cat "${image_index_blob}")"
+          if ! jq -e \
+            '.schemaVersion == 2 and
+             ([.manifests[] | [.platform.os, .platform.architecture]] | sort) ==
+             ([
+               ["linux", "amd64"],
+               ["linux", "arm64"]
+             ] | sort)' <<<"${archive_raw}" >/dev/null; then
+            echo "::error::Scanned OCI archive does not contain exactly linux/amd64 and linux/arm64."
+            exit 1
+          fi
+
+          publish_registry() {
+            repository="$1"
+            skopeo_cmd copy \
+              --all \
+              --preserve-digests \
+              --authfile /auth/config.json \
+              oci:/work/channelwatch.oci:release-scan \
+              "docker://${repository}:${VERSION}" >&2
+
+            version_digest="$(skopeo_cmd inspect \
+              --authfile /auth/config.json \
+              --format '{{.Digest}}' \
+              "docker://${repository}:${VERSION}")"
+            version_raw="$(skopeo_cmd inspect \
+              --authfile /auth/config.json \
+              --raw \
+              "docker://${repository}:${VERSION}")"
+            if ! jq -e \
+              --argjson archive "${archive_raw}" \
+              '(.manifests | sort_by(.digest)) == ($archive.manifests | sort_by(.digest))' \
+              <<<"${version_raw}" >/dev/null; then
+              echo "::error::Published manifest does not contain the exact scanned platform descriptors."
+              exit 1
+            fi
+
+            skopeo_cmd copy \
+              --all \
+              --preserve-digests \
+              --authfile /auth/config.json \
+              "docker://${repository}@${version_digest}" \
+              "docker://${repository}:latest" >&2
+            latest_digest="$(skopeo_cmd inspect \
+              --authfile /auth/config.json \
+              --format '{{.Digest}}' \
+              "docker://${repository}:latest")"
+            if [ "${latest_digest}" != "${version_digest}" ]; then
+              echo "::error::latest does not reference the exact version manifest."
+              exit 1
+            fi
+
+            printf '%s\n' "${version_digest}"
+          }
+
+          dockerhub_digest="$(publish_registry "${DOCKERHUB_IMAGE}")"
+          ghcr_digest="$(publish_registry "${GHCR_IMAGE}")"
+          {
+            echo "dockerhub_digest=${dockerhub_digest}"
+            echo "ghcr_digest=${ghcr_digest}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Attest build provenance
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+          HOME: ${{ runner.temp }}/docker-auth
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: index.docker.io/${{ env.DOCKERHUB_IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.publish.outputs.dockerhub_digest }}
           push-to-registry: true
 
   update-dockerhub-description:
@@ -307,6 +664,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Update Docker Hub description
         uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
@@ -330,6 +689,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Parse version
         id: version
@@ -356,7 +717,20 @@ jobs:
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${TAG}\") | .id" | head -n 1)"
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          release_json="$(jq -c --arg tag "${TAG}" \
+            '[.[] | select(.draft == true and .tag_name == $tag)]' \
+            <<<"${releases_json}")"
+          if [ "$(jq 'length' <<<"${release_json}")" != "1" ]; then
+            echo "::error::Draft release for ${TAG} is missing or already published; published releases are immutable."
+            exit 1
+          fi
+          release_json="$(jq -c '.[0]' <<<"${release_json}")"
+          if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
+            echo "::error::Draft release identity does not match ${TAG} at ${GITHUB_SHA}."
+            exit 1
+          fi
+          release_id="$(jq -r '.id // empty' <<<"${release_json}")"
           if [ -z "${release_id}" ]; then
             echo "::error::Draft release for ${TAG} was not found."
             exit 1
@@ -447,6 +821,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Parse release configuration
         id: release
@@ -455,12 +831,22 @@ jobs:
           echo "version=${GITHUB_REF_NAME#v}" >> "${GITHUB_OUTPUT}"
           echo "image_required=$(jq -r '.image_required' scripts/release/release-config.json)" >> "${GITHUB_OUTPUT}"
 
+      - name: Install update verifier dependencies
+        run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/runtime.constraints.txt \
+            -r deploy/requirements/runtime.txt
+
       - name: Verify live stable update manifest
+        env:
+          RAW_RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RAW_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
+          RAW_IMAGE_REQUIRED: ${{ steps.release.outputs.image_required }}
         run: |
           python scripts/release/verify-live-update-manifest.py \
-            --version "${{ steps.release.outputs.version }}" \
+            --version "${RAW_RELEASE_VERSION}" \
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${GITHUB_REF_NAME}" \
-            --bundle-sha256 "${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}" \
-            --image-required "${{ steps.release.outputs.image_required }}" \
+            --bundle-sha256 "${RAW_BUNDLE_SHA256}" \
+            --image-required "${RAW_IMAGE_REQUIRED}" \
             --attempts "90" \
             --interval "10"

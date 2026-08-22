@@ -8,6 +8,7 @@ venv
 env
 .env
 .env.*
+.dev-config
 *.pem
 *.key
 *.cert
@@ -15,6 +16,8 @@ env
 *.p12
 *.pfx
 *.md
+!docs/legal/THIRD_PARTY_LICENSES.md
+!docs/legal/CORRESPONDING_SOURCE.md
 .github
 community-post-*
 **/__pycache__

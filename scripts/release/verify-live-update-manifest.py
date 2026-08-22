@@ -4,10 +4,22 @@
 from __future__ import annotations
 
 import argparse
-import json
+import importlib.util
 import sys
 import time
-import urllib.request
+from pathlib import Path
+
+
+VERIFIER = Path(__file__).with_name("verify-update-assets.py")
+
+
+def load_asset_verifier():
+    spec = importlib.util.spec_from_file_location("verify_update_assets", VERIFIER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load update asset verifier.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,12 +32,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attempts", type=int, default=30)
     parser.add_argument("--interval", type=float, default=10.0)
     return parser.parse_args()
-
-
-def fetch_json(url: str) -> dict:
-    request = urllib.request.Request(url, headers={"User-Agent": "ChannelWatch-Release-Verification"})
-    with urllib.request.urlopen(request, timeout=20) as response:  # nosec B310: workflow-owned URL
-        return json.load(response)
 
 
 def verify(manifest: dict, args: argparse.Namespace) -> list[str]:
@@ -46,12 +52,31 @@ def verify(manifest: dict, args: argparse.Namespace) -> list[str]:
 
 def main() -> int:
     args = parse_args()
+    verifier = load_asset_verifier()
     last_errors: list[str] = []
     for attempt in range(1, args.attempts + 1):
         try:
-            last_errors = verify(fetch_json(args.url), args)
+            manifest_bytes = verifier.fetch_bytes(
+                args.url,
+                max_bytes=verifier.MAX_MANIFEST_BYTES,
+            )
+            trusted_manifest = verifier.verify_manifest(manifest_bytes)
+            bundle_url = str(trusted_manifest["payload"].get("bundle_url") or "")
+            bundle_bytes = verifier.fetch_bytes(
+                bundle_url,
+                max_bytes=verifier.MAX_BUNDLE_BYTES,
+            )
+            manifest = verifier.verify_update_assets(
+                manifest_bytes,
+                bundle_bytes,
+                expected_version=args.version,
+            )
+            last_errors = verify(manifest, args)
             if not last_errors:
-                print(f"Live stable manifest verified for v{args.version} on attempt {attempt}.")
+                print(
+                    "Live stable manifest and bundle verified for "
+                    f"v{args.version} on attempt {attempt}."
+                )
                 return 0
         except Exception as exc:
             last_errors = [str(exc)]

@@ -96,7 +96,7 @@ def _privacy_parity_payload():
     diagnostics = _payload()["diagnostics"]
     diagnostics.update(
         {
-            "channelwatch_version": "0.9.15",
+            "channelwatch_version": "0.9.16",
             "core_status": "fatal admin@example.com fd00::1234 fd12::1%5",
             "monitoring_statuses": ["live token=hunter2", "![m](https://evil.example/m)"],
             "notification_providers": [

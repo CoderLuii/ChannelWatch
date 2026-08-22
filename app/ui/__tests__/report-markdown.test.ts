@@ -580,7 +580,7 @@ describe("report markdown helpers", () => {
 
   it("sanitizes diagnostics shown in the browser-visible public preview", () => {
     const rows = publicDiagnosticsRows({
-      channelwatch_version: "0.9.15 ![v][pixel]",
+      channelwatch_version: "0.9.16 ![v][pixel]",
       dvr_count: 1,
       connected_dvr_count: 1,
       core_status: "fatal admin@example.com fd00::1234",

@@ -4,12 +4,12 @@ import { useState, useEffect, useRef, useContext, createContext } from "react"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/base/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
-import { ApiError, signalContainerRestart, fetchSettings, pollForRecovery, fetchSecurityStatus } from "@/lib/api"
+import { ApiError, signalContainerRestart, fetchSettings, pollForRecovery, fetchSecurityStatus, fetchWhoAmI, logoutSession } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { useToast } from "@/hooks/use-toast"
 import { SecurityModeBadge } from "@/components/settings/security-section"
 import { useDvrSelection } from "@/lib/dvr-selection-context"
-import type { SecurityStatus } from "@/lib/types"
+import type { SecurityStatus, WhoAmIResponse } from "@/lib/types"
 import {
   Menu,
   Power,
@@ -18,6 +18,7 @@ import {
   XCircle,
   RefreshCw,
   Server,
+  LogOut,
 } from "lucide-react"
 import {
   Tooltip,
@@ -42,6 +43,8 @@ export function Header() {
   const [overlayState, setOverlayState] = useState<OverlayState>("idle")
   const [elapsed, setElapsed] = useState(0)
   const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null)
+  const [whoAmI, setWhoAmI] = useState<WhoAmIResponse | null>(null)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
   const cancelPollRef = useRef<(() => void) | null>(null)
   const { toast } = useToast()
   const { setActiveView } = useContext(HeaderContext)
@@ -66,9 +69,20 @@ export function Header() {
       }
     }
 
+    const loadWhoAmI = async () => {
+      try {
+        const nextWhoAmI = await fetchWhoAmI()
+        if (!cancelled) setWhoAmI(nextWhoAmI)
+      } catch {
+        if (!cancelled) setWhoAmI(null)
+      }
+    }
+
     loadSecurityStatus()
+    loadWhoAmI()
     const handleRefresh = () => {
       loadSecurityStatus()
+      loadWhoAmI()
     }
     window.addEventListener("channelwatch-auth-state-changed", handleRefresh)
     return () => {
@@ -76,6 +90,22 @@ export function Header() {
       window.removeEventListener("channelwatch-auth-state-changed", handleRefresh)
     }
   }, [])
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true)
+    try {
+      await logoutSession()
+      window.dispatchEvent(new CustomEvent("channelwatch-auth-state-changed"))
+      window.location.reload()
+    } catch (error) {
+      setIsLoggingOut(false)
+      toast({
+        variant: "destructive",
+        title: t("header.signOutFailed"),
+        description: error instanceof Error ? error.message : t("errors.tryAgain"),
+      })
+    }
+  }
 
   const handleRestart = async () => {
     try {
@@ -268,6 +298,36 @@ export function Header() {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+
+            {whoAmI?.authenticated && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex items-center gap-1"
+                      onClick={handleLogout}
+                      disabled={isLoggingOut}
+                      aria-label={t("header.signOut")}
+                      data-testid="header-sign-out"
+                    >
+                      {isLoggingOut ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <LogOut className="h-4 w-4" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {isLoggingOut ? t("header.signingOut") : t("header.signOut")}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{t("header.signOut")}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
 
             <ModeToggle />
           </div>

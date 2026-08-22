@@ -7,15 +7,19 @@ and invalidates sessions when credentials change.
 
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import sqlalchemy as sa
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from .database import get_session
 from .models import User, UserSession
 
 SESSION_EXPIRY_SECONDS = 86400
+
+
+class FirstAdminExistsError(ValueError):
+    """Raised when first-admin ownership has already been claimed."""
 
 
 def generate_token() -> str:
@@ -218,6 +222,95 @@ def create_user(engine, username: str, password: str, role: str = "viewer") -> U
         role=role,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
+    )
+
+
+def create_first_admin_session(
+    engine,
+    username: str,
+    password: str,
+    *,
+    persist_settings: Optional[Callable[[], None]] = None,
+) -> tuple[User, UserSession]:
+    """Atomically claim first-admin ownership and create its browser session.
+
+    ChannelWatch supports SQLite as its authentication store. ``BEGIN
+    IMMEDIATE`` acquires the database write reservation before the user-count
+    check, so concurrent processes cannot both observe an empty user table and
+    insert different administrator names. The session is committed in the same
+    transaction. When supplied, ``persist_settings`` runs after both database
+    rows are flushed but before the transaction commits. A settings-write
+    failure therefore rolls the database claim back; a later database-commit
+    failure leaves RBAC configured with zero users, which remains an explicitly
+    retryable setup state.
+    """
+
+    if engine.dialect.name != "sqlite":
+        raise RuntimeError("Atomic first-admin setup requires the SQLite auth store")
+
+    now = datetime.now(timezone.utc)
+    user = User(
+        username=username,
+        password_hash=hash_password(password),
+        role="admin",
+        created_at=now,
+        updated_at=now,
+    )
+    session_obj = UserSession(
+        user_id=0,
+        token=generate_token(),
+        csrf_token=generate_token(),
+        created_at=now,
+        expires_at=now + timedelta(seconds=SESSION_EXPIRY_SECONDS),
+    )
+
+    with engine.connect() as connection:
+        try:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            with Session(bind=connection) as db_session:
+                user_count = db_session.execute(
+                    sa.select(sa.func.count()).select_from(User)
+                ).scalar()
+                if user_count:
+                    raise FirstAdminExistsError("An administrator already exists")
+
+                db_session.add(user)
+                db_session.flush()
+                if user.id is None:
+                    raise RuntimeError("First administrator id was not persisted")
+
+                session_obj.user_id = user.id
+                db_session.add(session_obj)
+                db_session.flush()
+                if session_obj.id is None:
+                    raise RuntimeError("First administrator session was not persisted")
+                if persist_settings is not None:
+                    persist_settings()
+            connection.commit()
+        except BaseException:
+            # The callback is an intentional cross-store commit boundary. Roll
+            # back for every failure class before propagating it, including
+            # cancellation/termination signals raised by the caller.
+            connection.rollback()
+            raise
+
+    return (
+        User(
+            id=user.id,
+            username=username,
+            password_hash="",
+            role="admin",
+            created_at=now,
+            updated_at=now,
+        ),
+        UserSession(
+            id=session_obj.id,
+            user_id=user.id,
+            token=session_obj.token,
+            csrf_token=session_obj.csrf_token,
+            created_at=now,
+            expires_at=session_obj.expires_at,
+        ),
     )
 
 

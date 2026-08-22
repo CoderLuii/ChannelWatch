@@ -1,0 +1,195 @@
+name: ChannelWatch CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            deploy/requirements/runtime.txt
+            deploy/requirements/dev.txt
+            deploy/requirements/dev.constraints.txt
+      - name: Install dependencies
+        run: python -m pip install -c deploy/requirements/dev.constraints.txt -r deploy/requirements/runtime.txt -r deploy/requirements/dev.txt
+      - name: Compile Python
+        run: python -m compileall app/core app/ui/backend
+      - name: Run backend suite
+        env:
+          PYTHONPATH: app
+        run: python -m pytest app/core/tests
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Run Chromium smoke, keyboard, and accessibility checks
+        run: pnpm exec playwright test --project=smoke --project=a11y
+
+  docs-config:
+    name: Docs and config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+      - run: bash deploy/scripts/doc-qa/diataxis-check.sh
+      - run: bash deploy/scripts/doc-qa/spell-check.sh
+      - name: Validate Compose examples
+        env:
+          CHANNELWATCH_SECRET_STORAGE_KEY: ci-only-0123456789abcdef0123456789abcdef
+        run: |
+          for compose_file in deploy/compose/*.yml; do
+            docker compose -f "${compose_file}" config --quiet
+          done
+
+  helm:
+    name: Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - name: Lint and render managed Secret
+        run: |
+          helm lint deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef
+          helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null
+      - name: Render existing Secret mode
+        run: helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.existingSecret=channelwatch-runtime >/dev/null
+      - name: Verify invalid values fail
+        run: |
+          if helm template channelwatch deploy/helm/channelwatch >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=short >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.existingSecret=external --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set replicaCount=2 --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set persistence.enabled=false --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
+
+  container:
+    name: Container build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: true
+      - name: Scan filesystem, including the rendered Helm chart
+        env:
+          CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
+        run: |
+          trivy fs \
+            --scanners vuln,secret,misconfig \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --ignorefile .trivyignore.yaml \
+            --skip-files deploy/docker/Dockerfile.dockerignore \
+            --helm-set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef \
+            --format json \
+            --output "${CHANNELWATCH_TRIVY_REPORT}" \
+            .
+      - name: Prove Trivy scanned the Helm chart
+        env:
+          CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path(os.environ["CHANNELWATCH_TRIVY_REPORT"]).read_text(encoding="utf-8")
+          )
+          helm_targets = {
+              str(result.get("Target") or "")
+              for result in report.get("Results", [])
+              if result.get("Type") == "helm"
+          }
+          required = {
+              "deploy/helm/channelwatch/templates/deployment.yaml",
+              "deploy/helm/channelwatch/templates/secret.yaml",
+          }
+          missing = sorted(required - helm_targets)
+          if missing:
+              raise SystemExit(
+                  "Trivy did not scan required Helm targets: " + ", ".join(missing)
+              )
+          print(f"Trivy scanned {len(helm_targets)} Helm resources.")
+          PY

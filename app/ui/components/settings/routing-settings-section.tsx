@@ -10,7 +10,19 @@ import { cn } from "@/lib/utils"
 import { t } from "@/lib/i18n"
 import type { AppSettings } from "@/lib/types"
 
-export type RoutingState = Record<string, Record<string, Record<string, boolean>>>
+export type RoutingState = Record<string, Record<string, Record<string, boolean> | null> | null>
+
+export const ALL_ROUTING_DESTINATIONS = [
+  "pushover",
+  "discord",
+  "email",
+  "telegram",
+  "slack",
+  "gotify",
+  "matrix",
+  "custom",
+  "webhook",
+] as const
 
 interface EventColumn {
   key: string
@@ -48,16 +60,28 @@ function getAppriseDestChannels(): Array<{ key: string; label: string; settingKe
 }
 
 export function getRoutingValue(routing: RoutingState, dvrId: string, eventKey: string, dest: string): boolean {
-  return routing?.[dvrId]?.[eventKey]?.[dest] ?? true
+  if (!Object.prototype.hasOwnProperty.call(routing, dvrId)) return true
+  const explicitDvrRoute = routing[dvrId]
+  if (explicitDvrRoute === null || typeof explicitDvrRoute !== "object") return false
+  if (!Object.prototype.hasOwnProperty.call(explicitDvrRoute, eventKey)) return true
+  const explicitEventRoute = explicitDvrRoute[eventKey]
+  if (explicitEventRoute === null || typeof explicitEventRoute !== "object") return false
+  return typeof explicitEventRoute[dest] === "boolean" ? explicitEventRoute[dest] : false
 }
 
 export function setRoutingValue(routing: RoutingState, dvrId: string, eventKey: string, dest: string, value: boolean): RoutingState {
+  const explicitDvrRoute = routing[dvrId]
+  const explicitEventRoute = explicitDvrRoute?.[eventKey]
+  const completeDefaults = Object.fromEntries(
+    ALL_ROUTING_DESTINATIONS.map((destination) => [destination, getRoutingValue(routing, dvrId, eventKey, destination)]),
+  ) as Record<string, boolean>
   return {
     ...routing,
     [dvrId]: {
-      ...(routing[dvrId] ?? {}),
+      ...(explicitDvrRoute ?? {}),
       [eventKey]: {
-        ...(routing?.[dvrId]?.[eventKey] ?? {}),
+        ...completeDefaults,
+        ...(explicitEventRoute ?? {}),
         [dest]: value,
       },
     },

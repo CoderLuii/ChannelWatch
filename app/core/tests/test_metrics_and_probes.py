@@ -244,8 +244,7 @@ class TestHealthzReady:
         assert resp.status_code == 503
         assert resp.json()["status"] == "degraded"
 
-    def test_ready_dvr_entries_include_null_version_fields_when_unprobed(self, client):
-        self._clear_version_status_cache()
+    def test_ready_response_does_not_expose_dvr_details(self, client):
         healthy_summary = {
             "ready": True,
             "dvrs": [
@@ -262,108 +261,13 @@ class TestHealthzReady:
             ],
             "stale_threshold_seconds": 300,
         }
-        try:
-            with (
-                patch(
-                    "ui.backend.main._get_monitoring_health_summary",
-                    return_value=healthy_summary,
-                ),
-                patch(
-                    "ui.backend.main._dvr_http_client.get", new_callable=AsyncMock
-                ) as mock_get,
-            ):
-                resp = client.get("/healthz/ready")
-            assert resp.status_code == 200
-            dvr = resp.json()["dvrs"][0]
-            assert dvr["version"] is None
-            assert dvr["version_compatible"] is None
-            assert dvr["version_warning"] is None
-            mock_get.assert_not_called()
-        finally:
-            self._clear_version_status_cache()
-
-    def test_ready_dvr_entries_include_cached_version_status(self, client):
-        from ui.backend import main as ui_main
-
-        self._clear_version_status_cache()
-        healthy_summary = {
-            "ready": True,
-            "dvrs": [
-                {
-                    "id": "dvr_aaa11111",
-                    "name": "Living Room",
-                    "monitoring_status": "healthy",
-                    "freshness_status": "healthy",
-                    "connected": True,
-                    "reason": "Freshness updates are current",
-                    "last_freshness_at": "2026-01-01T00:00:00+00:00",
-                    "freshness_age_seconds": 12.0,
-                }
-            ],
-            "stale_threshold_seconds": 300,
-        }
-        try:
-            ui_main._cache_dvr_version_status("dvr_aaa11111", "2025.05.13")
-            with (
-                patch(
-                    "ui.backend.main._get_monitoring_health_summary",
-                    return_value=healthy_summary,
-                ),
-                patch(
-                    "ui.backend.main._dvr_http_client.get", new_callable=AsyncMock
-                ) as mock_get,
-            ):
-                resp = client.get("/healthz/ready")
-            assert resp.status_code == 200
-            dvr = resp.json()["dvrs"][0]
-            assert dvr["version"] == "2025.05.13"
-            assert dvr["version_compatible"] is True
-            assert dvr["version_warning"] is None
-            mock_get.assert_not_called()
-        finally:
-            self._clear_version_status_cache()
-
-    def test_ready_dvr_entries_include_cached_version_warning(self, client):
-        from ui.backend import main as ui_main
-
-        self._clear_version_status_cache()
-        degraded_summary = {
-            "ready": False,
-            "dvrs": [
-                {
-                    "id": "dvr_aaa11111",
-                    "name": "Living Room",
-                    "monitoring_status": "stale",
-                    "freshness_status": "stale",
-                    "connected": True,
-                    "reason": "No freshness update for 601s",
-                    "last_freshness_at": "2026-01-01T00:00:00+00:00",
-                    "freshness_age_seconds": 601.0,
-                }
-            ],
-            "stale_threshold_seconds": 300,
-        }
-        try:
-            ui_main._cache_dvr_version_status("dvr_aaa11111", "2023.01.01")
-            with (
-                patch(
-                    "ui.backend.main._get_monitoring_health_summary",
-                    return_value=degraded_summary,
-                ),
-                patch(
-                    "ui.backend.main._dvr_http_client.get", new_callable=AsyncMock
-                ) as mock_get,
-            ):
-                resp = client.get("/healthz/ready")
-            assert resp.status_code == 503
-            dvr = resp.json()["dvrs"][0]
-            assert dvr["version"] == "2023.01.01"
-            assert dvr["version_compatible"] is False
-            assert "below the tested range" in dvr["version_warning"]
-            assert "2024.01.01" in dvr["version_warning"]
-            mock_get.assert_not_called()
-        finally:
-            self._clear_version_status_cache()
+        with patch(
+            "ui.backend.main._get_monitoring_health_summary",
+            return_value=healthy_summary,
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ready", "ready": True}
 
 
 class TestMetricsPerDvrLabels:
@@ -939,7 +843,10 @@ class TestActiveRecordingsCount:
 
         assert health_resp.status_code == 200
         assert ready_resp.status_code == 200
-        assert calls == [mock_summary, mock_summary]
+        assert calls[0] is mock_summary
+        assert calls[1].__name__ == "load_settings"
+        assert calls[2] is mock_summary
+        assert len(calls) == 3
 
 
 class TestDvrHealthEnhancedFields:

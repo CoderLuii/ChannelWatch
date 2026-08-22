@@ -1,4 +1,7 @@
 import threading
+import warnings
+
+import pytest
 
 from core.helpers.job_info import JobInfoProvider
 
@@ -51,3 +54,21 @@ def test_get_job_by_id_refreshes_expired_cache_without_nested_lock_deadlock(
     job = _call_in_daemon_thread(lambda: provider.get_job_by_id("job-2"))
 
     assert job == {"id": "job-2", "name": "Movie"}
+
+
+def test_legacy_recording_provider_warns_only_when_instantiated():
+    with warnings.catch_warnings(record=True) as import_warnings:
+        warnings.simplefilter("always")
+        from core.helpers.recording_info import RecordingInfoProvider
+
+    assert import_warnings == []
+
+    with pytest.warns(
+        DeprecationWarning,
+        match="RecordingInfoProvider is deprecated, use JobInfoProvider instead",
+    ):
+        provider = RecordingInfoProvider(host="127.0.0.1", port=9)
+
+    assert isinstance(provider, JobInfoProvider)
+    assert provider.host == "127.0.0.1"
+    assert provider.port == 9

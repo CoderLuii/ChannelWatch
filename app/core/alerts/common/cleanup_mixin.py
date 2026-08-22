@@ -2,7 +2,7 @@
 
 import time
 import threading
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 
@@ -11,6 +11,9 @@ from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 
 class CleanupMixin:
     """Provides reusable cleanup operations for time-based data across components."""
+
+    _CLEANUP_POLL_SECONDS = 10.0
+    _CLEANUP_JOIN_TIMEOUT_SECONDS = 1.0
 
     def __init__(self):
         """Initializes the cleanup mixin with default configuration settings."""
@@ -21,8 +24,10 @@ class CleanupMixin:
             "auto_cleanup": False,
         }
 
-        self.cleanup_thread = None
+        self.cleanup_thread: Optional[threading.Thread] = None
         self.cleanup_running = False
+        self._cleanup_stop_event = threading.Event()
+        self._cleanup_lifecycle_lock = threading.Lock()
 
         self.initial_cleanup_done = False
         self.last_logged_cleanup = 0
@@ -35,41 +40,77 @@ class CleanupMixin:
         self, enabled: bool = True, interval: int = 3600, auto_cleanup: bool = False
     ) -> None:
         """Configures cleanup behavior with specified settings."""
-        self.cleanup_config["enabled"] = enabled
-        self.cleanup_config["interval"] = interval
-        self.cleanup_config["auto_cleanup"] = auto_cleanup
+        with self._cleanup_lifecycle_lock:
+            self.cleanup_config["enabled"] = enabled
+            self.cleanup_config["interval"] = interval
+            self.cleanup_config["auto_cleanup"] = auto_cleanup
 
-        if auto_cleanup and not self.cleanup_thread:
+            if not auto_cleanup or self._cleanup_stop_event.is_set():
+                return
+            if self.cleanup_thread is not None and self.cleanup_thread.is_alive():
+                return
+
             self.cleanup_running = True
             self.cleanup_thread = threading.Thread(
-                target=self._auto_cleanup_thread, daemon=True
+                target=self._auto_cleanup_thread,
+                daemon=True,
+                name=f"{self.__class__.__name__}-cleanup",
             )
             self.cleanup_thread.start()
 
-    def stop_cleanup(self) -> None:
-        """Stops the automatic cleanup thread if running."""
-        if self.cleanup_thread and self.cleanup_running:
+    def stop_cleanup(
+        self, join_timeout: float = _CLEANUP_JOIN_TIMEOUT_SECONDS
+    ) -> None:
+        """Terminally stop automatic cleanup and wait a bounded time for exit."""
+        with self._cleanup_lifecycle_lock:
+            self._cleanup_stop_event.set()
             self.cleanup_running = False
-            log("Auto-cleanup thread stopping...", LOG_VERBOSE)
+            cleanup_thread = self.cleanup_thread
+            if cleanup_thread is not None and cleanup_thread.is_alive():
+                log("Auto-cleanup thread stopping...", LOG_VERBOSE)
+
+        if (
+            cleanup_thread is not None
+            and cleanup_thread.is_alive()
+            and cleanup_thread is not threading.current_thread()
+        ):
+            cleanup_thread.join(timeout=max(0.0, join_timeout))
+            if cleanup_thread.is_alive():
+                log(
+                    "Auto-cleanup thread did not stop within the bounded timeout",
+                    LOG_STANDARD,
+                )
+            else:
+                log("Auto-cleanup thread stopped", LOG_VERBOSE)
+
+        if cleanup_thread is threading.current_thread():
+            self.cleanup_running = False
 
     # THREAD MANAGEMENT
 
     def _auto_cleanup_thread(self) -> None:
         import inspect
 
-        while self.cleanup_running:
-            try:
-                time.sleep(10)
-                current_time = time.time()
-                if (
-                    current_time - self.cleanup_config["last_cleanup"]
-                    >= self.cleanup_config["interval"]
-                ):
-                    self.cleanup_config["last_cleanup"] = current_time
-                    if not inspect.iscoroutinefunction(self.run_cleanup):
-                        self.run_cleanup()
-            except Exception as e:
-                log(f"Error in auto-cleanup thread: {e}", LOG_STANDARD)
+        try:
+            while not self._cleanup_stop_event.wait(self._CLEANUP_POLL_SECONDS):
+                try:
+                    current_time = time.time()
+                    if (
+                        current_time - self.cleanup_config["last_cleanup"]
+                        >= self.cleanup_config["interval"]
+                    ):
+                        self.cleanup_config["last_cleanup"] = current_time
+                        if (
+                            not self._cleanup_stop_event.is_set()
+                            and not inspect.iscoroutinefunction(self.run_cleanup)
+                        ):
+                            self.run_cleanup()
+                except Exception as e:
+                    log(f"Error in auto-cleanup thread: {e}", LOG_STANDARD)
+        finally:
+            with self._cleanup_lifecycle_lock:
+                if self.cleanup_thread is threading.current_thread():
+                    self.cleanup_running = False
 
     # CLEANUP OPERATIONS
 
@@ -143,14 +184,8 @@ class CleanupMixin:
 
     def start_auto_cleanup(self, interval: int = 60) -> None:
         """Starts a background thread for executing automatic cleanup operations."""
-        if (
-            hasattr(self, "_cleanup_thread")
-            and self._cleanup_thread
-            and self._cleanup_thread.is_alive()
-        ):
-            return
-
-        self._cleanup_thread = threading.Thread(
-            target=self._cleanup_loop, args=(interval,), daemon=True
+        self.configure_cleanup(
+            enabled=True,
+            interval=interval,
+            auto_cleanup=True,
         )
-        self._cleanup_thread.start()

@@ -34,8 +34,10 @@ def migrate_delivery_schema(engine: Engine) -> None:
         }
         for col_name, col_def in _NEW_COLUMNS:
             if col_name not in existing:
+                # Both values come only from the fixed module constants above;
+                # SQL parameters cannot represent SQLite identifiers or DDL.
                 conn.execute(
-                    text(
+                    text(  # nosemgrep
                         f"ALTER TABLE notification_delivery ADD COLUMN {col_name} {col_def}"
                     )
                 )

@@ -5,7 +5,7 @@ Only the YYYY.MM.DD prefix is used for compatibility comparisons.
 """
 
 MIN_TESTED_DVR_VERSION = "2024.01.01"
-MAX_TESTED_DVR_VERSION = "2026.04.20"
+MAX_TESTED_DVR_VERSION = "2026.08.07"
 
 
 def parse_dvr_version(version_str: str):

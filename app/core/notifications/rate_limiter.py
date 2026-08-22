@@ -55,6 +55,17 @@ class RateLimiter:
                 self._suppressed_count = 0
             return True
 
+    def reconfigure(self, max_notifications: int, window_seconds: int) -> None:
+        """Atomically update installation limits without replacing state."""
+        normalized_max = max(1, int(max_notifications))
+        normalized_window = max(1, int(window_seconds))
+        with self._lock:
+            self.max_notifications = normalized_max
+            self.window_seconds = normalized_window
+            cutoff = time.time() - normalized_window
+            while self._timestamps and self._timestamps[0] <= cutoff:
+                self._timestamps.popleft()
+
     @property
     def suppressed_count(self) -> int:
         """Number of notifications suppressed since the last successful send."""

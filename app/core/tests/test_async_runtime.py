@@ -14,6 +14,7 @@ class _RecordingAlertManager:
         self.alert_instances = {}
         self.load_count = 0
         self.save_count = 0
+        self.process_count = 0
 
     async def load_all_state(self):
         self.load_count += 1
@@ -25,6 +26,7 @@ class _RecordingAlertManager:
         return []
 
     async def process_event(self, event_type, event_data):
+        self.process_count += 1
         return False
 
 
@@ -71,6 +73,138 @@ class TestAsyncRuntimeStructure:
 
         assert loop_thread_id == caller_thread_id
         assert monitor.running is False
+
+    def test_event_monitor_abnormal_loop_return_clears_running_state(self):
+        from core.engine.event_monitor import EventMonitor
+
+        monitor = EventMonitor(host="127.0.0.1")
+        monitor._monitor_events_loop = MagicMock(return_value=None)
+
+        monitor.start_monitoring()
+
+        monitor._monitor_events_loop.assert_called_once_with()
+        assert monitor.running is False
+
+    def test_event_monitor_stop_before_start_is_sticky(self):
+        from core.engine.event_monitor import EventMonitor
+
+        monitor = EventMonitor(host="127.0.0.1")
+        monitor._monitor_events_loop = MagicMock()
+
+        monitor.stop_monitoring()
+        monitor.start_monitoring()
+
+        monitor._monitor_events_loop.assert_not_called()
+        assert monitor._stop_requested is True
+        assert monitor.running is False
+
+    def test_event_monitor_start_before_stop_exits_worker(self):
+        from core.engine.event_monitor import EventMonitor
+
+        monitor = EventMonitor(host="127.0.0.1")
+        loop_entered = threading.Event()
+
+        def fake_loop():
+            loop_entered.set()
+            while monitor.running:
+                time.sleep(0.001)
+
+        monitor._monitor_events_loop = fake_loop
+        worker = threading.Thread(target=monitor.start_monitoring)
+        worker.start()
+        assert loop_entered.wait(timeout=1.0)
+
+        monitor.stop_monitoring()
+        worker.join(timeout=1.0)
+
+        assert worker.is_alive() is False
+        assert monitor._stop_requested is True
+        assert monitor.running is False
+
+    def test_event_monitor_repeated_stop_closes_active_resources_once(self):
+        from core.engine.event_monitor import EventMonitor
+
+        class FakeAsyncResource:
+            def __init__(self):
+                self.close_count = 0
+
+            async def aclose(self):
+                self.close_count += 1
+
+        async def run():
+            monitor = EventMonitor(host="127.0.0.1")
+            response = FakeAsyncResource()
+            client = FakeAsyncResource()
+            monitor.running = True
+            monitor._monitor_loop = asyncio.get_running_loop()
+            monitor._active_response = cast(Any, response)
+            monitor._active_client = cast(Any, client)
+
+            monitor.stop_monitoring()
+            monitor.stop_monitoring()
+            await asyncio.sleep(0.01)
+
+            assert monitor._stop_requested is True
+            assert monitor.running is False
+            assert response.close_count == 1
+            assert client.close_count == 1
+
+        asyncio.run(run())
+
+    def test_validation_probe_marks_fresh_without_dispatching_event(self):
+        from core.engine.event_monitor import EventMonitor
+
+        alert_manager = MagicMock()
+        monitor = EventMonitor(
+            host="127.0.0.1",
+            alert_manager=alert_manager,
+            validation_only=True,
+        )
+
+        asyncio.run(monitor._process_event_line('{"Type":"watching"}'))
+
+        assert monitor.last_freshness_source == "event"
+        assert monitor.last_freshness_at > 0
+        alert_manager.process_event.assert_not_called()
+
+    def test_validation_probe_sse_lifecycle_never_loads_processes_or_saves_state(
+        self, mock_dvr_cluster
+    ):
+        from core.engine.event_monitor import EventMonitor
+
+        dvr = mock_dvr_cluster(count=1)[0]
+        alert_manager = _RecordingAlertManager()
+        monitor = EventMonitor(
+            dvr=dvr,
+            alert_manager=alert_manager,
+            validation_only=True,
+        )
+        thread = threading.Thread(target=monitor.start_monitoring, daemon=True)
+
+        try:
+            thread.start()
+            deadline = time.monotonic() + 2.0
+            while monitor.last_freshness_at <= 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert monitor.last_freshness_at > 0
+
+            initial_events = monitor.stats["total_events"]
+            dvr.inject_event("watching", name="natural-event", value="active")
+            deadline = time.monotonic() + 2.0
+            while (
+                monitor.stats["total_events"] <= initial_events
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            assert monitor.stats["total_events"] == initial_events + 1
+        finally:
+            monitor.stop_monitoring()
+            thread.join(timeout=2.0)
+
+        assert thread.is_alive() is False
+        assert alert_manager.load_count == 0
+        assert alert_manager.process_count == 0
+        assert alert_manager.save_count == 0
 
     def test_event_monitor_stop_closes_active_sse_resources(self):
         from core.engine.event_monitor import EventMonitor

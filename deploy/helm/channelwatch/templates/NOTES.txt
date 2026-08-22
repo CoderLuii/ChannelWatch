@@ -2,7 +2,7 @@ Thank you for installing ChannelWatch.
 
 ChannelWatch is deployed as a single replica only. Do not scale this release above one pod: the application persists shared state under /config and does not support concurrent writers.
 
-Access the UI after the pod becomes Ready:
+Access the UI after the pod starts:
 
   kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}
   kubectl port-forward svc/{{ include "channelwatch.fullname" . }} 8501:{{ .Values.service.port }} -n {{ .Release.Namespace }}
@@ -10,6 +10,8 @@ Access the UI after the pod becomes Ready:
 Then open:
 
   http://127.0.0.1:8501
+
+The pod remains NotReady while no DVR is configured or an enabled DVR monitor is degraded. The single-replica Service publishes that pod address by default so the setup and diagnostics UI stays reachable; pod readiness remains available as a monitoring signal.
 {{- if .Values.ingress.enabled }}
 
 Or access via Ingress at:
@@ -29,6 +31,7 @@ PVC details:
 
 Secret-backed values:
 
+  - Set either secretConfig.existingSecret or the chart-managed secretConfig fields. The selected Secret must contain CHANNELWATCH_SECRET_STORAGE_KEY (at least 32 characters); the Pod fails closed when that key is absent.
   - secretConfig.apiKey is exposed to the container as CW_API_KEY; the entrypoint seeds it during the first /config/settings.json bootstrap.
   - secretConfig.adminUser/adminPass are exposed as CW_ADMIN_USER/CW_ADMIN_PASS; the UI backend bootstraps the first RBAC admin when RBAC is enabled and no users exist yet.
 

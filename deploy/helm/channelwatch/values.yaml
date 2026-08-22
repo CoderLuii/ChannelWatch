@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   repository: coderluii/channelwatch
-  tag: "0.9.15"
+  tag: "0.9.16"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -13,6 +13,10 @@ fullnameOverride: ""
 service:
   type: ClusterIP
   port: 8501
+  # Preserve UI/setup access while monitoring readiness is degraded. This chart
+  # supports one replica only, so readiness remains a status signal rather than
+  # a traffic-shifting mechanism.
+  publishNotReadyAddresses: true
 
 ingress:
   enabled: false
@@ -67,6 +71,8 @@ config:
   pgid: "1000"
   logLevel: "1"
   disableAuth: "false"
+  # Comma-separated exact proxy IPs/CIDRs allowed to supply forwarded headers.
+  trustedProxies: ""
   alertChannelWatching: "true"
   alertVodWatching: "true"
   alertDiskSpace: "true"
@@ -76,6 +82,11 @@ config:
   dsAlertCooldown: "3600"
 
 secretConfig:
+  # Use either an existing Secret or the chart-managed values below, not both.
+  # An existing Secret must contain CHANNELWATCH_SECRET_STORAGE_KEY.
+  existingSecret: ""
+  # Required in managed mode. Use a random value with at least 32 characters.
+  secretStorageKey: ""
   apiKey: ""
   adminUser: ""
   adminPass: ""

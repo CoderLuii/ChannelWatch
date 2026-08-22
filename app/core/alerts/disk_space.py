@@ -1,12 +1,11 @@
 """Disk space monitoring alert implementation for tracking DVR storage capacity."""
 
-import json
 import time
 import threading
 from typing import Dict, Any, Optional
 import random
-from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+
+import httpx
 
 from .base import BaseAlert
 from ..helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
@@ -120,6 +119,8 @@ class DiskSpaceAlert(BaseAlert):
 
         self.monitoring_thread = None
         self.running = False
+        self._shutdown_event = threading.Event()
+        self._lifecycle_lock = threading.RLock()
         self.previous_free_space = None
         self.previous_percentage = None
         self.startup_complete = False
@@ -209,28 +210,54 @@ class DiskSpaceAlert(BaseAlert):
         """Handles an event from the event stream."""
         return False
 
-    def start_monitoring(self):
-        """Start the disk space monitoring thread."""
-        if not self.running:
+    def start_monitoring(self) -> bool:
+        """Start monitoring unless this alert instance was permanently stopped."""
+        with self._lifecycle_lock:
+            if self._shutdown_event.is_set():
+                return False
+            if self.monitoring_thread is not None and self.monitoring_thread.is_alive():
+                self.running = True
+                return False
             if self.start_monitoring_time is None:
                 self.start_monitoring_time = time.time()
             self.running = True
-            self.monitoring_thread = threading.Thread(
+            monitoring_thread = threading.Thread(
                 target=self._monitoring_loop, daemon=True
             )
-            self.monitoring_thread.start()
+            self.monitoring_thread = monitoring_thread
+            try:
+                monitoring_thread.start()
+            except Exception:
+                self.monitoring_thread = None
+                self.running = False
+                raise
+            return True
 
     def stop_monitoring(self):
-        """Stops the disk space monitoring thread."""
-        was_running = self.running
-        self.running = False
+        """Permanently stop this instance and all of its recovery machinery."""
+        self._shutdown_event.set()
+        with self._lifecycle_lock:
+            was_running = self.running
+            self.running = False
+            monitoring_thread = self.monitoring_thread
+            health_checker_thread = self.health_checker_thread
 
-        if self.monitoring_thread:
+        current_thread = threading.current_thread()
+        for owned_thread in (monitoring_thread, health_checker_thread):
+            if owned_thread is None or owned_thread is current_thread:
+                continue
             try:
-                self.monitoring_thread.join(timeout=1.0)
+                owned_thread.join(timeout=1.0)
             except Exception:
                 pass
-            self.monitoring_thread = None
+
+        with self._lifecycle_lock:
+            if monitoring_thread is not None and not monitoring_thread.is_alive():
+                if self.monitoring_thread is monitoring_thread:
+                    self.monitoring_thread = None
+            if health_checker_thread is not None and not health_checker_thread.is_alive():
+                if self.health_checker_thread is health_checker_thread:
+                    self.health_checker_thread = None
 
         if was_running and not self.is_test_mode:
             log("Disk space monitoring stopped", level=LOG_STANDARD)
@@ -244,80 +271,95 @@ class DiskSpaceAlert(BaseAlert):
         """Main monitoring loop that runs in a separate thread."""
         consecutive_errors = 0
         max_consecutive_errors = 5
+        current_thread = threading.current_thread()
 
-        while self.running:
-            try:
-                jitter = random.uniform(0, 0.5)
+        try:
+            while self.running and not self._shutdown_event.is_set():
+                try:
+                    jitter = random.uniform(0, 0.5)
 
-                self._check_disk_space()
-                consecutive_errors = 0
+                    self._check_disk_space()
+                    consecutive_errors = 0
 
-                sleep_duration = self._get_next_check_delay(time.time(), jitter)
-                time.sleep(sleep_duration)
+                    sleep_duration = self._get_next_check_delay(time.time(), jitter)
+                    if self._shutdown_event.wait(sleep_duration):
+                        break
 
-            except Exception as e:
-                consecutive_errors += 1
-                log(f"Error in disk space monitoring: {e}", level=LOG_STANDARD)
+                except Exception as e:
+                    consecutive_errors += 1
+                    log(f"Error in disk space monitoring: {e}", level=LOG_STANDARD)
 
-                backoff_time = min(30, 2**consecutive_errors)
-                time.sleep(backoff_time)
+                    backoff_time = min(30, 2**consecutive_errors)
+                    if self._shutdown_event.wait(backoff_time):
+                        break
 
-                if consecutive_errors >= max_consecutive_errors:
-                    log(
-                        "Too many consecutive errors in disk space monitoring, but continuing to retry",
-                        level=LOG_VERBOSE,
-                    )
-
-        if not self.is_test_mode:
-            log("Disk space monitoring recovering (60s delay)", level=LOG_VERBOSE)
-            recovery_thread = threading.Thread(
-                target=self._attempt_monitoring_recovery, daemon=True
-            )
-            recovery_thread.start()
+                    if consecutive_errors >= max_consecutive_errors:
+                        log(
+                            "Too many consecutive errors in disk space monitoring, but continuing to retry",
+                            level=LOG_VERBOSE,
+                        )
+        finally:
+            with self._lifecycle_lock:
+                if self.monitoring_thread is current_thread:
+                    self.running = False
 
     def _attempt_monitoring_recovery(self):
-        """Attempts to recover disk space monitoring after failure."""
-        recovery_delay = 60
-        time.sleep(recovery_delay)
-
-        if not self.running and not self.is_test_mode:
-            self.start_monitoring()
+        """Recover a non-terminal unexpected stop after an interruptible delay."""
+        if self._shutdown_event.wait(60):
+            return
+        self.start_monitoring()
 
     def _start_health_checker(self):
         """Starts the health checker thread to ensure monitoring stays active."""
-        if (
-            self.health_checker_thread is not None
-            and self.health_checker_thread.is_alive()
-        ):
-            return
+        with self._lifecycle_lock:
+            if self._shutdown_event.is_set():
+                return False
+            if (
+                self.health_checker_thread is not None
+                and self.health_checker_thread.is_alive()
+            ):
+                return False
 
-        self.health_checker_thread = threading.Thread(
-            target=self._health_checker_loop, daemon=True
-        )
-        self.health_checker_thread.start()
+            health_checker_thread = threading.Thread(
+                target=self._health_checker_loop, daemon=True
+            )
+            self.health_checker_thread = health_checker_thread
+            try:
+                health_checker_thread.start()
+            except Exception:
+                self.health_checker_thread = None
+                raise
+            return True
 
     def _health_checker_loop(self):
         """Monitors the health of disk space checking and restarts if necessary."""
-        while True:
-            time.sleep(self.health_check_interval)
-
+        while not self._shutdown_event.wait(self.health_check_interval):
             try:
                 current_time = time.time()
-
-                if (
-                    not self.running
-                    or self.monitoring_thread is None
-                    or not self.monitoring_thread.is_alive()
-                    or (
-                        self.last_successful_check > 0
-                        and current_time - self.last_successful_check
-                        > self.health_check_interval * 3
+                with self._lifecycle_lock:
+                    monitoring_thread = self.monitoring_thread
+                    thread_alive = bool(
+                        monitoring_thread is not None
+                        and monitoring_thread.is_alive()
                     )
-                ):
+                    running = self.running
+
+                if not running or not thread_alive:
                     log("Restarting disk space monitoring", level=LOG_VERBOSE)
-                    self.stop_monitoring()
-                    time.sleep(5)
                     self.start_monitoring()
+                elif (
+                    self.last_successful_check > 0
+                    and current_time - self.last_successful_check
+                    > self.health_check_interval * 3
+                ):
+                    # The monitoring loop already retries every failure. Never
+                    # start a duplicate poller merely because the DVR remains
+                    # unavailable or a request is still in flight.
+                    log(
+                        "Disk space monitoring has no recent successful check; "
+                        "the existing poller is still retrying",
+                        level=LOG_VERBOSE,
+                    )
             except Exception as e:
                 log(
                     f"Error in disk space monitoring health check: {e}",
@@ -328,18 +370,15 @@ class DiskSpaceAlert(BaseAlert):
     def _get_disk_info(self) -> Optional[Dict[str, Any]]:
         """Fetches disk space information from the Channels DVR API."""
         try:
-            with urlopen(self.api_url, timeout=3) as response:
-                status_code = getattr(response, "status", 200)
-                if status_code != 200:
-                    log(
-                        f"Failed to get disk info: HTTP {status_code}",
-                        level=LOG_STANDARD,
-                    )
-                    return None
+            response = httpx.get(self.api_url, timeout=3)
+            if response.status_code != 200:
+                log(
+                    f"Failed to get disk info: HTTP {response.status_code}",
+                    level=LOG_STANDARD,
+                )
+                return None
 
-                response_body = response.read().decode("utf-8")
-
-            data = json.loads(response_body)
+            data = response.json()
 
             if "disk" not in data:
                 log("Disk info not found in API response", level=LOG_VERBOSE)
@@ -347,16 +386,13 @@ class DiskSpaceAlert(BaseAlert):
 
             data["disk"]["path"] = data.get("path", "/shares/DVR")
             return data["disk"]
-        except TimeoutError:
+        except httpx.TimeoutException:
             log(
                 "Connection timeout reaching Channels DVR API for disk info",
                 level=LOG_STANDARD,
             )
             return None
-        except HTTPError as e:
-            log(f"Failed to get disk info: HTTP {e.code}", level=LOG_STANDARD)
-            return None
-        except URLError:
+        except httpx.RequestError:
             log(
                 "Connection error reaching Channels DVR API for disk info",
                 level=LOG_STANDARD,
@@ -833,6 +869,7 @@ class DiskSpaceAlert(BaseAlert):
     def __del__(self):
         """Cleans up when the object is deleted."""
         try:
+            self._shutdown_event.set()
             self.running = False
         except Exception:
             pass

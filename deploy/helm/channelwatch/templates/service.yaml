@@ -6,6 +6,7 @@ metadata:
     {{- include "channelwatch.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
+  publishNotReadyAddresses: {{ .Values.service.publishNotReadyAddresses }}
   selector:
     {{- include "channelwatch.selectorLabels" . | nindent 4 }}
   ports:

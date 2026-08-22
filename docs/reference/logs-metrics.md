@@ -63,7 +63,6 @@ The current implementation does not instantiate `prometheus_client.Counter`, `Ga
 | `channelwatch_dvr_connected` | gauge | `dvr_id`, `dvr_name`, `host`, `port` | `1` when the DVR `/status` request succeeds during system info collection, otherwise `0`. |
 | `channelwatch_dvr_version_info` | gauge | `dvr_id`, `dvr_name`, `version`, `compatible` | DVR version metadata. The value is always `1`. The `compatible` label is `1`, `0`, or `unknown`. This metric is emitted only for DVRs with a version string. |
 
-
 ## Activity history
 
 Activity history is the user visible timeline used by Recent Activity and Watch History.

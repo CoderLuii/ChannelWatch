@@ -12,7 +12,6 @@ ChannelWatch does not expose the full Apprise catalog. Providers not listed here
 apprise>=1.11.0
 ```
 
-
 ## Supported destination keys
 
 | Destination key | Setting | Scheme used by ChannelWatch | Notes |

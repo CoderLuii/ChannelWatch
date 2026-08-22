@@ -21,11 +21,17 @@ Each bundle must match the current:
 
 If those checks pass, the image-stable launcher can run the active bundle instead of the image copy of the app.
 
+Every activation receives a unique generation identifier and a bounded validation deadline. The core and UI must each report a healthy startup for that exact generation before ChannelWatch marks the update successful. A stale readiness marker from an older process cannot validate a newer bundle. If either component fails or the deadline expires, the image-owned launcher restores the prior runtime selection and requests one coordinated container restart.
+
 ## Image-required updates
 
 An update is image-required when it needs something the current container image cannot provide safely. Examples include dependency changes, base image updates, OS package changes, Supervisor changes, persistent schema changes, and deployment chart assumptions.
 
 Image-required releases stay on the normal Docker, Unraid, Compose, or Helm update path.
+
+This boundary keeps the updater's authority narrow. The in-app path can select application code that the installed image is already capable of running, but it cannot change the interpreter or operating-system layer beneath that code. When a release crosses that boundary, ChannelWatch reports the required container update instead of attempting a partial installation.
+
+The distinction also makes recovery predictable across supported deployment platforms. App-bundle recovery belongs to the image-owned launcher and its durable activation record, while image recovery remains the responsibility of Docker, Compose, Unraid, or Helm. Operators therefore retain the rollback mechanism provided by their deployment system without granting ChannelWatch access to the host Docker socket or cluster credentials.
 
 ## Startup precedence
 

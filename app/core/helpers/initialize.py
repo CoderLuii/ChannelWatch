@@ -1,6 +1,7 @@
 """Component initialization module for ChannelWatch system services."""
 
 import httpx
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +9,7 @@ from .logging import log
 from .dvr_connection import build_dvr_base_url
 from ..engine.event_monitor import EventMonitor
 from ..notifications.notification import NotificationManager
+from ..notifications.rate_limiter import RateLimiter
 from ..notifications.webhook import WebhookManager
 from ..engine.alert_manager import AlertManager
 from .config import CoreSettings
@@ -42,15 +44,50 @@ def check_server_connectivity(host: str, port: int) -> bool:
 
 
 # NOTIFICATIONS
+_shared_rate_limiter: Optional[RateLimiter] = None
+_shared_rate_limiters_lock = threading.Lock()
+
+
+def _get_shared_rate_limiter(rate_limit: int, rate_window: int) -> RateLimiter:
+    """Return the one process-wide limiter and atomically reconfigure it."""
+    global _shared_rate_limiter
+    normalized_limit = int(rate_limit)
+    normalized_window = int(rate_window)
+    with _shared_rate_limiters_lock:
+        if _shared_rate_limiter is None:
+            _shared_rate_limiter = RateLimiter(
+                max_notifications=normalized_limit,
+                window_seconds=normalized_window,
+            )
+        else:
+            _shared_rate_limiter.reconfigure(normalized_limit, normalized_window)
+        return _shared_rate_limiter
+
+
 def initialize_notifications(
     settings: CoreSettings,
     test_mode=False,
     plugin_dir: Optional[Path] = None,
+    installation_rate_limit: Optional[int] = None,
+    installation_rate_window: Optional[int] = None,
 ) -> Optional[NotificationManager]:
     """Configure and activate notification providers based on user settings."""
+    authoritative_limit = (
+        settings.global_rate_limit
+        if installation_rate_limit is None
+        else installation_rate_limit
+    )
+    authoritative_window = (
+        settings.global_rate_window
+        if installation_rate_window is None
+        else installation_rate_window
+    )
     notification_manager = NotificationManager(
-        rate_limit=settings.global_rate_limit,
-        rate_window=settings.global_rate_window,
+        rate_limit=authoritative_limit,
+        rate_window=authoritative_window,
+        rate_limiter=_get_shared_rate_limiter(
+            authoritative_limit, authoritative_window
+        ),
     )
     configured_providers = []
 

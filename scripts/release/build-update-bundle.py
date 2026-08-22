@@ -25,6 +25,12 @@ RUNTIME_ABI = "channelwatch-runtime-v1"
 SETTINGS_SCHEMA_VERSION = 7
 DEFAULT_KEY_ID = "channelwatch-update-ed25519-2026-06"
 EXPORTER = ROOT / "scripts" / "release" / "export-site-release-metadata.py"
+COPYLEFT_LICENSE_FETCHER = ROOT / "scripts" / "release" / "copyleft_licenses.py"
+LEGAL_RELEASE_FILES = {
+    "LICENSE": "LICENSE",
+    "docs/legal/NOTICE": "NOTICE",
+    "docs/legal/THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md",
+}
 BLOCKED_DIRS = {
     ".git",
     ".github",
@@ -110,6 +116,29 @@ def write_zip(source: Path, destination: Path) -> None:
             zf.write(path, rel)
 
 
+def copy_release_legal_files(destination: Path) -> None:
+    for source_name, target_name in LEGAL_RELEASE_FILES.items():
+        source = ROOT / source_name
+        if not source.is_file():
+            raise ValueError(f"Required release legal file is missing: {source_name}")
+        shutil.copy2(source, destination / target_name)
+
+
+def copy_copyleft_release_files(destination: Path) -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            str(COPYLEFT_LICENSE_FETCHER),
+            "--output-dir",
+            str(destination / "licenses" / "copyleft"),
+            "--source-map",
+            str(ROOT / "docs" / "legal" / "CORRESPONDING_SOURCE.md"),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 def canonical_payload_bytes(payload: dict) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -155,6 +184,8 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as temp:
         staging = Path(temp) / "bundle"
         staging.mkdir()
+        copy_release_legal_files(staging)
+        copy_copyleft_release_files(staging)
         copy_tree(ROOT / "app" / "core", staging / "core")
         copy_tree(ROOT / "app" / "ui" / "backend", staging / "ui" / "backend")
 

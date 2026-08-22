@@ -2,10 +2,12 @@
 Program information provider for Channels DVR XMLTV API integration.
 """
 
-import httpx
+import io
 import xml.etree.ElementTree as ET
 import time
 import threading
+
+import httpx
 import pytz
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -13,6 +15,11 @@ from typing import Dict, Any, Optional
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
 from .type_utils import ensure_str
 from .dvr_connection import build_dvr_base_url
+
+
+MAX_XMLTV_RESPONSE_BYTES = 64 * 1024 * 1024
+MAX_XMLTV_ELEMENTS = 500_000
+MAX_XMLTV_DEPTH = 16
 
 
 # PROGRAM INFO
@@ -46,86 +53,140 @@ class ProgramInfoProvider:
         self.cache_lock = threading.Lock()
 
     # DATA FETCHING
-    def _fetch_xmltv_data(self, duration: int = 86400) -> Optional[str]:
-        """Retrieves XMLTV program guide data from Channels DVR API."""
+    def _fetch_xmltv_data(self, duration: int = 86400) -> Optional[bytes]:
+        """Retrieve bounded XMLTV program guide data from Channels DVR."""
         try:
             url = f"{self.base_url}/devices/ANY/guide/xmltv"
-            response = httpx.get(url, timeout=30)
+            with httpx.stream("GET", url, timeout=30) as response:
+                if response.status_code != 200:
+                    log(
+                        f"Failed to fetch XMLTV data: HTTP {response.status_code}",
+                        level=LOG_STANDARD,
+                    )
+                    return None
 
-            if response.status_code == 200:
-                return response.text
-            else:
-                log(
-                    f"Failed to fetch XMLTV data: HTTP {response.status_code}",
-                    level=LOG_STANDARD,
-                )
-                return None
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_bytes = int(content_length)
+                    except ValueError:
+                        declared_bytes = -1
+                    if declared_bytes > MAX_XMLTV_RESPONSE_BYTES:
+                        log(
+                            "Rejected XMLTV data because the declared response size "
+                            f"exceeds {MAX_XMLTV_RESPONSE_BYTES} bytes",
+                            level=LOG_STANDARD,
+                        )
+                        return None
+
+                chunks: list[bytes] = []
+                total_bytes = 0
+                for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_XMLTV_RESPONSE_BYTES:
+                        log(
+                            "Rejected XMLTV data because the streamed response size "
+                            f"exceeds {MAX_XMLTV_RESPONSE_BYTES} bytes",
+                            level=LOG_STANDARD,
+                        )
+                        return None
+                    chunks.append(chunk)
+                return b"".join(chunks)
         except Exception as e:
             log(f"Error fetching XMLTV data: {e}", level=LOG_STANDARD)
             return None
 
-    def _parse_xmltv_data(self, xml_data: str) -> bool:
-        """Processes XMLTV data and updates program and channel caches."""
+    def _parse_xmltv_data(self, xml_data: str | bytes) -> bool:
+        """Stream a bounded XMLTV document into replacement guide caches."""
+        next_program_cache: dict[str, list[dict[str, Any]]] = {}
+        next_channel_map: dict[str, str] = {}
+        depth = 0
+        element_count = 0
+        root_element: Optional[ET.Element] = None
+
         try:
-            root = ET.fromstring(xml_data)
-
-            channels_count = 0
-            for channel in root.findall("./channel"):
-                channel_id = channel.get("id")
-                lcn = channel.find("lcn")
-
-                if lcn is not None and lcn.text:
-                    self.channel_map[lcn.text] = channel_id
-                    channels_count += 1
-
-            programs_count = 0
-            time_conversions = 0
-
-            for program in root.findall("./programme"):
-                channel_id = program.get("channel")
-                start_attr = program.get("start")
-                start_time = (
-                    self._parse_xmltv_time(ensure_str(start_attr))
-                    if start_attr
-                    else None
-                )
-                if start_time:
-                    time_conversions += 1
-
-                stop_attr = program.get("stop")
-                stop_time = (
-                    self._parse_xmltv_time(ensure_str(stop_attr)) if stop_attr else None
-                )
-                if stop_time:
-                    time_conversions += 1
-
-                if not channel_id or not start_time or not stop_time:
+            source = (
+                io.BytesIO(xml_data)
+                if isinstance(xml_data, bytes)
+                else io.StringIO(xml_data)
+            )
+            for event, element in ET.iterparse(source, events=("start", "end")):
+                if event == "start":
+                    depth += 1
+                    element_count += 1
+                    if root_element is None:
+                        root_element = element
+                    if depth > MAX_XMLTV_DEPTH:
+                        raise ValueError(
+                            f"XMLTV nesting exceeds the limit of {MAX_XMLTV_DEPTH}"
+                        )
+                    if element_count > MAX_XMLTV_ELEMENTS:
+                        raise ValueError(
+                            f"XMLTV element count exceeds the limit of {MAX_XMLTV_ELEMENTS}"
+                        )
                     continue
 
-                title_elem = program.find("title")
-                desc_elem = program.find("desc")
-                icon_elem = program.find("icon")
+                tag = element.tag.rsplit("}", 1)[-1]
+                if depth == 2 and tag == "channel":
+                    channel_id = element.get("id")
+                    lcn = next(
+                        (
+                            child
+                            for child in element
+                            if child.tag.rsplit("}", 1)[-1] == "lcn"
+                        ),
+                        None,
+                    )
+                    if channel_id and lcn is not None and lcn.text:
+                        next_channel_map[lcn.text] = channel_id
+                elif depth == 2 and tag == "programme":
+                    channel_id = element.get("channel")
+                    start_attr = element.get("start")
+                    stop_attr = element.get("stop")
+                    start_time = (
+                        self._parse_xmltv_time(ensure_str(start_attr))
+                        if start_attr
+                        else None
+                    )
+                    stop_time = (
+                        self._parse_xmltv_time(ensure_str(stop_attr))
+                        if stop_attr
+                        else None
+                    )
+                    if channel_id and start_time and stop_time:
+                        children = {
+                            child.tag.rsplit("}", 1)[-1]: child for child in element
+                        }
+                        title = children.get("title")
+                        description = children.get("desc")
+                        icon = children.get("icon")
+                        next_program_cache.setdefault(channel_id, []).append(
+                            {
+                                "channel_id": channel_id,
+                                "start_time": start_time,
+                                "stop_time": stop_time,
+                                "title": (
+                                    title.text
+                                    if title is not None and title.text
+                                    else "Unknown Program"
+                                ),
+                                "description": (
+                                    description.text
+                                    if description is not None and description.text
+                                    else ""
+                                ),
+                                "icon_url": icon.get("src") if icon is not None else None,
+                            }
+                        )
 
-                program_info = {
-                    "channel_id": channel_id,
-                    "start_time": start_time,
-                    "stop_time": stop_time,
-                    "title": title_elem.text
-                    if title_elem is not None
-                    else "Unknown Program",
-                    "description": desc_elem.text if desc_elem is not None else "",
-                    "icon_url": icon_elem.get("src") if icon_elem is not None else None,
-                }
+                if depth == 2:
+                    element.clear()
+                    if root_element is not None:
+                        root_element.clear()
+                depth -= 1
 
-                if channel_id not in self.program_cache:
-                    self.program_cache[channel_id] = []
-
-                self.program_cache[channel_id].append(program_info)
-                programs_count += 1
-
-            if time_conversions > 0:
-                pass
-
+            self.program_cache = next_program_cache
+            self.channel_map = next_channel_map
             return True
         except Exception as e:
             log(f"Error parsing XMLTV data: {e}", level=LOG_STANDARD)
@@ -161,9 +222,6 @@ class ProgramInfoProvider:
             xml_data = self._fetch_xmltv_data()
             if not xml_data:
                 return 0
-
-            self.program_cache = {}
-            self.channel_map = {}
 
             success = self._parse_xmltv_data(xml_data)
 

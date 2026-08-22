@@ -46,7 +46,7 @@ def _load_single_plugin(
     notification_manager,
     registered: List[str],
 ) -> None:
-    path_hash = hashlib.md5(str(path).encode()).hexdigest()[:8]
+    path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:8]
     module_name = f"channelwatch_plugin_{path.stem}_{path_hash}"
 
     try:

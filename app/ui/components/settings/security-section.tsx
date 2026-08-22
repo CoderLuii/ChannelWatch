@@ -352,6 +352,7 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
                       const result = await completeInitialSetup("rbac", setupUsername.trim(), setupPassword)
                       setCredentialSuccess(result.message)
                       setSetupPassword("")
+                      window.dispatchEvent(new CustomEvent("channelwatch-auth-state-changed"))
                       const [nextStatus, nextWhoAmI, nextSetup] = await Promise.all([
                         fetchSecurityStatus(),
                         fetchWhoAmI(),

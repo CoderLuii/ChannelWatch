@@ -4,6 +4,8 @@ import types
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from core.notifications.notification import (
     NotificationManager,
     _resolve_routing,
@@ -37,36 +39,45 @@ class TestResolveRoutingDefaults:
         result = _resolve_routing("dvr_abc", "channel", config)
         assert all(result.values())
 
-    def test_malformed_nested_routing_values_return_all_enabled(self):
+    def test_explicit_malformed_routing_values_fail_closed(self):
         configs: list[Any] = [
             {"dvr_abc": "not-a-map"},
+            {"dvr_abc": None},
             {"dvr_abc": {"channel": "not-a-map"}},
+            {"dvr_abc": {"channel": None}},
             "not-a-map",
         ]
         for config in configs:
             result = _resolve_routing("dvr_abc", "channel", config)
-            assert result == {k: True for k in ALL_DEST_KEYS}
+            assert result == {k: False for k in ALL_DEST_KEYS}
+
+    def test_malformed_explicit_destination_value_fails_closed(self):
+        result = _resolve_routing(
+            "dvr_abc", "channel", {"dvr_abc": {"channel": {"discord": "false"}}}
+        )
+        assert result["discord"] is False
+        assert result["pushover"] is False
 
 
 class TestResolveRoutingPerChannel:
-    def test_discord_disabled_others_enabled(self):
+    def test_partial_explicit_route_fails_closed_for_omitted_destinations(self):
         config = {"dvr_1": {"channel": {"discord": False}}}
         result = _resolve_routing("dvr_1", "channel", config)
         assert result["discord"] is False
-        assert result["pushover"] is True
-        assert result["webhook"] is True
+        assert result["pushover"] is False
+        assert result["webhook"] is False
 
     def test_pushover_disabled_discord_enabled(self):
-        config = {"dvr_1": {"vod": {"pushover": False}}}
+        config = {"dvr_1": {"vod": {"pushover": False, "discord": True}}}
         result = _resolve_routing("dvr_1", "vod", config)
         assert result["pushover"] is False
         assert result["discord"] is True
 
-    def test_webhook_disabled_apprise_channels_enabled(self):
+    def test_webhook_only_partial_route_does_not_enable_apprise(self):
         config = {"dvr_1": {"disk": {"webhook": False}}}
         result = _resolve_routing("dvr_1", "disk", config)
         assert result["webhook"] is False
-        assert all(result[k] for k in APPRISE_DEST_KEYS)
+        assert all(not result[k] for k in APPRISE_DEST_KEYS)
 
     def test_multiple_channels_disabled(self):
         config = {
@@ -78,27 +89,27 @@ class TestResolveRoutingPerChannel:
         assert result["pushover"] is False
         assert result["discord"] is False
         assert result["telegram"] is False
-        assert result["slack"] is True
-        assert result["webhook"] is True
+        assert result["slack"] is False
+        assert result["webhook"] is False
 
     def test_all_channels_disabled(self):
         config = {"dvr_1": {"channel": {k: False for k in ALL_DEST_KEYS}}}
         result = _resolve_routing("dvr_1", "channel", config)
         assert all(not v for v in result.values())
 
-    def test_absent_key_within_event_defaults_true(self):
+    def test_absent_key_within_explicit_event_defaults_false(self):
         config = {"dvr_1": {"channel": {"discord": False}}}
         result = _resolve_routing("dvr_1", "channel", config)
         for key in ALL_DEST_KEYS:
             if key == "discord":
                 assert result[key] is False
             else:
-                assert result[key] is True
+                assert result[key] is False
 
     def test_multiple_dvrs_independent(self):
         config = {
-            "dvr_1": {"channel": {"discord": False}},
-            "dvr_2": {"channel": {"pushover": False}},
+            "dvr_1": {"channel": {"discord": False, "pushover": True}},
+            "dvr_2": {"channel": {"pushover": False, "discord": True}},
         }
         r1 = _resolve_routing("dvr_1", "channel", config)
         r2 = _resolve_routing("dvr_2", "channel", config)
@@ -106,7 +117,12 @@ class TestResolveRoutingPerChannel:
         assert r2["pushover"] is False and r2["discord"] is True
 
     def test_event_types_independent_per_dvr(self):
-        config = {"dvr_1": {"channel": {"discord": False}, "vod": {"pushover": False}}}
+        config = {
+            "dvr_1": {
+                "channel": {"discord": False, "pushover": True},
+                "vod": {"pushover": False, "discord": True},
+            }
+        }
         rc = _resolve_routing("dvr_1", "channel", config)
         rv = _resolve_routing("dvr_1", "vod", config)
         assert rc["discord"] is False and rc["pushover"] is True
@@ -139,7 +155,9 @@ class TestNotificationManagerPerChannelRouting:
 
     def test_discord_disabled_pushover_in_allowed_set(self):
         manager, provider = _make_manager_with_provider()
-        config = {"dvr_1": {"channel": {"discord": False}}}
+        config = {
+            "dvr_1": {"channel": {"discord": False, "pushover": True}}
+        }
         with patch(
             "core.notifications.notification._load_routing_config", return_value=config
         ):
@@ -313,6 +331,26 @@ class TestAppriseProviderDestinationFilter:
         assert "pover://abc" in added_urls
         assert "slack://t" in added_urls
 
+    def test_concrete_destination_id_sends_only_one_target(self):
+        entries = [("pushover", "pover://abc"), ("slack", "slack://t")]
+        provider = self._make_provider(entries)
+        with patch.object(provider, "is_configured", return_value=True):
+            apprise_mod = MagicMock()
+            fake_apprise = MagicMock()
+            fake_apprise.notify.return_value = True
+            apprise_mod.Apprise.return_value = fake_apprise
+            with patch("importlib.import_module", return_value=apprise_mod):
+                assert provider.send_notification(
+                    "T", "M", apprise_destination_id="slack"
+                )
+
+        added_urls = [call[0][0] for call in fake_apprise.add.call_args_list]
+        assert added_urls == ["slack://t"]
+        assert provider.notification_destinations() == [
+            ("pushover", "pushover"),
+            ("slack", "slack"),
+        ]
+
 
 class TestRoutingEventTypeConstants:
     def test_channel_routing_event_type(self):
@@ -394,6 +432,146 @@ class TestRoutingDefaultPreservation:
             config = _load_routing_config()
         assert config == {}
 
+    def test_none_notification_routing_in_settings_means_legacy_absence(self):
+        from core.helpers.config import CoreSettings
+
+        fake_settings = types.SimpleNamespace(notification_routing=None)
+        with patch.object(CoreSettings, "get", return_value=fake_settings):
+            from core.notifications.notification import _load_routing_config
+
+            config = _load_routing_config()
+
+        assert config == {}
+
     def test_resolve_routing_with_empty_config_is_all_true(self):
         result = _resolve_routing("any_dvr", "any_event", {})
         assert all(result.values())
+
+    def test_settings_read_failure_is_not_treated_as_legacy_empty_routing(self):
+        from core.helpers.config import CoreSettings
+        from core.notifications.notification import _load_routing_config
+
+        with patch.object(CoreSettings, "get", side_effect=RuntimeError("unreadable")):
+            config = _load_routing_config()
+
+        assert config is None
+        assert not any(_resolve_routing("dvr_1", "channel", config).values())
+
+    @pytest.mark.parametrize("malformed", [[], "", 0, False])
+    def test_falsy_malformed_runtime_routing_is_not_broadened(self, malformed):
+        from core.helpers.config import CoreSettings
+        from core.notifications.notification import _load_routing_config
+
+        fake_settings = types.SimpleNamespace(notification_routing=malformed)
+        with patch.object(CoreSettings, "get", return_value=fake_settings):
+            config = _load_routing_config()
+
+        assert config == malformed
+        assert not any(_resolve_routing("dvr_1", "channel", config).values())
+
+    def test_falsy_malformed_runtime_routing_does_not_deliver_webhook(self):
+        from core.helpers.config import CoreSettings
+
+        manager = NotificationManager(rate_limit=10, rate_window=60)
+        webhook = MagicMock()
+        webhook.is_configured.return_value = True
+        webhook.send_notification.return_value = True
+        manager.register_webhook_manager(webhook)
+        fake_settings = types.SimpleNamespace(notification_routing=[])
+
+        with patch.object(CoreSettings, "get", return_value=fake_settings):
+            delivered = manager.send_notification(
+                "Malformed routing",
+                "must fail closed",
+                dvr_id="dvr_1",
+                event_type="channel",
+            )
+
+        assert delivered is False
+        webhook.send_notification.assert_not_called()
+
+
+class TestRoutingSaveValidation:
+    def test_partial_event_map_is_normalized_fail_closed(self):
+        from core.notifications.routing import normalize_notification_routing
+
+        normalized = normalize_notification_routing(
+            {"dvr_1": {"channel": {"discord": True}}},
+            [{"id": "dvr_1"}],
+        )
+
+        route = normalized["dvr_1"]["channel"]
+        assert route["discord"] is True
+        assert all(not route[key] for key in ALL_DEST_KEYS if key != "discord")
+
+    def test_object_dvr_id_is_supported(self):
+        from core.notifications.routing import normalize_notification_routing
+
+        normalized = normalize_notification_routing(
+            {"dvr_1": {"disk": {"webhook": False}}},
+            [types.SimpleNamespace(id="dvr_1")],
+        )
+
+        assert normalized["dvr_1"]["disk"] == {
+            key: False for key in ALL_DEST_KEYS
+        }
+
+    @pytest.mark.parametrize(
+        ("routing", "message"),
+        [
+            ({"stale": {"channel": {"discord": True}}}, "unknown DVR"),
+            ({"dvr_1": None}, "routing must be an object"),
+            ({"dvr_1": {"channel": None}}, "routing must be an object"),
+            ({"dvr_1": {"mystery": {"discord": True}}}, "unknown event"),
+            ({"dvr_1": {"channel": {"carrier_pigeon": True}}}, "unknown destinations"),
+            ({"dvr_1": {"channel": {"discord": "false"}}}, "must be boolean"),
+        ],
+    )
+    def test_invalid_explicit_routes_report_diagnostics(self, routing, message):
+        from core.notifications.routing import normalize_notification_routing
+
+        with pytest.raises(ValueError, match=message):
+            normalize_notification_routing(routing, [{"id": "dvr_1"}])
+
+
+def test_apprise_circuits_are_isolated_per_concrete_destination():
+    class TwoDestinationApprise:
+        PROVIDER_TYPE = "Apprise"
+
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def is_configured(self):
+            return True
+
+        def notification_destinations(self, allowed):
+            return [
+                ("discord", "discord"),
+                ("pushover", "pushover"),
+            ]
+
+        def send_notification(self, _title, _message, **kwargs):
+            destination_id = kwargs["apprise_destination_id"]
+            self.calls.append(destination_id)
+            return destination_id == "pushover"
+
+    manager = NotificationManager(rate_limit=10, rate_window=60)
+    manager.circuit_breaker.FAILURE_THRESHOLD = 1
+    provider = TwoDestinationApprise()
+    manager.register_provider(provider)
+
+    with patch("core.notifications.notification._load_routing_config", return_value={}):
+        assert manager.send_notification(
+            "First", "Message", dvr_id="dvr_1", event_type="channel"
+        )
+        assert manager.send_notification(
+            "Second", "Message", dvr_id="dvr_1", event_type="channel"
+        )
+
+    assert provider.calls == ["discord", "pushover", "pushover"]
+    assert manager.circuit_breaker.is_open(
+        "dvr_1", "apprise", "Apprise", "discord"
+    )
+    assert not manager.circuit_breaker.is_open(
+        "dvr_1", "apprise", "Apprise", "pushover"
+    )

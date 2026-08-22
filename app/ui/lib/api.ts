@@ -110,6 +110,20 @@ export async function fetchWhoAmI(): Promise<WhoAmIResponse> {
   return response.json()
 }
 
+export async function logoutSession(): Promise<void> {
+  const response = await fetch(`${API_BASE}/v1/auth/logout`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: authHeaders(),
+  })
+
+  if (response.status !== 401 && !response.ok) {
+    const payload = await parseApiError(response)
+    throw new ApiError(payload)
+  }
+  clearCachedAuthState()
+}
+
 export async function loginWithPassword(username: string, password: string): Promise<{ username: string; role: string; csrf_token: string }> {
   const response = await fetch(`${API_BASE}/v1/auth/login`, {
     method: "POST",

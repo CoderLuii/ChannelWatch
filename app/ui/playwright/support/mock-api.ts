@@ -68,7 +68,7 @@ const createMockDebugBundleZip = () => {
 
 const mockDebugBundleZip = createMockDebugBundleZip()
 
-const settings = {
+export const mockSettings = {
   api_key: "test-api-key",
   dvr_servers: [
     {
@@ -170,7 +170,7 @@ const settings = {
 }
 
 const systemInfo = {
-  channelwatch_version: "0.9.15",
+  channelwatch_version: "0.9.16",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",
@@ -303,7 +303,7 @@ const diagnosticsLogs = {
   ],
 }
 
-const securityStatus = {
+export const mockSecurityStatus = {
   persisted_mode: "rbac",
   configured_mode: "rbac",
   effective_mode: "rbac",
@@ -326,7 +326,7 @@ const securityStatus = {
   },
 }
 
-const setupStatus = {
+export const mockSetupStatus = {
   persisted_mode: "rbac",
   configured_mode: "rbac",
   effective_mode: "rbac",
@@ -341,7 +341,7 @@ const setupStatus = {
   available_modes: ["rbac", "none"],
 }
 
-const whoAmI = {
+export const mockWhoAmI = {
   authenticated: true,
   rbac_enabled: true,
   username: "cwadmin",
@@ -369,18 +369,18 @@ const reportConfig = {
 }
 
 const updateStatus = {
-  current_version: "0.9.15",
+  current_version: "0.9.16",
   runtime_abi: "channelwatch-runtime-v1",
   settings_schema_version: 7,
   active_bundle: null,
   latest: {
-    version: "0.9.15",
-    version_tag: "v0.9.15",
+    version: "0.9.16",
+    version_tag: "v0.9.16",
     image_required: false,
     runtime_abi: "channelwatch-runtime-v1",
     settings_schema_version: 7,
-    release_url: "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.15",
-    bundle_url: "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.15/channelwatch-app-v0.9.15.zip",
+    release_url: "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.16",
+    bundle_url: "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.16/channelwatch-app-v0.9.16.zip",
     highlights: [
       "Compatible app updates can be checked and applied from Settings > Updates.",
       "Pre-update backup, signed verification, restart activation, and rollback support are built in.",
@@ -393,7 +393,7 @@ const updateStatus = {
     job_id: "demo-update-check",
     operation: "check",
     status: "current",
-    version: "0.9.15",
+    version: "0.9.16",
     message: "ChannelWatch is up to date.",
     updated_at: "2026-08-11T00:00:00Z",
   },
@@ -418,7 +418,7 @@ export async function installApiMocks(page: Page) {
     const url = new URL(route.request().url())
     const { pathname } = url
 
-    if (pathname === "/api/settings") return json(route, settings)
+    if (pathname === "/api/settings") return json(route, mockSettings)
     if (pathname === "/api/system-info") return json(route, systemInfo)
     if (pathname === "/api/streams/details") return json(route, streamDetails)
     if (pathname === "/api/recordings/upcoming") return json(route, upcomingRecordings)
@@ -432,9 +432,9 @@ export async function installApiMocks(page: Page) {
       })
     }
     if (pathname === "/api/v1/notification-log") return json(route, notificationLog)
-    if (pathname === "/api/v1/security/status") return json(route, securityStatus)
-    if (pathname === "/api/v1/auth/setup-status") return json(route, setupStatus)
-    if (pathname === "/api/v1/auth/whoami") return json(route, whoAmI)
+    if (pathname === "/api/v1/security/status") return json(route, mockSecurityStatus)
+    if (pathname === "/api/v1/auth/setup-status") return json(route, mockSetupStatus)
+    if (pathname === "/api/v1/auth/whoami") return json(route, mockWhoAmI)
     if (pathname === "/api/v1/update/status") return json(route, updateStatus)
     if (pathname === "/api/v1/update/check") return json(route, updateStatus)
     if (pathname === "/api/v1/update/apply") {
@@ -442,7 +442,7 @@ export async function installApiMocks(page: Page) {
         job_id: "demo-apply",
         operation: "apply",
         status: "restarting",
-        version: "0.9.15",
+        version: "0.9.16",
         message: "Update installed. Restarting ChannelWatch to activate it.",
         restart_required: true,
       })
@@ -452,7 +452,7 @@ export async function installApiMocks(page: Page) {
         job_id: "demo-rollback",
         operation: "rollback",
         status: "restarting",
-        version: "0.9.15",
+        version: "0.9.16",
         message: "Rollback activated. Restarting ChannelWatch.",
         restart_required: true,
       })
@@ -504,7 +504,7 @@ export async function installApiMocks(page: Page) {
         `## Summary\n\n${payload.summary || "Untitled report"}`,
         `## Expected behavior\n\n${payload.expected || "Not provided."}`,
         "## Reporter\n\n- GetChannels community: [@Matthew_Crommert](https://community.getchannels.com/u/Matthew_Crommert)",
-        "## Diagnostics\n\n| Field | Value |\n| --- | --- |\n| ChannelWatch version | 0.9.15 |\n| DVRs configured | 1 |\n| DVRs connected | 1 |\n| Core status | Running |\n| Monitoring | healthy: 1 |\n| Notification providers | Pushover |\n| Enabled feature toggles | Channel watching, Disk space, Recording events |",
+        "## Diagnostics\n\n| Field | Value |\n| --- | --- |\n| ChannelWatch version | 0.9.16 |\n| DVRs configured | 1 |\n| DVRs connected | 1 |\n| Core status | Running |\n| Monitoring | healthy: 1 |\n| Notification providers | Pushover |\n| Enabled feature toggles | Channel watching, Disk space, Recording events |",
       ].join("\n\n")
       return json(route, {
         mode: "dry-run",

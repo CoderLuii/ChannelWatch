@@ -15,12 +15,12 @@ describe("waitForUpdatedRuntime", () => {
     const fetchStatus = vi.fn()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValueOnce(status("0.9.15"))
+      .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    const result = await waitForUpdatedRuntime("0.9.15", { fetchStatus, wait, maxAttempts: 5, intervalMs: 10 })
+    const result = await waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 5, intervalMs: 10 })
 
-    expect(result.current_version).toBe("0.9.15")
+    expect(result.current_version).toBe("0.9.16")
     expect(fetchStatus).toHaveBeenCalledTimes(3)
     expect(wait).toHaveBeenCalledTimes(2)
   })
@@ -28,24 +28,24 @@ describe("waitForUpdatedRuntime", () => {
   it("keeps polling while the old runtime responds", async () => {
     const fetchStatus = vi.fn()
       .mockResolvedValueOnce(status("0.9.13"))
-      .mockResolvedValueOnce(status("0.9.15"))
+      .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    await expect(waitForUpdatedRuntime("0.9.15", { fetchStatus, wait, maxAttempts: 3, intervalMs: 10 }))
-      .resolves.toMatchObject({ current_version: "0.9.15" })
+    await expect(waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 3, intervalMs: 10 }))
+      .resolves.toMatchObject({ current_version: "0.9.16" })
     expect(wait).toHaveBeenCalledTimes(1)
   })
 
   it("waits for the target bundle when the status exposes an active bundle", async () => {
     const fetchStatus = vi.fn()
       .mockResolvedValueOnce({
-        ...status("0.9.15"),
+        ...status("0.9.16"),
         active_bundle: { version: "0.9.13", path: "/config/releases/v0.9.13" },
       })
-      .mockResolvedValueOnce(status("0.9.15"))
+      .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    await waitForUpdatedRuntime("0.9.15", { fetchStatus, wait, maxAttempts: 2, intervalMs: 10 })
+    await waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 2, intervalMs: 10 })
 
     expect(fetchStatus).toHaveBeenCalledTimes(2)
     expect(wait).toHaveBeenCalledTimes(1)
@@ -55,8 +55,8 @@ describe("waitForUpdatedRuntime", () => {
     const fetchStatus = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    await expect(waitForUpdatedRuntime("0.9.15", { fetchStatus, wait, maxAttempts: 3, intervalMs: 10 }))
-      .rejects.toThrow("ChannelWatch did not reconnect after applying v0.9.15")
+    await expect(waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 3, intervalMs: 10 }))
+      .rejects.toThrow("ChannelWatch did not reconnect after applying v0.9.16")
     expect(fetchStatus).toHaveBeenCalledTimes(3)
     expect(wait).toHaveBeenCalledTimes(2)
   })
@@ -68,7 +68,7 @@ describe("applyUpdateAndReconnect", () => {
     const fetchStatus = vi.fn()
     const reload = vi.fn()
 
-    await expect(applyUpdateAndReconnect("0.9.15", {
+    await expect(applyUpdateAndReconnect("0.9.16", {
       apply: vi.fn().mockResolvedValue(job),
       fetchStatus,
       reload,
@@ -81,11 +81,11 @@ describe("applyUpdateAndReconnect", () => {
     const apply = vi.fn().mockResolvedValue({ job_id: "job-1", restart_required: true })
     const fetchStatus = vi.fn()
       .mockRejectedValueOnce(new TypeError("restart disconnect"))
-      .mockResolvedValueOnce(status("0.9.15"))
+      .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
     const reload = vi.fn()
 
-    const job = await applyUpdateAndReconnect("0.9.15", {
+    const job = await applyUpdateAndReconnect("0.9.16", {
       apply,
       fetchStatus,
       wait,
@@ -101,10 +101,10 @@ describe("applyUpdateAndReconnect", () => {
 
   it("recovers when the apply request disconnects during the restart", async () => {
     const apply = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
-    const fetchStatus = vi.fn().mockResolvedValue(status("0.9.15"))
+    const fetchStatus = vi.fn().mockResolvedValue(status("0.9.16"))
     const reload = vi.fn()
 
-    await expect(applyUpdateAndReconnect("0.9.15", {
+    await expect(applyUpdateAndReconnect("0.9.16", {
       apply,
       fetchStatus,
       reload,
@@ -118,7 +118,7 @@ describe("applyUpdateAndReconnect", () => {
     "does not mistake %s for a restart disconnect",
     async (failure) => {
       const fetchStatus = vi.fn()
-      await expect(applyUpdateAndReconnect("0.9.15", {
+      await expect(applyUpdateAndReconnect("0.9.16", {
         apply: vi.fn().mockRejectedValue(failure),
         fetchStatus,
         reload: vi.fn(),
@@ -129,7 +129,7 @@ describe("applyUpdateAndReconnect", () => {
 
   it("preserves the original disconnect when reconnect polling times out", async () => {
     const disconnect = new TypeError("Failed to fetch")
-    const promise = applyUpdateAndReconnect("0.9.15", {
+    const promise = applyUpdateAndReconnect("0.9.16", {
       apply: vi.fn().mockRejectedValue(disconnect),
       fetchStatus: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
       wait: vi.fn().mockResolvedValue(undefined),
@@ -145,7 +145,7 @@ describe("applyUpdateAndReconnect", () => {
     const rejected = new RejectedUpdate("signature rejected")
     const fetchStatus = vi.fn()
 
-    await expect(applyUpdateAndReconnect("0.9.15", {
+    await expect(applyUpdateAndReconnect("0.9.16", {
       apply: vi.fn().mockRejectedValue(rejected),
       fetchStatus,
       reload: vi.fn(),

@@ -37,7 +37,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "channelwatch.secretName" -}}
+{{- if .Values.secretConfig.existingSecret -}}
+{{- .Values.secretConfig.existingSecret | trim -}}
+{{- else -}}
 {{- printf "%s-secret" (include "channelwatch.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "channelwatch.pvcName" -}}

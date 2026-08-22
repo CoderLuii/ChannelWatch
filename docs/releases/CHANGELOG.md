@@ -8,6 +8,49 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.16] - 2026-08-22
+
+### Added
+
+- Add an always-running monitor reconciler that adopts new DVR configuration without a process restart and retries unavailable DVRs with interruptible exponential backoff.
+- Add an explicit `CW_TRUSTED_PROXIES` allowlist for validated forwarded client and scheme handling.
+- Add Helm support for a required chart-managed secret-storage key or an operator-managed existing Secret.
+- Add browser/backend API contract checks and non-publishing push/pull-request CI jobs for Python, frontend, browser, docs/config, Helm, container, and security gates.
+- Add a visible session logout control that uses the established CSRF-protected API contract.
+- Add a release-specific OpenVEX record with machine-checked runtime vulnerability dispositions.
+
+### Changed
+
+- Reconcile changed DVR monitors concurrently within one bounded freshness window and expose setup/degraded state through minimal unauthenticated probes.
+- Make notification rate limiting installation-wide and isolate circuit breakers by DVR, channel, provider, and destination.
+- Coordinate Update Center activation with generation-specific core and UI readiness markers, a bounded deadline, and whole-container recovery.
+- Mark v0.9.16 as container image required because launcher, entrypoint, lifecycle, and Helm behavior changed.
+- Bound Channels DVR XMLTV downloads and parsing, preserve a healthy guide cache after malformed input, and extend the tested DVR range through build `2026.08.07.0346`.
+- Refresh the pinned multi-architecture Chainguard Python inputs and pin the build-stage timezone package to the reviewed Wolfi version.
+
+### Fixed
+
+- Recover automatically when zero DVRs are configured or one or all configured DVRs are unreachable at startup.
+- Stop and unregister failed replacement monitor tasks without multiplying hot-reload waits across DVRs.
+- Restore the previous runtime selection when update restart or activation fails, reject stale/reused locks, and validate trusted redirects before reading response bodies.
+- Require CSRF for logout, keep detailed DVR health authenticated, and prevent untrusted forwarding headers from changing cookies or rate-limit identity.
+- Reject malformed explicit notification routing instead of broadening delivery and keep slow provider retries off the event loop.
+- Require the Helm runtime secret-storage key and preserve production static export while adding a development-only same-origin API proxy.
+- Keep unauthenticated readiness responses minimal while documenting authenticated per-DVR health diagnostics accurately.
+- Start reliably on Docker Desktop virtiofs bind mounts by verifying config writes after privilege drop when ownership metadata is virtualized, while keeping native ownership mismatches fail closed.
+- Keep the single-replica Helm Service reachable for first-run setup and diagnostics while preserving degraded monitoring readiness on the Pod.
+
+### Security
+
+- Fail closed on supplemental-group or effective-identity privilege-drop failures.
+- Harden release publication against stale/divergent tags, mutable published releases, and concurrent publication races.
+- Keep live DVR verification read-only and notification verification on disposable local sinks.
+- Reject non-ASCII update hosts before trusted-host validation and publish reviewed Python runtime dispositions with release assets.
+- Build and scan exact amd64 and arm64 release-candidate images before registry authentication or publication begins.
+- Pin the release runtimes, copy one already-scanned multi-architecture OCI layout to only the exact version and `latest` tags with digest and platform-descriptor verification, and align the isolated Docker config and temporary home so provenance attestation reuses the authenticated registry session.
+- Keep the required root-starting entrypoint exception narrow, documented, expiring, and enforced by the ordinary Trivy CI gate.
+- Bundle ChannelWatch notices, complete applicable copyleft license texts, and an exact corresponding-source map with both the image and app-update archive; attach exact amd64/arm64 SPDX and CycloneDX SBOMs and checksum every non-checksum release asset before registry publication.
+
 ## [0.9.15] - 2026-08-14
 
 ### Changed
@@ -361,7 +404,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.15...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.16...HEAD
+[0.9.16]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.15...v0.9.16
 [0.9.15]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.14...v0.9.15
 [0.9.14]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.13...v0.9.14
 [0.9.13]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.12...v0.9.13

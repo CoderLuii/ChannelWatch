@@ -43,6 +43,23 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     assert "/venv/bin/pip uninstall --yes pip setuptools" in dockerfile
 
 
+def test_dockerfile_pins_reviewed_python_bases_and_timezone_package():
+    dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "cgr.dev/chainguard/python:latest-dev@sha256:"
+        "4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef"
+    ) in dockerfile
+    assert (
+        "cgr.dev/chainguard/python:latest@sha256:"
+        "1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c"
+    ) in dockerfile
+    assert "apk add --no-cache tzdata=2026c-r0" in dockerfile
+    assert "apk add --no-cache tzdata \\" not in dockerfile
+
+
 def test_dockerfile_builds_static_ui_on_native_build_platform():
     dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
         encoding="utf-8"
@@ -54,6 +71,30 @@ def test_dockerfile_builds_static_ui_on_native_build_platform():
         "AS ui-builder"
     ) in dockerfile
     assert "FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/python" not in dockerfile
+
+
+def test_official_image_bundles_project_and_third_party_legal_notices():
+    dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    dockerignore = (
+        _REPO_DIR / "deploy" / "docker" / "Dockerfile.dockerignore"
+    ).read_text(encoding="utf-8")
+
+    assert "COPY LICENSE /licenses/channelwatch/LICENSE" in dockerfile
+    assert "COPY docs/legal/NOTICE /licenses/channelwatch/NOTICE" in dockerfile
+    assert (
+        "COPY docs/legal/THIRD_PARTY_LICENSES.md "
+        "/licenses/channelwatch/THIRD_PARTY_LICENSES.md"
+    ) in dockerfile
+    assert "!docs/legal/THIRD_PARTY_LICENSES.md" in dockerignore
+    assert "COPY scripts/release/copyleft_licenses.py" in dockerfile
+    assert "COPY docs/legal/CORRESPONDING_SOURCE.md" in dockerfile
+    assert (
+        "COPY --from=python-deps /release-licenses/copyleft "
+        "/licenses/channelwatch/copyleft"
+    ) in dockerfile
+    assert "!docs/legal/CORRESPONDING_SOURCE.md" in dockerignore
 
 
 def test_primary_compose_project_name_is_lowercase():
@@ -69,6 +110,29 @@ def test_docs_use_packaged_core_module_for_diagnostics():
         content = (_REPO_DIR / rel).read_text(encoding="utf-8")
         assert "python -m channelwatch.main" not in content
         assert "channelwatch doctor" in content or "python -m core.main" in content
+
+
+def test_health_docs_keep_public_readiness_minimal_and_detailed_health_protected():
+    for rel in ("docs/reference/api.md", "docs/reference/health-diagnostics.md"):
+        content = (_REPO_DIR / rel).read_text(encoding="utf-8")
+        ready_section = content.split("### `GET /healthz/ready`", 1)[1]
+        end_marker = (
+            "### `GET /healthz/startup`"
+            if rel == "docs/reference/api.md"
+            else "## Kubernetes style probes"
+        )
+        ready_section = ready_section.split(end_marker, 1)[0]
+        assert '{"status":"ready","ready":true}' in ready_section
+        assert '"dvrs"' not in ready_section
+        assert '"tested_version_range"' not in ready_section
+        assert "DVR names, IDs" in ready_section
+
+    api_reference = (_REPO_DIR / "docs/reference/api.md").read_text(encoding="utf-8")
+    detailed_section = api_reference.split("### `GET /api/health`", 1)[1].split(
+        "### `GET /healthz/live`", 1
+    )[0]
+    assert "api_key or RBAC session when configured" in detailed_section
+    assert '"notification_routing_diagnostics"' in detailed_section
 
 
 def test_runtime_diagnostics_are_not_under_legacy_test_package():
@@ -96,8 +160,21 @@ def test_release_workflow_changelog_gate_precedes_publish_steps():
     publish_markers = [
         "      - name: Login to Docker Hub",
         "      - name: Extract metadata",
-        "      - name: Build and push",
+        "      - name: Publish the scanned images and assemble exact manifests",
         "      - name: Attest build provenance",
     ]
     for marker in publish_markers:
         assert gate_index < release.index(marker)
+
+
+def test_release_workflow_routes_dynamic_values_through_environment():
+    release = (
+        _REPO_DIR / ".github" / "workflows" / "docker-publish.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'version="${{ steps.version.outputs.version }}"' not in release
+    live_step = release.split(
+        "      - name: Verify live stable update manifest", 1
+    )[1]
+    assert '--version "${{ steps.release.outputs.version }}"' not in live_step
+    assert "RAW_RELEASE_VERSION: ${{ steps.release.outputs.version }}" in live_step

@@ -173,4 +173,17 @@ describe("Dashboard auth bootstrap", () => {
 
     expect(resolveDashboardBootstrapShell(baseSetupStatus, runtimeNoAuthOverrideStatus)).toBe("login")
   })
+
+  it("offers an authenticated session a CSRF-protected sign-out control", () => {
+    const header = srcFile("../components/header.tsx")
+    const api = srcFile("../lib/api.ts")
+
+    expect(header).toContain("whoAmI?.authenticated")
+    expect(header).toContain('data-testid="header-sign-out"')
+    expect(header).toContain("await logoutSession()")
+    expect(api).toContain('`${API_BASE}/v1/auth/logout`')
+    expect(api).toContain('method: "POST"')
+    expect(api).toContain("headers: authHeaders()")
+    expect(api).toContain("clearCachedAuthState()")
+  })
 })

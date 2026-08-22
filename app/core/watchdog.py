@@ -113,10 +113,21 @@ def summarize_enabled_dvrs(
             freshness_age_seconds = max(0.0, current_time - float(last_freshness_ts))
 
         task_alive = bool(entry.get("task_alive", False))
+        monitor_registered = bool(entry.get("monitor_registered", False))
+        monitor_running = bool(entry.get("monitor_running", False))
         ready = bool(entry.get("ready", False))
         monitoring_status = str(entry.get("monitoring_status") or "missing")
         if not entry:
             monitoring_status = "missing"
+            ready = False
+        elif not monitor_registered:
+            # Persisted snapshots from older releases did not distinguish the
+            # long-running retry supervisor from the actual DVR monitor. Fail
+            # closed until the current core publishes authoritative state.
+            monitoring_status = "reconnecting"
+            ready = False
+        elif not monitor_running:
+            monitoring_status = "dead"
             ready = False
 
         results.append(
@@ -127,7 +138,8 @@ def summarize_enabled_dvrs(
                 "port": int(entry.get("port") or server["port"]),
                 "task_alive": task_alive,
                 "task_done": bool(entry.get("task_done", not task_alive)),
-                "monitor_running": bool(entry.get("monitor_running", False)),
+                "monitor_registered": monitor_registered,
+                "monitor_running": monitor_running,
                 "connected": bool(entry.get("connected", False)),
                 "alerts_paused": bool(entry.get("alerts_paused", False)),
                 "connection_status": str(entry.get("connection_status") or "unknown"),
@@ -258,6 +270,8 @@ class Watchdog:
                 monitor = monitors.get(dvr_id)
                 task = tasks.get(dvr_id)
                 entry = dict(self._entries.get(dvr_id, {}))
+                monitor_registered = monitor is not None
+                monitor_running = False
                 if monitor is not None:
                     entry_name = entry.get("name", dvr_id)
                     entry_host = entry.get("host", "")
@@ -296,10 +310,11 @@ class Watchdog:
                                 getattr(monitor, "last_freshness_source", None),
                                 entry.get("last_freshness_source", ""),
                             ),
-                            "monitor_running": _snapshot_bool(
-                                getattr(monitor, "running", None)
-                            ),
+                            "monitor_registered": True,
                         }
+                    )
+                    monitor_running = _snapshot_bool(
+                        getattr(monitor, "running", None)
                     )
                     last_freshness_ts = _snapshot_float(
                         getattr(monitor, "last_freshness_at", None),
@@ -325,7 +340,13 @@ class Watchdog:
 
                 if not task_alive:
                     monitoring_status = "dead"
-                    reason = "Monitor task is not alive"
+                    reason = "DVR supervisor task is not alive"
+                elif not monitor_registered:
+                    monitoring_status = "reconnecting"
+                    reason = "No active DVR monitor is registered"
+                elif not monitor_running:
+                    monitoring_status = "dead"
+                    reason = "Registered DVR monitor is not running"
                 elif last_freshness_ts is None:
                     monitoring_status = "starting"
                     reason = "Waiting for the first freshness update"
@@ -338,11 +359,19 @@ class Watchdog:
                     monitoring_status = "healthy"
                     reason = "Freshness updates are current"
 
-                ready = bool(task_alive and last_freshness_ts is not None and not stale)
+                ready = bool(
+                    task_alive
+                    and monitor_registered
+                    and monitor_running
+                    and last_freshness_ts is not None
+                    and not stale
+                )
                 entry.update(
                     {
                         "task_alive": task_alive,
                         "task_done": task_done,
+                        "monitor_registered": monitor_registered,
+                        "monitor_running": monitor_running,
                         "freshness_age_seconds": freshness_age_seconds,
                         "freshness_status": monitoring_status,
                         "monitoring_status": monitoring_status,

@@ -107,6 +107,28 @@ def test_update_apply_image_required_maps_to_structured_error(tmp_path: Path):
     assert resp.json()["detail"]["code"] == "ERR_UPDATE_IMAGE_REQUIRED"
 
 
+def test_update_check_network_error_maps_to_check_failure(tmp_path: Path):
+    import ui.backend.main as ui_main
+
+    class OfflineManager(FakeUpdateManager):
+        def check(self):
+            raise OSError("network unreachable")
+
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(ui_main, "_build_update_manager", return_value=OfflineManager()),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        resp = client.post("/api/v1/update/check")
+
+    assert resp.status_code >= 400
+    assert resp.json()["detail"]["code"] == "ERR_UPDATE_CHECK_FAILED"
+
+
 def test_missing_update_job_uses_structured_error(tmp_path: Path):
     import ui.backend.main as ui_main
 

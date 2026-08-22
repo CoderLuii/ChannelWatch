@@ -24,8 +24,10 @@ from core.notifications.notification import APPRISE_DEST_KEYS
 
 
 @pytest.fixture(name="engine")
-def engine_fixture():
-    eng = create_db_engine("sqlite:///:memory:")
+def engine_fixture(tmp_path):
+    # Queue delivery runs in its owned worker thread, so use a file database
+    # whose schema is visible to every SQLAlchemy connection.
+    eng = create_db_engine(f"sqlite:///{tmp_path / 'delivery.db'}")
     create_all_tables(eng)
     migrate_delivery_schema(eng)
     yield eng
@@ -638,6 +640,16 @@ class TestDeliveryPersistence:
 
 
 class TestNotificationManagerIntegration:
+    def test_circuit_breakers_are_isolated_by_provider_and_destination(self):
+        cb = CircuitBreaker()
+        for _ in range(CircuitBreaker.FAILURE_THRESHOLD):
+            cb.record_failure("dvr1", "apprise", "Apprise", "discord")
+
+        assert cb.is_open("dvr1", "apprise", "Apprise", "discord")
+        assert not cb.is_open("dvr1", "apprise", "Apprise", "pushover")
+        assert not cb.is_open("dvr1", "apprise", "Console", "discord")
+        assert not cb.is_open("dvr2", "apprise", "Apprise", "discord")
+
     def test_send_notification_success_persists_sent(self, engine):
         from core.notifications.notification import NotificationManager
 
@@ -692,34 +704,45 @@ class TestNotificationManagerIntegration:
         mock_provider.is_configured.return_value = True
         mock_provider.send_notification.return_value = True
         nm.register_provider(mock_provider)
-        offloaded = []
-
-        async def run_in_thread(func, *args, **kwargs):
-            offloaded.append(func)
-            return func(*args, **kwargs)
-
         async def run():
-            with patch(
-                "core.notifications.notification.asyncio.to_thread", run_in_thread
-            ):
-                return await nm.send_notification_async(
-                    "Async Test",
-                    "msg",
-                    dvr_id="dvr1",
-                    event_type="watching_channel",
-                    activity_event_id="activity-1",
-                )
+            accepted = await nm.send_notification_async(
+                "Async Test",
+                "msg",
+                dvr_id="dvr1",
+                event_type="watching_channel",
+                activity_event_id="activity-1",
+            )
+            completed = await asyncio.to_thread(nm.wait_for_delivery_queue, 1.0)
+            return accepted, completed
 
-        result = asyncio.run(run())
+        result, completed = asyncio.run(run())
 
         assert result is True
-        assert offloaded == [deliver_with_retry]
+        assert completed is True
         kwargs = mock_provider.send_notification.call_args.kwargs
         assert kwargs["allowed_apprise_destinations"] == set(APPRISE_DEST_KEYS)
         rows, total = query_delivery_log(engine, status="sent")
         assert total == 1
         assert rows[0].channel == "apprise"
         assert rows[0].activity_event_id == "activity-1"
+
+    def test_delivery_worker_survives_provider_system_exit_and_drains(self):
+        from core.notifications.notification import NotificationManager
+
+        nm = NotificationManager(rate_limit=10, rate_window=60)
+        provider = MagicMock()
+        provider.PROVIDER_TYPE = "Apprise"
+        provider.is_configured.return_value = True
+        provider.send_notification.side_effect = [SystemExit("provider abort"), True]
+        nm.register_provider(provider)
+
+        assert nm.enqueue_notification("First", "msg") is True
+        assert nm.enqueue_notification("Second", "msg") is True
+        assert nm.wait_for_delivery_queue(timeout=1.0) is True
+        assert provider.send_notification.call_count == 2
+        assert nm.shutdown_delivery_queue(timeout=1.0) is True
+        with nm._delivery_queue.mutex:
+            assert nm._delivery_queue.unfinished_tasks == 0
 
     def test_send_notification_async_webhook_offloads_and_persists_sent(self, engine):
         from core.notifications.notification import NotificationManager
@@ -729,24 +752,17 @@ class TestNotificationManagerIntegration:
         mock_wm.is_configured.return_value = True
         mock_wm.send_notification.return_value = True
         nm.register_webhook_manager(mock_wm)
-        offloaded = []
-
-        async def run_in_thread(func, *args, **kwargs):
-            offloaded.append(func)
-            return func(*args, **kwargs)
-
         async def run():
-            with patch(
-                "core.notifications.notification.asyncio.to_thread", run_in_thread
-            ):
-                return await nm.send_notification_async(
-                    "Webhook Test", "msg", dvr_id="dvr1", event_type="disk_alert"
-                )
+            accepted = await nm.send_notification_async(
+                "Webhook Test", "msg", dvr_id="dvr1", event_type="disk_alert"
+            )
+            completed = await asyncio.to_thread(nm.wait_for_delivery_queue, 1.0)
+            return accepted, completed
 
-        result = asyncio.run(run())
+        result, completed = asyncio.run(run())
 
         assert result is True
-        assert offloaded == [deliver_with_retry]
+        assert completed is True
         mock_wm.send_notification.assert_called_once_with(
             "Webhook Test", "msg", dvr_id="dvr1", event_type="disk_alert"
         )
@@ -779,26 +795,23 @@ class TestNotificationManagerIntegration:
             }
         }
 
-        async def run_in_thread(func, *args, **kwargs):
-            return func(*args, **kwargs)
-
         async def run():
-            with (
-                patch(
-                    "core.notifications.notification._load_routing_config",
-                    return_value=routing,
-                ),
-                patch(
-                    "core.notifications.notification.asyncio.to_thread", run_in_thread
-                ),
+            with patch(
+                "core.notifications.notification._load_routing_config",
+                return_value=routing,
             ):
-                return await nm.send_notification_async(
+                accepted = await nm.send_notification_async(
                     "Routed", "msg", dvr_id="dvr1", event_type="disk_alert"
                 )
+                completed = await asyncio.to_thread(
+                    nm.wait_for_delivery_queue, 1.0
+                )
+                return accepted, completed
 
-        result = asyncio.run(run())
+        result, completed = asyncio.run(run())
 
         assert result is True
+        assert completed is True
         kwargs = mock_provider.send_notification.call_args.kwargs
         allowed = kwargs["allowed_apprise_destinations"]
         assert "pushover" not in allowed
@@ -818,23 +831,20 @@ class TestNotificationManagerIntegration:
         mock_provider.send_notification.return_value = False
         nm.register_provider(mock_provider)
 
-        async def run_in_thread(func, *args, **kwargs):
-            return func(*args, **kwargs)
-
         async def run():
-            with (
-                patch("core.notifications.delivery.time.sleep"),
-                patch(
-                    "core.notifications.notification.asyncio.to_thread", run_in_thread
-                ),
-            ):
-                return await nm.send_notification_async(
+            with patch("core.notifications.delivery.time.sleep"):
+                accepted = await nm.send_notification_async(
                     "Failing", "msg", dvr_id="dvr1", event_type="disk_alert"
                 )
+                completed = await asyncio.to_thread(
+                    nm.wait_for_delivery_queue, 1.0
+                )
+                return accepted, completed
 
-        result = asyncio.run(run())
+        result, completed = asyncio.run(run())
 
-        assert result is False
+        assert result is True
+        assert completed is True
         assert (
             mock_provider.send_notification.call_count
             == CircuitBreaker.FAILURE_THRESHOLD
@@ -912,20 +922,17 @@ class TestNotificationManagerIntegration:
         mock_provider.send_notification.return_value = False
         nm.register_provider(mock_provider)
 
-        async def run_in_thread(func, *args, **kwargs):
-            return func(*args, **kwargs)
-
         async def run():
-            with patch(
-                "core.notifications.notification.asyncio.to_thread", run_in_thread
-            ):
-                return await nm.send_notification_async(
-                    "Watching DVR Content", "msg", dvr_id="dvr1", event_type="vod"
-                )
+            accepted = await nm.send_notification_async(
+                "Watching DVR Content", "msg", dvr_id="dvr1", event_type="vod"
+            )
+            completed = await asyncio.to_thread(nm.wait_for_delivery_queue, 1.0)
+            return accepted, completed
 
-        result = asyncio.run(run())
+        result, completed = asyncio.run(run())
 
-        assert result is False
+        assert result is True
+        assert completed is True
         mock_provider.send_notification.assert_called_once()
         failed_rows, failed_total = query_delivery_log(engine, status="failed")
         retry_rows, retry_total = query_delivery_log(engine, status="retry")

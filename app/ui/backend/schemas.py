@@ -251,7 +251,7 @@ class AppSettings(BaseModel):
 
     notification_routing: dict[str, Any] = Field(
         default_factory=dict,
-        description="Per-DVR per-event-type notification routing: dvr_id->event_type->{apprise,webhook}. Absent keys default to all-enabled.",
+        description="Per-DVR per-event-type routing. Empty means legacy all-enabled; explicit event maps are complete and fail closed.",
     )
 
     @model_validator(mode="before")

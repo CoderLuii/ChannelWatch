@@ -44,13 +44,39 @@ class CircuitBreaker:
         self._state: dict = {}
         self._lock = threading.Lock()
 
-    def _key(self, dvr_id: str, channel: str) -> tuple:
-        return (dvr_id or "", channel or "")
+    def _key(
+        self,
+        dvr_id: str,
+        channel: str,
+        provider_type: str = "",
+        channel_id: str = "",
+    ) -> tuple:
+        return (dvr_id or "", channel or "", provider_type or "", channel_id or "")
 
-    def is_open(self, dvr_id: str, channel: str) -> bool:
-        key = self._key(dvr_id, channel)
+    def is_open(
+        self,
+        dvr_id: str,
+        channel: str,
+        provider_type: str = "",
+        channel_id: str = "",
+    ) -> bool:
+        key = self._key(dvr_id, channel, provider_type, channel_id)
         with self._lock:
             state = self._state.get(key)
+            if state is None and (provider_type or channel_id):
+                state = self._state.get(self._key(dvr_id, channel))
+            # Preserve the historical two-part diagnostic query without using
+            # it as the state identity for concrete destinations.
+            if state is None and not provider_type and not channel_id:
+                state = next(
+                    (
+                        value
+                        for candidate, value in self._state.items()
+                        if candidate[:2] == key[:2]
+                        and value.get("opened_at") is not None
+                    ),
+                    None,
+                )
             if not state or state.get("opened_at") is None:
                 return False
             if time.monotonic() - state["opened_at"] > self.OPEN_DURATION_SECONDS:
@@ -59,8 +85,14 @@ class CircuitBreaker:
                 return False
             return True
 
-    def record_failure(self, dvr_id: str, channel: str) -> bool:
-        key = self._key(dvr_id, channel)
+    def record_failure(
+        self,
+        dvr_id: str,
+        channel: str,
+        provider_type: str = "",
+        channel_id: str = "",
+    ) -> bool:
+        key = self._key(dvr_id, channel, provider_type, channel_id)
         with self._lock:
             state = self._state.setdefault(key, {"failure_count": 0, "opened_at": None})
             state["failure_count"] = state.get("failure_count", 0) + 1
@@ -72,21 +104,52 @@ class CircuitBreaker:
                 return True
             return False
 
-    def record_success(self, dvr_id: str, channel: str) -> None:
-        key = self._key(dvr_id, channel)
+    def record_success(
+        self,
+        dvr_id: str,
+        channel: str,
+        provider_type: str = "",
+        channel_id: str = "",
+    ) -> None:
+        key = self._key(dvr_id, channel, provider_type, channel_id)
         with self._lock:
             if key in self._state:
                 self._state[key] = {"failure_count": 0, "opened_at": None}
 
-    def failure_count(self, dvr_id: str, channel: str) -> int:
-        key = self._key(dvr_id, channel)
+    def failure_count(
+        self,
+        dvr_id: str,
+        channel: str,
+        provider_type: str = "",
+        channel_id: str = "",
+    ) -> int:
+        key = self._key(dvr_id, channel, provider_type, channel_id)
         with self._lock:
-            return self._state.get(key, {}).get("failure_count", 0)
+            if provider_type or channel_id:
+                return self._state.get(key, {}).get("failure_count", 0)
+            return sum(
+                state.get("failure_count", 0)
+                for candidate, state in self._state.items()
+                if candidate[:2] == key[:2]
+            )
 
-    def opened_at(self, dvr_id: str, channel: str) -> Optional[float]:
-        key = self._key(dvr_id, channel)
+    def opened_at(
+        self,
+        dvr_id: str,
+        channel: str,
+        provider_type: str = "",
+        channel_id: str = "",
+    ) -> Optional[float]:
+        key = self._key(dvr_id, channel, provider_type, channel_id)
         with self._lock:
-            return self._state.get(key, {}).get("opened_at")
+            if provider_type or channel_id:
+                return self._state.get(key, {}).get("opened_at")
+            opened = [
+                state.get("opened_at")
+                for candidate, state in self._state.items()
+                if candidate[:2] == key[:2] and state.get("opened_at") is not None
+            ]
+            return min(opened) if opened else None
 
 
 def estimate_payload_size(title: str, message: str, **kwargs: Any) -> int:
@@ -159,7 +222,7 @@ def deliver_with_retry(
     sleeper = sleep_fn or time.sleep
 
     for retry_count, delay in enumerate(attempts):
-        if circuit_breaker.is_open(dvr_id, channel):
+        if circuit_breaker.is_open(dvr_id, channel, provider_type, channel_id):
             _persist(
                 dvr_id=dvr_id,
                 event_type=event_type,
@@ -199,7 +262,7 @@ def deliver_with_retry(
             )
 
         if success:
-            circuit_breaker.record_success(dvr_id, channel)
+            circuit_breaker.record_success(dvr_id, channel, provider_type, channel_id)
             _persist(
                 dvr_id=dvr_id,
                 event_type=event_type,
@@ -215,7 +278,9 @@ def deliver_with_retry(
             )
             return True
 
-        just_opened = circuit_breaker.record_failure(dvr_id, channel)
+        just_opened = circuit_breaker.record_failure(
+            dvr_id, channel, provider_type, channel_id
+        )
         if just_opened:
             log.warning(
                 "Circuit opened for (%s, %s) after %d failures",

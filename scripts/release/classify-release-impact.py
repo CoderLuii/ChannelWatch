@@ -21,12 +21,16 @@ class ReleaseImpactMismatch(RuntimeError):
 
 
 EXACT_RUNTIME_PATHS = {
+    "app/bin/channelwatch",
     "app/core/docker-entrypoint.py",
+    "app/core/helpers/atomic_io.py",
+    "app/core/helpers/migration.py",
     "app/core/runtime_launcher.py",
     "app/core/update_center.py",
     "app/ui/pnpm-lock.yaml",
     "app/ui/pnpm-workspace.yaml",
-    "deploy/docker/supervisord.conf.template",
+    "deploy/config/supervisor/supervisord.conf.template",
+    "deploy/docker/Dockerfile.dockerignore",
 }
 
 RUNTIME_PREFIXES = (

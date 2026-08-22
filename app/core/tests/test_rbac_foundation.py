@@ -1,24 +1,32 @@
 import json
-import pytest
-from datetime import datetime, timezone, timedelta
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
-from starlette.testclient import TestClient
-from sqlmodel import SQLModel
 
+import pytest
+import sqlalchemy as sa
+from fastapi import HTTPException
+from sqlmodel import Session, SQLModel
+from starlette.testclient import TestClient
+
+from core.storage.auth import (
+    FirstAdminExistsError,
+    cleanup_expired_sessions,
+    create_first_admin_session,
+    create_session,
+    generate_token,
+    get_session_by_token,
+    get_user_by_id,
+    get_user_by_username,
+    get_user_count,
+    hash_password,
+    invalidate_session,
+    reset_password,
+    verify_password,
+)
 from core.storage.database import create_db_engine
 from core.storage.models import User, UserSession
-from core.storage.auth import (
-    hash_password,
-    verify_password,
-    generate_token,
-    create_session,
-    get_session_by_token,
-    invalidate_session,
-    cleanup_expired_sessions,
-    get_user_by_username,
-    get_user_by_id,
-    reset_password,
-)
 
 
 CANONICAL_AUTH_KEYS = (
@@ -35,6 +43,14 @@ CANONICAL_AUTH_KEYS = (
 
 def _canonical_auth_slice(payload):
     return {key: payload[key] for key in CANONICAL_AUTH_KEYS}
+
+
+def _with_session_cookie(client: TestClient, token: str | None) -> TestClient:
+    """Select exactly one browser session through the client's persistent jar."""
+    assert token
+    client.cookies.clear()
+    client.cookies.set("channelwatch_session", token)
+    return client
 
 
 @pytest.fixture(name="auth_engine")
@@ -260,10 +276,7 @@ class TestRbacOff:
         assert resp.status_code == 501
 
     def test_session_cookie_ignored_when_rbac_off(self, rbac_off_client):
-        resp = rbac_off_client.get(
-            "/api/about",
-            cookies={"channelwatch_session": "fake-token"},
-        )
+        resp = _with_session_cookie(rbac_off_client, "fake-token").get("/api/about")
         assert resp.status_code == 401
 
     def test_setup_and_security_status_never_diverge(self, rbac_off_client):
@@ -363,9 +376,8 @@ class TestLoginLogoutWhoami:
         session_token = login_resp.cookies.get("channelwatch_session")
         assert session_token
 
-        whoami_resp = rbac_on_client.get(
-            "/api/v1/auth/whoami",
-            cookies={"channelwatch_session": session_token},
+        whoami_resp = _with_session_cookie(rbac_on_client, session_token).get(
+            "/api/v1/auth/whoami"
         )
         assert whoami_resp.status_code == 200
         data = whoami_resp.json()
@@ -379,9 +391,8 @@ class TestLoginLogoutWhoami:
         assert resp.status_code == 401
 
     def test_whoami_bad_token_returns_401(self, rbac_on_client):
-        resp = rbac_on_client.get(
-            "/api/v1/auth/whoami",
-            cookies={"channelwatch_session": "badtoken"},
+        resp = _with_session_cookie(rbac_on_client, "badtoken").get(
+            "/api/v1/auth/whoami"
         )
         assert resp.status_code == 401
 
@@ -392,17 +403,367 @@ class TestLoginLogoutWhoami:
         )
         session_token = login_resp.cookies.get("channelwatch_session")
 
-        logout_resp = rbac_on_client.post(
+        logout_resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/v1/auth/logout",
-            cookies={"channelwatch_session": session_token},
+            headers={"X-CSRF-Token": login_resp.json()["csrf_token"]},
         )
         assert logout_resp.status_code == 200
 
-        whoami_resp = rbac_on_client.get(
-            "/api/v1/auth/whoami",
-            cookies={"channelwatch_session": session_token},
+        whoami_resp = _with_session_cookie(rbac_on_client, session_token).get(
+            "/api/v1/auth/whoami"
         )
         assert whoami_resp.status_code == 401
+
+    def test_logout_rejects_missing_csrf_without_invalidating_session(
+        self, rbac_on_client, rbac_user, auth_engine
+    ):
+        login_resp = rbac_on_client.post(
+            "/api/v1/auth/login",
+            json={"username": "bob", "password": "hunter2"},
+        )
+        session_token = login_resp.cookies.get("channelwatch_session")
+
+        logout_resp = _with_session_cookie(rbac_on_client, session_token).post(
+            "/api/v1/auth/logout"
+        )
+
+        assert logout_resp.status_code == 403
+        assert logout_resp.json()["detail"]["code"] == "ERR_AUTH_CSRF_INVALID"
+        whoami_resp = _with_session_cookie(rbac_on_client, session_token).get(
+            "/api/v1/auth/whoami"
+        )
+        assert whoami_resp.status_code == 200
+
+    def test_detailed_api_health_requires_authentication(
+        self, rbac_on_client, rbac_user, auth_engine
+    ):
+        unauthenticated = rbac_on_client.get("/api/health")
+        assert unauthenticated.status_code == 401
+
+        login_resp = rbac_on_client.post(
+            "/api/v1/auth/login",
+            json={"username": "bob", "password": "hunter2"},
+        )
+        session_token = login_resp.cookies.get("channelwatch_session")
+        with patch(
+            "ui.backend.main._get_monitoring_health_summary",
+            return_value={"ready": True, "dvrs": []},
+        ):
+            authenticated = _with_session_cookie(rbac_on_client, session_token).get(
+                "/api/health"
+            )
+        assert authenticated.status_code == 200
+        assert authenticated.json() == {
+            "status": "ok",
+            "ready": True,
+            "dvrs": [],
+            "notification_routing_diagnostics": [],
+        }
+
+
+class TestFirstAdminSetupBoundaries:
+    def test_database_first_admin_claim_is_atomic_across_connections(self, tmp_path):
+        database_url = f"sqlite:///{tmp_path / 'auth-race.sqlite'}"
+        bootstrap_engine = create_db_engine(database_url)
+        SQLModel.metadata.create_all(bootstrap_engine)
+        bootstrap_engine.dispose()
+        engines = [create_db_engine(database_url), create_db_engine(database_url)]
+        both_hashed = threading.Barrier(2)
+        real_hash_password = hash_password
+
+        def synchronized_hash(password: str) -> str:
+            hashed = real_hash_password(password)
+            both_hashed.wait(timeout=10)
+            return hashed
+
+        def claim(attempt):
+            engine, username = attempt
+            try:
+                user, session = create_first_admin_session(
+                    engine, username, "strong-password"
+                )
+                return "created", user.username, session.user_id
+            except FirstAdminExistsError:
+                return "exists", username, None
+
+        try:
+            with (
+                patch("core.storage.auth.hash_password", side_effect=synchronized_hash),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                outcomes = list(
+                    pool.map(claim, zip(engines, ("admin-one", "admin-two")))
+                )
+
+            assert sorted(outcome[0] for outcome in outcomes) == ["created", "exists"]
+            assert get_user_count(engines[0]) == 1
+            with Session(engines[0]) as db_session:
+                session_count = db_session.execute(
+                    sa.select(sa.func.count()).select_from(UserSession)
+                ).scalar()
+            assert session_count == 1
+        finally:
+            for engine in engines:
+                engine.dispose()
+
+    def test_concurrent_setup_requests_have_one_winner(self, tmp_path):
+        from ui.backend import main as backend_main
+        from ui.backend.schemas import AppSettings
+
+        engine = create_db_engine(f"sqlite:///{tmp_path / 'setup-race.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        settings = AppSettings(
+            auth_mode="",
+            security_setup_completed=False,
+            dvr_servers=[],
+        )
+        start = threading.Barrier(2)
+
+        def setup(username: str):
+            start.wait(timeout=10)
+            try:
+                result = backend_main._auth_setup_sync(
+                    backend_main._SetupRequest(
+                        mode="rbac", username=username, password="strong-password"
+                    )
+                )
+                return "created", result.username
+            except HTTPException as exc:
+                return exc.status_code, username
+
+        try:
+            with (
+                patch("ui.backend.main.load_settings", return_value=settings),
+                patch("ui.backend.main._ensure_auth_tables", return_value=engine),
+                patch("ui.backend.main.save_settings") as save_settings,
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                outcomes = list(pool.map(setup, ("admin-one", "admin-two")))
+
+            statuses = [outcome[0] for outcome in outcomes]
+            assert statuses.count("created") == 1
+            assert statuses.count(409) == 1
+            assert get_user_count(engine) == 1
+            with Session(engine) as db_session:
+                session_count = db_session.execute(
+                    sa.select(sa.func.count()).select_from(UserSession)
+                ).scalar()
+            assert session_count == 1
+            save_settings.assert_called_once()
+        finally:
+            engine.dispose()
+
+    def test_settings_write_failure_rolls_back_claim_and_retry_succeeds(
+        self, tmp_path
+    ):
+        from ui.backend import main as backend_main
+        from ui.backend.schemas import AppSettings
+
+        engine = create_db_engine(f"sqlite:///{tmp_path / 'setup-save-failure.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        persisted = AppSettings(
+            auth_mode="",
+            security_setup_completed=False,
+            dvr_servers=[],
+        )
+        save_attempts = 0
+
+        def load_persisted_settings():
+            return AppSettings.model_validate(persisted.model_dump())
+
+        def persist_or_fail(settings):
+            nonlocal persisted, save_attempts
+            save_attempts += 1
+            if save_attempts == 1:
+                raise OSError("injected settings write failure")
+            persisted = AppSettings.model_validate(settings.model_dump())
+
+        body = backend_main._SetupRequest(
+            mode="rbac", username="first-admin", password="strong-password"
+        )
+        try:
+            with (
+                patch(
+                    "ui.backend.main.load_settings",
+                    side_effect=load_persisted_settings,
+                ),
+                patch("ui.backend.main._ensure_auth_tables", return_value=engine),
+                patch(
+                    "ui.backend.main.save_settings",
+                    side_effect=persist_or_fail,
+                ),
+            ):
+                with pytest.raises(OSError, match="injected settings write failure"):
+                    backend_main._auth_setup_sync(body)
+
+                assert get_user_count(engine) == 0
+                with Session(engine) as db_session:
+                    session_count = db_session.execute(
+                        sa.select(sa.func.count()).select_from(UserSession)
+                    ).scalar()
+                assert session_count == 0
+                assert persisted.auth_mode == ""
+                assert persisted.security_setup_completed is False
+
+                result = backend_main._auth_setup_sync(body)
+
+            assert result.mode == "rbac"
+            assert result.username == "first-admin"
+            assert get_user_count(engine) == 1
+            assert persisted.auth_mode == "rbac"
+            assert persisted.security_setup_completed is True
+        finally:
+            engine.dispose()
+
+    def test_database_commit_failure_leaves_retryable_rbac_setup(self, tmp_path):
+        from ui.backend import main as backend_main
+        from ui.backend.schemas import AppSettings
+
+        engine = create_db_engine(f"sqlite:///{tmp_path / 'setup-commit-failure.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        persisted = AppSettings(
+            auth_mode="",
+            security_setup_completed=False,
+            dvr_servers=[],
+        )
+        fail_next_commit = True
+
+        def load_persisted_settings():
+            return AppSettings.model_validate(persisted.model_dump())
+
+        def persist_settings(settings):
+            nonlocal persisted
+            persisted = AppSettings.model_validate(settings.model_dump())
+
+        def inject_first_commit_failure(_connection):
+            nonlocal fail_next_commit
+            if fail_next_commit:
+                fail_next_commit = False
+                raise RuntimeError("injected database commit failure")
+
+        body = backend_main._SetupRequest(
+            mode="rbac", username="first-admin", password="strong-password"
+        )
+        sa.event.listen(engine, "commit", inject_first_commit_failure)
+        try:
+            with (
+                patch(
+                    "ui.backend.main.load_settings",
+                    side_effect=load_persisted_settings,
+                ),
+                patch("ui.backend.main._ensure_auth_tables", return_value=engine),
+                patch(
+                    "ui.backend.main.save_settings",
+                    side_effect=persist_settings,
+                ),
+            ):
+                with pytest.raises(RuntimeError, match="injected database commit failure"):
+                    backend_main._auth_setup_sync(body)
+
+                assert get_user_count(engine) == 0
+                with Session(engine) as db_session:
+                    session_count = db_session.execute(
+                        sa.select(sa.func.count()).select_from(UserSession)
+                    ).scalar()
+                assert session_count == 0
+                assert persisted.auth_mode == "rbac"
+                assert persisted.security_setup_completed is True
+                assert backend_main._setup_required(persisted) is True
+
+                result = backend_main._auth_setup_sync(body)
+
+            assert result.mode == "rbac"
+            assert result.username == "first-admin"
+            assert get_user_count(engine) == 1
+        finally:
+            sa.event.remove(engine, "commit", inject_first_commit_failure)
+            engine.dispose()
+
+    def test_first_admin_session_failure_rolls_back_user(self, tmp_path):
+        engine = create_db_engine(f"sqlite:///{tmp_path / 'setup-rollback.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        with engine.connect() as connection:
+            connection.exec_driver_sql(
+                "CREATE TRIGGER fail_first_session "
+                "BEFORE INSERT ON user_session "
+                "BEGIN SELECT RAISE(ABORT, 'injected session failure'); END"
+            )
+            connection.commit()
+
+        try:
+            with pytest.raises(sa.exc.IntegrityError):
+                create_first_admin_session(
+                    engine, "first-admin", "strong-password"
+                )
+
+            assert get_user_count(engine) == 0
+            with Session(engine) as db_session:
+                session_count = db_session.execute(
+                    sa.select(sa.func.count()).select_from(UserSession)
+                ).scalar()
+            assert session_count == 0
+        finally:
+            engine.dispose()
+
+    def test_persisted_no_auth_can_be_converted_only_when_no_users_exist(
+        self, auth_engine
+    ):
+        from ui.backend import main as backend_main
+        from ui.backend.schemas import AppSettings
+
+        settings = AppSettings(
+            auth_mode="none",
+            security_setup_completed=True,
+            dvr_servers=[
+                {
+                    "id": "dvr_existing",
+                    "name": "Existing DVR",
+                    "host": "192.0.2.20",
+                    "port": 8089,
+                    "enabled": True,
+                }
+            ],
+        )
+        with (
+            patch("ui.backend.main.load_settings", return_value=settings),
+            patch("ui.backend.main._ensure_auth_tables", return_value=auth_engine),
+            patch("ui.backend.main.save_settings") as save_settings,
+        ):
+            result = backend_main._auth_setup_sync(
+                backend_main._SetupRequest(
+                    mode="rbac", username="first-admin", password="strong-password"
+                )
+            )
+
+        assert result.mode == "rbac"
+        assert result.username == "first-admin"
+        save_settings.assert_called_once()
+
+    def test_persisted_no_auth_rejects_first_admin_setup_when_user_exists(
+        self, auth_engine, rbac_user
+    ):
+        from ui.backend import main as backend_main
+        from ui.backend.schemas import AppSettings
+
+        settings = AppSettings(
+            auth_mode="none",
+            security_setup_completed=True,
+            dvr_servers=[],
+        )
+        with (
+            patch("ui.backend.main.load_settings", return_value=settings),
+            patch("ui.backend.main._ensure_auth_tables", return_value=auth_engine),
+            patch("ui.backend.main.save_settings"),
+            pytest.raises(Exception) as exc_info,
+        ):
+            backend_main._auth_setup_sync(
+                backend_main._SetupRequest(
+                    mode="rbac", username="attacker", password="strong-password"
+                )
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["code"] == "ERR_AUTH_ADMIN_EXISTS"
 
 
 class TestAdminPasswordRecovery:
@@ -453,9 +814,8 @@ class TestAdminPasswordRecovery:
             )
             session_token = login_resp.cookies.get("channelwatch_session")
 
-            before_reset_resp = client.get(
-                "/api/v1/auth/whoami",
-                cookies={"channelwatch_session": session_token},
+            before_reset_resp = _with_session_cookie(client, session_token).get(
+                "/api/v1/auth/whoami"
             )
 
             assert (
@@ -463,9 +823,8 @@ class TestAdminPasswordRecovery:
                 is True
             )
 
-            after_reset_resp = client.get(
-                "/api/v1/auth/whoami",
-                cookies={"channelwatch_session": session_token},
+            after_reset_resp = _with_session_cookie(client, session_token).get(
+                "/api/v1/auth/whoami"
             )
 
         assert login_resp.status_code == 200
@@ -585,14 +944,13 @@ class TestChangeCredentialsRoute:
             rbac_on_client, rbac_user["username"], rbac_user["password"]
         )
 
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/v1/auth/change-credentials",
             json={
                 "current_password": rbac_user["password"],
                 "username": "bob_renamed",
                 "new_password": "",
             },
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": csrf_token},
         )
 
@@ -610,14 +968,13 @@ class TestChangeCredentialsRoute:
             rbac_on_client, rbac_user["username"], rbac_user["password"]
         )
 
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/v1/auth/change-credentials",
             json={
                 "current_password": rbac_user["password"],
                 "username": "csrf_should_not_apply",
                 "new_password": "",
             },
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": "wrong"},
         )
 
@@ -627,14 +984,13 @@ class TestChangeCredentialsRoute:
     def test_change_credentials_rejects_invalid_session(
         self, rbac_on_client, rbac_user
     ):
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, "not-a-session").post(
             "/api/v1/auth/change-credentials",
             json={
                 "current_password": rbac_user["password"],
                 "username": "nobody",
                 "new_password": "",
             },
-            cookies={"channelwatch_session": "not-a-session"},
             headers={"X-CSRF-Token": "not-a-csrf"},
         )
 
@@ -647,14 +1003,13 @@ class TestChangeCredentialsRoute:
             rbac_on_client, rbac_user["username"], rbac_user["password"]
         )
 
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/v1/auth/change-credentials",
             json={
                 "current_password": "wrongpassword",
                 "username": "stolen_session_name",
                 "new_password": "newpass",
             },
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": csrf_token},
         )
 
@@ -689,14 +1044,9 @@ class TestLogEndpointRbac:
         log_file.write_text("secret-ish log line\n", encoding="utf-8")
 
         with patch("ui.backend.main.LOG_FILE", log_file):
-            tail_resp = rbac_on_client.get(
-                "/api/logs",
-                cookies={"channelwatch_session": session_token},
-            )
-            download_resp = rbac_on_client.get(
-                "/api/logs/download",
-                cookies={"channelwatch_session": session_token},
-            )
+            session_client = _with_session_cookie(rbac_on_client, session_token)
+            tail_resp = session_client.get("/api/logs")
+            download_resp = session_client.get("/api/logs/download")
 
         assert tail_resp.status_code == 403
         assert download_resp.status_code == 403
@@ -713,9 +1063,8 @@ class TestLogEndpointRbac:
         log_file.write_text("ops log line\n", encoding="utf-8")
 
         with patch("ui.backend.main.LOG_FILE", log_file):
-            resp = rbac_on_client.get(
-                "/api/logs?lines=1",
-                cookies={"channelwatch_session": session_token},
+            resp = _with_session_cookie(rbac_on_client, session_token).get(
+                "/api/logs?lines=1"
             )
 
         assert resp.status_code == 200
@@ -753,7 +1102,7 @@ class TestPersistedDvrHostSafety:
             rbac_admin_user["username"],
             rbac_admin_user["password"],
         )
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/settings",
             json={
                 "dvr_servers": [
@@ -766,7 +1115,6 @@ class TestPersistedDvrHostSafety:
                     }
                 ]
             },
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": csrf_token},
         )
 
@@ -783,7 +1131,7 @@ class TestPersistedDvrHostSafety:
             rbac_admin_user["username"],
             rbac_admin_user["password"],
         )
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/settings",
             json={
                 "dvr_servers": [
@@ -796,7 +1144,6 @@ class TestPersistedDvrHostSafety:
                     }
                 ]
             },
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": csrf_token},
         )
 
@@ -811,7 +1158,7 @@ class TestPersistedDvrHostSafety:
             rbac_admin_user["username"],
             rbac_admin_user["password"],
         )
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/settings",
             json={
                 "dvr_servers": [
@@ -824,7 +1171,6 @@ class TestPersistedDvrHostSafety:
                     }
                 ]
             },
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": csrf_token},
         )
 
@@ -865,10 +1211,9 @@ class TestDvrConnectionSecurity:
         mock_client = _DvrStatusClient()
 
         with patch("ui.backend.main._dvr_http_client", mock_client):
-            viewer_resp = rbac_on_client.post(
+            viewer_resp = _with_session_cookie(rbac_on_client, viewer_session).post(
                 "/api/v1/dvrs/test-connection",
                 json={"host": "example.com", "port": 8089},
-                cookies={"channelwatch_session": viewer_session},
                 headers={"X-CSRF-Token": viewer_csrf},
             )
 
@@ -877,10 +1222,9 @@ class TestDvrConnectionSecurity:
                 rbac_admin_user["username"],
                 rbac_admin_user["password"],
             )
-            admin_resp = rbac_on_client.post(
+            admin_resp = _with_session_cookie(rbac_on_client, admin_session).post(
                 "/api/v1/dvrs/test-connection",
                 json={"host": "example.com", "port": 8089},
-                cookies={"channelwatch_session": admin_session},
                 headers={"X-CSRF-Token": admin_csrf},
             )
 
@@ -900,10 +1244,9 @@ class TestDvrConnectionSecurity:
         mock_client = _DvrStatusClient()
 
         with patch("ui.backend.main._dvr_http_client", mock_client):
-            resp = rbac_on_client.post(
+            resp = _with_session_cookie(rbac_on_client, admin_session).post(
                 "/api/v1/dvrs/test-connection",
                 json={"host": "192.168.1.1", "port": 8089},
-                cookies={"channelwatch_session": admin_session},
                 headers={"X-CSRF-Token": admin_csrf},
             )
 
@@ -923,10 +1266,9 @@ class TestDvrConnectionSecurity:
         mock_client = _DvrStatusClient()
 
         with patch("ui.backend.main._dvr_http_client", mock_client):
-            resp = rbac_on_client.post(
+            resp = _with_session_cookie(rbac_on_client, admin_session).post(
                 "/api/v1/dvrs/test-connection",
                 json={"host": host, "port": 8089},
-                cookies={"channelwatch_session": admin_session},
                 headers={"X-CSRF-Token": admin_csrf},
             )
 
@@ -945,10 +1287,9 @@ class TestDvrConnectionSecurity:
         mock_client = _DvrStatusClient()
 
         with patch("ui.backend.main._dvr_http_client", mock_client):
-            resp = rbac_on_client.post(
+            resp = _with_session_cookie(rbac_on_client, admin_session).post(
                 "/api/v1/dvrs/test-connection",
                 json={"host": "169.254.169.254", "port": 8089},
-                cookies={"channelwatch_session": admin_session},
                 headers={"X-CSRF-Token": admin_csrf},
             )
 
@@ -974,10 +1315,9 @@ class TestCSRF:
         session_token, csrf_token = self._login_and_get_tokens(
             rbac_on_client, "bob", "hunter2"
         )
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/settings",
             json={"dvr_servers": []},
-            cookies={"channelwatch_session": session_token},
         )
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "ERR_AUTH_CSRF_INVALID"
@@ -988,10 +1328,9 @@ class TestCSRF:
         session_token, csrf_token = self._login_and_get_tokens(
             rbac_on_client, "admin_dave", "adminpass"
         )
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/settings",
             json={"dvr_servers": []},
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": csrf_token},
         )
         assert resp.status_code == 200
@@ -1000,10 +1339,9 @@ class TestCSRF:
         session_token, csrf_token = self._login_and_get_tokens(
             rbac_on_client, "bob", "hunter2"
         )
-        resp = rbac_on_client.post(
+        resp = _with_session_cookie(rbac_on_client, session_token).post(
             "/api/settings",
             json={"dvr_servers": []},
-            cookies={"channelwatch_session": session_token},
             headers={"X-CSRF-Token": "wrongtoken"},
         )
         assert resp.status_code == 403
@@ -1019,10 +1357,9 @@ class TestCSRF:
             "ui.backend.main.secrets.compare_digest",
             side_effect=lambda provided, expected: provided == expected,
         ) as compare_digest:
-            resp = rbac_on_client.post(
+            resp = _with_session_cookie(rbac_on_client, session_token).post(
                 "/api/settings",
                 json={"dvr_servers": []},
-                cookies={"channelwatch_session": session_token},
                 headers={"X-CSRF-Token": csrf_token},
             )
 
@@ -1046,9 +1383,8 @@ class TestCSRF:
         self, rbac_on_client, rbac_user, auth_engine
     ):
         session_token, _ = self._login_and_get_tokens(rbac_on_client, "bob", "hunter2")
-        resp = rbac_on_client.get(
-            "/api/v1/auth/whoami",
-            cookies={"channelwatch_session": session_token},
+        resp = _with_session_cookie(rbac_on_client, session_token).get(
+            "/api/v1/auth/whoami"
         )
         assert resp.status_code == 200
 

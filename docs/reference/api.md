@@ -15,7 +15,7 @@ OpenAPI JSON is available at `/openapi.json` when the UI backend is running. Rou
 | RBAC session | Send `channelwatch_session` cookie | Used when effective auth mode is `rbac`. State changing session requests also need `X-CSRF-Token` when the security middleware applies. |
 | RBAC role | `viewer`, `operator`, or `admin` | Routes with `require_role(...)` enforce the listed minimum role only when RBAC is enabled. API key fallback bypasses role checks when legacy fallback is active. |
 
-Rate limits apply to most `/api/*` requests: 120 read requests and 30 write requests per client per 60 seconds. Exempt paths are `/api/ping`, `/api/health`, `/healthz/ready`, `/healthz/live`, `/healthz/startup`, and `/metrics`.
+Rate limits apply to most `/api/*` requests: 120 read requests and 30 write requests per client per 60 seconds. Exempt paths are `/api/ping`, `/api/health`, `/api/v1/runtime/preflight`, `/healthz/ready`, `/healthz/live`, `/healthz/startup`, and `/metrics`.
 
 ## Webhook endpoints
 
@@ -47,6 +47,32 @@ Example response:
 {"status":"ok"}
 ```
 
+### `GET /api/v1/runtime/preflight`
+
+| Field | Value |
+| --- | --- |
+| Function | `runtime_preflight_endpoint` |
+| Auth requirement | none |
+| RBAC role required | none |
+| Request body schema | `none` |
+| Response body schema | `object` |
+| Status codes | 200 |
+| Rate limit applies | no |
+
+Example request:
+
+```bash
+curl -sS "$BASE_URL/api/v1/runtime/preflight"
+```
+
+Example response:
+
+```json
+{"status":"setup_required","setup_required":true,"blockers":["secret_storage_key_missing"],"warnings":[]}
+```
+
+This public bootstrap response uses only fixed blocker and warning codes. It never includes secret values, hashes, key-file contents, deployment paths, environment dumps, or DVR data. Supported blocker codes are `secret_storage_key_missing`, `secret_storage_key_too_short`, `secret_storage_key_mismatch`, and `secret_storage_key_file_unreadable`; the supported warning is `legacy_plaintext_key_migration_recommended`.
+
 ### `GET /api/health`
 
 | Field | Value |
@@ -68,7 +94,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/health"
 Example response:
 
 ```json
-{"status":"ok","ready":true,"dvrs":[],"notification_routing_diagnostics":[]}
+{"status":"ok","ready":true,"runtime":{"status":"ready","setup_required":false,"blockers":[],"warnings":[]},"dvrs":[],"notification_routing_diagnostics":[]}
 ```
 
 This is the authenticated detailed monitoring surface. Its `dvrs` entries include DVR IDs, names, monitor states, and reasons. Routing diagnostics identify stale DVR IDs and unknown destination keys. No live DVR request is made while rendering this response.
@@ -168,7 +194,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.16","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.17","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -876,7 +902,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.16","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.17","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`
@@ -1098,7 +1124,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
 Example response:
 
 ```json
-{"current_version":"0.9.16","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
+{"current_version":"0.9.17","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
 ```
 
 ### `POST /api/v1/update/check`
@@ -1122,7 +1148,7 @@ This route fetches the trusted public ChannelWatch update manifest and stores th
 | Function | `update_apply` |
 | Auth requirement | api_key or RBAC session |
 | RBAC role required | admin |
-| Request body schema | `{ "version": "0.9.16" }` |
+| Request body schema | `{ "version": "0.9.17" }` |
 | Response body schema | `UpdateJob` |
 | Status codes | 202, 401, 403, 409 (`ERR_UPDATE_LOCKED` or `ERR_UPDATE_IMAGE_REQUIRED`), 429, 500 |
 | Rate limit applies | yes |

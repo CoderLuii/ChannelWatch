@@ -6,6 +6,7 @@ delivery for each alert notification.
 """
 
 from dataclasses import dataclass
+import asyncio
 from queue import Empty, Full, Queue
 import threading
 import time
@@ -19,6 +20,7 @@ from .routing import ALL_DEST_KEYS as ALL_DEST_KEYS
 from .routing import APPRISE_DEST_KEYS, resolve_notification_routing
 
 SINGLE_ATTEMPT_APPRISE_EVENT_TYPES = {"channel", "runtime", "vod"}
+DIAGNOSTIC_DEADLINE_SECONDS = 19.5
 
 
 def _resolve_routing(
@@ -74,6 +76,8 @@ class NotificationManager:
         db_engine: Any = None,
         rate_limiter: Optional[RateLimiter] = None,
         delivery_queue_size: int = 256,
+        diagnostic_mode: bool = False,
+        diagnostic_deadline_seconds: float = DIAGNOSTIC_DEADLINE_SECONDS,
     ):
         self.providers: Dict[str, NotificationProvider] = {}
         self.webhook_manager: Optional[Any] = None
@@ -85,6 +89,10 @@ class NotificationManager:
         self._provider_delivery_lock = threading.Lock()
         self._delivery_queue: Queue[Any] = Queue(
             maxsize=max(1, int(delivery_queue_size))
+        )
+        self.diagnostic_mode = bool(diagnostic_mode)
+        self.diagnostic_deadline_seconds = max(
+            0.01, float(diagnostic_deadline_seconds)
         )
         self._queue_state_lock = threading.Lock()
         self._queued_dedupe_keys: set[str] = set()
@@ -134,6 +142,11 @@ class NotificationManager:
         )
         return bool(self.get_active_providers() or has_webhooks)
 
+    def has_configured_destinations(self) -> bool:
+        """Return whether any provider or webhook can accept a notification."""
+
+        return self._has_configured_destinations()
+
     @staticmethod
     def _dedupe_key(kwargs: dict[str, Any]) -> Optional[str]:
         raw_key = kwargs.get("notification_dedupe_key") or kwargs.get(
@@ -171,6 +184,7 @@ class NotificationManager:
         event_type = kwargs.get("event_type", "")
         routing = _resolve_routing(dvr_id, event_type, _load_routing_config())
         activity_event_id = kwargs.get("activity_event_id")
+        diagnostic_deadline = kwargs.get("_diagnostic_deadline_monotonic")
 
         allowed_apprise: Optional[Set[str]] = None
         if dvr_id and event_type:
@@ -211,6 +225,7 @@ class NotificationManager:
                         db_engine=self.db_engine,
                         activity_event_id=activity_event_id,
                         with_retry=_should_retry_apprise(event_type),
+                        deadline_monotonic=diagnostic_deadline,
                     )
                     if success:
                         log(
@@ -242,6 +257,7 @@ class NotificationManager:
                     db_engine=self.db_engine,
                     activity_event_id=activity_event_id,
                     with_retry=False,
+                    deadline_monotonic=diagnostic_deadline,
                 )
                 if success:
                     overall_success = True
@@ -264,6 +280,11 @@ class NotificationManager:
 
     def send_notification(self, title: str, message: str, **kwargs) -> bool:
         """Synchronously deliver one rate-limited notification."""
+        if self.diagnostic_mode and "_diagnostic_deadline_monotonic" not in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["_diagnostic_deadline_monotonic"] = (
+                time.monotonic() + self.diagnostic_deadline_seconds
+            )
         if not self._has_configured_destinations():
             return False
         if not self.rate_limiter.allow():
@@ -446,6 +467,26 @@ class NotificationManager:
 
     async def send_notification_async(self, title: str, message: str, **kwargs) -> bool:
         """Queue one notification and return whether the queue accepted it."""
+        if self.diagnostic_mode:
+            deadline = time.monotonic() + self.diagnostic_deadline_seconds
+            diagnostic_kwargs = dict(kwargs)
+            diagnostic_kwargs["_diagnostic_deadline_monotonic"] = deadline
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self.send_notification,
+                        title,
+                        message,
+                        **diagnostic_kwargs,
+                    ),
+                    timeout=self.diagnostic_deadline_seconds + 0.25,
+                )
+            except TimeoutError:
+                log(
+                    "Notification diagnostic exceeded its delivery deadline",
+                    level=LOG_STANDARD,
+                )
+                return False
         return self.enqueue_notification(title, message, **kwargs)
 
     def wait_for_delivery_queue(self, timeout: float = 5.0) -> bool:

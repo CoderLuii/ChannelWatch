@@ -1,5 +1,8 @@
 """Runtime diagnostics for ChannelWatch."""
 
+import asyncio
+import inspect
+
 from .connectivity.server import (
     test_connectivity,
     test_api_endpoints,
@@ -50,21 +53,26 @@ ALERT_TESTS = {
 }
 
 
-def run_test(
+async def run_test(
     test_name: str, host: str, port: int, alert_manager=None, duration=30
 ) -> bool:
     """Executes a specified diagnostic with given parameters and returns the result."""
     if test_name == "connectivity":
-        return test_connectivity(host, port)
+        return await asyncio.to_thread(test_connectivity, host, port)
     elif test_name == "api":
-        return test_api_endpoints(host, port)
+        return await asyncio.to_thread(test_api_endpoints, host, port)
     elif test_name == "event_stream":
-        return test_event_stream(host, port, duration)
+        return await asyncio.to_thread(test_event_stream, host, port, duration)
     elif test_name in ALERT_TESTS:
         if not alert_manager:
             log(f"[FAIL]  alert_manager required for {test_name} test")
             return False
-        return ALERT_TESTS[test_name](host, port, alert_manager)
+        diagnostic = ALERT_TESTS[test_name]
+        if inspect.iscoroutinefunction(diagnostic):
+            return bool(await diagnostic(host, port, alert_manager))
+        return bool(
+            await asyncio.to_thread(diagnostic, host, port, alert_manager)
+        )
     else:
         log(f"[FAIL]  Unknown test: {test_name}")
         return False

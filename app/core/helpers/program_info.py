@@ -15,6 +15,7 @@ from typing import Dict, Any, Optional
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
 from .type_utils import ensure_str
 from .dvr_connection import build_dvr_base_url
+from .dvr_target import build_safe_dvr_request
 
 
 MAX_XMLTV_RESPONSE_BYTES = 64 * 1024 * 1024
@@ -44,6 +45,9 @@ class ProgramInfoProvider:
             self.port = port
             self.base_url = build_dvr_base_url(host, port)
         self.cache_ttl = cache_ttl
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
         self.timezone = timezone
         self.local_tz = pytz.timezone(timezone)
 
@@ -56,8 +60,21 @@ class ProgramInfoProvider:
     def _fetch_xmltv_data(self, duration: int = 86400) -> Optional[bytes]:
         """Retrieve bounded XMLTV program guide data from Channels DVR."""
         try:
-            url = f"{self.base_url}/devices/ANY/guide/xmltv"
-            with httpx.stream("GET", url, timeout=30) as response:
+            request = build_safe_dvr_request(
+                self.host,
+                self.port,
+                "/devices/ANY/guide/xmltv",
+                allow_loopback=self._allow_test_loopback,
+            )
+            if request is None:
+                raise httpx.ConnectError("DVR target did not pass safety validation")
+            with httpx.stream(
+                "GET",
+                request.url,
+                headers={"Host": request.host_header},
+                timeout=30,
+                trust_env=False,
+            ) as response:
                 if response.status_code != 200:
                     log(
                         f"Failed to fetch XMLTV data: HTTP {response.status_code}",

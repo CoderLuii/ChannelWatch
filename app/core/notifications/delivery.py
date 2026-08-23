@@ -215,6 +215,7 @@ def deliver_with_retry(
     activity_event_id: Optional[str] = None,
     with_retry: bool = True,
     sleep_fn: Optional[Callable[[int], None]] = None,
+    deadline_monotonic: Optional[float] = None,
 ) -> bool:
     delays = RETRY_DELAYS if with_retry else []
     attempts = [0] + delays
@@ -222,6 +223,8 @@ def deliver_with_retry(
     sleeper = sleep_fn or time.sleep
 
     for retry_count, delay in enumerate(attempts):
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            return False
         if circuit_breaker.is_open(dvr_id, channel, provider_type, channel_id):
             _persist(
                 dvr_id=dvr_id,
@@ -245,6 +248,12 @@ def deliver_with_retry(
             return False
 
         if delay > 0:
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= delay:
+                    if remaining > 0:
+                        sleeper(remaining)
+                    return False
             sleeper(delay)
 
         error_msg: Optional[str] = None

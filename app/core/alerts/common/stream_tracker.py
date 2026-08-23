@@ -9,6 +9,7 @@ import os
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 from ...helpers.type_utils import ensure_str
 from ...helpers.dvr_connection import build_dvr_base_url
+from ...helpers.dvr_target import build_safe_dvr_request
 
 # GLOBALS
 
@@ -25,11 +26,18 @@ class StreamTracker:
     def __init__(self, dvr=None, host: Optional[str] = None, port: int = 8089):
         """Initializes the stream tracker with connection settings and state tracking."""
         if dvr is not None:
+            self.host = dvr.host
+            self.port = dvr.port
             self.base_url = dvr.base_url
             self.dvr_id = dvr.id
         else:
-            self.base_url = build_dvr_base_url(ensure_str(host), port)
+            self.host = ensure_str(host)
+            self.port = port
+            self.base_url = build_dvr_base_url(self.host, port)
             self.dvr_id = "default"
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
 
         self.active_streams: Dict[str, Dict[str, Any]] = {}
         self.device_sessions: Dict[str, str] = {}
@@ -64,7 +72,20 @@ class StreamTracker:
     def update_from_status(self) -> Optional[Dict[str, Any]]:
         """Gets current stream status from DVR server."""
         try:
-            response = httpx.get(f"{self.base_url}/dvr", timeout=10)
+            request = build_safe_dvr_request(
+                self.host,
+                self.port,
+                "/dvr",
+                allow_loopback=self._allow_test_loopback,
+            )
+            if request is None:
+                raise httpx.ConnectError("DVR target did not pass safety validation")
+            response = httpx.get(
+                request.url,
+                headers={"Host": request.host_header},
+                timeout=10,
+                trust_env=False,
+            )
             if response.status_code == 200:
                 return response.json()
             else:

@@ -6,7 +6,7 @@ import time
 import httpx
 
 from .logging import log
-from .dvr_connection import build_dvr_base_url
+from .dvr_target import build_safe_dvr_request
 
 
 # EVENT STREAM
@@ -14,27 +14,30 @@ def monitor_event_stream(host: str, port: int, duration: int = 30) -> bool:
     """Captures and logs event stream data from Channels DVR for specified duration."""
     import threading
 
-    base_url = build_dvr_base_url(host, port)
-    url = f"{base_url}/dvr/events/subscribe"
-
     log(f"Monitoring events for {duration} seconds")
 
     monitor_data = {"running": True, "event_count": 0, "success": False}
 
     def monitoring_thread():
         try:
+            request = build_safe_dvr_request(
+                host, port, "/dvr/events/subscribe"
+            )
+            if request is None:
+                raise httpx.ConnectError("DVR target did not pass safety validation")
             headers = {
                 "Accept": "text/event-stream",
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
+                "Host": request.host_header,
             }
 
             log("Connecting to event stream...")
             timeout = httpx.Timeout(10.0, read=duration + 30)
 
-            with httpx.Client() as client:
+            with httpx.Client(trust_env=False) as client:
                 with client.stream(
-                    "GET", url, headers=headers, timeout=timeout
+                    "GET", request.url, headers=headers, timeout=timeout
                 ) as response:
                     if response.status_code != 200:
                         log(f"Connection failed - HTTP {response.status_code}")

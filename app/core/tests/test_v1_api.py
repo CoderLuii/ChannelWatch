@@ -179,7 +179,9 @@ class TestDvrConnectionTest:
             "version": "2026.02.09",
         }
         mock_client.get.assert_awaited_once_with(
-            "http://10.10.25.75:8089/status", timeout=8.0
+            "http://10.10.25.75:8089/status",
+            headers={"Host": "10.10.25.75:8089"},
+            timeout=8.0,
         )
 
     def test_manual_connection_test_rejects_unsafe_metadata_host(self, client):
@@ -212,7 +214,7 @@ class TestDvrConnectionTest:
         assert detail["message"] == "Test target rejected: host failed safety check"
         mock_client.get.assert_not_called()
 
-    @pytest.mark.parametrize("host", ["2001:db8::1", "[2001:db8::1]"])
+    @pytest.mark.parametrize("host", ["fd00::1", "[fd00::1]"])
     def test_manual_connection_test_accepts_ipv6_target(self, client, host):
         status_resp = MagicMock()
         status_resp.status_code = 200
@@ -236,7 +238,9 @@ class TestDvrConnectionTest:
             "version": "2026.03.01",
         }
         mock_client.get.assert_awaited_once_with(
-            "http://[2001:db8::1]:8089/status", timeout=8.0
+            "http://[fd00::1]:8089/status",
+            headers={"Host": "[fd00::1]:8089"},
+            timeout=8.0,
         )
 
     def test_manual_connection_test_non_200_status_returns_success_false(self, client):
@@ -762,7 +766,9 @@ class TestDvrUpcomingRecordings:
             patch(
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
-                return_value=[("dvr_aaa11111", "Living Room", "http://dvr.test")],
+                return_value=[
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10")
+                ],
             ),
             patch("ui.backend.main.CORE_APP_AVAILABLE", False),
         ):
@@ -792,7 +798,9 @@ class TestDvrUpcomingRecordings:
             patch(
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
-                return_value=[("dvr_aaa11111", "Living Room", "http://dvr.test")],
+                return_value=[
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10")
+                ],
             ),
             patch("ui.backend.main.CORE_APP_AVAILABLE", False),
         ):
@@ -832,7 +840,9 @@ class TestDvrUpcomingRecordings:
             patch(
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
-                return_value=[("dvr_aaa11111", "Living Room", "http://dvr.test")],
+                return_value=[
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10")
+                ],
             ),
             patch("ui.backend.main.CORE_APP_AVAILABLE", False),
         ):

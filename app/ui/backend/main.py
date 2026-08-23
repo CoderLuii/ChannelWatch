@@ -1,5 +1,6 @@
 # IMPORTS
 import http.client
+import inspect
 import os
 import signal
 import ipaddress
@@ -49,7 +50,10 @@ from .support_report import (
 )
 from core.helpers.config import CONFIG_DIR as _CORE_CONFIG_DIR, ConfigLoadError
 from core.helpers.atomic_io import atomic_write_json
+from core.helpers.encryption import EncryptionKeyUnavailableError
+from core.helpers.runtime_preflight import inspect_runtime_preflight
 from core.helpers.dvr_connection import build_dvr_base_url
+from core.helpers.dvr_target import build_safe_dvr_request, validate_dvr_target
 from core.helpers.dvr_id import dvr_display_name
 from core.helpers.trusted_destinations import preview_notification_destination_safety
 from core.notifications.routing import (
@@ -84,7 +88,7 @@ from datetime import datetime, timedelta, timezone as _tz
 # no untrusted network XML reaches this parser.
 import xmlrpc.client  # nosec B411
 import httpx
-from typing import Optional, List, Dict, Any, cast
+from typing import Optional, List, Dict, Any, Literal, cast
 import time
 import threading
 import re
@@ -183,7 +187,7 @@ except ImportError as e:
     ) -> Optional[Any]:
         return None
 
-    def run_test(
+    async def run_test(
         test_name: str,
         host: str,
         port: int,
@@ -280,7 +284,34 @@ except ImportError:
     _DISCOVERY_AVAILABLE = False
 
 # SHARED HTTP CLIENT
-_dvr_http_client = httpx.AsyncClient(timeout=30.0)
+_dvr_http_client = httpx.AsyncClient(timeout=30.0, trust_env=False)
+
+
+async def _safe_dvr_get_url(url: str, *, timeout: float) -> httpx.Response:
+    """Resolve, validate, and pin a configured DVR URL for one GET request."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password:
+        raise httpx.ConnectError("DVR target did not pass safety validation")
+    try:
+        port = parsed.port or 8089
+    except ValueError as exc:
+        raise httpx.ConnectError("DVR target has an invalid port") from exc
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    request = await asyncio.to_thread(
+        build_safe_dvr_request,
+        parsed.hostname,
+        port,
+        path,
+    )
+    if request is None:
+        raise httpx.ConnectError("DVR target did not pass safety validation")
+    return await _dvr_http_client.get(
+        request.url,
+        headers={"Host": request.host_header},
+        timeout=timeout,
+    )
 
 
 # APP INITIALIZATION
@@ -609,6 +640,7 @@ AUTH_EXEMPT_PATHS = {
     "/healthz/startup",
 }
 AUTH_EXEMPT_ROUTES = {
+    ("GET", "/api/v1/runtime/preflight"),
     ("GET", "/api/v1/security/status"),
     ("GET", "/api/v1/feeds/calendar.ics"),
     ("GET", "/api/v1/calendar.ics"),
@@ -624,6 +656,7 @@ RATE_LIMIT_EXEMPT_PATHS = {
     "/healthz/ready",
     "/healthz/live",
     "/healthz/startup",
+    "/api/v1/runtime/preflight",
     "/metrics",
 }
 RATE_LIMIT_WINDOW_SECONDS = 60
@@ -882,7 +915,7 @@ async def _fetch_dvr_library_counts(dvr_url: str) -> tuple[int, int, int]:
 
     async def _count(path: str) -> int:
         try:
-            resp = await _dvr_http_client.get(f"{dvr_url}{path}", timeout=5)
+            resp = await _safe_dvr_get_url(f"{dvr_url}{path}", timeout=5)
             if resp.is_success:
                 return len(resp.json())
         except Exception:
@@ -1099,10 +1132,13 @@ async def ping():
 @app.get("/api/health")
 async def health():
     summary = await asyncio.to_thread(_get_monitoring_health_summary)
+    runtime_preflight = await asyncio.to_thread(inspect_runtime_preflight)
     settings = await _load_settings_async()
+    ready = bool(summary["ready"] and not runtime_preflight.setup_required)
     payload = {
-        "status": "ok" if summary["ready"] else "degraded",
-        "ready": summary["ready"],
+        "status": "ok" if ready else "degraded",
+        "ready": ready,
+        "runtime": runtime_preflight.public_payload(),
         "dvrs": [
             {
                 "id": entry["id"],
@@ -1117,7 +1153,7 @@ async def health():
             getattr(settings, "dvr_servers", []),
         ),
     }
-    if summary["ready"]:
+    if ready:
         return payload
     return JSONResponse(status_code=503, content=payload)
 
@@ -1129,12 +1165,14 @@ async def healthz_live():
 
 @app.get("/healthz/ready", include_in_schema=False)
 async def healthz_ready():
+    runtime_preflight = await asyncio.to_thread(inspect_runtime_preflight)
     summary = await asyncio.to_thread(_get_monitoring_health_summary)
+    ready = bool(summary["ready"] and not runtime_preflight.setup_required)
     payload = {
-        "status": "ready" if summary["ready"] else "degraded",
-        "ready": summary["ready"],
+        "status": "ready" if ready else "degraded",
+        "ready": ready,
     }
-    if summary["ready"]:
+    if ready:
         return payload
     return JSONResponse(status_code=503, content=payload)
 
@@ -1144,6 +1182,32 @@ async def healthz_startup():
     if _STARTUP_COMPLETE:
         return {"status": "ready"}
     return JSONResponse(status_code=503, content={"status": "not_ready"})
+
+
+class RuntimePreflightResponse(BaseModel):
+    status: Literal["ready", "setup_required", "migration_recommended"]
+    setup_required: bool
+    blockers: list[
+        Literal[
+            "secret_storage_key_missing",
+            "secret_storage_key_too_short",
+            "secret_storage_key_mismatch",
+            "secret_storage_key_file_unreadable",
+        ]
+    ]
+    warnings: list[Literal["legacy_plaintext_key_migration_recommended"]]
+
+
+@app.get(
+    "/api/v1/runtime/preflight",
+    tags=["Runtime"],
+    response_model=RuntimePreflightResponse,
+)
+async def runtime_preflight():
+    """Return the minimal non-sensitive setup state needed by the UI shell."""
+
+    result = await asyncio.to_thread(inspect_runtime_preflight)
+    return result.public_payload()
 
 
 @app.get("/api/discover-servers", tags=["Information"])
@@ -1181,68 +1245,8 @@ class _DvrConnectionTestRequest(BaseModel):
     api_key: Optional[str] = None
 
 
-_DVR_TEST_PRIVATE_LAN_NETWORKS = tuple(
-    ipaddress.ip_network(network)
-    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
-)
-
-
-def _is_private_lan_dvr_host(host: str) -> bool:
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-
-    return addr.version == 4 and any(
-        addr in network for network in _DVR_TEST_PRIVATE_LAN_NETWORKS
-    )
-
-
-def _parse_safe_dvr_ip_literal(
-    host: str,
-) -> Optional[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    raw = host.strip()
-    if raw.startswith("["):
-        if not raw.endswith("]"):
-            return None
-        raw = raw[1:-1]
-    if not raw:
-        return None
-    try:
-        return ipaddress.ip_address(raw)
-    except ValueError:
-        return None
-
-
-def _is_allowed_ipv6_dvr_host(host: str) -> bool:
-    addr = _parse_safe_dvr_ip_literal(host)
-    if addr is None or addr.version != 6:
-        return False
-    return not (
-        addr.is_link_local
-        or addr.is_loopback
-        or addr.is_multicast
-        or addr.is_unspecified
-    )
-
-
 def _is_safe_dvr_test_target(host: str, port: int) -> bool:
-    host = (host or "").strip()
-    if not host or not (1 <= port <= 65535):
-        return False
-    if "://" in host or any(ch in host for ch in ("/", "?", "#", "@")):
-        return False
-
-    if ":" in host:
-        return _is_allowed_ipv6_dvr_host(host)
-
-    if _is_private_lan_dvr_host(host):
-        return True
-
-    safety_url = build_dvr_base_url(host, port)
-    if is_safe_url(safety_url):
-        return True
-    return False
+    return validate_dvr_target(host, port) is not None
 
 
 def _safe_dvr_test_error(exc: Exception) -> str:
@@ -1263,7 +1267,10 @@ def _safe_dvr_test_error(exc: Exception) -> str:
 async def test_dvr_connection(body: _DvrConnectionTestRequest):
     host = body.host.strip()
     safety_url = build_dvr_base_url(host, body.port)
-    if not _is_safe_dvr_test_target(host, body.port):
+    safe_request = await asyncio.to_thread(
+        build_safe_dvr_request, host, body.port, "/status"
+    )
+    if safe_request is None:
         log.warning("Rejected unsafe DVR test target: %s", redact_url(safety_url))
         raise structured_error(
             ErrorCode.DVR_TEST_TARGET_REJECTED,
@@ -1271,8 +1278,11 @@ async def test_dvr_connection(body: _DvrConnectionTestRequest):
         )
 
     try:
-        url = f"{build_dvr_base_url(host, body.port)}/status"
-        resp = await _dvr_http_client.get(url, timeout=8.0)
+        resp = await _dvr_http_client.get(
+            safe_request.url,
+            headers={"Host": safe_request.host_header},
+            timeout=8.0,
+        )
         if resp.status_code != 200:
             return {"success": False, "error": f"DVR returned HTTP {resp.status_code}"}
         data = resp.json()
@@ -1500,6 +1510,9 @@ async def update_settings_endpoint(settings: AppSettings):
         return {"message": "Settings saved successfully"}
     except HTTPException:
         raise
+    except EncryptionKeyUnavailableError as exc:
+        log.warning("Credential write blocked because runtime setup is incomplete.")
+        raise structured_error(ErrorCode.RUNTIME_SETUP_REQUIRED) from exc
     except Exception as e:
         print(f"[WebUI API] ERROR: Failed saving settings: {e}")
         raise structured_error(ErrorCode.SETTINGS_SAVE_FAILED)
@@ -3097,8 +3110,8 @@ async def get_system_info(
         s_connected = False
 
         status_result, storage_result = await asyncio.gather(
-            _dvr_http_client.get(f"{dvr_url}/status", timeout=3),
-            _dvr_http_client.get(f"{dvr_url}/dvr", timeout=3),
+            _safe_dvr_get_url(f"{dvr_url}/status", timeout=3),
+            _safe_dvr_get_url(f"{dvr_url}/dvr", timeout=3),
             return_exceptions=True,
         )
         if isinstance(status_result, BaseException) or isinstance(
@@ -3574,7 +3587,7 @@ async def _collect_upcoming_recordings(limit: int = 250) -> list[RecordingInfo]:
             channel_map = {}
             channel_logo_map = {}
             try:
-                channel_response = await _dvr_http_client.get(
+                channel_response = await _safe_dvr_get_url(
                     f"{dvr_url}/api/v1/channels", timeout=5
                 )
                 if channel_response.status_code == 200:
@@ -3595,7 +3608,9 @@ async def _collect_upcoming_recordings(limit: int = 250) -> list[RecordingInfo]:
             except Exception:
                 pass
 
-            jobs_response = await _dvr_http_client.get(f"{dvr_url}/dvr/jobs", timeout=5)
+            jobs_response = await _safe_dvr_get_url(
+                f"{dvr_url}/dvr/jobs", timeout=5
+            )
             if jobs_response.status_code != 200:
                 return []
 
@@ -4042,7 +4057,9 @@ async def get_active_recordings_count():
     async def _count_for_dvr(entry):
         _dvr_id, _dvr_name, dvr_url = entry
         try:
-            response = await _dvr_http_client.get(f"{dvr_url}/dvr/jobs", timeout=5)
+            response = await _safe_dvr_get_url(
+                f"{dvr_url}/dvr/jobs", timeout=5
+            )
             if response.status_code == 200:
                 active_count = 0
                 for recording in response.json():
@@ -4075,7 +4092,7 @@ async def _get_per_dvr_active_stream_counts() -> Dict[str, int]:
     async def _count_for_dvr(entry):
         dvr_id, _dvr_name, dvr_url = entry
         try:
-            resp = await _dvr_http_client.get(f"{dvr_url}/dvr", timeout=3)
+            resp = await _safe_dvr_get_url(f"{dvr_url}/dvr", timeout=3)
             if resp.status_code == 200:
                 data = resp.json()
                 return dvr_id, len(data.get("activity", {}))
@@ -4114,7 +4131,7 @@ async def get_active_streams_details(response: Response):
         dvr_watching = []
         dvr_recording = []
         try:
-            resp = await _dvr_http_client.get(f"{dvr_url}/dvr", timeout=3)
+            resp = await _safe_dvr_get_url(f"{dvr_url}/dvr", timeout=3)
             if resp.status_code != 200:
                 return dvr_watching, dvr_recording
 
@@ -4126,7 +4143,7 @@ async def get_active_streams_details(response: Response):
             channel_images = {}
             channel_logos = {}
             try:
-                ch_resp = await _dvr_http_client.get(
+                ch_resp = await _safe_dvr_get_url(
                     f"{dvr_url}/api/v1/channels", timeout=3
                 )
                 if ch_resp.status_code == 200:
@@ -4144,7 +4161,7 @@ async def get_active_streams_details(response: Response):
 
             if stream_pref == "program":
                 try:
-                    guide_resp = await _dvr_http_client.get(
+                    guide_resp = await _safe_dvr_get_url(
                         f"{dvr_url}/devices/ANY/guide/now", timeout=5
                     )
                     if guide_resp.status_code == 200:
@@ -4243,7 +4260,7 @@ class TestResult(BaseModel):
     message: str
 
 
-def run_test_background(test_name: str) -> TestResult:
+async def _run_test_background_async(test_name: str) -> TestResult:
     """Helper function to run a test in the background."""
     message = ""
     success = False
@@ -4395,6 +4412,7 @@ def run_test_background(test_name: str) -> TestResult:
                 notification_manager = NotificationManager(
                     rate_limit=test_settings.global_rate_limit,
                     rate_window=test_settings.global_rate_window,
+                    diagnostic_mode=True,
                 )
 
             alert_manager = initialize_alerts(
@@ -4407,9 +4425,16 @@ def run_test_background(test_name: str) -> TestResult:
                     message="Failed to initialize alert manager",
                 )
 
-            success = run_test(test_key, host, port, alert_manager)
+            diagnostic_result = run_test(test_key, host, port, alert_manager)
         else:
-            success = run_test(test_key, host, port, None)
+            diagnostic_result = run_test(test_key, host, port, None)
+
+        if inspect.isawaitable(diagnostic_result):
+            success = await asyncio.wait_for(diagnostic_result, timeout=20.0)
+        else:
+            # Compatibility for test/plugin shims written against the older
+            # synchronous internal diagnostic hook.
+            success = bool(diagnostic_result)
 
         message = f"Test '{test_name}' {'succeeded' if success else 'failed'}"
 
@@ -4422,6 +4447,12 @@ def run_test_background(test_name: str) -> TestResult:
         message = f"Error running test '{test_name}': {e}. Check container logs."
 
     return TestResult(test_name=test_name, success=success, message=message)
+
+
+def run_test_background(test_name: str) -> TestResult:
+    """Synchronous compatibility wrapper for CLI/tests outside the ASGI loop."""
+
+    return asyncio.run(_run_test_background_async(test_name))
 
 
 @app.post(
@@ -4440,9 +4471,7 @@ async def trigger_test_endpoint(test_name_url: str):
 
     test_name = test_name_url.replace("_", " ")
 
-    import asyncio
-
-    result = await asyncio.to_thread(run_test_background, test_name)
+    result = await _run_test_background_async(test_name)
     return result
 
 
@@ -5246,11 +5275,11 @@ async def get_dvr_v1(dvr_id: str):
     s_shows, s_movies, s_episodes = 0, 0, 0
     s_connected = False
     try:
-        status_resp = await _dvr_http_client.get(f"{surl}/status", timeout=3)
+        status_resp = await _safe_dvr_get_url(f"{surl}/status", timeout=3)
         if status_resp.status_code == 200:
             s_version = status_resp.json().get("version", None)
             s_connected = True
-        storage_resp = await _dvr_http_client.get(f"{surl}/dvr", timeout=3)
+        storage_resp = await _safe_dvr_get_url(f"{surl}/dvr", timeout=3)
         if storage_resp.status_code == 200:
             s_percent, s_total, s_free, _ = _parse_dvr_storage(storage_resp.json())
     except Exception:
@@ -5298,7 +5327,7 @@ async def get_dvr_streams_v1(dvr_id: str):
     watching = []
     recording = []
     try:
-        resp = await _dvr_http_client.get(f"{surl}/dvr", timeout=3)
+        resp = await _safe_dvr_get_url(f"{surl}/dvr", timeout=3)
         if resp.status_code != 200:
             return {
                 "dvr_id": sid,
@@ -5314,7 +5343,9 @@ async def get_dvr_streams_v1(dvr_id: str):
         channel_images: Dict[str, str] = {}
         channel_logos: Dict[str, str] = {}
         try:
-            ch_resp = await _dvr_http_client.get(f"{surl}/api/v1/channels", timeout=3)
+            ch_resp = await _safe_dvr_get_url(
+                f"{surl}/api/v1/channels", timeout=3
+            )
             if ch_resp.status_code == 200:
                 for ch in ch_resp.json():
                     num = str(ch.get("number", ""))
@@ -5330,7 +5361,7 @@ async def get_dvr_streams_v1(dvr_id: str):
 
         if stream_pref == "program":
             try:
-                guide_resp = await _dvr_http_client.get(
+                guide_resp = await _safe_dvr_get_url(
                     f"{surl}/devices/ANY/guide/now", timeout=5
                 )
                 if guide_resp.status_code == 200:
@@ -5438,11 +5469,11 @@ async def get_dvr_system_info_v1(dvr_id: str):
     s_connected = False
 
     try:
-        status_resp = await _dvr_http_client.get(f"{surl}/status", timeout=3)
+        status_resp = await _safe_dvr_get_url(f"{surl}/status", timeout=3)
         if status_resp.status_code == 200:
             s_version = status_resp.json().get("version", None)
             s_connected = True
-        storage_resp = await _dvr_http_client.get(f"{surl}/dvr", timeout=3)
+        storage_resp = await _safe_dvr_get_url(f"{surl}/dvr", timeout=3)
         if storage_resp.status_code == 200:
             s_percent, s_total, s_free, _ = _parse_dvr_storage(storage_resp.json())
     except Exception:
@@ -5593,7 +5624,7 @@ async def get_dvr_upcoming_recordings_v1(dvr_id: str, limit: int = 250):
         channel_map: Dict[str, str] = {}
         channel_logo_map: Dict[str, str] = {}
         try:
-            channel_response = await _dvr_http_client.get(
+            channel_response = await _safe_dvr_get_url(
                 f"{surl}/api/v1/channels", timeout=5
             )
             if channel_response.status_code == 200:
@@ -5612,7 +5643,7 @@ async def get_dvr_upcoming_recordings_v1(dvr_id: str, limit: int = 250):
         except Exception:
             pass
 
-        response = await _dvr_http_client.get(f"{surl}/dvr/jobs", timeout=5)
+        response = await _safe_dvr_get_url(f"{surl}/dvr/jobs", timeout=5)
         if response.status_code != 200:
             return []
 
@@ -5698,11 +5729,11 @@ async def get_dvr_health_v1(dvr_id: str):
     s_connected = False
 
     try:
-        status_resp = await _dvr_http_client.get(f"{surl}/status", timeout=3)
+        status_resp = await _safe_dvr_get_url(f"{surl}/status", timeout=3)
         if status_resp.status_code == 200:
             s_version = status_resp.json().get("version", None)
             s_connected = True
-        storage_resp = await _dvr_http_client.get(f"{surl}/dvr", timeout=3)
+        storage_resp = await _safe_dvr_get_url(f"{surl}/dvr", timeout=3)
         if storage_resp.status_code == 200:
             _, s_total, s_free, _ = _parse_dvr_storage(storage_resp.json())
     except Exception:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPORTER = ROOT / "scripts" / "release" / "export-site-release-metadata.py"
+RELEASE_CONFIG = ROOT / "scripts" / "release" / "release-config.json"
 
 
 def load_exporter():
@@ -32,6 +33,10 @@ def main() -> int:
 
     requested_version = args.version.strip().lstrip("v")
     requested_tag = f"v{requested_version}"
+    release_config = json.loads(RELEASE_CONFIG.read_text(encoding="utf-8"))
+    configured_tag = f"v{str(release_config.get('version', '')).strip()}"
+    configured_heading = str(release_config.get("release_heading", "")).strip()
+    configured_release = requested_tag == configured_tag and bool(configured_heading)
     exporter = load_exporter()
     metadata = exporter.collect_metadata(
         requested_tag,
@@ -39,6 +44,7 @@ def main() -> int:
         requested_tag if requested_tag == "v0.9.10" else None,
     )
     version_tag = metadata["versionTag"]
+    compatible_image_tag = ".".join(str(metadata["dockerTag"]).split(".")[:2])
     highlights = metadata.get("changelogHighlights") or []
     if version_tag == "v0.9.10":
         body = [
@@ -53,15 +59,19 @@ def main() -> int:
             "## What's Fixed",
             "",
         ]
-    elif version_tag in {"v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"}:
-        title = {
-            "v0.9.12": "Dependency maintenance",
-            "v0.9.13": "Reporting reliability",
-            "v0.9.14": "Reporting and update reliability",
-            "v0.9.15": "Update and reporting reliability",
-            "v0.9.16": "Monitoring, update, and deployment reliability",
-        }[version_tag]
-        body = [f"# ChannelWatch {version_tag} - {title}"]
+    elif configured_release or version_tag in {"v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"}:
+        if configured_release:
+            heading = configured_heading
+        else:
+            title = {
+                "v0.9.12": "Dependency maintenance",
+                "v0.9.13": "Reporting reliability",
+                "v0.9.14": "Reporting and update reliability",
+                "v0.9.15": "Update and reporting reliability",
+                "v0.9.16": "Monitoring, update, and deployment reliability",
+            }[version_tag]
+            heading = f"# ChannelWatch {version_tag} - {title}"
+        body = [heading]
         sections = metadata.get("changelogSections") or {"Changed": highlights}
         for heading in ("Added", "Changed", "Fixed", "Security"):
             items = sections.get(heading) or []
@@ -84,7 +94,7 @@ def main() -> int:
             body.extend(f"- {item}" for item in items)
     if version_tag == "v0.9.10":
         body.extend(f"- {item}" for item in highlights)
-    heading_level = "##" if version_tag in {"v0.9.10", "v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"} else "###"
+    heading_level = "##" if configured_release or version_tag in {"v0.9.10", "v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"} else "###"
     body.extend(
         [
             "",
@@ -96,14 +106,18 @@ def main() -> int:
             "",
             "Docker Hub:",
             f"`coderluii/channelwatch:{metadata['dockerTag']}`",
+            f"`coderluii/channelwatch:{compatible_image_tag}`",
             "`coderluii/channelwatch:latest`",
             "",
             "GHCR:",
             f"`ghcr.io/coderluii/channelwatch:{metadata['dockerTag']}`",
+            f"`ghcr.io/coderluii/channelwatch:{compatible_image_tag}`",
             "`ghcr.io/coderluii/channelwatch:latest`",
         ]
     )
-    if version_tag == "v0.9.16":
+    if version_tag == "v0.9.16" or (
+        configured_release and release_config.get("verification_assets") is True
+    ):
         asset_base = (
             "https://github.com/CoderLuii/ChannelWatch/releases/download/"
             f"{version_tag}"

@@ -1,5 +1,6 @@
 """Runs Recording-Events diagnostics with simulated recording lifecycle events."""
 
+import asyncio
 import time
 
 from ...helpers.logging import log
@@ -8,13 +9,15 @@ from ..output import print_test_header, print_result
 # ALERT TESTING
 
 
-def _setup_recording_test(alert_manager):
+async def _setup_recording_test(alert_manager):
     """Common setup for recording event tests."""
     if "Recording-Events" not in alert_manager.alert_instances:
         return None, False
     test_alert = alert_manager.alert_instances["Recording-Events"]
     if hasattr(test_alert, "_cache_channels"):
-        test_alert._cache_channels()
+        # Cache refresh uses a bounded synchronous DVR client; keep it off the
+        # API event loop while retaining direct awaited delivery below.
+        await asyncio.to_thread(test_alert._cache_channels)
     channel_data = {
         "129": {
             "name": "MOVIE CHANNEL",
@@ -32,26 +35,26 @@ def _setup_recording_test(alert_manager):
     if hasattr(test_alert, "channel_provider"):
         for channel_number, data in channel_data.items():
             test_alert.channel_provider.channel_cache[channel_number] = data
+    notification_manager = getattr(alert_manager, "notification_manager", None)
     has_providers = bool(
-        hasattr(alert_manager, "notification_manager")
-        and alert_manager.notification_manager
-        and alert_manager.notification_manager.get_active_providers()
+        notification_manager
+        and notification_manager.has_configured_destinations()
     )
     return test_alert, has_providers
 
 
-def _run_single_recording_test(name, host, port, alert_manager, test_fn):
+async def _run_single_recording_test(name, host, port, alert_manager, test_fn):
     """Run a single recording event test with standardized output."""
     print_test_header(f"Recording {name} Test")
     try:
-        test_alert, has_providers = _setup_recording_test(alert_manager)
+        test_alert, has_providers = await _setup_recording_test(alert_manager)
         if not test_alert:
             print_result(False, "Alert not registered")
             return False
         log(f"Target: {host}:{port}")
         log(f"Processing {name.lower()} event...")
-        test_fn(test_alert)
-        if has_providers:
+        delivered = await test_fn(test_alert)
+        if has_providers and delivered:
             print_result(True, f"{name} event processed, notification dispatched")
             return True
         else:
@@ -65,44 +68,44 @@ def _run_single_recording_test(name, host, port, alert_manager, test_fn):
         return False
 
 
-def test_recording_scheduled_alert(host, port, alert_manager):
-    return _run_single_recording_test(
+async def test_recording_scheduled_alert(host, port, alert_manager):
+    return await _run_single_recording_test(
         "Scheduled", host, port, alert_manager, test_recording_scheduled
     )
 
 
-def test_recording_started_alert(host, port, alert_manager):
-    return _run_single_recording_test(
+async def test_recording_started_alert(host, port, alert_manager):
+    return await _run_single_recording_test(
         "Started", host, port, alert_manager, test_recording_started
     )
 
 
-def test_recording_completed_alert(host, port, alert_manager):
-    return _run_single_recording_test(
+async def test_recording_completed_alert(host, port, alert_manager):
+    return await _run_single_recording_test(
         "Completed", host, port, alert_manager, test_recording_completed
     )
 
 
-def test_recording_stopped_alert(host, port, alert_manager):
-    return _run_single_recording_test(
+async def test_recording_stopped_alert(host, port, alert_manager):
+    return await _run_single_recording_test(
         "Stopped", host, port, alert_manager, test_recording_stopped
     )
 
 
-def test_recording_cancelled_alert(host, port, alert_manager):
-    return _run_single_recording_test(
+async def test_recording_cancelled_alert(host, port, alert_manager):
+    return await _run_single_recording_test(
         "Cancelled", host, port, alert_manager, test_recording_cancelled
     )
 
 
-def test_recording_events_alert(host: str, port: int, alert_manager) -> bool:
+async def test_recording_events_alert(host: str, port: int, alert_manager) -> bool:
     """Runs all 5 recording event tests."""
     results = [
-        test_recording_scheduled_alert(host, port, alert_manager),
-        test_recording_started_alert(host, port, alert_manager),
-        test_recording_completed_alert(host, port, alert_manager),
-        test_recording_stopped_alert(host, port, alert_manager),
-        test_recording_cancelled_alert(host, port, alert_manager),
+        await test_recording_scheduled_alert(host, port, alert_manager),
+        await test_recording_started_alert(host, port, alert_manager),
+        await test_recording_completed_alert(host, port, alert_manager),
+        await test_recording_stopped_alert(host, port, alert_manager),
+        await test_recording_cancelled_alert(host, port, alert_manager),
     ]
     return all(results)
 
@@ -110,7 +113,7 @@ def test_recording_events_alert(host: str, port: int, alert_manager) -> bool:
 # EVENT SIMULATIONS
 
 
-def test_recording_scheduled(alert) -> bool:
+async def test_recording_scheduled(alert) -> bool:
     """Simulates a scheduled recording event."""
     job_id = f"test-job-scheduled-{int(time.time())}"
     mock_job = {
@@ -129,11 +132,11 @@ def test_recording_scheduled(alert) -> bool:
         alert.job_provider._jobs_cache[job_id] = mock_job
 
     mock_event_data = {"Type": "recording.created", "Name": job_id, "Value": ""}
-    result = alert._handle_recording_created(mock_event_data, mock_job)
+    result = await alert._handle_recording_created(mock_event_data, mock_job)
     return bool(result)
 
 
-def test_recording_started(alert) -> bool:
+async def test_recording_started(alert) -> bool:
     """Simulates a recording started event."""
     job_id = f"test-job-started-{int(time.time())}"
     mock_job = {
@@ -156,11 +159,11 @@ def test_recording_started(alert) -> bool:
         "Name": "",
         "Value": f"recording-{job_id}",
     }
-    result = alert._handle_recording_started(mock_event_data, mock_job)
+    result = await alert._handle_recording_started(mock_event_data, mock_job)
     return bool(result)
 
 
-def test_recording_completed(alert) -> bool:
+async def test_recording_completed(alert) -> bool:
     """Simulates a recording completed event."""
     file_id = f"test-file-completed-{int(time.time())}"
     mock_recording = {
@@ -188,11 +191,11 @@ def test_recording_completed(alert) -> bool:
         "Name": "",
         "Value": f"recorded-{file_id}",
     }
-    result = alert._handle_recording_completed(mock_event_data, mock_recording)
+    result = await alert._handle_recording_completed(mock_event_data, mock_recording)
     return bool(result)
 
 
-def test_recording_stopped(alert) -> bool:
+async def test_recording_stopped(alert) -> bool:
     """Simulates a manually stopped recording event."""
     file_id = f"test-file-stopped-{int(time.time())}"
     mock_recording = {
@@ -220,11 +223,11 @@ def test_recording_stopped(alert) -> bool:
         "Name": "",
         "Value": f"recorded-{file_id}",
     }
-    result = alert._handle_recording_completed(mock_event_data, mock_recording)
+    result = await alert._handle_recording_completed(mock_event_data, mock_recording)
     return bool(result)
 
 
-def test_recording_cancelled(alert) -> bool:
+async def test_recording_cancelled(alert) -> bool:
     """Simulates a cancelled recording event."""
     job_id = f"test-job-cancelled-{int(time.time())}"
     mock_job = {
@@ -252,5 +255,5 @@ def test_recording_cancelled(alert) -> bool:
     if not hasattr(alert, "_handle_recording_deleted"):
         return False
 
-    result = alert._handle_recording_deleted(mock_event_data, mock_job)
+    result = await alert._handle_recording_deleted(mock_event_data, mock_job)
     return bool(result)

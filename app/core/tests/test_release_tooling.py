@@ -18,10 +18,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[3]
 TEST_RELEASE_GIT_SHA = "0123456789abcdef0123456789abcdef01234567"
-TEST_RELEASE_URL = "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.16"
+TEST_RELEASE_URL = "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.17"
 TEST_BUNDLE_URL = (
     "https://github.com/CoderLuii/ChannelWatch/releases/download/"
-    "v0.9.16/channelwatch-app-v0.9.16.zip"
+    "v0.9.17/channelwatch-app-v0.9.17.zip"
 )
 
 
@@ -278,14 +278,18 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_marks_0916_as_image_required():
+def test_release_config_marks_0917_as_image_required():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
     assert config == {
-        "version": "0.9.16",
+        "version": "0.9.17",
         "image_required": True,
+        "release_heading": (
+            "# ChannelWatch v0.9.17 - Setup, diagnostics, and LAN reliability"
+        ),
+        "verification_assets": True,
     }
 
 
@@ -300,26 +304,26 @@ def test_release_version_surfaces_accept_multi_digit_patch():
         release_url=None,
     )
 
-    assert metadata["version"] == "0.9.16"
-    assert metadata["versionTag"] == "v0.9.16"
-    assert metadata["dockerTag"] == "0.9.16"
-    assert metadata["helmChartVersion"] == "0.9.16"
-    assert metadata["helmAppVersion"] == "0.9.16"
+    assert metadata["version"] == "0.9.17"
+    assert metadata["versionTag"] == "v0.9.17"
+    assert metadata["dockerTag"] == "0.9.17"
+    assert metadata["helmChartVersion"] == "0.9.17"
+    assert metadata["helmAppVersion"] == "0.9.17"
 
 
-def test_release_body_for_0916_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_0917_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
-        "render_release_body_0916_legal_assets",
+        "render_release_body_0917_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v0.9.16",
+        "versionTag": "v0.9.17",
         "releaseDate": "2026-08-21",
         "changelogHighlights": ["Bundle release license notices."],
         "changelogSections": {
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "0.9.16",
+        "dockerTag": "0.9.17",
     }
     monkeypatch.setattr(
         module,
@@ -329,22 +333,24 @@ def test_release_body_for_0916_links_license_and_sbom_assets(monkeypatch, capsys
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "0.9.16"],
+        ["render-release-body.py", "--version", "0.9.17"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v0.9.16 - Monitoring, update, and deployment reliability\n"
+        "# ChannelWatch v0.9.17 - Setup, diagnostics, and LAN reliability\n"
     )
     assert "## License and verification" in output
-    assert "channelwatch-v0.9.16-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v0.9.16-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v0.9.16-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v0.9.16-SHA256SUMS.txt" in output
+    assert "channelwatch-v0.9.17-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v0.9.17-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v0.9.17-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v0.9.17-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
+    assert "`coderluii/channelwatch:0.9`" in output
+    assert "`ghcr.io/coderluii/channelwatch:0.9`" in output
 
 
 def test_release_workflow_uses_explicit_config_and_python_gate():
@@ -356,7 +362,7 @@ def test_release_workflow_uses_explicit_config_and_python_gate():
     assert 'grep -Eiq "container image update required|image-required"' not in workflow
     assert "python -m pytest app/core/tests" in workflow
     assert "python -m compileall app/core app/ui/backend" in workflow
-    assert 'expected_heading="# ChannelWatch ${TAG} - Monitoring, update, and deployment reliability"' in workflow
+    assert 'expected_heading="$(jq -r \'.release_heading\' scripts/release/release-config.json)"' in workflow
     assert "GitHub Release body must start with '${expected_heading}'" in workflow
     release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
         "\n  build-and-push:",
@@ -413,7 +419,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
     output_path = tmp_path / "github-output"
     parse_env = {
         **os.environ,
-        "GITHUB_REF_NAME": "v0.9.16",
+        "GITHUB_REF_NAME": "v0.9.17",
         "GITHUB_OUTPUT": str(output_path),
     }
 
@@ -431,7 +437,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         line.split("=", 1)
         for line in output_path.read_text(encoding="utf-8").splitlines()
     )
-    assert output_values == {"version": "0.9.16"}
+    assert output_values == {"version": "0.9.17"}
     assert "VERSION: ${{ steps.version.outputs.version }}" in verify_block
     assert 'version_re="${VERSION//' in verify_shell
     assert 'version_re="${version//' not in verify_shell
@@ -441,7 +447,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         cwd=ROOT,
         env={
             **os.environ,
-            "GITHUB_REF_NAME": "v0.9.16",
+            "GITHUB_REF_NAME": "v0.9.17",
             "VERSION": output_values["version"],
         },
         capture_output=True,
@@ -738,7 +744,10 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert publish_job.count("--preserve-digests") == 2
     assert "Published manifest does not contain the exact scanned platform descriptors" in publish_job
     assert '"docker://${repository}@${version_digest}"' in publish_job
-    assert "latest does not reference the exact version manifest" in publish_job
+    assert 'compatible_tag="${VERSION%.*}"' in publish_job
+    assert 'publish_alias "${compatible_tag}"' in publish_job
+    assert "publish_alias latest" in publish_job
+    assert "${alias_tag} does not reference the exact version manifest" in publish_job
     assert '"${VERSION}-amd64"' not in publish_job
     assert '"${VERSION}-arm64"' not in publish_job
     assert "steps.publish.outputs.dockerhub_digest" in image_job
@@ -883,18 +892,18 @@ def test_release_candidate_rejects_stale_and_divergent_tags():
         "scripts/release/verify-release-candidate.py",
     )
 
-    assert module.validate_candidate("v0.9.16", ["v0.9.15", "v0.9.16"]) == "v0.9.16"
+    assert module.validate_candidate("v0.9.17", ["v0.9.15", "v0.9.17"]) == "v0.9.17"
     try:
-        module.validate_candidate("v0.9.15", ["v0.9.15", "v0.9.16"])
+        module.validate_candidate("v0.9.15", ["v0.9.15", "v0.9.17"])
     except ValueError as exc:
-        assert "newer release tag v0.9.16 already exists" in str(exc)
+        assert "newer release tag v0.9.17 already exists" in str(exc)
     else:
         raise AssertionError("stale release candidate was accepted")
 
     try:
         module.validate_candidate(
-            "v0.9.16",
-            ["v0.9.15", "v0.9.16"],
+            "v0.9.17",
+            ["v0.9.15", "v0.9.17"],
             candidate_sha="divergent",
             main_sha="current-main",
         )
@@ -905,7 +914,7 @@ def test_release_candidate_rejects_stale_and_divergent_tags():
 
 
 def _signed_update_assets(
-    version: str = "0.9.16",
+    version: str = "0.9.17",
     *,
     image_required: bool = False,
     git_sha: str | None = TEST_RELEASE_GIT_SHA,
@@ -993,14 +1002,14 @@ def test_update_asset_verifier_uses_runtime_signature_and_archive_validation():
         manifest_bytes,
         bundle_bytes,
         public_keys=public_keys,
-        expected_version="0.9.16",
+        expected_version="0.9.17",
         expected_image_required=False,
         expected_git_sha=TEST_RELEASE_GIT_SHA,
         expected_release_url=TEST_RELEASE_URL,
         expected_bundle_url=TEST_BUNDLE_URL,
     )
 
-    assert verified["payload"]["version"] == "0.9.16"
+    assert verified["payload"]["version"] == "0.9.17"
 
 
 def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
@@ -1015,7 +1024,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             manifest_bytes,
             bundle_bytes,
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=True,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1030,7 +1039,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             missing_image_manifest,
             missing_image_bundle,
             public_keys=missing_image_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1042,7 +1051,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             manifest_bytes,
             bundle_bytes,
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha="f" * 40,
             expected_release_url=TEST_RELEASE_URL,
@@ -1057,7 +1066,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             missing_sha_manifest,
             missing_sha_bundle,
             public_keys=missing_sha_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1072,7 +1081,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             missing_type_manifest,
             missing_type_bundle,
             public_keys=missing_type_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1087,7 +1096,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             wrong_type_manifest,
             wrong_type_bundle,
             public_keys=wrong_type_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1102,7 +1111,7 @@ def test_update_asset_verifier_binds_image_requirement_and_exact_git_sha():
             wrong_metadata_tag_manifest,
             wrong_metadata_tag_bundle,
             public_keys=wrong_metadata_tag_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1159,7 +1168,7 @@ def test_update_asset_verifier_binds_canonical_runtime_contract(
             manifest_bytes,
             bundle_bytes,
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_channel="stable",
             expected_runtime_abi="channelwatch-runtime-v1",
             expected_settings_schema_version=7,
@@ -1201,7 +1210,7 @@ def test_update_asset_verifier_rejects_wrong_bundle_metadata_types(
             manifest_bytes,
             bundle_bytes,
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_channel="stable",
             expected_runtime_abi="channelwatch-runtime-v1",
             expected_settings_schema_version=7,
@@ -1250,7 +1259,7 @@ def test_update_asset_verifier_rejects_wrong_tag_and_urls(
             manifest_bytes,
             bundle_bytes,
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=TEST_RELEASE_GIT_SHA,
             expected_release_url=TEST_RELEASE_URL,
@@ -1302,7 +1311,7 @@ def test_update_asset_verifier_matches_critical_members_to_exact_source(tmp_path
         manifest_bytes,
         bundle_bytes,
         public_keys=public_keys,
-        expected_version="0.9.16",
+        expected_version="0.9.17",
         expected_channel="stable",
         expected_runtime_abi="channelwatch-runtime-v1",
         expected_settings_schema_version=7,
@@ -1336,7 +1345,7 @@ def test_update_asset_verifier_matches_critical_members_to_exact_source(tmp_path
                 wrong_manifest,
                 wrong_bundle,
                 public_keys=wrong_keys,
-                expected_version="0.9.16",
+                expected_version="0.9.17",
                 expected_channel="stable",
                 expected_runtime_abi="channelwatch-runtime-v1",
                 expected_settings_schema_version=7,
@@ -1354,7 +1363,7 @@ def test_update_asset_verifier_matches_critical_members_to_exact_source(tmp_path
             manifest_bytes,
             bundle_bytes,
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=exact_git_sha,
             expected_release_url=TEST_RELEASE_URL,
@@ -1376,7 +1385,7 @@ def test_update_asset_verifier_matches_critical_members_to_exact_source(tmp_path
             mismatched_manifest,
             mismatched_bundle,
             public_keys=mismatched_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
             expected_image_required=False,
             expected_git_sha=exact_git_sha,
             expected_release_url=TEST_RELEASE_URL,
@@ -1397,7 +1406,7 @@ def test_update_asset_verifier_rejects_tampered_bundle_and_empty_trust_store():
             manifest_bytes,
             bundle_bytes + b"tampered",
             public_keys=public_keys,
-            expected_version="0.9.16",
+            expected_version="0.9.17",
         )
     except Exception as exc:
         assert "hash did not match" in str(exc)
@@ -1409,7 +1418,7 @@ def test_update_asset_verifier_rejects_tampered_bundle_and_empty_trust_store():
             manifest_bytes,
             bundle_bytes,
             public_keys={},
-            expected_version="0.9.16",
+            expected_version="0.9.17",
         )
     except Exception as exc:
         assert "Unknown update signing key" in str(exc)

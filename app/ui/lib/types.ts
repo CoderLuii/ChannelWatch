@@ -310,6 +310,21 @@ export interface AuthSetupStatus extends AuthStateContract {
   needs_setup: boolean
 }
 
+export type RuntimePreflightBlocker =
+  | "secret_storage_key_missing"
+  | "secret_storage_key_too_short"
+  | "secret_storage_key_mismatch"
+  | "secret_storage_key_file_unreadable"
+
+export type RuntimePreflightWarning = "legacy_plaintext_key_migration_recommended"
+
+export interface RuntimePreflightStatus {
+  status: "ready" | "setup_required" | "migration_recommended"
+  setup_required: boolean
+  blockers: RuntimePreflightBlocker[]
+  warnings: RuntimePreflightWarning[]
+}
+
 export interface SecurityFeedsStatus {
   implemented: boolean
   ics_enabled: boolean

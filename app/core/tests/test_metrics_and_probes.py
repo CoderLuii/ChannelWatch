@@ -503,7 +503,7 @@ class TestMetricsPerDvrLabels:
 
         requests = []
 
-        async def fake_get(url, timeout):
+        async def fake_get(url, timeout, **kwargs):
             requests.append(url)
             response = MagicMock()
             response.status_code = 200
@@ -577,7 +577,7 @@ class TestMetricsPerDvrLabels:
             "192.168.1.20": free_by_dvr[1],
         }
 
-        async def fake_get(url, timeout):
+        async def fake_get(url, timeout, **kwargs):
             response = MagicMock()
             response.status_code = 200
             if url.endswith("/status"):
@@ -724,7 +724,9 @@ class TestActiveRecordingsCount:
             patch(
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
-                return_value=[("dvr_aaa11111", "Living Room", "http://dvr.local")],
+                return_value=[
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10")
+                ],
             ),
             patch("ui.backend.main._dvr_http_client", mock_client),
         ):
@@ -751,7 +753,9 @@ class TestActiveRecordingsCount:
             patch(
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
-                return_value=[("dvr_aaa11111", "Living Room", "http://dvr.local")],
+                return_value=[
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10")
+                ],
             ),
             patch("ui.backend.main._dvr_http_client", mock_client),
         ):
@@ -782,8 +786,8 @@ class TestActiveRecordingsCount:
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
                 return_value=[
-                    ("dvr_aaa11111", "Living Room", "http://dvr-a.local"),
-                    ("dvr_bbb22222", "Bedroom", "http://dvr-b.local"),
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10"),
+                    ("dvr_bbb22222", "Bedroom", "http://192.168.1.20"),
                 ],
             ),
             patch("ui.backend.main._dvr_http_client", mock_client),
@@ -810,7 +814,9 @@ class TestActiveRecordingsCount:
             patch(
                 "ui.backend.main._get_dvr_servers_async",
                 new_callable=AsyncMock,
-                return_value=[("dvr_aaa11111", "Living Room", "http://dvr.local")],
+                return_value=[
+                    ("dvr_aaa11111", "Living Room", "http://192.168.1.10")
+                ],
             ),
             patch("ui.backend.main._dvr_http_client", mock_client),
         ):
@@ -844,9 +850,11 @@ class TestActiveRecordingsCount:
         assert health_resp.status_code == 200
         assert ready_resp.status_code == 200
         assert calls[0] is mock_summary
-        assert calls[1].__name__ == "load_settings"
-        assert calls[2] is mock_summary
-        assert len(calls) == 3
+        assert calls[1].__name__ == "inspect_runtime_preflight"
+        assert calls[2].__name__ == "load_settings"
+        assert calls[3].__name__ == "inspect_runtime_preflight"
+        assert calls[4] is mock_summary
+        assert len(calls) == 5
 
 
 class TestDvrHealthEnhancedFields:

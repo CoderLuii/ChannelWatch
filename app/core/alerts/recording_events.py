@@ -142,6 +142,12 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
 
         log("RecordingEventsAlert: Initialized", level=LOG_VERBOSE)
 
+    def _processed_delivery_result(self, delivered: bool) -> bool:
+        """Report provider truth for diagnostics without blocking live ingestion."""
+        if getattr(self.notification_manager, "diagnostic_mode", False) is True:
+            return bool(delivered)
+        return True
+
     def _format_clock_time(self, dt: datetime) -> str:
         return dt.strftime("%I:%M %p").lstrip("0") + f" {self.tz_abbr}"
 
@@ -910,6 +916,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             notification_history=self._notification_history,
         )
 
+        notification_sent = False
         if self.recording_scheduled_enabled and getattr(
             self.settings, "alert_recording_events", True
         ):
@@ -960,14 +967,15 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                         else "",
                     ),
                 )
-                await self.send_alert_async(
+                notification_sent = await self.send_alert_async(
                     formatted_alert["title"],
                     formatted_alert["message"],
                     formatted_alert.get("image_url"),
                 )
-                await self.session_manager.record_notification(notification_key)
+                if notification_sent:
+                    await self.session_manager.record_notification(notification_key)
 
-        return True
+        return self._processed_delivery_result(notification_sent)
 
     async def _handle_recording_started(
         self, event_data: Dict[str, Any], job_details: Optional[Dict[str, Any]]
@@ -1340,6 +1348,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 notification_history=self._notification_history,
             )
 
+            notification_sent = False
             if self.recording_cancelled_enabled and getattr(
                 self.settings, "alert_recording_events", True
             ):
@@ -1405,7 +1414,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                         ),
                     )
                     try:
-                        await self.send_alert_async(
+                        notification_sent = await self.send_alert_async(
                             formatted_alert["title"],
                             formatted_alert["message"],
                             formatted_alert.get("image_url"),
@@ -1415,9 +1424,10 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                             f"ERROR_SEND: Exception during self.send_alert for {job_id}: {send_err}",
                             level=LOG_VERBOSE,
                         )
-                    await self.session_manager.record_notification(notification_key)
+                    if notification_sent:
+                        await self.session_manager.record_notification(notification_key)
 
-            return True
+            return self._processed_delivery_result(notification_sent)
 
         elif job_details:
             job = job_details
@@ -1508,6 +1518,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             notification_history=self._notification_history,
         )
 
+        notification_sent = False
         if self.recording_cancelled_enabled and getattr(
             self.settings, "alert_recording_events", True
         ):
@@ -1570,7 +1581,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                     ),
                 )
                 try:
-                    await self.send_alert_async(
+                    notification_sent = await self.send_alert_async(
                         formatted_alert["title"],
                         formatted_alert["message"],
                         formatted_alert.get("image_url"),
@@ -1580,12 +1591,13 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                         f"ERROR_SEND: Exception during self.send_alert for ACTIVE {job_id}: {send_err}",
                         level=LOG_VERBOSE,
                     )
-                await self.session_manager.record_notification(notification_key)
+                if notification_sent:
+                    await self.session_manager.record_notification(notification_key)
 
         if self.stream_count_enabled:
             await self.stream_tracker.process_activity({}, job_id)
 
-        return True
+        return self._processed_delivery_result(notification_sent)
 
     async def _process_completed_recording(
         self,
@@ -1809,11 +1821,12 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             )
             log(f"Total Streams: {current_count}", level=LOG_STANDARD)
 
+        notification_sent = False
         if self.recording_completed_enabled and getattr(
             self.settings, "alert_recording_events", True
         ):
             try:
-                await self.send_alert_async(
+                notification_sent = await self.send_alert_async(
                     formatted_alert["title"],
                     formatted_alert["message"],
                     formatted_alert.get("image_url"),
@@ -1823,14 +1836,15 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                     f"ERROR_SEND: Exception during self.send_alert for {file_id}: {send_err}",
                     level=LOG_STANDARD,
                 )
-            await self.session_manager.record_notification(notification_key)
+            if notification_sent:
+                await self.session_manager.record_notification(notification_key)
 
         job_id = recording.get("job_id")
         if job_id:
             async with self._event_lock:
                 self.active_recordings.pop(job_id, None)
 
-        return True
+        return self._processed_delivery_result(notification_sent)
 
     async def run_cleanup(self) -> None:
         """Executes cleanup operations for stale recording data and sessions."""

@@ -246,6 +246,25 @@ class TestDeliverWithRetry:
             )
         assert result is False
 
+    def test_expired_diagnostic_deadline_prevents_first_attempt(self):
+        cb = CircuitBreaker()
+        calls = []
+
+        result = deliver_with_retry(
+            dvr_id="dvr1",
+            channel="apprise",
+            event_type="recording",
+            provider_type="Apprise",
+            channel_id="apprise",
+            payload_size=50,
+            deliver_fn=lambda: calls.append(1) or True,
+            circuit_breaker=cb,
+            deadline_monotonic=time.monotonic() - 1,
+        )
+
+        assert result is False
+        assert calls == []
+
     def test_skips_when_circuit_open(self):
         cb = CircuitBreaker()
         for _ in range(CircuitBreaker.FAILURE_THRESHOLD):

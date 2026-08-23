@@ -1,4 +1,5 @@
 [
+  {"method":"GET","path":"/api/v1/runtime/preflight","auth":"public","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/runtime/preflight"},
   {"method":"GET","path":"/api/v1/auth/setup-status","auth":"public","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/auth/setup-status"},
   {"method":"GET","path":"/api/v1/auth/whoami","auth":"session","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/auth/whoami"},
   {"method":"POST","path":"/api/v1/auth/login","auth":"public","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/auth/login"},

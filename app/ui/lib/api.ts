@@ -1,4 +1,4 @@
-import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource } from "@/lib/types"
+import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus } from "@/lib/types"
 import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
 import { encodeReportChallengeProof, solveReportChallenge, type ReportChallenge } from "@/lib/report-proof"
 
@@ -92,6 +92,16 @@ export async function fetchSetupStatus(): Promise<AuthSetupStatus> {
 
   const body = (await response.json()) as AuthSetupStatus
   return withConfiguredMode(body)
+}
+
+export async function fetchRuntimePreflight(): Promise<RuntimePreflightStatus> {
+  const response = await fetch(`${API_BASE}/v1/runtime/preflight`, {
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to fetch runtime preflight: ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function fetchWhoAmI(): Promise<WhoAmIResponse> {
@@ -611,9 +621,32 @@ export interface PollForRecoveryOptions {
   interval?: number
   initialDelay?: number
   timeout?: number
+  minimumRecoveryMs?: number
   onTick?: (elapsedMs: number) => void
   onRecovered?: () => void
   onTimeout?: () => void
+}
+
+export const RESTART_RECOVERED_EVENT = "channelwatch-restart-recovered"
+
+export async function fetchMonitoringReadiness(): Promise<boolean | null> {
+  const publicResponse = await fetch(`/healthz/ready`, {
+    credentials: "same-origin",
+  })
+  if (publicResponse.status !== 200 && publicResponse.status !== 503) return null
+  const publicPayload = await publicResponse.json() as { ready?: boolean }
+  if (publicResponse.status === 200 && publicPayload.ready === true) return true
+
+  // Public readiness is authoritative for the recovered process. Detailed
+  // health enriches the result when authentication survived the restart, but
+  // its absence must not turn a known degraded state into success.
+  const response = await fetch(`${API_BASE}/health`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (response.status !== 200 && response.status !== 503) return false
+  const payload = await response.json() as { ready?: boolean }
+  return payload.ready === true
 }
 
 export async function fetchDvrSystemInfo(dvrId: string): Promise<PerDvrSystemInfo> {
@@ -1041,6 +1074,7 @@ export function pollForRecovery(options: PollForRecoveryOptions = {}): () => voi
   const interval = options.interval ?? 2000
   const initialDelay = options.initialDelay ?? 3000
   const timeout = options.timeout ?? 60000
+  const minimumRecoveryMs = options.minimumRecoveryMs ?? 5000
   const startTime = Date.now()
   let timerId: ReturnType<typeof setTimeout> | null = null
   let cancelled = false
@@ -1055,14 +1089,21 @@ export function pollForRecovery(options: PollForRecoveryOptions = {}): () => voi
       return
     }
 
-    fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(2000) })
-      .then((res) => {
+    fetch(`/healthz/live`, { signal: AbortSignal.timeout(2000) })
+      .then(async (res) => {
         if (cancelled) return
-        if (res.ok) {
-          options.onRecovered?.()
-        } else {
+        if (!res.ok) {
           timerId = setTimeout(poll, interval)
+          return
         }
+        const startup = await fetch(`/healthz/startup`, { signal: AbortSignal.timeout(2000) })
+        if (cancelled) return
+        if (!startup.ok || elapsed < minimumRecoveryMs) {
+          timerId = setTimeout(poll, interval)
+          return
+        }
+        cancelled = true
+        options.onRecovered?.()
       })
       .catch(() => {
         if (cancelled) return

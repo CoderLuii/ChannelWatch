@@ -1,12 +1,14 @@
 """Runs the VOD-Watching diagnostic with simulated video-on-demand viewing events."""
 
+import asyncio
+
 from ...helpers.logging import log
 from ..output import print_test_header, print_result
 
 # ALERT TESTING
 
 
-def test_vod_watching_alert(host: str, port: int, alert_manager) -> bool:
+async def test_vod_watching_alert(host: str, port: int, alert_manager) -> bool:
     """Tests the VOD-Watching alert by simulating a video-on-demand viewing session."""
     print_test_header("VOD-Watching Test")
 
@@ -29,9 +31,6 @@ def test_vod_watching_alert(host: str, port: int, alert_manager) -> bool:
 
         test_alert = alert_manager.alert_instances["VOD-Watching"]
 
-        if hasattr(test_alert, "_cache_vod_metadata"):
-            test_alert._cache_vod_metadata()
-
         real_movie_data = {
             "id": "12345",
             "title": "Crank: High Voltage (2009)",
@@ -45,23 +44,32 @@ def test_vod_watching_alert(host: str, port: int, alert_manager) -> bool:
             "cast": ["Jason Statham", "Amy Smart", "Dwight Yoakam"],
         }
 
-        if not test_alert.vod_provider.get_metadata("12345"):
-            test_alert.vod_provider.metadata_cache["12345"] = real_movie_data
-        else:
+        def _prepare_fixture_metadata() -> None:
+            if hasattr(test_alert, "_cache_vod_metadata"):
+                test_alert._cache_vod_metadata()
+
             metadata = test_alert.vod_provider.get_metadata("12345")
+            if not metadata:
+                test_alert.vod_provider.metadata_cache["12345"] = real_movie_data
+                return
             if not metadata.get("image_url"):
                 metadata["image_url"] = real_movie_data["image_url"]
             for key in ["title", "summary", "content_rating", "genres", "cast"]:
                 if not metadata.get(key):
                     metadata[key] = real_movie_data[key]
 
+        # The VOD cache may perform bounded synchronous DVR requests. Isolate
+        # the entire lookup/fallback sequence from the ASGI event loop.
+        await asyncio.to_thread(_prepare_fixture_metadata)
+
+        notification_manager = alert_manager.notification_manager
         has_providers = bool(
-            alert_manager.notification_manager
-            and alert_manager.notification_manager.get_active_providers()
+            notification_manager
+            and notification_manager.has_configured_destinations()
         )
 
         log("Processing event...")
-        result = alert_manager.process_event("activities.set", mock_event_data)
+        result = await alert_manager.process_event("activities.set", mock_event_data)
 
         if result:
             print_result(True, "Event processed, notification dispatched")

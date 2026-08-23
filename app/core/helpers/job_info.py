@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
 from .dvr_connection import build_dvr_base_url
+from .dvr_target import build_safe_dvr_request
 
 
 # JOB INFO
@@ -24,6 +25,9 @@ class JobInfoProvider:
         else:
             self.host = host
             self.port = port
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
         self._jobs_cache = {}
         self._jobs_cache_time = 0
         self._cache_ttl = cache_ttl
@@ -33,12 +37,28 @@ class JobInfoProvider:
         """Generate base URL for API requests to Channels DVR server."""
         return build_dvr_base_url(self.host, self.port)
 
+    def _get(self, path: str, *, timeout: float) -> httpx.Response:
+        request = build_safe_dvr_request(
+            self.host,
+            self.port,
+            path,
+            allow_loopback=self._allow_test_loopback,
+        )
+        if request is None:
+            raise httpx.ConnectError("DVR target did not pass safety validation")
+        return httpx.get(
+            request.url,
+            headers={"Host": request.host_header},
+            timeout=timeout,
+            trust_env=False,
+        )
+
     # CACHING
     def cache_jobs(self) -> int:
         """Fetch and store all active recording jobs from the server."""
         url = f"{self._get_base_url()}/api/v1/jobs"
         try:
-            response = httpx.get(url, timeout=15)
+            response = self._get("/api/v1/jobs", timeout=15)
             response.raise_for_status()
 
             jobs = response.json()
@@ -119,7 +139,7 @@ class JobInfoProvider:
                 log(f"Fetching job from API: {url}", level=LOG_VERBOSE)
 
                 start_time = time.time()
-                response = httpx.get(url, timeout=5.0)
+                response = self._get("/api/v1/jobs", timeout=5.0)
                 fetch_time = time.time() - start_time
 
                 if fetch_time > 2.0:
@@ -173,7 +193,7 @@ class JobInfoProvider:
         """Retrieve completed recording by file ID with fallback to alternative endpoint."""
         try:
             url = f"{self._get_base_url()}/api/v1/recordings/{file_id}"
-            response = httpx.get(url, timeout=15)
+            response = self._get(f"/api/v1/recordings/{file_id}", timeout=15)
 
             if response.status_code == 200:
                 return response.json()
@@ -184,7 +204,7 @@ class JobInfoProvider:
                 )
 
             url = f"{self._get_base_url()}/api/v1/all?id={file_id}"
-            response = httpx.get(url, timeout=15)
+            response = self._get(f"/api/v1/all?id={file_id}", timeout=15)
             response.raise_for_status()
 
             data = response.json()
@@ -222,7 +242,7 @@ class JobInfoProvider:
         """Retrieve all completed recordings with fallback to alternative endpoint."""
         try:
             url = f"{self._get_base_url()}/api/v1/recordings"
-            response = httpx.get(url, timeout=20)
+            response = self._get("/api/v1/recordings", timeout=20)
 
             if response.status_code == 200:
                 return response.json()
@@ -233,7 +253,7 @@ class JobInfoProvider:
                 )
 
             url = f"{self._get_base_url()}/api/v1/all"
-            response = httpx.get(url, timeout=30)
+            response = self._get("/api/v1/all", timeout=30)
             response.raise_for_status()
 
             return response.json()

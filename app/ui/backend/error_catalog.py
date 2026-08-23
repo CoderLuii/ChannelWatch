@@ -53,6 +53,7 @@ class ErrorCode:
     # Settings
     SETTINGS_VALIDATION_FAILED = "ERR_SETTINGS_VALIDATION_FAILED"
     SETTINGS_SAVE_FAILED = "ERR_SETTINGS_SAVE_FAILED"
+    RUNTIME_SETUP_REQUIRED = "ERR_RUNTIME_SETUP_REQUIRED"
 
     # Backup / restore
     BACKUP_CREATE_FAILED = "ERR_BACKUP_CREATE_FAILED"
@@ -240,6 +241,15 @@ _CATALOG: dict[str, CatalogEntry] = {
         http_status=500,
         message="Failed to save settings.",
         remediation="Check that /config is writable inside the container and try again.",
+    ),
+    ErrorCode.RUNTIME_SETUP_REQUIRED: CatalogEntry(
+        code=ErrorCode.RUNTIME_SETUP_REQUIRED,
+        http_status=503,
+        message="Runtime setup is required before protected credentials can be saved.",
+        remediation=(
+            "Set CHANNELWATCH_SECRET_STORAGE_KEY to a stable value containing at "
+            "least 32 characters, then recreate or restart the container."
+        ),
     ),
     # Activity / history -------------------------------------------------
     ErrorCode.ACTIVITY_FETCH_FAILED: CatalogEntry(

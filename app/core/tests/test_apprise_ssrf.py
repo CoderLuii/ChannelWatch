@@ -99,6 +99,45 @@ class TestAppriseSSRFImageDrop:
 
 class TestAppriseSSRFRegression:
     @patch("httpx.post")
+    def test_diagnostic_deadline_bounds_discord_timeout(
+        self, mock_post: MagicMock
+    ) -> None:
+        mock_post.return_value = _ok_response()
+        provider = _make_discord_provider()
+
+        with patch(
+            "core.notifications.providers.apprise.time.monotonic",
+            return_value=100.0,
+        ):
+            result = provider.send_notification(
+                "Diagnostic",
+                "fixture",
+                _diagnostic_deadline_monotonic=100.25,
+            )
+
+        assert result is True
+        assert mock_post.call_args.kwargs["timeout"] == pytest.approx(0.25)
+
+    @patch("httpx.post")
+    def test_expired_diagnostic_deadline_skips_discord_delivery(
+        self, mock_post: MagicMock
+    ) -> None:
+        provider = _make_discord_provider()
+
+        with patch(
+            "core.notifications.providers.apprise.time.monotonic",
+            return_value=101.0,
+        ):
+            result = provider.send_notification(
+                "Diagnostic",
+                "fixture",
+                _diagnostic_deadline_monotonic=100.0,
+            )
+
+        assert result is False
+        mock_post.assert_not_called()
+
+    @patch("httpx.post")
     def test_public_image_delivered_unchanged(self, mock_post: MagicMock) -> None:
         mock_post.return_value = _ok_response()
 

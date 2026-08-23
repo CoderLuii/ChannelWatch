@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any
 
 _SECRET_ENVELOPE_PREFIX = b"channelwatch-secret-v1\n"
@@ -17,6 +18,47 @@ _MIN_SECRET_STORAGE_KEY_CHARS = 32
 
 class SecretStorageKeyUnavailableError(RuntimeError):
     """Raised when encrypted local secret storage cannot be used safely."""
+
+    def __init__(self, message: str, *, code: str = "secret_storage_key_missing"):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class SecretStorageKeyStatus:
+    """Non-sensitive description of the external secret-storage key input."""
+
+    available: bool
+    code: str | None = None
+    material: bytes | None = field(default=None, repr=False)
+
+
+def secret_storage_key_status() -> SecretStorageKeyStatus:
+    """Validate key input without exposing its value in logs or API responses."""
+
+    key_file = os.getenv(_SECRET_STORAGE_KEY_FILE_ENV, "").strip()
+    if key_file:
+        try:
+            value = Path(key_file).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            return SecretStorageKeyStatus(
+                available=False,
+                code="secret_storage_key_file_unreadable",
+            )
+    else:
+        value = os.getenv(_SECRET_STORAGE_KEY_ENV, "").strip()
+
+    if not value:
+        return SecretStorageKeyStatus(
+            available=False,
+            code="secret_storage_key_missing",
+        )
+    if len(value) < _MIN_SECRET_STORAGE_KEY_CHARS:
+        return SecretStorageKeyStatus(
+            available=False,
+            code="secret_storage_key_too_short",
+        )
+    return SecretStorageKeyStatus(available=True, material=value.encode("utf-8"))
 
 
 def fsync_directory(path: Path) -> None:
@@ -72,23 +114,23 @@ def atomic_write_bytes(
 
 
 def _load_secret_storage_key_material() -> bytes:
-    key_file = os.getenv(_SECRET_STORAGE_KEY_FILE_ENV, "").strip()
-    if key_file:
-        try:
-            value = Path(key_file).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise SecretStorageKeyUnavailableError(
-                f"{_SECRET_STORAGE_KEY_FILE_ENV} points to a key file that cannot be read."
-            ) from exc
-    else:
-        value = os.getenv(_SECRET_STORAGE_KEY_ENV, "").strip()
+    status = secret_storage_key_status()
+    if status.available and status.material is not None:
+        return status.material
 
-    if len(value) < _MIN_SECRET_STORAGE_KEY_CHARS:
-        raise SecretStorageKeyUnavailableError(
+    if status.code == "secret_storage_key_file_unreadable":
+        message = (
+            f"{_SECRET_STORAGE_KEY_FILE_ENV} points to a key file that cannot be read."
+        )
+    else:
+        message = (
             f"{_SECRET_STORAGE_KEY_ENV} must be set to at least "
             f"{_MIN_SECRET_STORAGE_KEY_CHARS} characters before writing local secrets."
         )
-    return value.encode("utf-8")
+    raise SecretStorageKeyUnavailableError(
+        message,
+        code=status.code or "secret_storage_key_missing",
+    )
 
 
 def _make_secret_storage_fernet():

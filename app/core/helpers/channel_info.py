@@ -7,6 +7,7 @@ from threading import Lock
 
 from .logging import log, LOG_STANDARD
 from .dvr_connection import build_dvr_base_url
+from .dvr_target import build_safe_dvr_request
 # Import channel data extraction utilities
 
 
@@ -25,6 +26,9 @@ class ChannelInfoProvider:
             self.port = port
             self.base_url = build_dvr_base_url(host, port)
         self.cache_ttl = cache_ttl
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
         self.channel_cache = {}
         self.channel_cache_timestamp = 0
         self.cache_lock = Lock()
@@ -66,7 +70,20 @@ class ChannelInfoProvider:
             ):
                 return len(self.channel_cache)
 
-            response = httpx.get(f"{self.base_url}/api/v1/channels", timeout=10)
+            request = build_safe_dvr_request(
+                self.host,
+                self.port,
+                "/api/v1/channels",
+                allow_loopback=self._allow_test_loopback,
+            )
+            if request is None:
+                raise httpx.ConnectError("DVR target did not pass safety validation")
+            response = httpx.get(
+                request.url,
+                headers={"Host": request.host_header},
+                timeout=10,
+                trust_env=False,
+            )
             if response.status_code == 200:
                 channels_data = response.json()
 

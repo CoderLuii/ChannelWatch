@@ -1,5 +1,6 @@
 """Runs the Channel-Watching diagnostic with mock viewing events."""
 
+import asyncio
 import time
 
 from ...helpers.logging import log
@@ -8,7 +9,7 @@ from ..output import print_test_header, print_result
 # ALERT TESTING
 
 
-def test_channel_watching_alert(host: str, port: int, alert_manager) -> bool:
+async def test_channel_watching_alert(host: str, port: int, alert_manager) -> bool:
     """Tests the Channel-Watching alert by simulating a channel viewing event."""
     print_test_header("Channel-Watching Test")
 
@@ -28,11 +29,14 @@ def test_channel_watching_alert(host: str, port: int, alert_manager) -> bool:
 
         test_alert = alert_manager.alert_instances["Channel-Watching"]
 
-        if hasattr(test_alert, "_cache_channels"):
-            test_alert._cache_channels()
-
         channel_number = "7"
-        if hasattr(test_alert, "channel_provider"):
+
+        def _prepare_fixture_metadata() -> None:
+            if hasattr(test_alert, "_cache_channels"):
+                test_alert._cache_channels()
+
+            if not hasattr(test_alert, "channel_provider"):
+                return
             real_channel_data = {
                 "name": "WABC",
                 "display_name": "ABC",
@@ -57,13 +61,19 @@ def test_channel_watching_alert(host: str, port: int, alert_manager) -> bool:
                     "icon_url": "https://tmsimg.fancybits.co/assets/p184220_b_h9_aa.jpg?w=720&h=540",
                 }
 
+        # Channel metadata providers use bounded synchronous HTTP clients.
+        # Keep their cache warm-up off the ASGI event loop just like provider
+        # delivery, so an offline DVR cannot pause unrelated UI requests.
+        await asyncio.to_thread(_prepare_fixture_metadata)
+
+        notification_manager = alert_manager.notification_manager
         has_providers = bool(
-            alert_manager.notification_manager
-            and alert_manager.notification_manager.get_active_providers()
+            notification_manager
+            and notification_manager.has_configured_destinations()
         )
 
         log("Processing event...")
-        result = alert_manager.process_event("activities.set", mock_event_data)
+        result = await alert_manager.process_event("activities.set", mock_event_data)
 
         if result:
             print_result(True, "Event processed, notification dispatched")

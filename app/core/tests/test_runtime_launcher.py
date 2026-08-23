@@ -218,7 +218,11 @@ def test_runtime_activation_rollback_power_loss_is_replayable_and_blocks_launch(
     monkeypatch.setattr(
         runtime_launcher, "_restart_transition_checkpoint", lambda _phase: None
     )
-    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "time",
+        SimpleNamespace(sleep=lambda _delay: None),
+    )
     monkeypatch.setattr(runtime_launcher, "request_container_restart", lambda: None)
     monkeypatch.setattr(
         runtime_launcher,
@@ -327,7 +331,11 @@ def test_restart_required_sentinel_blocks_and_retries_each_child_launch(
         raise RuntimeError("supervisor unavailable")
 
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
-    monkeypatch.setattr(runtime_launcher.time, "sleep", delays.append)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "time",
+        SimpleNamespace(sleep=delays.append),
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "request_container_restart",
@@ -361,7 +369,11 @@ def test_any_restart_journal_filesystem_object_blocks_application_launch(
     restart_attempts: list[bool] = []
 
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
-    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "time",
+        SimpleNamespace(sleep=lambda _delay: None),
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "request_container_restart",
@@ -1488,7 +1500,11 @@ def test_activation_watchdog_survives_transient_error(tmp_path: Path, monkeypatc
         lambda: (_ for _ in ()).throw(RuntimeError("temporary failure")),
     )
     monkeypatch.setattr(runtime_launcher, "log", calls.append)
-    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _seconds: pending_path.unlink())
+    monkeypatch.setattr(
+        runtime_launcher,
+        "time",
+        SimpleNamespace(sleep=lambda _seconds: pending_path.unlink()),
+    )
 
     runtime_launcher._activation_watchdog_loop()
 

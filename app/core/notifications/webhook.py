@@ -70,15 +70,23 @@ class WebhookManager:
         payload = self._build_payload(
             event_type=event_type, title=title, message=message, kwargs=kwargs
         )
+        diagnostic_deadline = kwargs.get("_diagnostic_deadline_monotonic")
 
         if len(enabled_webhooks) == 1:
-            return self._deliver_webhook(enabled_webhooks[0], payload)
+            return self._deliver_webhook(
+                enabled_webhooks[0], payload, diagnostic_deadline=diagnostic_deadline
+            )
 
         max_workers = max(1, min(self.MAX_DELIVERY_WORKERS, len(enabled_webhooks)))
         overall_success = False
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
-                executor.submit(self._deliver_webhook, webhook, payload)
+                executor.submit(
+                    self._deliver_webhook,
+                    webhook,
+                    payload,
+                    diagnostic_deadline=diagnostic_deadline,
+                )
                 for webhook in enabled_webhooks
             ]
             for future in as_completed(futures):
@@ -159,14 +167,23 @@ class WebhookManager:
         headers: Dict[str, str],
         *,
         sni_hostname: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> httpx.Response:
         extensions = {"sni_hostname": sni_hostname} if sni_hostname else None
         return self._client.post(
-            url, content=body, headers=headers, extensions=extensions
+            url,
+            content=body,
+            headers=headers,
+            extensions=extensions,
+            timeout=timeout_seconds or self.REQUEST_TIMEOUT_SECONDS,
         )
 
     def _deliver_webhook(
-        self, webhook: Dict[str, Any], payload: Dict[str, Any]
+        self,
+        webhook: Dict[str, Any],
+        payload: Dict[str, Any],
+        *,
+        diagnostic_deadline: float | None = None,
     ) -> bool:
         url = str(webhook.get("url", "")).strip()
         redacted_url = redact_url(url)
@@ -216,6 +233,11 @@ class WebhookManager:
         }
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            remaining = None
+            if diagnostic_deadline is not None:
+                remaining = diagnostic_deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
             safe_request = (
                 build_trusted_notification_request(
                     url,
@@ -239,6 +261,11 @@ class WebhookManager:
                     body,
                     delivery_headers,
                     sni_hostname=safe_request.sni_hostname,
+                    timeout_seconds=(
+                        min(self.REQUEST_TIMEOUT_SECONDS, max(0.01, remaining))
+                        if remaining is not None
+                        else None
+                    ),
                 )
                 if 200 <= response.status_code < 300:
                     log(
@@ -264,6 +291,10 @@ class WebhookManager:
 
             if attempt < self.MAX_ATTEMPTS:
                 delay = self.BASE_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+                if diagnostic_deadline is not None:
+                    remaining = diagnostic_deadline - time.monotonic()
+                    if remaining <= delay:
+                        return False
                 log(f"Retrying webhook in {delay}s", level=LOG_VERBOSE)
                 time.sleep(delay)
 

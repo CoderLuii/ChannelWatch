@@ -10,6 +10,7 @@ import httpx
 from .base import BaseAlert
 from ..helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 from ..helpers.dvr_connection import build_dvr_base_url
+from ..helpers.dvr_target import build_safe_dvr_request
 from .common.alert_formatter import AlertFormatter
 from .common.session_manager import SessionManager
 from ..helpers.activity_recorder import record_disk_status
@@ -62,6 +63,11 @@ class DiskSpaceAlert(BaseAlert):
         self.dvr = dvr
         host = dvr.host if dvr else None
         port = dvr.port if dvr else 8089
+        self.host = host
+        self.port = port
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
 
         legacy_warning_percent = float(
             getattr(
@@ -370,7 +376,20 @@ class DiskSpaceAlert(BaseAlert):
     def _get_disk_info(self) -> Optional[Dict[str, Any]]:
         """Fetches disk space information from the Channels DVR API."""
         try:
-            response = httpx.get(self.api_url, timeout=3)
+            request = build_safe_dvr_request(
+                self.host,
+                self.port,
+                "/dvr",
+                allow_loopback=self._allow_test_loopback,
+            )
+            if request is None:
+                raise httpx.ConnectError("DVR target did not pass safety validation")
+            response = httpx.get(
+                request.url,
+                headers={"Host": request.host_header},
+                timeout=3,
+                trust_env=False,
+            )
             if response.status_code != 200:
                 log(
                     f"Failed to get disk info: HTTP {response.status_code}",

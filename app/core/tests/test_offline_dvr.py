@@ -207,7 +207,7 @@ class TestDvrRetryAfterBackoff:
             async def save_all_state(self):
                 return None
 
-        monitor = EventMonitor(host="127.0.0.1", alert_manager=DummyAlertManager())
+        monitor = EventMonitor(host="192.168.1.10", alert_manager=DummyAlertManager())
 
         async def run():
             with patch("core.engine.event_monitor.httpx.AsyncClient", FakeAsyncClient):
@@ -219,7 +219,7 @@ class TestDvrRetryAfterBackoff:
         assert monitor._consume_retry_after_delay() == 7.0
 
     def test_retry_after_seconds_overrides_next_reconnect_sleep(self):
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor.running = True
         sleep_calls: list[float] = []
 
@@ -245,7 +245,7 @@ class TestDvrRetryAfterBackoff:
         assert EventMonitor._parse_retry_after("9999") == 60.0
 
     def test_reconnect_sleep_stops_promptly_when_monitor_is_stopped(self):
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor.running = True
         sleep_calls: list[float] = []
 
@@ -267,7 +267,7 @@ class TestDvrRetryAfterBackoff:
         assert 0 < delay <= 30
 
     def test_invalid_or_missing_retry_after_uses_exponential_fallback(self):
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor.running = True
         sleep_calls: list[float] = []
 
@@ -290,7 +290,7 @@ class TestDvrRetryAfterBackoff:
         assert sleep_calls == [1]
 
     def test_normal_reconnect_delay_uses_interruptible_sleep(self):
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor.running = True
 
         with (
@@ -308,7 +308,7 @@ class TestDvrRetryAfterBackoff:
         interruptible_sleep.assert_called_once_with(1)
 
     def test_healthy_attempt_resets_exponential_backoff(self):
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor.running = True
         sleep_calls: list[float] = []
         attempts = {"count": 0}
@@ -391,7 +391,7 @@ class TestDvrStreamFailures:
     @pytest.mark.parametrize("status_code", [401, 503])
     def test_non_success_response_is_disconnected(self, status_code):
         alert_manager = self._alert_manager()
-        monitor = EventMonitor(host="127.0.0.1", alert_manager=alert_manager)
+        monitor = EventMonitor(host="192.168.1.10", alert_manager=alert_manager)
         monitor.running = True
 
         async def run():
@@ -406,7 +406,7 @@ class TestDvrStreamFailures:
 
     def test_unexpected_stream_eof_is_disconnected(self):
         alert_manager = self._alert_manager()
-        monitor = EventMonitor(host="127.0.0.1", alert_manager=alert_manager)
+        monitor = EventMonitor(host="192.168.1.10", alert_manager=alert_manager)
         monitor.running = True
 
         async def run():
@@ -423,7 +423,7 @@ class TestDvrStreamFailures:
 
     def test_alert_state_loads_once_across_connection_attempts(self):
         alert_manager = self._alert_manager()
-        monitor = EventMonitor(host="127.0.0.1", alert_manager=alert_manager)
+        monitor = EventMonitor(host="192.168.1.10", alert_manager=alert_manager)
         monitor.running = True
 
         async def run():
@@ -458,7 +458,7 @@ class TestDvrStreamFailures:
             async def aclose(self):
                 self.closed = True
 
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor.running = True
         monitor.connected = True
         monitor.ping_interval = 0
@@ -486,7 +486,7 @@ class TestDvrStreamFailures:
             async def aclose(self):
                 self.closed = True
 
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor._active_response = FailingResponse()
         client = ClosableClient()
         monitor._active_client = client

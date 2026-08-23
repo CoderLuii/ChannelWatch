@@ -139,7 +139,7 @@ class TestBridgeModeWarning:
         calls = [str(c) for c in mock_log.call_args_list]
         assert not any("Bridge mode" in c for c in calls)
 
-    def test_successful_connection_no_warning(self):
+    def test_successful_private_lan_connection_no_bridge_warning(self):
         from core.helpers.initialize import check_server_connectivity
 
         mock_resp = MagicMock()
@@ -149,7 +149,7 @@ class TestBridgeModeWarning:
             patch("core.helpers.initialize.httpx.get", return_value=mock_resp),
             patch("core.helpers.initialize.log") as mock_log,
         ):
-            result = check_server_connectivity("localhost", 8089)
+            result = check_server_connectivity("192.168.1.50", 8089)
 
         assert result is True
         calls = [str(c) for c in mock_log.call_args_list]

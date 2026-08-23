@@ -3,9 +3,30 @@
 import requests
 
 from ...helpers.logging import log
+from ...helpers.dvr_target import build_safe_dvr_request
 from ..output import print_test_header, print_result, print_section
 
 # CONNECTIVITY TESTING
+_DVR_HTTP_SESSION = requests.Session()
+_DVR_HTTP_SESSION.trust_env = False
+
+
+def _safe_get(host: str, port: int, path: str, *, timeout: float, **kwargs):
+    request = build_safe_dvr_request(host, port, path)
+    if request is None:
+        raise requests.ConnectionError("DVR target did not pass safety validation")
+    headers = dict(kwargs.pop("headers", {}) or {})
+    kwargs.pop("allow_redirects", None)
+    headers["Host"] = request.host_header
+    # The DVR-only validator resolves every answer, rejects mixed/forbidden
+    # results, and supplies this numeric connection URL plus the original Host.
+    return _DVR_HTTP_SESSION.get(  # nosemgrep: python.django.security.injection.ssrf.ssrf-injection-requests.ssrf-injection-requests
+        request.url,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=False,
+        **kwargs,
+    )
 
 
 def test_connectivity(host: str, port: int) -> bool:
@@ -15,7 +36,7 @@ def test_connectivity(host: str, port: int) -> bool:
     try:
         log(f"Connecting to {host}:{port}...")
 
-        response = requests.get(f"http://{host}:{port}/status", timeout=5)
+        response = _safe_get(host, port, "/status", timeout=5)
 
         if response.status_code != 200:
             print_result(False, f"Server returned HTTP {response.status_code}")
@@ -26,8 +47,10 @@ def test_connectivity(host: str, port: int) -> bool:
         log(f"Server version: {version}")
 
         log("Testing event stream...")
-        event_response = requests.get(
-            f"http://{host}:{port}/dvr/events/subscribe",
+        event_response = _safe_get(
+            host,
+            port,
+            "/dvr/events/subscribe",
             headers={"Accept": "text/event-stream"},
             stream=True,
             timeout=5,
@@ -90,8 +113,10 @@ def test_api_endpoints(host: str, port: int) -> bool:
 
             try:
                 if is_stream:
-                    response = requests.get(
-                        f"http://{host}:{port}{url}",
+                    response = _safe_get(
+                        host,
+                        port,
+                        url,
                         headers={"Accept": "text/event-stream"},
                         stream=True,
                         timeout=5,
@@ -99,9 +124,7 @@ def test_api_endpoints(host: str, port: int) -> bool:
                     if response.status_code == 200:
                         response.close()
                 else:
-                    response = requests.get(
-                        f"http://{host}:{port}{url}", timeout=timeout
-                    )
+                    response = _safe_get(host, port, url, timeout=timeout)
 
                 if response.status_code == 200:
                     log(f"  {url:<35} PASS  (HTTP 200)")

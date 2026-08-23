@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { encodeReportChallengeProof, sha256, solveReportChallenge } from "@/lib/report-proof"
+import { DEFAULT_REPORT_PROOF_DEADLINE_MS, encodeReportChallengeProof, sha256, solveReportChallenge } from "@/lib/report-proof"
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
 const challenge = {
@@ -48,6 +48,20 @@ describe("report proof preparation", () => {
     await expect(solveReportChallenge(
       { ...challenge, difficulty: 24 },
       { deadlineMs: 1, yieldEvery: 1 },
-    )).rejects.toThrow("took too long")
+    )).rejects.toThrow("attachments are still here")
+  })
+
+  it("uses a 30-second default deadline", async () => {
+    expect(DEFAULT_REPORT_PROOF_DEADLINE_MS).toBe(30000)
+  })
+
+  it.each([
+    { ...challenge, version: 2 },
+    { ...challenge, nonce: "" },
+    { ...challenge, expires_at: Date.now() - 1 },
+    { ...challenge, route_class: "other" as "in_app" },
+    { ...challenge, signature: "" },
+  ])("rejects malformed or expired challenge input", async (invalid) => {
+    await expect(solveReportChallenge(invalid)).rejects.toThrow("invalid secure challenge")
   })
 })

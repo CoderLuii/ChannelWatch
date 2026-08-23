@@ -7,6 +7,7 @@ from typing import Optional
 
 from .logging import log
 from .dvr_connection import build_dvr_base_url
+from .dvr_target import build_safe_dvr_request
 from ..engine.event_monitor import EventMonitor
 from ..notifications.notification import NotificationManager
 from ..notifications.rate_limiter import RateLimiter
@@ -20,7 +21,22 @@ from ..dvr_client import check_version_compatibility
 def check_server_connectivity(host: str, port: int) -> bool:
     """Verify connection to Channels DVR server and report version information."""
     try:
-        response = httpx.get(f"{build_dvr_base_url(host, port)}/status", timeout=5)
+        safe_request = build_safe_dvr_request(host, port, "/status")
+        if safe_request is None:
+            log("Connection failed: DVR target did not pass safety validation")
+            if host in ("localhost", "127.0.0.1", "0.0.0.0"):
+                log(
+                    "Bridge mode detected: DVR host is set to a local address which is "
+                    "unreachable from inside a Docker container. Use your DVR's LAN IP "
+                    "or host.docker.internal instead.",
+                )
+            return False
+        response = httpx.get(
+            safe_request.url,
+            headers={"Host": safe_request.host_header},
+            timeout=5,
+            trust_env=False,
+        )
         if response.status_code == 200:
             data = response.json()
             version = data.get("version", "Unknown")
@@ -88,6 +104,7 @@ def initialize_notifications(
         rate_limiter=_get_shared_rate_limiter(
             authoritative_limit, authoritative_window
         ),
+        diagnostic_mode=test_mode,
     )
     configured_providers = []
 
@@ -172,7 +189,8 @@ def initialize_alerts(
 
     if registered_alerts and not test_mode:
         has_providers = (
-            notification_manager and notification_manager.get_active_providers()
+            notification_manager
+            and notification_manager.has_configured_destinations()
         )
         notification_types = [
             t for attr, t in alert_mapping.items() if getattr(settings, attr, False)

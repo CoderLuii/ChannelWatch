@@ -68,6 +68,10 @@ class BaseAlert(ABC):
         notification_kwargs = self._build_notification_kwargs(
             image_url=image_url, **kwargs
         )
+        if getattr(self.notification_manager, "diagnostic_mode", False) is True:
+            return self.notification_manager.send_notification(
+                title, message, **notification_kwargs
+            )
         enqueue = getattr(type(self.notification_manager), "enqueue_notification", None)
         if callable(enqueue):
             return enqueue(

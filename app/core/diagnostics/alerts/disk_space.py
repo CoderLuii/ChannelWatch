@@ -37,9 +37,10 @@ def test_disk_space_alert(host: str, port: int, alert_manager) -> bool:
             f"Disk: {free_formatted} free of {total_formatted} ({free_percentage:.1f}%)"
         )
 
+        notification_manager = alert_manager.notification_manager
         has_providers = bool(
-            alert_manager.notification_manager
-            and alert_manager.notification_manager.get_active_providers()
+            notification_manager
+            and notification_manager.has_configured_destinations()
         )
 
         log("Processing alert...")

@@ -8,6 +8,38 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.17] - 2026-08-23
+
+### Added
+
+- Add a privacy-preserving runtime preflight endpoint and setup-required screen for deployments that omit, shorten, or mismatch the external secret-storage key.
+- Add a DVR-specific destination policy that safely supports private-LAN, single-label, `.local`, public, IPv6 unique-local, and Tailscale MagicDNS hosts while pinning the validated DNS address to each outbound connection.
+- Document that fresh installs from the third-party Project One-Click template remain setup-required until the operator runs `openssl rand -base64 48`, adds the result as `CHANNELWATCH_SECRET_STORAGE_KEY`, pulls and recreates the v0.9.17 container without deleting `/config`, and preserves that same key across upgrades, restores, and host migrations; the external project is not modified or contacted.
+
+### Changed
+
+- Keep the core process stable and responsive to shutdown while protected runtime setup is blocked, without starting monitors, notifications, migrations, or update readiness.
+- Await notification diagnostics end to end with a bounded delivery deadline so a passing result means at least one configured destination accepted the test alert.
+- Solve signed support-report proof challenges in a cancellable browser worker with a 30-second deadline and non-sensitive progress reporting.
+- Determine restart recovery from UI liveness and startup probes, then report degraded monitoring separately from a failed restart.
+- Mark v0.9.17 as container image required because secret-storage recovery must work before the core monitor can use an app-only update path.
+
+### Fixed
+
+- Replace fresh-install Supervisor crash loops with an actionable setup-required state while preserving fail-closed external key separation.
+- Preserve existing plaintext encryption keys for compatibility, warn that migration is recommended, and atomically envelope the same logical key after a valid deployment key is supplied.
+- Stop channel, VOD, and recording notification tests from reporting success for a coroutine that was not awaited or a queued-but-undelivered alert.
+- Keep report text, screenshots, and debug bundles in memory after proof timeout or network failure until successful submission, explicit removal or discard, or page navigation.
+- Stop a healthy restarted UI from being mislabeled as failed solely because a DVR remains offline or runtime setup still needs attention.
+- Reject DNS results that include any loopback, link-local, metadata, multicast, unspecified, reserved, or otherwise forbidden destination even when another answer is safe.
+
+### Security
+
+- Continue requiring a stable operator-managed secret-storage key of at least 32 trimmed characters; ChannelWatch does not generate, display, upload, persist, or recover that deployment secret.
+- Keep the general outbound URL validator unchanged while applying the new hostname support only to Channels DVR connections.
+- Keep unauthenticated health probes minimal and expose only fixed, non-secret blocker codes through the new bootstrap preflight endpoint.
+- Require users to pull and recreate the v0.9.17 image while preserving `/config`; removing or changing an established wrapping key remains fail closed.
+
 ## [0.9.16] - 2026-08-22
 
 ### Added
@@ -404,7 +436,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.16...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.17...HEAD
+[0.9.17]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.16...v0.9.17
 [0.9.16]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.15...v0.9.16
 [0.9.15]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.14...v0.9.15
 [0.9.14]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.13...v0.9.14

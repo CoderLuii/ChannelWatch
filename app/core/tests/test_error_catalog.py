@@ -29,6 +29,9 @@ class TestErrorCodeConstants:
             == "ERR_SETTINGS_VALIDATION_FAILED"
         )
 
+    def test_runtime_setup_required(self):
+        assert ErrorCode.RUNTIME_SETUP_REQUIRED == "ERR_RUNTIME_SETUP_REQUIRED"
+
     def test_all_codes_are_strings(self):
         codes = [
             v
@@ -191,6 +194,27 @@ class TestMigratedEndpointPayloads:
         assert detail["code"] == ErrorCode.SETTINGS_SAVE_FAILED
         assert "message" in detail
         assert "remediation" in detail
+
+    def test_credential_write_without_storage_key_returns_actionable_503(
+        self, client, settings_file
+    ):
+        from core.helpers.encryption import EncryptionKeyUnavailableError
+
+        with patch(
+            "ui.backend.main._save_settings_and_signal_reload_async",
+            side_effect=EncryptionKeyUnavailableError("redacted"),
+        ):
+            resp = client.post(
+                "/api/settings",
+                json=json.loads(settings_file.read_text()),
+                headers={"X-API-Key": "test-key-abc"},
+            )
+
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert detail["code"] == ErrorCode.RUNTIME_SETUP_REQUIRED
+        assert "CHANNELWATCH_SECRET_STORAGE_KEY" in detail["remediation"]
+        assert "redacted" not in json.dumps(detail)
 
     def test_dvr_soft_delete_not_found_structured(self, client):
         resp = client.post(

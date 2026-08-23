@@ -31,7 +31,7 @@ def _call_in_daemon_thread(func):
 
 
 def test_get_all_jobs_refreshes_expired_cache_without_nested_lock_deadlock(monkeypatch):
-    provider = JobInfoProvider(host="127.0.0.1", port=9, cache_ttl=0)
+    provider = JobInfoProvider(host="192.168.1.10", port=9, cache_ttl=0)
     monkeypatch.setattr(
         "core.helpers.job_info.httpx.get",
         lambda *args, **kwargs: _JobsResponse([{"id": "job-1", "name": "News"}]),
@@ -45,7 +45,7 @@ def test_get_all_jobs_refreshes_expired_cache_without_nested_lock_deadlock(monke
 def test_get_job_by_id_refreshes_expired_cache_without_nested_lock_deadlock(
     monkeypatch,
 ):
-    provider = JobInfoProvider(host="127.0.0.1", port=9, cache_ttl=0)
+    provider = JobInfoProvider(host="192.168.1.10", port=9, cache_ttl=0)
     monkeypatch.setattr(
         "core.helpers.job_info.httpx.get",
         lambda *args, **kwargs: _JobsResponse([{"id": "job-2", "name": "Movie"}]),
@@ -67,8 +67,8 @@ def test_legacy_recording_provider_warns_only_when_instantiated():
         DeprecationWarning,
         match="RecordingInfoProvider is deprecated, use JobInfoProvider instead",
     ):
-        provider = RecordingInfoProvider(host="127.0.0.1", port=9)
+        provider = RecordingInfoProvider(host="192.168.1.10", port=9)
 
     assert isinstance(provider, JobInfoProvider)
-    assert provider.host == "127.0.0.1"
+    assert provider.host == "192.168.1.10"
     assert provider.port == 9

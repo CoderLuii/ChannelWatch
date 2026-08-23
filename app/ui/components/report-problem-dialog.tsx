@@ -691,7 +691,25 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
 
   useEffect(() => {
     if (open) return
+    submissionAbortRef.current?.abort()
     setStep("form")
+    setErrors({})
+    setDraftPayload(null)
+    setReportDraft(null)
+    setServerPreview(null)
+    setSubmitError(null)
+    setAttachmentError(null)
+    setDebugBundleLoading(false)
+    setScreenshotDropActive(false)
+    setSubmitting(false)
+    setManualUploadOpen(false)
+    setSupportCodeStatus("idle")
+    setOfflinePackageStatus("idle")
+  }, [open])
+
+  const clearDraft = () => {
+    submissionAbortRef.current?.abort()
+    setForm({ ...initialForm })
     setErrors({})
     setDraftPayload(null)
     setReportDraft(null)
@@ -700,13 +718,21 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     setAttachmentError(null)
     setScreenshots([])
     setDebugBundle(null)
-    setDebugBundleLoading(false)
-    setScreenshotDropActive(false)
-    setSubmitting(false)
     setManualUploadOpen(false)
     setSupportCodeStatus("idle")
     setOfflinePackageStatus("idle")
-  }, [open])
+    setStep("form")
+  }
+
+  const handleDiscardDraft = () => {
+    clearDraft()
+    setOpen(false)
+  }
+
+  const handleSuccessClose = () => {
+    if (!privateDeliveryFailed && !providerConfirmationPending) clearDraft()
+    setOpen(false)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -873,6 +899,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     setSubmitting(true)
     setPreparingSubmission(false)
     setSubmitError(null)
+    submissionAbortRef.current?.abort()
     const abortController = new AbortController()
     submissionAbortRef.current = abortController
     try {
@@ -906,7 +933,9 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
       setSubmitError(message)
       setManualUploadOpen(true)
     } finally {
-      submissionAbortRef.current = null
+      if (submissionAbortRef.current === abortController) {
+        submissionAbortRef.current = null
+      }
       setPreparingSubmission(false)
       setSubmitting(false)
     }
@@ -917,6 +946,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     setSubmitting(true)
     setPreparingSubmission(false)
     setSubmitError(null)
+    submissionAbortRef.current?.abort()
     const abortController = new AbortController()
     submissionAbortRef.current = abortController
     try {
@@ -934,7 +964,9 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : t("supportReport.error.submit"))
     } finally {
-      submissionAbortRef.current = null
+      if (submissionAbortRef.current === abortController) {
+        submissionAbortRef.current = null
+      }
       setPreparingSubmission(false)
       setSubmitting(false)
     }
@@ -1659,9 +1691,14 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
           <DialogFooter className="gap-3 border-t border-border bg-card/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0 sm:px-6">
             {step === "form" && (
               <>
+                <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setOpen(false)}>
                   {t("supportReport.form.cancel")}
                 </Button>
+                <Button variant="ghost" onClick={handleDiscardDraft}>
+                  {t("supportReport.form.discard")}
+                </Button>
+                </div>
                 <Button onClick={handleReview} disabled={loadingConfig || Boolean(configError)}>
                   {t("supportReport.form.continue")}
                 </Button>
@@ -1728,7 +1765,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                       : t("supportReport.success.retryPrivateDelivery")}
                   </Button>
                 )}
-                <Button variant={privateDeliveryFailed || providerConfirmationPending ? "outline" : "default"} onClick={() => setOpen(false)}>
+                <Button variant={privateDeliveryFailed || providerConfirmationPending ? "outline" : "default"} onClick={handleSuccessClose}>
                   {t("supportReport.success.close")}
                 </Button>
               </div>

@@ -23,6 +23,7 @@ export const ErrorCode = {
   DVR_TEST_TARGET_REJECTED: "ERR_DVR_TEST_TARGET_REJECTED",
   SETTINGS_VALIDATION_FAILED: "ERR_SETTINGS_VALIDATION_FAILED",
   SETTINGS_SAVE_FAILED: "ERR_SETTINGS_SAVE_FAILED",
+  RUNTIME_SETUP_REQUIRED: "ERR_RUNTIME_SETUP_REQUIRED",
   BACKUP_CREATE_FAILED: "ERR_BACKUP_CREATE_FAILED",
   RESTORE_INVALID_ZIP: "ERR_RESTORE_INVALID_ZIP",
   RESTORE_SCHEMA_AHEAD: "ERR_RESTORE_SCHEMA_AHEAD",
@@ -177,6 +178,13 @@ const CATALOG: Record<string, CatalogEntry> = {
     code: ErrorCode.SETTINGS_VALIDATION_FAILED,
     message: "Settings validation failed.",
     remediation: "Correct the reported settings fields and try saving again.",
+  },
+  [ErrorCode.RUNTIME_SETUP_REQUIRED]: {
+    code: ErrorCode.RUNTIME_SETUP_REQUIRED,
+    message:
+      "Runtime setup is required before protected credentials can be saved.",
+    remediation:
+      "Set CHANNELWATCH_SECRET_STORAGE_KEY to a stable value containing at least 32 characters, then recreate or restart the container.",
   },
   [ErrorCode.BACKUP_CREATE_FAILED]: {
     code: ErrorCode.BACKUP_CREATE_FAILED,

@@ -15,6 +15,7 @@ from typing import Any
 
 from .helpers.config import get_settings, CONFIG_FILE
 from .helpers.encryption import bootstrap_encryption_key
+from .helpers.runtime_preflight import inspect_runtime_preflight
 from .watchdog import (
     Watchdog,
     WATCHDOG_CHECK_INTERVAL_SECONDS,
@@ -1211,10 +1212,6 @@ def _record_update_core_ready(config_dir: str) -> None:
 async def main() -> None:
     """Async application entry point handling initialization, monitoring, and command-line options."""
 
-    # INITIALIZATION
-    bootstrap_encryption_key()
-    settings = get_settings()
-
     parser = argparse.ArgumentParser(
         description=f"{__app_name__} - Channels DVR monitoring tool"
     )
@@ -1245,17 +1242,52 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    config_dir = os.getenv("CONFIG_PATH", "/config")
-    retention_days = settings.log_retention_days
-    log_level = settings.log_level
-    log_file_path = os.path.join(config_dir, "channelwatch.log")
-
     test_mode = (
         args.test_connectivity
         or args.test_api
         or args.test_alert
         or args.monitor_events is not None
     )
+
+    # Shutdown handling must exist before secret preflight. A deliberately
+    # blocked fresh install stays stable under Supervisor and still exits
+    # promptly when Docker stops the container.
+    shutdown_event = asyncio.Event()
+    reload_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown() -> None:
+        log("Received shutdown signal, stopping...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        _install_signal_handler(loop, sig, _request_shutdown)
+    if SIGHUP is not None:
+        _install_signal_handler(loop, SIGHUP, lambda: reload_event.set())
+
+    preflight = inspect_runtime_preflight()
+    if preflight.setup_required:
+        blocker = preflight.blockers[0] if preflight.blockers else "unknown"
+        log(
+            "Runtime setup required: protected local key storage is unavailable "
+            f"({blocker}). Configure CHANNELWATCH_SECRET_STORAGE_KEY with at "
+            "least 32 characters (or its supported key-file variable), then "
+            "recreate the container. Monitoring has not started."
+        )
+        if test_mode:
+            raise SystemExit(2)
+        await shutdown_event.wait()
+        return
+
+    # INITIALIZATION
+    bootstrap_encryption_key()
+    settings = get_settings()
+
+    config_dir = os.getenv("CONFIG_PATH", "/config")
+    retention_days = settings.log_retention_days
+    log_level = settings.log_level
+    log_file_path = os.path.join(config_dir, "channelwatch.log")
+
     setup_logging(config_dir, retention_days, test_mode=test_mode)
 
     def _record_runtime_ready() -> None:
@@ -1283,14 +1315,18 @@ async def main() -> None:
         log("No enabled DVR is configured for the requested diagnostic.")
         raise SystemExit(1)
     if args.test_connectivity:
-        sys.exit(0 if run_test("connectivity", first_dvr.host, first_dvr.port) else 1)
+        sys.exit(
+            0 if await run_test("connectivity", first_dvr.host, first_dvr.port) else 1
+        )
     if args.test_api:
-        sys.exit(0 if run_test("api", first_dvr.host, first_dvr.port) else 1)
+        sys.exit(0 if await run_test("api", first_dvr.host, first_dvr.port) else 1)
     if args.monitor_events:
         duration = args.monitor_events
         sys.exit(
             0
-            if run_test("event_stream", first_dvr.host, first_dvr.port, None, duration)
+            if await run_test(
+                "event_stream", first_dvr.host, first_dvr.port, None, duration
+            )
             else 1
         )
 
@@ -1319,29 +1355,18 @@ async def main() -> None:
                     settings.global_rate_limit,
                     settings.global_rate_window,
                 ),
+                diagnostic_mode=True,
             )
         alert_manager = initialize_alerts(
             _test_nm, _test_settings, test_mode=test_mode, dvr=first_dvr
         )
         sys.exit(
             0
-            if run_test(args.test_alert, first_dvr.host, first_dvr.port, alert_manager)
+            if await run_test(
+                args.test_alert, first_dvr.host, first_dvr.port, alert_manager
+            )
             else 1
         )
-
-    # SHUTDOWN SIGNAL WIRING
-    shutdown_event = asyncio.Event()
-    reload_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-
-    def _request_shutdown() -> None:
-        log("Received shutdown signal, stopping...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        _install_signal_handler(loop, sig, _request_shutdown)
-    if SIGHUP is not None:
-        _install_signal_handler(loop, SIGHUP, lambda: reload_event.set())
 
     # PER-DVR MONITORING SETUP
     global event_monitors

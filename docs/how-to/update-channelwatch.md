@@ -6,7 +6,9 @@ The Update Center is meant to make routine updates feel like a normal app update
 
 If you pulled v0.9.9, update the container image to v0.9.10 first. That repair release touches Docker entrypoint and runtime behavior, so ChannelWatch marks it as **container image update required** instead of applying it as an in-app bundle.
 
-v0.9.16 requires a normal container image update because it changes the image-stable launcher, entrypoint privilege handling, monitor lifecycle, and Helm deployment contract. The Update Center reports this release as **container image update required** and does not attempt an unsafe app-only activation.
+v0.9.17 requires a normal container image update because missing-key recovery must work before the core monitor starts. Pull and recreate the container while preserving `/config`; the Update Center reports this release as **container image update required** and does not attempt an unsafe app-only activation.
+
+If an external Project One-Click installation shows **Runtime setup required**, edit its stack and add a stable `CHANNELWATCH_SECRET_STORAGE_KEY` containing at least 32 characters. Generate one locally with `openssl rand -base64 48`, preserve it with your deployment secrets, and recreate the container without deleting the `/config` volume. ChannelWatch deliberately does not generate this deployment key under `/config`, and it cannot recover the value if it is lost.
 
 ## Check for updates
 

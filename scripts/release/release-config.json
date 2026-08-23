@@ -1,4 +1,6 @@
 {
-  "version": "0.9.16",
-  "image_required": true
+  "version": "0.9.17",
+  "image_required": true,
+  "release_heading": "# ChannelWatch v0.9.17 - Setup, diagnostics, and LAN reliability",
+  "verification_assets": true
 }

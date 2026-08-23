@@ -404,3 +404,60 @@ def test_send_notification_delivers_enabled_webhooks_concurrently():
 
     assert mock_post.call_count == 2
     assert overlapped is True
+
+
+def test_diagnostic_deadline_prevents_webhook_attempt_after_expiry():
+    settings = type("Settings", (), {"webhooks": []})()
+    manager = WebhookManager(settings)
+    webhook = {
+        "url": "https://example.test/webhook",
+        "secret": "super-secret",
+        "enabled": True,
+    }
+
+    with patch.object(manager, "_post") as mock_post:
+        result = manager._deliver_webhook(
+            webhook,
+            manager._build_payload("test", "Title", "Message", {}),
+            diagnostic_deadline=time.monotonic() - 1,
+        )
+
+    assert result is False
+    mock_post.assert_not_called()
+
+
+def test_diagnostic_deadline_stops_webhook_before_retry_delay():
+    settings = type("Settings", (), {"webhooks": []})()
+    manager = WebhookManager(settings)
+    webhook = {
+        "url": "https://example.test/webhook",
+        "secret": "super-secret",
+        "enabled": True,
+    }
+    response = MagicMock(status_code=503)
+
+    with (
+        patch(
+            "core.helpers.url_validator.socket.getaddrinfo",
+            return_value=[
+                (
+                    __import__("socket").AF_INET,
+                    __import__("socket").SOCK_STREAM,
+                    6,
+                    "",
+                    ("93.184.216.34", 0),
+                )
+            ],
+        ),
+        patch.object(manager, "_post", return_value=response) as mock_post,
+        patch("core.notifications.webhook.time.sleep") as sleep,
+    ):
+        result = manager._deliver_webhook(
+            webhook,
+            manager._build_payload("test", "Title", "Message", {}),
+            diagnostic_deadline=time.monotonic() + 0.05,
+        )
+
+    assert result is False
+    assert mock_post.call_count == 1
+    sleep.assert_not_called()

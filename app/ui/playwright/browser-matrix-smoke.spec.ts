@@ -158,21 +158,32 @@ test("settings save posts the changed value before requesting core restart", asy
   expect(calls).toEqual(["settings", "restart"])
 })
 
-test("restart overlay appears and recovers after the health endpoint returns", async ({ page }) => {
-  let healthChecks = 0
+test("restart overlay appears and recovers from liveness and startup while monitoring is degraded", async ({ page }) => {
+  let livenessChecks = 0
   await page.route("**/api/restart_container", (route) => fulfillJson(route, { message: "Restart initiated" }, 202))
-  await page.route("**/api/health", (route) => {
-    healthChecks += 1
-    return healthChecks === 1
+  await page.route("**/healthz/live", (route) => {
+    livenessChecks += 1
+    return livenessChecks === 1
       ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ status: "starting" }) })
       : fulfillJson(route, { status: "ok" })
   })
+  await page.route("**/healthz/startup", (route) => fulfillJson(route, { status: "ready" }))
+  await page.route("**/healthz/ready", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ status: "degraded", ready: false }),
+  }))
+  await page.route("**/api/health", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ status: "degraded", ready: false }),
+  }))
   await page.goto("/#overview")
   await page.getByRole("button", { name: "Restart", exact: true }).click()
 
   await expect(page.getByRole("heading", { name: "Restarting ChannelWatch..." })).toBeVisible()
-  await expect(page.getByRole("heading", { name: "ChannelWatch is back online" })).toBeVisible({ timeout: 10_000 })
-  expect(healthChecks).toBeGreaterThanOrEqual(2)
+  await expect(page.getByRole("heading", { name: "ChannelWatch restarted; monitoring needs attention" })).toBeVisible({ timeout: 12_000 })
+  expect(livenessChecks).toBeGreaterThanOrEqual(2)
 })
 
 test("restart API errors recover to the dashboard with actionable feedback", async ({ page }) => {

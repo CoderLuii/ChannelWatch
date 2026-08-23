@@ -7,7 +7,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-VEX_PATH = ROOT / "deploy" / "security" / "channelwatch-v0.9.16.openvex.json"
+VEX_PATH = ROOT / "deploy" / "security" / "channelwatch-v0.9.17.openvex.json"
 SCRIPT_PATH = ROOT / "scripts" / "release" / "verify-vex.py"
 
 
@@ -24,7 +24,7 @@ def _document():
 
 
 def test_release_vex_covers_exact_runtime_findings_and_architectures():
-    _module().validate_vex(_document(), expected_version="0.9.16")
+    _module().validate_vex(_document(), expected_version="0.9.17")
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,7 @@ def test_release_vex_rejects_incomplete_or_stale_dispositions(mutation):
     mutation(document)
     module = _module()
     with pytest.raises(module.VexValidationError):
-        module.validate_vex(document, expected_version="0.9.16")
+        module.validate_vex(document, expected_version="0.9.17")
 
 
 def test_runtime_sources_preserve_vex_execute_path_claims():
@@ -67,5 +67,6 @@ def test_runtime_sources_preserve_vex_execute_path_claims():
     updater_source = (ROOT / "app" / "core" / "update_center.py").read_text(
         encoding="utf-8"
     )
-    assert "httpx.get(self.api_url" in disk_source
+    assert "build_safe_dvr_request" in disk_source
+    assert 'headers={"Host": request.host_header}' in disk_source
     assert 'parsed.hostname.encode("ascii")' in updater_source

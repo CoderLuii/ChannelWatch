@@ -1,9 +1,9 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/CoderLuii/ChannelWatch/security/vex/v0.9.16-cpython-runtime",
+  "@id": "https://github.com/CoderLuii/ChannelWatch/security/vex/v0.9.17-cpython-runtime",
   "author": "ChannelWatch maintainers",
   "role": "Project Maintainer",
-  "timestamp": "2026-08-22T00:00:00Z",
+  "timestamp": "2026-08-23T00:00:00Z",
   "version": 1,
   "statements": [
     {
@@ -12,16 +12,12 @@
         "name": "CVE-2026-17084"
       },
       "products": [
-        {
-          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"
-        },
-        {
-          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"
-        }
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"},
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"}
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "Configurable DVR HTTP traffic uses httpx and its separately packaged IDNA implementation. The only production urllib.request downloader rejects non-ASCII hosts and accepts a fixed ASCII allowlist before opening a connection; the container health request uses numeric loopback. Untrusted domain names cannot reach the vulnerable standard-library IDNA 2003 stringprep path."
+      "impact_statement": "Configurable DVR HTTP traffic uses DNS-pinned numeric-address requests through httpx after the DVR-specific validator accepts the complete address set. The only production urllib.request downloader rejects non-ASCII hosts and accepts a fixed ASCII allowlist before opening a connection; the container health request uses numeric loopback. Untrusted domain names cannot reach the vulnerable standard-library IDNA 2003 stringprep path."
     },
     {
       "vulnerability": {
@@ -29,12 +25,8 @@
         "name": "CVE-2026-15806"
       },
       "products": [
-        {
-          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"
-        },
-        {
-          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"
-        }
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"},
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"}
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
@@ -46,12 +38,8 @@
         "name": "CVE-2025-15367"
       },
       "products": [
-        {
-          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"
-        },
-        {
-          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"
-        }
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"},
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"}
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",

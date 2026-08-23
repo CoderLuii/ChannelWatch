@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 from .logging import log, LOG_VERBOSE
 from .config import CoreSettings
 from .dvr_connection import build_dvr_base_url
+from .dvr_target import build_safe_dvr_request
 
 
 def _metadata_value(metadata: Dict[str, Any], *keys: str, default: Any = "") -> Any:
@@ -45,6 +46,9 @@ class VODInfoProvider:
             self.port = port
             self.base_url = build_dvr_base_url(host, port)
         self.settings = settings
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
         self.cache_ttl = settings.vod_cache_ttl if settings else 86400
         self.metadata_url = f"{self.base_url}/api/v1/all"
 
@@ -55,7 +59,20 @@ class VODInfoProvider:
     def _fetch_metadata(self) -> List[Dict[str, Any]]:
         """Retrieves VOD metadata from Channels DVR API endpoint."""
         try:
-            response = httpx.get(self.metadata_url, timeout=10)
+            request = build_safe_dvr_request(
+                self.host,
+                self.port,
+                "/api/v1/all",
+                allow_loopback=self._allow_test_loopback,
+            )
+            if request is None:
+                raise httpx.ConnectError("DVR target did not pass safety validation")
+            response = httpx.get(
+                request.url,
+                headers={"Host": request.host_header},
+                timeout=10,
+                trust_env=False,
+            )
             response.raise_for_status()
             return response.json()
         except Exception as e:

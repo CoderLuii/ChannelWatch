@@ -58,7 +58,7 @@ class TestAsyncRuntimeStructure:
     def test_event_monitor_start_runs_loop_inline(self):
         from core.engine.event_monitor import EventMonitor
 
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         caller_thread_id = threading.get_ident()
         loop_thread_id = None
 
@@ -77,7 +77,7 @@ class TestAsyncRuntimeStructure:
     def test_event_monitor_abnormal_loop_return_clears_running_state(self):
         from core.engine.event_monitor import EventMonitor
 
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor._monitor_events_loop = MagicMock(return_value=None)
 
         monitor.start_monitoring()
@@ -88,7 +88,7 @@ class TestAsyncRuntimeStructure:
     def test_event_monitor_stop_before_start_is_sticky(self):
         from core.engine.event_monitor import EventMonitor
 
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         monitor._monitor_events_loop = MagicMock()
 
         monitor.stop_monitoring()
@@ -101,7 +101,7 @@ class TestAsyncRuntimeStructure:
     def test_event_monitor_start_before_stop_exits_worker(self):
         from core.engine.event_monitor import EventMonitor
 
-        monitor = EventMonitor(host="127.0.0.1")
+        monitor = EventMonitor(host="192.168.1.10")
         loop_entered = threading.Event()
 
         def fake_loop():
@@ -132,7 +132,7 @@ class TestAsyncRuntimeStructure:
                 self.close_count += 1
 
         async def run():
-            monitor = EventMonitor(host="127.0.0.1")
+            monitor = EventMonitor(host="192.168.1.10")
             response = FakeAsyncResource()
             client = FakeAsyncResource()
             monitor.running = True
@@ -156,7 +156,7 @@ class TestAsyncRuntimeStructure:
 
         alert_manager = MagicMock()
         monitor = EventMonitor(
-            host="127.0.0.1",
+            host="192.168.1.10",
             alert_manager=alert_manager,
             validation_only=True,
         )
@@ -217,7 +217,7 @@ class TestAsyncRuntimeStructure:
                 self.closed = True
 
         async def run():
-            monitor = EventMonitor(host="127.0.0.1")
+            monitor = EventMonitor(host="192.168.1.10")
             response = FakeAsyncResource()
             client = FakeAsyncResource()
             monitor.running = True

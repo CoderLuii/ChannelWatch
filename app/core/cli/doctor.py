@@ -17,6 +17,7 @@ from core.helpers.atomic_io import (
 )
 from core.helpers.config import ConfigLoadError, CoreSettings
 from core.helpers.dvr_connection import build_dvr_base_url
+from core.helpers.dvr_target import build_safe_dvr_request
 from core.helpers.encryption import (
     ENCRYPTION_KEY_FILE,
     encrypt_value,
@@ -40,6 +41,28 @@ def _key_file() -> Path:
 
 def _base_url(server: dict[str, Any]) -> str:
     return build_dvr_base_url(server.get("host", ""), server.get("port", 8089))
+
+
+def _safe_get(
+    server: dict[str, Any],
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float,
+) -> httpx.Response:
+    request = build_safe_dvr_request(
+        server.get("host", ""), server.get("port", 8089), path
+    )
+    if request is None:
+        raise httpx.ConnectError("DVR target did not pass safety validation")
+    request_headers = dict(headers or {})
+    request_headers["Host"] = request.host_header
+    return httpx.get(
+        request.url,
+        headers=request_headers,
+        timeout=timeout,
+        trust_env=False,
+    )
 
 
 def _server_label(server: dict[str, Any]) -> str:
@@ -88,9 +111,7 @@ def _diagnose_auth(server: dict[str, Any]) -> tuple[bool | None, str]:
     if api_key:
         headers["X-API-Key"] = str(api_key)
 
-    response = httpx.get(
-        f"{_base_url(server)}/api/v1/channels", headers=headers, timeout=5
-    )
+    response = _safe_get(server, "/api/v1/channels", headers=headers, timeout=5)
     if response.status_code == 200:
         if api_key:
             return True, "Auth check passed using the configured DVR API key."
@@ -179,7 +200,7 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
             continue
 
         try:
-            status_response = httpx.get(f"{_base_url(server)}/status", timeout=5)
+            status_response = _safe_get(server, "/status", timeout=5)
             status_response.raise_for_status()
             status_payload = status_response.json()
             version = str(status_payload.get("version", "Unknown"))

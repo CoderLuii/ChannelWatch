@@ -1,9 +1,50 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test"
+import { createHash } from "node:crypto"
 
 import { installApiMocks } from "./support/mock-api"
 
 test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
+})
+
+test("missing deployment key shows the focused runtime setup shell", async ({ page }) => {
+  await page.route("**/api/v1/runtime/preflight", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      status: "setup_required",
+      setup_required: true,
+      blockers: ["secret_storage_key_missing"],
+      warnings: [],
+    }),
+  }))
+
+  await page.goto("/")
+
+  const shell = page.getByTestId("runtime-setup-required-shell")
+  await expect(shell).toBeVisible()
+  await expect(shell.getByRole("heading", { name: "Runtime setup required" })).toBeVisible()
+  await expect(shell.getByText(/CHANNELWATCH_SECRET_STORAGE_KEY/).first()).toBeVisible()
+  await expect(shell.getByText("openssl rand -base64 48", { exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toHaveCount(0)
+})
+
+test("closing and reopening a report retains in-memory text and attachments until discard", async ({ page }) => {
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByLabel("Problem summary").fill("Retain this report draft")
+  await page.getByLabel("Screenshots").setInputFiles("public/images/channelwatch-logo.png")
+  await expect(page.getByText("channelwatch-logo.png")).toBeVisible()
+
+  await page.getByRole("button", { name: "Cancel", exact: true }).click()
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await expect(page.getByLabel("Problem summary")).toHaveValue("Retain this report draft")
+  await expect(page.getByText("channelwatch-logo.png")).toBeVisible()
+
+  await page.getByRole("button", { name: "Discard draft", exact: true }).click()
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await expect(page.getByLabel("Problem summary")).toHaveValue("")
+  await expect(page.getByText("channelwatch-logo.png")).toHaveCount(0)
 })
 
 test("report review works without randomUUID or network access", async ({ page, context }) => {
@@ -186,7 +227,7 @@ test("report problem prepares anonymous proof without a visible challenge", asyn
   await page.route("https://channelwatch.coderluii.dev/api/reports/challenge", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       nonce: "browser-test", expires_at: Date.now() + 60_000, route_class: "in_app",
-      difficulty: 0, key_id: "current", signature: "signed",
+      difficulty: 16, key_id: "current", signature: "signed",
     }) })
   })
   await page.route("https://channelwatch.coderluii.dev/api/reports", async (route) => {
@@ -223,6 +264,14 @@ test("report problem prepares anonymous proof without a visible challenge", asyn
   await expect(page.getByText("Report submitted")).toBeVisible()
   expect(submittedHeaders[0]?.["x-channelwatch-in-app-report"]).toBe("1")
   expect(submittedHeaders[0]?.["x-channelwatch-report-challenge"]).toBeTruthy()
+  const proof = JSON.parse(Buffer.from(
+    submittedHeaders[0]["x-channelwatch-report-challenge"],
+    "base64url",
+  ).toString("utf8")) as { nonce: string; difficulty: number; solution: string }
+  const proofDigest = createHash("sha256").update(`${proof.nonce}.${proof.solution}`).digest()
+  expect(proof.difficulty).toBe(16)
+  expect(proofDigest[0]).toBe(0)
+  expect(proofDigest[1]).toBe(0)
   expect(submittedBodies[0]?.support_code).toMatch(/^CW-REPORT-v2-/)
   expect(submittedBodies[0]?.turnstile_token).toBeUndefined()
 })

@@ -70,13 +70,13 @@ No modifications have been made to the `zeroconf` library itself.
 
 ## Container base packages
 
-The published image also contains unmodified operating-system packages from the pinned Chainguard Python base image. The v0.9.16 SBOM and license scan identify GPL or LGPL metadata for `gdbm`, `glibc`, `ld-linux`, `libuuid`, `libzstd`, `readline`, and `xz`. These packages are not copied into the ChannelWatch source tree, and their package metadata remains in the image.
+The published image also contains unmodified operating-system packages from the pinned Chainguard Python base image. The v0.9.17 SBOM and license scan identify GPL or LGPL metadata for `gdbm`, `glibc`, `ld-linux`, `libuuid`, `libzstd`, `readline`, and `xz`. These packages are not copied into the ChannelWatch source tree, and their package metadata remains in the image.
 
-The reviewed v0.9.16 container inputs are the multi-architecture Chainguard Python runtime index `sha256:1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c`, the build-only Python development index `sha256:4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef`, and Wolfi package `tzdata=2026c-r0`. The Dockerfile pins each value so the final image can be reproduced and its package sources traced through the SBOM package identifiers and Chainguard package repositories.
+The reviewed v0.9.17 container inputs are the multi-architecture Chainguard Python runtime index `sha256:1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c`, the build-only Python development index `sha256:4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef`, and Wolfi package `tzdata=2026c-r0`. The Dockerfile pins each value so the final image can be reproduced and its package sources traced through the SBOM package identifiers and Chainguard package repositories.
 
 The image and app-update archive include the complete GPL 1.0, GPL 2.0,
 GPL 3.0, LGPL 2.1, and GCC Runtime Library Exception 3.1 texts identified by
-the v0.9.16 SBOM under `licenses/copyleft`. The matching GitHub Release also
+the v0.9.17 SBOM under `licenses/copyleft`. The matching GitHub Release also
 attaches those texts in a single archive. Exact upstream commits, source
 archive digests, Wolfi recipes and patches, and rebuild/replacement guidance
 are recorded in `docs/legal/CORRESPONDING_SOURCE.md`.
@@ -108,4 +108,4 @@ Dependencies with one of these licenses need to be replaced or reviewed before t
 
 ---
 
-Last verified: 2026-08-22 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the v0.9.16 candidate image SBOM.
+Last verified: 2026-08-23 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the v0.9.17 candidate image SBOM.

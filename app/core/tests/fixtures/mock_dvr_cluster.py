@@ -93,6 +93,11 @@ class MockDVR:
         return f"http://{self.host}:{self.port}"
 
     @property
+    def test_only_allow_loopback(self) -> bool:
+        """Mark this disposable fixture as eligible for loopback-only tests."""
+        return True
+
+    @property
     def subscription_count(self) -> int:
         with self._subscriber_lock:
             return self._subscription_count

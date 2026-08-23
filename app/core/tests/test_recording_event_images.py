@@ -9,6 +9,7 @@ import pytest
 
 from core.alerts import recording_events as recording_events_module
 from core.alerts.recording_events import RecordingEventsAlert
+from core.diagnostics.alerts import recording_events as recording_diagnostics
 from core.helpers.job_info import JobInfoProvider
 
 
@@ -39,11 +40,11 @@ def _build_alert() -> RecordingEventsAlert:
     notification_manager = MagicMock()
     notification_manager.send_notification.return_value = True
     dvr = SimpleNamespace(
-        host="127.0.0.1",
+        host="192.168.1.10",
         port=8089,
         id="dvr_test01",
         name="TestDVR",
-        base_url="http://127.0.0.1:8089",
+        base_url="http://192.168.1.10:8089",
     )
     am = SimpleNamespace(
         notification_manager=notification_manager,
@@ -106,7 +107,7 @@ async def test_cleanup_offloads_blocking_job_provider_work_from_event_loop():
 
     class SlowJobProvider(JobInfoProvider):
         def __init__(self):
-            super().__init__(host="127.0.0.1", port=9, cache_ttl=0)
+            super().__init__(host="192.168.1.10", port=9, cache_ttl=0)
 
         def is_job_active(self, job_id: str) -> bool:
             time.sleep(0.05)
@@ -302,3 +303,34 @@ async def test_completed_handler_uses_pre_fetched_recording_and_offloads_activit
     assert result is True
     alert.job_provider.get_recording_by_id.assert_not_called()
     assert mock_record in calls
+
+
+@pytest.mark.parametrize(
+    "diagnostic_name",
+    [
+        "test_recording_scheduled",
+        "test_recording_completed",
+        "test_recording_stopped",
+        "test_recording_cancelled",
+    ],
+)
+@pytest.mark.asyncio
+async def test_recording_diagnostics_propagate_delivery_failure(diagnostic_name):
+    alert = _build_alert()
+    alert.notification_manager.diagnostic_mode = True
+    alert.notification_manager.send_notification_async = AsyncMock(return_value=False)
+    alert.channel_provider.get_channel_info = MagicMock(
+        return_value={
+            "name": "Test Channel",
+            "logo_url": "https://example.test/logo.png",
+        }
+    )
+
+    diagnostic = getattr(recording_diagnostics, diagnostic_name)
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ):
+        result = await diagnostic(alert)
+
+    assert result is False
+    alert.notification_manager.send_notification_async.assert_awaited_once()

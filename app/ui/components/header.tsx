@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useContext, createContext } from "react"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/base/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
-import { ApiError, signalContainerRestart, fetchSettings, pollForRecovery, fetchSecurityStatus, fetchWhoAmI, logoutSession } from "@/lib/api"
+import { ApiError, RESTART_RECOVERED_EVENT, signalContainerRestart, fetchMonitoringReadiness, fetchSettings, pollForRecovery, fetchSecurityStatus, fetchWhoAmI, logoutSession } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { useToast } from "@/hooks/use-toast"
 import { SecurityModeBadge } from "@/components/settings/security-section"
@@ -36,7 +36,7 @@ export const HeaderContext = createContext<{
   setActiveView: () => {}
 });
 
-type OverlayState = "idle" | "restarting" | "success" | "failed" | "dismissing"
+type OverlayState = "idle" | "restarting" | "success" | "degraded" | "failed" | "dismissing"
 
 export function Header() {
   const [isRestarting, setIsRestarting] = useState(false)
@@ -134,6 +134,8 @@ export function Header() {
           setElapsed(Math.floor(elapsedMs / 1000))
         },
         onRecovered: async () => {
+          window.dispatchEvent(new CustomEvent("channelwatch-auth-state-changed"))
+          window.dispatchEvent(new CustomEvent(RESTART_RECOVERED_EVENT))
           // Re-bootstrap API key
           try {
             await fetchSettings()
@@ -141,7 +143,8 @@ export function Header() {
             // Non-critical, will be picked up on next poll
           }
 
-          setOverlayState("success")
+          const monitoringReady = await fetchMonitoringReadiness().catch(() => null)
+          setOverlayState(monitoringReady === true ? "success" : "degraded")
 
           // Auto-dismiss after 3 seconds
           setTimeout(() => {
@@ -175,14 +178,18 @@ export function Header() {
       initialDelay: 0,
       interval: 2000,
       timeout: 60000,
+      minimumRecoveryMs: 0,
       onTick: (elapsedMs) => {
         setElapsed(Math.floor(elapsedMs / 1000))
       },
       onRecovered: async () => {
+        window.dispatchEvent(new CustomEvent("channelwatch-auth-state-changed"))
+        window.dispatchEvent(new CustomEvent(RESTART_RECOVERED_EVENT))
         try {
           await fetchSettings()
         } catch {}
-        setOverlayState("success")
+        const monitoringReady = await fetchMonitoringReadiness().catch(() => null)
+        setOverlayState(monitoringReady === true ? "success" : "degraded")
         setTimeout(() => {
           setOverlayState("dismissing")
         }, 3000)
@@ -388,6 +395,22 @@ export function Header() {
                 </h2>
                 <p className="text-sm text-zinc-400">
                   {t("header.overlay.reconnected", { elapsed })}
+                </p>
+              </>
+            )}
+
+            {overlayState === "degraded" && (
+              <>
+                <div className="flex justify-center mb-4">
+                  <div className="rounded-full bg-amber-500/20 p-4 animate-icon-bounce">
+                    <Server className="h-8 w-8 text-amber-400" />
+                  </div>
+                </div>
+                <h2 className="text-lg font-semibold text-zinc-100 mb-1">
+                  {t("header.overlay.degraded")}
+                </h2>
+                <p className="text-sm text-zinc-400">
+                  {t("header.overlay.degradedHint")}
                 </p>
               </>
             )}

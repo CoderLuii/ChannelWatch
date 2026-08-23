@@ -38,7 +38,7 @@ class _StreamResponse:
 
 @pytest.fixture
 def provider():
-    return ProgramInfoProvider(host="127.0.0.1", port=8089)
+    return ProgramInfoProvider(host="192.168.1.10", port=8089)
 
 
 def test_fetch_rejects_declared_oversized_xmltv_before_streaming(provider):

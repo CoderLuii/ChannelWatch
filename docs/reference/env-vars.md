@@ -245,14 +245,14 @@ Env vars are mostly startup inputs. Saved application settings live in `/config/
   - Purpose: Provides the wrapping secret used to envelope-encrypt newly written local secret files such as `/config/encryption.key`.
   - Scope: startup and any write path that creates, rotates, or restores local secret material.
   - Related `settings.json` path: none.
-  - Operator guidance: set this to a unique value of at least 32 characters and keep it outside the repo. Existing plaintext key files can still be read for migration, but new secret writes require this value.
+  - Operator guidance: set this to a unique stable value of at least 32 trimmed characters and keep it outside the repo. Existing plaintext key files can still be read with a migration warning, but fresh installs and envelope-encrypted key files enter a stable setup-required state if this value is absent, short, or incorrect. Generate a value locally with `openssl rand -base64 48`; ChannelWatch never generates or displays this deployment secret.
 
 - `CHANNELWATCH_SECRET_STORAGE_KEY_FILE`
   - Default: unset.
   - Purpose: Reads the wrapping secret from a mounted file instead of an environment variable.
   - Scope: startup and any write path that creates, rotates, or restores local secret material.
   - Related `settings.json` path: none.
-  - Operator guidance: prefer this when your container platform supports Docker/Kubernetes secrets.
+  - Operator guidance: prefer this when your container platform supports Docker/Kubernetes secrets. The file is evaluated under the same minimum-length and envelope-decryption rules as the environment variable. An unreadable file enters setup-required state without exposing its path or contents through public diagnostics.
 
 ## Supervisor
 

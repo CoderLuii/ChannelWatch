@@ -217,17 +217,31 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:0.9.16` or `latest` for the current v0.9 release. v0.9.16 keeps monitoring alive through empty and offline startup states, coordinates Update Center activation across core and UI, tightens proxy/auth/health privacy boundaries, and repairs the Helm secret contract.
+Use `coderluii/channelwatch:0.9.17`, `0.9`, or `latest` for the current v0.9 release. v0.9.17 makes missing deployment-key setup explicit, makes notification diagnostics reflect real delivery, preserves report attachments across preparation failures, separates restart recovery from DVR readiness, and safely supports LAN and Tailscale DVR hostnames.
 
 After installing a version with Update Center support through Docker, Unraid, Compose, or Helm, open **Settings > Updates** and use the in-app Update Center for compatible app-only releases.
 
-v0.9.16 requires a normal container image update because it changes the image-stable launcher, entrypoint privilege handling, lifecycle coordination, and deployment contract. The Update Center intentionally reports this candidate as **container image update required**.
+v0.9.17 requires a normal container image update because recovery from a missing secret-storage key must work before the core monitor can start. Pull and recreate the container; an app-only update is intentionally unavailable.
 
 The Update Center checks trusted public ChannelWatch release metadata, verifies signed app bundles, creates a pre-update backup, activates the update, restarts ChannelWatch, and keeps rollback available when the previous runtime can be restored. It does not add telemetry.
 
 Some releases still require a normal container image update. ChannelWatch will say **container image update required** when a release changes Python dependencies, base image packages, Supervisor/container behavior, runtime ABI, Helm assumptions, or persistent schema. See [`docs/how-to/update-channelwatch.md`](docs/how-to/update-channelwatch.md) for the full update guide.
 
 ## Troubleshooting
+
+### Project One-Click installs that ask for runtime setup
+
+The third-party Project One-Click template currently omits ChannelWatch's required secret-storage key. A fresh install made from that template will therefore show the v0.9.17 **Runtime setup required** screen. ChannelWatch intentionally stops monitoring rather than generating a fallback key under `/config`.
+
+Generate a stable key locally:
+
+```bash
+openssl rand -base64 48
+```
+
+Edit the Project One-Click stack, add `CHANNELWATCH_SECRET_STORAGE_KEY` with that generated value, and recreate the ChannelWatch container while preserving its existing `/config` volume. Preserve the same key with your deployment secrets across upgrades, restores, and host migrations. Once an envelope-encrypted `/config/encryption.key` exists, removing or changing the deployment key blocks access to the protected local key material. ChannelWatch cannot print, upload, or recover a lost deployment key.
+
+This is a documented manual correction for the external template. ChannelWatch v0.9.17 does not modify or redistribute that third-party repository.
 
 Start here:
 

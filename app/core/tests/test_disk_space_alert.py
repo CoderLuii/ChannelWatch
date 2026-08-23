@@ -29,7 +29,7 @@ def alert_factory(tmp_path):
 
         notification_manager = MagicMock()
         notification_manager.send_notification.return_value = True
-        dvr = SimpleNamespace(host="127.0.0.1", port=8089)
+        dvr = SimpleNamespace(host="192.168.1.10", port=8089)
         am = SimpleNamespace(
             notification_manager=notification_manager,
             settings=settings,
@@ -86,7 +86,12 @@ class TestDiskSpaceAlertSemantics:
         with patch("core.alerts.disk_space.httpx.get", return_value=response) as get:
             disk_info = alert._get_disk_info()
 
-        get.assert_called_once_with(alert.api_url, timeout=3)
+        get.assert_called_once_with(
+            alert.api_url,
+            headers={"Host": "192.168.1.10:8089"},
+            timeout=3,
+            trust_env=False,
+        )
         assert disk_info == {
             "free": 40 * GIB,
             "total": 100 * GIB,

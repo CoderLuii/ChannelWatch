@@ -29,7 +29,7 @@ jobs:
     name: Build signed update bundle and release
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Create the exact-SHA draft and upload signed update assets.
     outputs:
       bundle_url: ${{ steps.assets.outputs.bundle_url }}
       manifest_url: ${{ steps.assets.outputs.manifest_url }}
@@ -187,7 +187,11 @@ jobs:
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --output release-body.md
           first_line="$(head -n 1 release-body.md)"
-          expected_heading="# ChannelWatch ${TAG} - Monitoring, update, and deployment reliability"
+          expected_heading="$(jq -r '.release_heading' scripts/release/release-config.json)"
+          if [ -z "${expected_heading}" ] || [ "${expected_heading}" = "null" ]; then
+            echo "::error::release-config.json release_heading is required."
+            exit 1
+          fi
           if [ "${first_line}" != "${expected_heading}" ]; then
             echo "::error::GitHub Release body must start with '${expected_heading}'."
             exit 1
@@ -261,10 +265,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-update-bundle-and-release
     permissions:
-      contents: write
-      packages: write
-      attestations: write
-      id-token: write
+      contents: write # Read and add verified assets to the exact-SHA draft.
+      packages: write # Publish the verified multi-architecture image to GHCR.
+      attestations: write # Record provenance for the published image.
+      id-token: write # Exchange the workflow identity for the attestation.
 
     steps:
       - name: Checkout
@@ -594,6 +598,7 @@ jobs:
 
           publish_registry() {
             repository="$1"
+            compatible_tag="${VERSION%.*}"
             skopeo_cmd copy \
               --all \
               --preserve-digests \
@@ -617,20 +622,26 @@ jobs:
               exit 1
             fi
 
-            skopeo_cmd copy \
-              --all \
-              --preserve-digests \
-              --authfile /auth/config.json \
-              "docker://${repository}@${version_digest}" \
-              "docker://${repository}:latest" >&2
-            latest_digest="$(skopeo_cmd inspect \
-              --authfile /auth/config.json \
-              --format '{{.Digest}}' \
-              "docker://${repository}:latest")"
-            if [ "${latest_digest}" != "${version_digest}" ]; then
-              echo "::error::latest does not reference the exact version manifest."
-              exit 1
-            fi
+            publish_alias() {
+              alias_tag="$1"
+              skopeo_cmd copy \
+                --all \
+                --preserve-digests \
+                --authfile /auth/config.json \
+                "docker://${repository}@${version_digest}" \
+                "docker://${repository}:${alias_tag}" >&2
+              alias_digest="$(skopeo_cmd inspect \
+                --authfile /auth/config.json \
+                --format '{{.Digest}}' \
+                "docker://${repository}:${alias_tag}")"
+              if [ "${alias_digest}" != "${version_digest}" ]; then
+                echo "::error::${alias_tag} does not reference the exact version manifest."
+                exit 1
+              fi
+            }
+
+            publish_alias "${compatible_tag}"
+            publish_alias latest
 
             printf '%s\n' "${version_digest}"
           }
@@ -684,7 +695,7 @@ jobs:
       - update-dockerhub-description
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
-      contents: write
+      contents: write # Promote the exact-SHA draft to the public GitHub release.
 
     steps:
       - name: Checkout

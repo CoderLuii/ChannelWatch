@@ -456,6 +456,12 @@ class TestLoginLogoutWhoami:
         assert authenticated.json() == {
             "status": "ok",
             "ready": True,
+            "runtime": {
+                "status": "ready",
+                "setup_required": False,
+                "blockers": [],
+                "warnings": [],
+            },
             "dvrs": [],
             "notification_routing_diagnostics": [],
         }
@@ -1149,7 +1155,7 @@ class TestPersistedDvrHostSafety:
 
         assert resp.status_code == 200
 
-    @pytest.mark.parametrize("host", ["2001:db8::1", "[2001:db8::1]"])
+    @pytest.mark.parametrize("host", ["fd00::1", "[fd00::1]"])
     def test_settings_accepts_ipv6_persisted_dvr_hosts(
         self, rbac_on_client, rbac_admin_user, host
     ):
@@ -1188,8 +1194,8 @@ class _DvrStatusClient:
     def __init__(self):
         self.requests = []
 
-    async def get(self, url, timeout):
-        self.requests.append((url, timeout))
+    async def get(self, url, timeout, headers=None):
+        self.requests.append((url, timeout, headers))
         return _DvrStatusResponse()
 
 
@@ -1231,7 +1237,11 @@ class TestDvrConnectionSecurity:
         assert viewer_resp.status_code == 403
         assert admin_resp.status_code == 200
         assert admin_resp.json()["success"] is True
-        assert mock_client.requests == [("http://example.com:8089/status", 8.0)]
+        assert len(mock_client.requests) == 1
+        assert mock_client.requests[0][1:] == (
+            8.0,
+            {"Host": "example.com:8089"},
+        )
 
     def test_dvr_test_connection_accepts_private_lan_host(
         self, rbac_on_client, rbac_admin_user
@@ -1252,9 +1262,15 @@ class TestDvrConnectionSecurity:
 
         assert resp.status_code == 200
         assert resp.json()["success"] is True
-        assert mock_client.requests == [("http://192.168.1.1:8089/status", 8.0)]
+        assert mock_client.requests == [
+            (
+                "http://192.168.1.1:8089/status",
+                8.0,
+                {"Host": "192.168.1.1:8089"},
+            )
+        ]
 
-    @pytest.mark.parametrize("host", ["2001:db8::1", "[2001:db8::1]"])
+    @pytest.mark.parametrize("host", ["fd00::1", "[fd00::1]"])
     def test_dvr_test_connection_accepts_ipv6_hosts(
         self, rbac_on_client, rbac_admin_user, host
     ):
@@ -1274,7 +1290,9 @@ class TestDvrConnectionSecurity:
 
         assert resp.status_code == 200
         assert resp.json()["success"] is True
-        assert mock_client.requests == [("http://[2001:db8::1]:8089/status", 8.0)]
+        assert mock_client.requests == [
+            ("http://[fd00::1]:8089/status", 8.0, {"Host": "[fd00::1]:8089"})
+        ]
 
     def test_dvr_test_connection_rejects_link_local_metadata_host(
         self, rbac_on_client, rbac_admin_user

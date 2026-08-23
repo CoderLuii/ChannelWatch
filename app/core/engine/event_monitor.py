@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional
 
 from ..helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 from ..helpers.dvr_connection import build_dvr_base_url
+from ..helpers.dvr_target import build_safe_dvr_request
 
 MAX_RETRY_AFTER_DELAY_SECONDS = 60.0
 RECONNECT_SLEEP_SLICE_SECONDS = 1.0
@@ -46,6 +47,9 @@ class EventMonitor:
         self.server_version = server_version
         self.event_url = f"{self.base_url}/events"
         self.validation_only = bool(validation_only)
+        self._allow_test_loopback = bool(
+            getattr(dvr, "test_only_allow_loopback", False)
+        )
 
         # State
         self.running = False
@@ -272,11 +276,21 @@ class EventMonitor:
                 "EventMonitor requires an alert manager before monitoring events"
             )
 
-        url = f"{self.base_url}/dvr/events/subscribe"
+        safe_stream = await asyncio.to_thread(
+            build_safe_dvr_request,
+            self.host,
+            self.port,
+            "/dvr/events/subscribe",
+            allow_loopback=self._allow_test_loopback,
+        )
+        if safe_stream is None:
+            raise ConnectionError("DVR target did not pass safety validation")
+        url = safe_stream.url
         headers = {
             "Accept": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "Host": safe_stream.host_header,
         }
         timeout = httpx.Timeout(connect=10.0, read=None, write=None, pool=None)
 
@@ -292,7 +306,7 @@ class EventMonitor:
                     background_tasks.extend(alert.create_background_tasks())
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 self._active_client = client
                 async with client.stream("GET", url, headers=headers) as response:
                     self._active_response = response
@@ -377,7 +391,20 @@ class EventMonitor:
                     break
 
                 current_time = time.time()
-                response = await client.get(f"{self.base_url}/status", timeout=5)
+                safe_status = await asyncio.to_thread(
+                    build_safe_dvr_request,
+                    self.host,
+                    self.port,
+                    "/status",
+                    allow_loopback=self._allow_test_loopback,
+                )
+                if safe_status is None:
+                    raise httpx.ConnectError("DVR target did not pass safety validation")
+                response = await client.get(
+                    safe_status.url,
+                    headers={"Host": safe_status.host_header},
+                    timeout=5,
+                )
 
                 should_log = (
                     self.last_keep_alive_log == 0

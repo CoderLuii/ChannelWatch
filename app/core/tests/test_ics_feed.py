@@ -44,7 +44,7 @@ def settings_file(tmp_path):
         "dvr_servers": [
             {
                 "id": "dvr_main",
-                "host": "127.0.0.1",
+                "host": "192.168.1.10",
                 "port": 8089,
                 "name": "Main DVR",
                 "enabled": True,
@@ -79,7 +79,7 @@ def _make_client(settings_file, mem_engine):
     history_file = settings_file.parent / "activity_history.json"
     history_file.write_text("[]")
 
-    async def _fake_dvr_get(url, timeout=5):
+    async def _fake_dvr_get(url, timeout=5, **kwargs):
         if url.endswith("/api/v1/channels"):
             return _FakeResponse([{"number": "7", "name": "Channel 7"}])
         if url.endswith("/dvr/jobs"):

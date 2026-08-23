@@ -306,7 +306,11 @@ class ChannelWatchingAlert(BaseAlert, CleanupMixin):
             )
             await self.session_manager.record_notification(tracking_key)
 
-            await asyncio.to_thread(self._send_alert, channel_info)
+            delivery_succeeded = await asyncio.to_thread(
+                self._send_alert, channel_info
+            )
+            if getattr(self.notification_manager, "diagnostic_mode", False) is True:
+                return bool(delivery_succeeded)
             return True
         except Exception as e:
             log(f"Error processing watching event: {e}")

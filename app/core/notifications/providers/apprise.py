@@ -2,6 +2,7 @@
 
 import importlib
 import ipaddress
+import time
 from typing import Any, Optional, List
 from urllib.parse import urlparse
 
@@ -289,6 +290,7 @@ class AppriseProvider(NotificationProvider):
 
         allowed: Optional[set] = kwargs.get("allowed_apprise_destinations")
         selected_destination_id = kwargs.get("apprise_destination_id")
+        diagnostic_deadline = kwargs.get("_diagnostic_deadline_monotonic")
 
         active_entries = [
             (dest_key, url)
@@ -367,6 +369,11 @@ class AppriseProvider(NotificationProvider):
                     else:
                         for discord_url in discord_urls:
                             if (
+                                diagnostic_deadline is not None
+                                and time.monotonic() >= diagnostic_deadline
+                            ):
+                                break
+                            if (
                                 discord_url.startswith("discord://")
                                 and "/" in discord_url[10:]
                             ):
@@ -399,8 +406,18 @@ class AppriseProvider(NotificationProvider):
                                         level=LOG_VERBOSE,
                                     )
                                     try:
+                                        timeout = 10.0
+                                        if diagnostic_deadline is not None:
+                                            timeout = min(
+                                                timeout,
+                                                max(
+                                                    0.01,
+                                                    diagnostic_deadline
+                                                    - time.monotonic(),
+                                                ),
+                                            )
                                         response = httpx.post(
-                                            webhook_url, json=payload, timeout=10
+                                            webhook_url, json=payload, timeout=timeout
                                         )
                                     except (
                                         httpx.RequestError,
@@ -436,6 +453,11 @@ class AppriseProvider(NotificationProvider):
                     )
                     discord_success = False
             if other_urls:
+                if (
+                    diagnostic_deadline is not None
+                    and time.monotonic() >= diagnostic_deadline
+                ):
+                    return success
                 try:
                     try:
                         body_format = (

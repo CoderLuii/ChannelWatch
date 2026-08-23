@@ -61,11 +61,11 @@ def _make_settings():
 
 def _make_dvr(dvr_id="dvr_test01"):
     return SimpleNamespace(
-        host="127.0.0.1",
+        host="192.168.1.10",
         port=8089,
         id=dvr_id,
         name="TestDVR",
-        base_url="http://127.0.0.1:8089",
+        base_url="http://192.168.1.10:8089",
         overrides={},
     )
 
@@ -347,6 +347,43 @@ class TestChannelWatchingAsyncPaths:
             activity_kwargs = record_mock.call_args.kwargs
             assert activity_kwargs["dvr_id"] == "dvr_test01"
             assert activity_kwargs["dvr_name"] == "TestDVR"
+
+        __import__("asyncio").run(run())
+
+    def test_channel_diagnostic_returns_actual_delivery_failure(self):
+        from core.alerts.channel_watching import ChannelWatchingAlert
+        from core.notifications.notification import NotificationManager
+
+        notification_manager = NotificationManager(diagnostic_mode=True)
+        notification_manager.send_notification = MagicMock(return_value=False)
+        channel_provider = MagicMock()
+        channel_provider.get_channel_info.return_value = {
+            "name": "Channel Five",
+            "logo_url": "https://example.invalid/logo.png",
+        }
+        am = _make_am(notification_manager=notification_manager)
+
+        async def run():
+            with (
+                patch(
+                    "core.alerts.channel_watching.ChannelInfoProvider",
+                    return_value=channel_provider,
+                ),
+                patch("core.alerts.channel_watching.StreamTracker"),
+                patch("core.alerts.channel_watching.ProgramInfoProvider"),
+                patch("core.alerts.channel_watching.record_activity"),
+            ):
+                alert = ChannelWatchingAlert(am)
+                result = await alert.process_event(
+                    "activities.set",
+                    {
+                        "Name": "1-stream-TVE-5-diagnostic-client",
+                        "Value": "Watching ch5 ABC from Test Device (192.0.2.10)",
+                    },
+                )
+
+            assert result is False
+            notification_manager.send_notification.assert_called_once()
 
         __import__("asyncio").run(run())
 

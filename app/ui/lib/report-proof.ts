@@ -1,4 +1,5 @@
 export interface ReportChallenge {
+  version?: number
   nonce: string
   expires_at: number
   route_class: "in_app"
@@ -73,31 +74,114 @@ function hasLeadingZeroBits(bytes: Uint8Array, difficulty: number): boolean {
   return remainingBits === 0 || (bytes[wholeBytes] & (0xff << (8 - remainingBits))) === 0
 }
 
-export async function solveReportChallenge(
-  challenge: ReportChallenge,
-  options: { signal?: AbortSignal; onProgress?: (attempts: number) => void; deadlineMs?: number; yieldEvery?: number } = {},
-): Promise<ReportChallengeProof> {
-  if (!Number.isInteger(challenge.difficulty) || challenge.difficulty < 0 || challenge.difficulty > 24) {
+export interface ReportChallengeSolveOptions {
+  signal?: AbortSignal
+  onProgress?: (attempts: number) => void
+  deadlineMs?: number
+  yieldEvery?: number
+}
+
+export const DEFAULT_REPORT_PROOF_DEADLINE_MS = 30000
+
+function validateChallenge(challenge: ReportChallenge): void {
+  if (
+    (challenge.version !== undefined && challenge.version !== 1) ||
+    challenge.route_class !== "in_app" ||
+    !challenge.nonce ||
+    !challenge.key_id ||
+    !challenge.signature ||
+    !Number.isFinite(challenge.expires_at) ||
+    challenge.expires_at <= Date.now() ||
+    !Number.isInteger(challenge.difficulty) ||
+    challenge.difficulty < 0 ||
+    challenge.difficulty > 24
+  ) {
     throw new Error("The reporting service returned an invalid secure challenge.")
   }
+}
+
+export async function solveReportChallengeInline(
+  challenge: ReportChallenge,
+  options: ReportChallengeSolveOptions = {},
+): Promise<ReportChallengeProof> {
+  validateChallenge(challenge)
   const started = performance.now()
-  const deadlineMs = options.deadlineMs ?? 1500
-  const yieldEvery = options.yieldEvery ?? 256
+  const deadlineMs = Number.isFinite(options.deadlineMs) && Number(options.deadlineMs) >= 0
+    ? Number(options.deadlineMs)
+    : DEFAULT_REPORT_PROOF_DEADLINE_MS
+  const yieldEvery = Number.isInteger(options.yieldEvery) && Number(options.yieldEvery) > 0
+    ? Number(options.yieldEvery)
+    : 256
   const encoder = new TextEncoder()
-  const maximumAttempts = 1 << 24
-  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+  let lastProgressAt = -Infinity
+  for (let attempt = 0; attempt < Number.MAX_SAFE_INTEGER; attempt += 1) {
     if (options.signal?.aborted) throw new DOMException("Submission preparation was cancelled.", "AbortError")
     const solution = String(attempt)
     if (hasLeadingZeroBits(sha256(encoder.encode(`${challenge.nonce}.${solution}`)), challenge.difficulty)) {
       return { ...challenge, solution }
     }
     if ((attempt + 1) % yieldEvery === 0) {
-      options.onProgress?.(attempt + 1)
-      if (performance.now() - started >= deadlineMs) throw new Error("Secure report preparation took too long. Use the upload portal or offline package instead.")
+      const now = performance.now()
+      if (now - lastProgressAt >= 250) {
+        options.onProgress?.(attempt + 1)
+        lastProgressAt = now
+      }
+      if (now - started >= deadlineMs) throw new Error("Secure report preparation timed out. Your report and attachments are still here; retry, use the upload portal, or download the offline package.")
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
   }
   throw new Error("Secure report preparation could not be completed.")
+}
+
+export async function solveReportChallenge(
+  challenge: ReportChallenge,
+  options: ReportChallengeSolveOptions = {},
+): Promise<ReportChallengeProof> {
+  validateChallenge(challenge)
+  if (typeof Worker === "undefined") {
+    return solveReportChallengeInline(challenge, options)
+  }
+
+  return new Promise<ReportChallengeProof>((resolve, reject) => {
+    const worker = new Worker(new URL("./report-proof.worker.js", import.meta.url), { type: "module" })
+    let settled = false
+
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      options.signal?.removeEventListener("abort", onAbort)
+      worker.terminate()
+      callback()
+    }
+    const onAbort = () => finish(() => reject(new DOMException("Submission preparation was cancelled.", "AbortError")))
+
+    if (options.signal?.aborted) {
+      onAbort()
+      return
+    }
+    options.signal?.addEventListener("abort", onAbort, { once: true })
+    worker.onmessage = (event: MessageEvent<{ type: string; attempts?: number; proof?: ReportChallengeProof; message?: string }>) => {
+      if (event.data.type === "progress" && typeof event.data.attempts === "number") {
+        options.onProgress?.(event.data.attempts)
+      } else if (event.data.type === "success" && event.data.proof) {
+        finish(() => resolve(event.data.proof as ReportChallengeProof))
+      } else if (event.data.type === "error") {
+        finish(() => reject(new Error(event.data.message || "Secure report preparation failed.")))
+      }
+    }
+    worker.onerror = () => finish(() => reject(new Error("Secure report preparation worker failed.")))
+    const deadlineMs = Number.isFinite(options.deadlineMs) && Number(options.deadlineMs) >= 0
+      ? Number(options.deadlineMs)
+      : DEFAULT_REPORT_PROOF_DEADLINE_MS
+    const yieldEvery = Number.isInteger(options.yieldEvery) && Number(options.yieldEvery) > 0
+      ? Number(options.yieldEvery)
+      : 256
+    worker.postMessage({
+      challenge,
+      deadlineMs,
+      yieldEvery,
+    })
+  })
 }
 
 export function encodeReportChallengeProof(proof: ReportChallengeProof): string {

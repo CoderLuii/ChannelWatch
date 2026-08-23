@@ -365,6 +365,9 @@ describe("browser API contract manifest", () => {
 
   it("requires an explicit disposition for every dynamic browser fetch", () => {
     expect(discoverDynamicBrowserFetches()).toEqual([
+      "lib/api.ts:`/healthz/live`",
+      "lib/api.ts:`/healthz/ready`",
+      "lib/api.ts:`/healthz/startup`",
       "lib/api.ts:challengeUrl",
       "lib/api.ts:endpoint",
       "lib/api.ts:statusEndpoint",

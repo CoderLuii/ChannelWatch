@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -201,6 +202,7 @@ def rbac_off_client_fixture(tmp_path):
     with (
         patch("ui.backend.config.CONFIG_FILE", f),
         patch("ui.backend.config.CONFIG_DIR", f.parent),
+        patch("ui.backend.main.CONFIG_DIR", f.parent),
         patch("ui.backend.main.API_KEY_CACHE", "off-key"),
         patch("ui.backend.main.RBAC_ENABLED", False),
     ):
@@ -224,6 +226,7 @@ def rbac_on_client_fixture(tmp_path, auth_engine):
     with (
         patch("ui.backend.config.CONFIG_FILE", f),
         patch("ui.backend.config.CONFIG_DIR", f.parent),
+        patch("ui.backend.main.CONFIG_DIR", f.parent),
         patch("ui.backend.main.API_KEY_CACHE", "on-key"),
         patch("ui.backend.main.RBAC_ENABLED", True),
         patch("ui.backend.main._auth_db_engine", auth_engine),
@@ -453,7 +456,8 @@ class TestLoginLogoutWhoami:
                 "/api/health"
             )
         assert authenticated.status_code == 200
-        assert authenticated.json() == {
+        payload = authenticated.json()
+        assert payload == {
             "status": "ok",
             "ready": True,
             "runtime": {
@@ -462,9 +466,14 @@ class TestLoginLogoutWhoami:
                 "blockers": [],
                 "warnings": [],
             },
+            "credential_protection": payload["credential_protection"],
             "dvrs": [],
             "notification_routing_diagnostics": [],
         }
+        assert payload["credential_protection"]["state"] == "managed_local"
+        serialized_protection = json.dumps(payload["credential_protection"])
+        assert "encryption.key" not in serialized_protection
+        assert "fernet:" not in serialized_protection
 
 
 class TestFirstAdminSetupBoundaries:
@@ -539,6 +548,7 @@ class TestFirstAdminSetupBoundaries:
 
         try:
             with (
+                patch("ui.backend.config.CONFIG_DIR", tmp_path),
                 patch("ui.backend.main.load_settings", return_value=settings),
                 patch("ui.backend.main._ensure_auth_tables", return_value=engine),
                 patch("ui.backend.main.save_settings") as save_settings,
@@ -557,6 +567,94 @@ class TestFirstAdminSetupBoundaries:
             assert session_count == 1
             save_settings.assert_called_once()
         finally:
+            engine.dispose()
+
+    def test_auth_setup_and_credential_reset_share_one_settings_generation(
+        self, tmp_path
+    ):
+        from core.helpers.credential_maintenance import reset_protected_credentials
+        from core.helpers.encryption import encrypt_value
+        from ui.backend import config as backend_config
+        from ui.backend import main as backend_main
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        key = os.urandom(32)
+        key_file = config_dir / "encryption.key"
+        key_file.write_bytes(key)
+        key_file.chmod(0o600)
+        settings_file = config_dir / "settings.json"
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "auth_mode": "",
+                    "security_setup_completed": False,
+                    "dvr_servers": [
+                        {
+                            "id": "dvr-race",
+                            "host": "192.168.1.20",
+                            "enabled": True,
+                            "api_key": encrypt_value("stale-secret", key),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        engine = create_db_engine(f"sqlite:///{tmp_path / 'setup-reset.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        setup_has_maintenance_lock = threading.Event()
+        allow_setup = threading.Event()
+        reset_started = threading.Event()
+        original_generation = backend_main._auth_setup_generation_locked
+
+        def gated_generation(body):
+            setup_has_maintenance_lock.set()
+            assert allow_setup.wait(timeout=10)
+            return original_generation(body)
+
+        def reset_after_setup_claims_lock():
+            reset_started.set()
+            return reset_protected_credentials(
+                config_dir,
+                settings_file=settings_file,
+                key_file=key_file,
+            )
+
+        body = backend_main._SetupRequest(
+            mode="rbac",
+            username="first-admin",
+            password="strong-password",
+        )
+        try:
+            with (
+                patch("ui.backend.config.CONFIG_DIR", config_dir),
+                patch("ui.backend.config.CONFIG_FILE", settings_file),
+                patch("ui.backend.main._ensure_auth_tables", return_value=engine),
+                patch(
+                    "ui.backend.main._auth_setup_generation_locked",
+                    side_effect=gated_generation,
+                ),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                setup_future = pool.submit(backend_main._auth_setup_sync, body)
+                assert setup_has_maintenance_lock.wait(timeout=10)
+                reset_future = pool.submit(reset_after_setup_claims_lock)
+                assert reset_started.wait(timeout=10)
+                assert not reset_future.done()
+                allow_setup.set()
+                assert setup_future.result(timeout=10).mode == "rbac"
+                reset_future.result(timeout=10)
+
+                current = backend_config.load_settings()
+
+            assert current.auth_mode == "rbac"
+            assert current.security_setup_completed is True
+            assert current.dvr_servers[0]["api_key"] == ""
+            assert current.dvr_servers[0]["enabled"] is False
+            assert get_user_count(engine) == 1
+        finally:
+            allow_setup.set()
             engine.dispose()
 
     def test_settings_write_failure_rolls_back_claim_and_retry_succeeds(
@@ -589,6 +687,7 @@ class TestFirstAdminSetupBoundaries:
         )
         try:
             with (
+                patch("ui.backend.config.CONFIG_DIR", tmp_path),
                 patch(
                     "ui.backend.main.load_settings",
                     side_effect=load_persisted_settings,
@@ -653,6 +752,7 @@ class TestFirstAdminSetupBoundaries:
         sa.event.listen(engine, "commit", inject_first_commit_failure)
         try:
             with (
+                patch("ui.backend.config.CONFIG_DIR", tmp_path),
                 patch(
                     "ui.backend.main.load_settings",
                     side_effect=load_persisted_settings,
@@ -712,7 +812,7 @@ class TestFirstAdminSetupBoundaries:
             engine.dispose()
 
     def test_persisted_no_auth_can_be_converted_only_when_no_users_exist(
-        self, auth_engine
+        self, auth_engine, tmp_path
     ):
         from ui.backend import main as backend_main
         from ui.backend.schemas import AppSettings
@@ -731,6 +831,7 @@ class TestFirstAdminSetupBoundaries:
             ],
         )
         with (
+            patch("ui.backend.config.CONFIG_DIR", tmp_path),
             patch("ui.backend.main.load_settings", return_value=settings),
             patch("ui.backend.main._ensure_auth_tables", return_value=auth_engine),
             patch("ui.backend.main.save_settings") as save_settings,
@@ -746,7 +847,7 @@ class TestFirstAdminSetupBoundaries:
         save_settings.assert_called_once()
 
     def test_persisted_no_auth_rejects_first_admin_setup_when_user_exists(
-        self, auth_engine, rbac_user
+        self, auth_engine, rbac_user, tmp_path
     ):
         from ui.backend import main as backend_main
         from ui.backend.schemas import AppSettings
@@ -757,6 +858,7 @@ class TestFirstAdminSetupBoundaries:
             dvr_servers=[],
         )
         with (
+            patch("ui.backend.config.CONFIG_DIR", tmp_path),
             patch("ui.backend.main.load_settings", return_value=settings),
             patch("ui.backend.main._ensure_auth_tables", return_value=auth_engine),
             patch("ui.backend.main.save_settings"),

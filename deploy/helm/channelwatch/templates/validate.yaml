@@ -4,6 +4,11 @@
 {{- if not .Values.persistence.enabled -}}
 {{- fail "ChannelWatch requires persistence.enabled=true because /config must be backed by a PersistentVolumeClaim." -}}
 {{- end -}}
+{{- range $name, $_ := .Values.podAnnotations -}}
+  {{- if hasPrefix "checksum/channelwatch-" $name -}}
+    {{- fail "podAnnotations keys beginning with checksum/channelwatch- are reserved for chart-managed rollout checksums." -}}
+  {{- end -}}
+{{- end -}}
 {{- $existingSecret := .Values.secretConfig.existingSecret | trim -}}
 {{- $secretStorageKey := .Values.secretConfig.secretStorageKey | trim -}}
 {{- $managedSecretValues := list
@@ -23,9 +28,9 @@
 {{- if $existingSecret -}}
   {{- range $managedSecretValues -}}
     {{- if . -}}
-      {{- fail "secretConfig.existingSecret cannot be combined with chart-managed secretConfig values. Put CHANNELWATCH_SECRET_STORAGE_KEY and any optional ChannelWatch credentials in the existing Secret." -}}
+      {{- fail "secretConfig.existingSecret cannot be combined with chart-managed secretConfig values. Put optional ChannelWatch credentials and any deprecated migration-only CHANNELWATCH_SECRET_STORAGE_KEY in the existing Secret." -}}
     {{- end -}}
   {{- end -}}
-{{- else if lt (len $secretStorageKey) 32 -}}
-{{- fail "secretConfig.secretStorageKey must contain at least 32 non-whitespace characters when secretConfig.existingSecret is empty." -}}
+{{- else if and $secretStorageKey (lt (len $secretStorageKey) 32) -}}
+{{- fail "deprecated secretConfig.secretStorageKey must contain at least 32 non-whitespace characters when supplied for a one-time legacy envelope migration." -}}
 {{- end -}}

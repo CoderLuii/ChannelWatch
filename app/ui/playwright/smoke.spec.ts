@@ -7,26 +7,315 @@ test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
 })
 
-test("missing deployment key shows the focused runtime setup shell", async ({ page }) => {
+test("legacy key recovery keeps the authenticated dashboard reachable", async ({ page }) => {
   await page.route("**/api/v1/runtime/preflight", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
       status: "setup_required",
       setup_required: true,
-      blockers: ["secret_storage_key_missing"],
+      blockers: ["protected_credentials_locked"],
       warnings: [],
     }),
   }))
 
   await page.goto("/")
 
-  const shell = page.getByTestId("runtime-setup-required-shell")
-  await expect(shell).toBeVisible()
-  await expect(shell.getByRole("heading", { name: "Runtime setup required" })).toBeVisible()
-  await expect(shell.getByText(/CHANNELWATCH_SECRET_STORAGE_KEY/).first()).toBeVisible()
-  await expect(shell.getByText("openssl rand -base64 48", { exact: true })).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toHaveCount(0)
+  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  const warning = page.getByTestId("runtime-recovery-warning")
+  await expect(warning).toBeVisible()
+  await expect(warning).toContainText("Protected credentials need administrator attention")
+  await expect(page.getByText("openssl rand -base64 48", { exact: true })).toHaveCount(0)
+  await warning.getByRole("button", { name: "Open Security recovery" }).click()
+  await expect(page).toHaveURL(/#settings:security$/)
+})
+
+test("legacy recovery submits the old value once and clears the browser field", async ({ page }) => {
+  const legacyValue = "legacy-review-only-0123456789abcdef"
+  await page.route("**/api/v1/runtime/key-recovery/status", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      state: "legacy_recovery_required",
+      recovery_required: true,
+      can_migrate: true,
+      can_reset: true,
+      blocker_code: "protected_credentials_locked",
+      affected_dvr_credentials: 1,
+      affected_notification_credentials: 0,
+      legacy_input_detected: false,
+      message: null,
+    }),
+  }))
+  await page.route("**/api/v1/runtime/key-recovery/migrate", async (route) => {
+    expect(await route.request().headerValue("content-type")).toContain("multipart/form-data")
+    expect(route.request().postData()).toContain('name="legacy_storage_key"')
+    expect(route.request().postData()).toContain(legacyValue)
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "managed_local",
+        recovery_required: false,
+        can_migrate: false,
+        can_reset: false,
+        blocker_code: null,
+        affected_dvr_credentials: 1,
+        affected_notification_credentials: 0,
+        legacy_input_detected: false,
+        message: "Credential protection recovered. Monitoring is resuming.",
+        backup_created: false,
+        restart_required: false,
+      }),
+    })
+  })
+
+  await page.goto("/#settings:security")
+  const recovery = page.getByTestId("key-recovery-card")
+  await expect(recovery).toBeVisible()
+  const wrappingInput = page.getByLabel("Old v0.9.5-v0.9.17 wrapping value")
+  await wrappingInput.fill(legacyValue)
+  await recovery.getByRole("button", { name: "Migrate protected key" }).click()
+
+  await expect(page.getByTestId("key-recovery-complete")).toContainText("Credential protection recovered")
+  await expect(wrappingInput).toHaveCount(0)
+  expect(await page.evaluate(() => ({
+    legacy: localStorage.getItem("legacy_storage_key"),
+    recovery: localStorage.getItem("key_recovery"),
+  }))).toEqual({ legacy: null, recovery: null })
+})
+
+test("setup shell can apply only a confirmed official signed recovery update", async ({ page }) => {
+  const bootstrapCsrf = "bootstrap-browser-review-token"
+  const latest = {
+    version: "0.9.18",
+    version_tag: "v0.9.18",
+    image_required: false,
+    runtime_abi: "channelwatch-runtime-v1",
+    settings_schema_version: 7,
+  }
+  const recoveryStatus = {
+    current_version: "0.9.17",
+    image_version: "0.9.17",
+    runtime_abi: "channelwatch-runtime-v1",
+    launcher_protocol: 1,
+    runtime_source: "image",
+    delivery_mode: "app_update",
+    image_refresh_recommended: false,
+    settings_schema_version: 7,
+    active_bundle: null,
+    latest,
+    update_available: true,
+    image_required: false,
+    last_job: null,
+    rollback_available: false,
+    auth_disabled_warning: false,
+    recovery_active: true,
+    bootstrap_csrf: bootstrapCsrf,
+    confirmation_required: true,
+  }
+  await page.route("**/api/settings", (route) => route.fulfill({
+    status: 401,
+    contentType: "application/json",
+    body: JSON.stringify({ detail: { code: "ERR_AUTH_UNAUTHENTICATED", message: "Sign in required." } }),
+  }))
+  await page.route("**/api/v1/runtime/preflight", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ status: "setup_required", setup_required: true, blockers: ["protected_credentials_locked"], warnings: [] }),
+  }))
+  await page.route("**/api/v1/auth/setup-status", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ setup_required: true, configured_mode: "rbac", effective_mode: "rbac", available_modes: ["rbac", "none"] }),
+  }))
+  await page.route("**/api/v1/security/status", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      auth_disabled: false,
+      configured_mode: "rbac",
+      current_mode: "rbac",
+      effective_mode: "rbac",
+      persisted_mode: "rbac",
+      runtime_auth_override_active: false,
+      api_key_required: false,
+      api_key_configured: false,
+      api_key_fallback_active: false,
+      session_auth_active: false,
+      setup_required: true,
+      session_setup_required: true,
+      security_mode: "RBAC_ONLY",
+      encryption_key_path: "/config/encryption.key",
+    }),
+  }))
+  await page.route("**/api/v1/update/recovery/status", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(recoveryStatus),
+  }))
+  await page.route("**/api/v1/update/recovery/check", async (route) => {
+    expect(await route.request().headerValue("x-csrf-token")).toBe(bootstrapCsrf)
+    expect(route.request().postDataJSON()).toEqual({})
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...recoveryStatus, bootstrap_csrf: null }),
+    })
+  })
+  await page.route("**/api/v1/update/recovery/apply", async (route) => {
+    expect(await route.request().headerValue("x-csrf-token")).toBe(bootstrapCsrf)
+    expect(route.request().postDataJSON()).toEqual({
+      version: "0.9.18",
+      confirmation: "INSTALL OFFICIAL UPDATE",
+    })
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job_id: "recovery-browser-job",
+        operation: "apply",
+        status: "success",
+        version: "0.9.18",
+        message: "Official recovery update installed.",
+        restart_required: false,
+      }),
+    })
+  })
+
+  await page.goto("/")
+  await expect(page.getByText("Set up ChannelWatch", { exact: true })).toBeVisible()
+  const actions = page.getByTestId("official-recovery-update-actions")
+  await expect(actions).toBeVisible()
+  await actions.getByRole("button", { name: "Check official channel" }).click()
+  const confirmation = page.getByLabel(/INSTALL OFFICIAL UPDATE/)
+  await confirmation.fill("INSTALL OFFICIAL UPDATE")
+  await actions.getByRole("button", { name: "Apply signed v0.9.18 update" }).click()
+  await expect(actions).toContainText("Official recovery update installed.")
+  await expect(confirmation).toHaveValue("")
+  expect(await page.evaluate(() => sessionStorage.getItem("recovery_bootstrap_csrf"))).toBeNull()
+})
+
+test("Update Center defaults to automatic signed updates in the 03:00–05:00 window", async ({ page }) => {
+  await page.goto("/#settings:updates")
+
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible()
+  await expect(page.getByText("Application version")).toBeVisible()
+  await expect(page.getByText("Container image version")).toBeVisible()
+  await expect(page.getByText("Launcher protocol 1")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Automatic during maintenance window" })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByText("Maintenance window: 03:00–05:00 local time")).toBeVisible()
+  await expect(page.getByText("A compatible base-image refresh is recommended later.")).toBeVisible()
+})
+
+test("Update Center validates and saves an editable local maintenance window", async ({ page }) => {
+  let savedPolicy: Record<string, unknown> | null = null
+  await page.route("**/api/v1/update/policy", async (route) => {
+    const defaultPolicy = {
+      mode: "automatic",
+      maintenance_window_start: "03:00",
+      maintenance_window_minutes: 120,
+      scheduled_restart_at: null,
+      postpone_available: true,
+    }
+    if (route.request().method() === "PUT") {
+      savedPolicy = route.request().postDataJSON()
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(savedPolicy) })
+      return
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(defaultPolicy) })
+  })
+
+  await page.goto("/#settings:updates")
+  await page.getByLabel("Maintenance window start (local time)").fill("04:30")
+  await page.getByLabel("Window duration in minutes").fill("90")
+  const policySaved = page.waitForResponse((response) => (
+    response.url().endsWith("/api/v1/update/policy")
+    && response.request().method() === "PUT"
+  ))
+  await page.getByRole("button", { name: "Save maintenance window" }).click()
+  await policySaved
+  await expect.poll(() => savedPolicy).toEqual({
+    mode: "automatic",
+    maintenance_window_start: "04:30",
+    maintenance_window_minutes: 90,
+  })
+  await expect(page.getByText("Maintenance window: 04:30–06:00 local time")).toBeVisible()
+
+  await page.getByLabel("Window duration in minutes").fill("10")
+  await expect(page.getByRole("alert").filter({ hasText: "Choose a valid local start time" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Save maintenance window" })).toBeDisabled()
+})
+
+test("terminal retry and rollback failures restore Update Center controls", async ({ page }) => {
+  const failedStatus = {
+    current_version: "0.9.18",
+    image_version: "0.9.18",
+    runtime_abi: "channelwatch-runtime-v1",
+    launcher_protocol: 3,
+    runtime_source: "image",
+    delivery_mode: "app_update",
+    image_refresh_recommended: false,
+    settings_schema_version: 7,
+    active_bundle: null,
+    latest: null,
+    update_available: false,
+    image_required: false,
+    rollback_available: true,
+    auth_disabled_warning: false,
+    last_job: {
+      job_id: "failed-before-retry",
+      operation: "apply",
+      status: "failed",
+      version: "0.9.18",
+      message: "Previous update attempt failed.",
+      restart_required: true,
+    },
+  }
+  await page.route("**/api/v1/update/status", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(failedStatus),
+  }))
+  await page.route("**/api/v1/update/retry", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      job_id: "failed-retry",
+      operation: "apply",
+      status: "failed",
+      version: "0.9.18",
+      message: "Retry restart was rejected.",
+      restart_required: true,
+    }),
+  }))
+  await page.route("**/api/v1/update/rollback", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      job_id: "failed-rollback",
+      operation: "rollback",
+      status: "failed",
+      version: "0.9.18",
+      message: "Rollback restart was rejected.",
+      restart_required: true,
+      rollback_applied: false,
+    }),
+  }))
+
+  await page.goto("/#settings:updates")
+  const retry = page.getByRole("button", { name: "Retry now" })
+  const rollback = page.getByRole("button", { name: "Roll back" })
+
+  await retry.click()
+  await expect(page.getByText("Retry restart was rejected.")).toBeVisible()
+  await expect(retry).toBeEnabled()
+  await expect(rollback).toBeEnabled()
+
+  await rollback.click()
+  await expect(page.getByText("Rollback restart was rejected.")).toBeVisible()
+  await expect(retry).toBeEnabled()
+  await expect(rollback).toBeEnabled()
 })
 
 test("closing and reopening a report retains in-memory text and attachments until discard", async ({ page }) => {
@@ -45,6 +334,46 @@ test("closing and reopening a report retains in-memory text and attachments unti
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
   await expect(page.getByLabel("Problem summary")).toHaveValue("")
   await expect(page.getByText("channelwatch-logo.png")).toHaveCount(0)
+})
+
+test("dirty report draft shows a scheduled restart countdown and one postponement", async ({ page }) => {
+  const scheduledRestart = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+  await page.route("**/api/v1/update/policy", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      mode: "automatic",
+      maintenance_window_start: "03:00",
+      maintenance_window_minutes: 120,
+      scheduled_restart_at: scheduledRestart,
+      postpone_available: true,
+    }),
+  }))
+  await page.route("**/api/v1/update/postpone", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ hours: 24, reason: "dirty_report_draft" })
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        mode: "automatic",
+        maintenance_window_start: "03:00",
+        maintenance_window_minutes: 120,
+        scheduled_restart_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        postpone_available: false,
+      }),
+    })
+  })
+
+  await page.goto("/#diagnostics")
+  await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
+  await page.getByLabel("Problem summary").fill("Keep this private draft during the update")
+
+  const warning = page.getByTestId("report-scheduled-restart-warning")
+  await expect(warning).toBeVisible()
+  await expect(warning).toContainText(/ChannelWatch is scheduled to restart in \d+m \d{2}s/)
+  await warning.getByRole("button", { name: "Postpone once for 24 hours" }).click()
+  await expect(warning).toContainText("The one-time draft postponement has already been used.")
+  await expect(page.getByLabel("Problem summary")).toHaveValue("Keep this private draft during the update")
 })
 
 test("report review works without randomUUID or network access", async ({ page, context }) => {

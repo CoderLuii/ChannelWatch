@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "repository": "coderluii/channelwatch",
+  "platform": "linux/amd64",
+  "images": [
+    {
+      "version": "0.9.9",
+      "tag": "v0.9.9",
+      "source_sha": "4bcf22cf05ea413747478ff17b49164384b283d8",
+      "index_digest": "sha256:fbd92e6f747bee562f017bfde5c4b5770be230b9e504421752497538ceafab59",
+      "amd64_digest": "sha256:1909601a98f46bd318b8040d18f000e55ce34165fe2f0084f5dbcb8109c2a467",
+      "launcher_protocol": 0,
+      "entrypoint": ["/usr/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "image_pull_only"
+    },
+    {
+      "version": "0.9.10",
+      "tag": "v0.9.10",
+      "source_sha": "489ff2b03468ebf3c03898b88baf81a4d5d1bcbb",
+      "index_digest": "sha256:f8409767177d16681ed8d9f43c36d7b244ff1b1d9a3c9c87d9f45b9dc93d1997",
+      "amd64_digest": "sha256:a03aae5b589189840e83d2fc11d88dfb861733463fc9cdc230397d4a21b523f1",
+      "launcher_protocol": 1,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "image_pull_only"
+    },
+    {
+      "version": "0.9.11",
+      "tag": "v0.9.11",
+      "source_sha": "93f7f89c69d5271b34774ce30237ea0280664c66",
+      "index_digest": "sha256:dc3dedbcdfddfaafb845436906b2e9323b0453240236db77fe013731eb685290",
+      "amd64_digest": "sha256:ae9a541cbb9088fb024b900f578d411fbcff946590f0ec158d398ac9ca5795e7",
+      "launcher_protocol": 1,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    },
+    {
+      "version": "0.9.12",
+      "tag": "v0.9.12",
+      "source_sha": "b194cb05a2da60f61dcbfdf06f1f457f4d43c039",
+      "index_digest": "sha256:bd3bca362876f525ac5b7ab90b06bb2b782c005644e04e4ffac73807922fcd27",
+      "amd64_digest": "sha256:0a4f62df8e7d7930cb96787dc69eb1fa0727105aaf4e014a477cffc41d1866e6",
+      "launcher_protocol": 1,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    },
+    {
+      "version": "0.9.13",
+      "tag": "v0.9.13",
+      "source_sha": "bfb3c73503e68cc6823717b447d5aaf55e559e77",
+      "index_digest": "sha256:f10e7a29dbd0b7a40e5903ed7705b9b83e565d5f1bff81ef5dcfd0c0273754c3",
+      "amd64_digest": "sha256:9560224dad19218846e72e6d9eb4e023c44762f6e7b3e786e307518be8c38b69",
+      "launcher_protocol": 1,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    },
+    {
+      "version": "0.9.14",
+      "tag": "v0.9.14",
+      "source_sha": "81bb86423778c8d7dabed5936f58d9fcd6697dae",
+      "index_digest": "sha256:601b9df98668863e6f709d0e78313dd5192be887cb0a4938cce200c7c6bf1064",
+      "amd64_digest": "sha256:cb414ef81186472029581f2b47efa43963710a62405500d92538a7272acd72d4",
+      "launcher_protocol": 1,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    },
+    {
+      "version": "0.9.15",
+      "tag": "v0.9.15",
+      "source_sha": "1abd457258c869082a9779e86aa78d090a10be99",
+      "index_digest": "sha256:af44730aeb81d50d239f7bdced877dd6067d77a29e58e4ede520af3aedf07f1d",
+      "amd64_digest": "sha256:32a7e0b2cbb09161287534eaa66eaf6865468dd337b9bdd5e5a1d5140dc79021",
+      "launcher_protocol": 1,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    },
+    {
+      "version": "0.9.16",
+      "tag": "v0.9.16",
+      "source_sha": "4b04a64cb4305473325f725ff9e2a775625cb77e",
+      "index_digest": "sha256:71ae1f2644d526245f83ee1a884d4e7e1d7cedb5e14c33ef15fe06ae1672b6c8",
+      "amd64_digest": "sha256:02e6d626d48e287d7a704f9aeb6c667a5e09f2dd7b3ccf6c538930dfd639ee9e",
+      "launcher_protocol": 2,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    },
+    {
+      "version": "0.9.17",
+      "tag": "v0.9.17",
+      "source_sha": "31dafd56712cdd5a1eb67838f3dcd83a1a6bfc37",
+      "index_digest": "sha256:136806b1952db866b8a9ecc00e9ba79fcf8dea54029160228123a391c7c16f75",
+      "amd64_digest": "sha256:598604c7d7f3a4628f15dc49021689d199e6c3f1d5b3d205a73f9521151df4db",
+      "launcher_protocol": 2,
+      "entrypoint": ["/venv/bin/python", "/app/core/docker-entrypoint.py"],
+      "cmd": ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"],
+      "support": "app_update"
+    }
+  ]
+}

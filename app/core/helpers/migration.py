@@ -6,18 +6,28 @@ migrations to ensure seamless upgrades for existing users.
 
 import json
 import os
+import secrets
 import shutil
+import stat
 from dataclasses import fields, MISSING
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
-from .atomic_io import atomic_copy_file, atomic_write_json
+from .atomic_io import (
+    _atomic_write_secret_bytes,
+    atomic_copy_file,
+    atomic_write_json,
+    atomic_write_private_json,
+    fsync_directory,
+    read_regular_file_bytes,
+)
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
 from ..notifications.template_engine import TEMPLATE_SETTINGS_DEFAULTS
 from .dvr_id import canonical_dvr_id, dvr_display_name
 
 CURRENT_SCHEMA_VERSION = 7
 JOURNAL_FILE_NAME = "migration.journal"
+MAX_MIGRATION_SETTINGS_BYTES = 8 * 1024 * 1024
 
 DISK_ALERT_DEFAULTS = {
     "ds_threshold_percent": 10,
@@ -179,52 +189,99 @@ def normalize_dvr_server_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
 # --- Auto-backup ---
 
 
-def auto_backup(config_dir: Path, from_version: int, to_version: int) -> bool:
+def _create_auto_backup(
+    config_dir: Path, from_version: int, to_version: int
+) -> Path | None:
     """Create a timestamped backup of settings.json before migration.
 
     Stores backups in config_dir/backups/ with rotation (max 10 kept).
-    Returns True if backup was created successfully.
+    Returns the exact private backup path when creation succeeds.
     """
     settings_file = config_dir / "settings.json"
     if not settings_file.is_file():
-        return False
+        return None
 
     backup_dir = config_dir / "backups"
     try:
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            backup_metadata = backup_dir.lstat()
+        except FileNotFoundError:
+            backup_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+            fsync_directory(backup_dir.parent)
+            backup_metadata = backup_dir.lstat()
+        if stat.S_ISLNK(backup_metadata.st_mode) or not stat.S_ISDIR(
+            backup_metadata.st_mode
+        ):
+            raise PermissionError("The migration backup directory is unsafe.")
+        if os.name != "nt":
+            backup_dir.chmod(0o700)
+            if stat.S_IMODE(backup_dir.stat().st_mode) != 0o700:
+                raise PermissionError(
+                    "The migration backup directory is not owner-only."
+                )
     except OSError as e:
-        log(f"Could not create backup directory: {e}", level=LOG_STANDARD)
-        return False
+        log(f"Could not secure migration backup directory: {e}", level=LOG_STANDARD)
+        return None
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"settings.v{from_version}.{timestamp}.json"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_name = (
+        f"settings.v{from_version}.{timestamp}.{secrets.token_hex(6)}.json"
+    )
     backup_path = backup_dir / backup_name
 
     try:
-        shutil.copy2(str(settings_file), str(backup_path))
+        settings_bytes = read_regular_file_bytes(
+            settings_file,
+            max_bytes=MAX_MIGRATION_SETTINGS_BYTES,
+        )
+        _atomic_write_secret_bytes(backup_path, settings_bytes)
         log(f"Backup saved: {backup_path.name}", level=LOG_STANDARD)
-    except OSError as e:
+    except (OSError, ValueError) as e:
         log(f"Failed to create backup: {e}", level=LOG_STANDARD)
-        return False
+        return None
 
     # Rotate: keep last 10 backups
-    _rotate_backups(backup_dir, max_backups=10)
-    return True
+    _rotate_backups(backup_dir, max_backups=10, preserve=backup_path)
+    return backup_path
 
 
-def _rotate_backups(backup_dir: Path, max_backups: int = 10):
+def auto_backup(config_dir: Path, from_version: int, to_version: int) -> bool:
+    """Compatibility wrapper returning whether a private backup was created."""
+
+    return _create_auto_backup(config_dir, from_version, to_version) is not None
+
+
+def _rotate_backups(
+    backup_dir: Path,
+    max_backups: int = 10,
+    *,
+    preserve: Path | None = None,
+):
     """Remove oldest backups if count exceeds max_backups."""
     try:
+        preserved = Path(preserve) if preserve is not None else None
         backups = sorted(
             [
                 f
                 for f in backup_dir.iterdir()
-                if f.is_file() and f.name.startswith("settings")
+                if f.name.startswith("settings")
+                and stat.S_ISREG(f.lstat().st_mode)
+                and f.lstat().st_nlink == 1
             ],
-            key=lambda f: f.stat().st_mtime,
+            key=lambda f: f.lstat().st_mtime,
         )
         while len(backups) > max_backups:
-            oldest = backups.pop(0)
+            oldest_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(backups)
+                    if preserved is None or candidate != preserved
+                ),
+                None,
+            )
+            if oldest_index is None:
+                break
+            oldest = backups.pop(oldest_index)
             oldest.unlink()
             log(f"Rotated old backup: {oldest.name}", level=LOG_VERBOSE)
     except OSError as e:
@@ -586,7 +643,12 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
         old_dvr_servers = list(settings.get("dvr_servers") or [])
         needs_v7_session_archival = version < 7 <= CURRENT_SCHEMA_VERSION
         backup_path: str | None = None
-        if settings:
+        # A durable pre-migration backup is mandatory whenever there is a live
+        # settings file to protect.  Some callers (and first-run imports) pass
+        # an in-memory legacy mapping before settings.json exists; there is no
+        # on-disk source to back up in that case, and this function does not
+        # persist the returned mapping on their behalf.
+        if settings_file.is_file():
             _journal_step(
                 config_dir,
                 step="backup",
@@ -595,13 +657,25 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
                 to_version=CURRENT_SCHEMA_VERSION,
                 backup_path=None,
             )
-            auto_backup(config_dir, version, CURRENT_SCHEMA_VERSION)
-            backup_dir = config_dir / "backups"
-            matching_backups = sorted(
-                backup_dir.glob(f"settings.v{version}.*.json"),
-                key=lambda f: f.stat().st_mtime,
+            created_backup = _create_auto_backup(
+                config_dir,
+                version,
+                CURRENT_SCHEMA_VERSION,
             )
-            backup_path = str(matching_backups[-1]) if matching_backups else None
+            if created_backup is None:
+                _journal_step(
+                    config_dir,
+                    step="backup",
+                    status="failed",
+                    from_version=version,
+                    to_version=CURRENT_SCHEMA_VERSION,
+                    backup_path=None,
+                )
+                raise RuntimeError(
+                    "Settings migration requires a private, durable pre-migration "
+                    "backup. Repair /config/backups permissions and restart."
+                )
+            backup_path = str(created_backup)
             _journal_step(
                 config_dir,
                 step="backup",
@@ -685,7 +759,7 @@ def migrate_settings(config_dir: Path, settings: Dict[str, Any]) -> Dict[str, An
                 to_version=CURRENT_SCHEMA_VERSION,
                 backup_path=backup_path,
             )
-            atomic_write_json(settings_file, settings)
+            atomic_write_private_json(settings_file, settings)
             _journal_step(
                 config_dir,
                 step="persist_settings",

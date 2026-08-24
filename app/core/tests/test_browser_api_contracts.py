@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from fastapi.routing import APIRoute
 from starlette.testclient import TestClient
@@ -27,17 +28,57 @@ EXPLICIT_SESSION_CSRF_ROUTES = {
     ("POST", "/api/v1/auth/change-credentials"),
     ("POST", "/api/v1/auth/logout"),
 }
+READ_ONLY_SAFE_MUTATIONS = {
+    ("POST", "/api/v1/dvrs/test-connection"),
+    ("POST", "/api/v1/notifications/destination-safety/preview"),
+    ("POST", "/api/v1/support/report-dry-run"),
+    ("POST", "/api/v1/support/offline-package"),
+    ("POST", "/api/run_test/{test_name_url}"),
+    ("POST", "/api/restart_container"),
+    ("POST", "/api/restart_core"),
+    ("POST", "/api/v1/discovery/scan"),
+}
+READ_ONLY_BLOCKED_MUTATIONS = {
+    ("POST", "/api/v1/runtime/key-recovery/migrate"),
+    ("POST", "/api/v1/runtime/key-recovery/reset"),
+    ("POST", "/api/settings"),
+    ("POST", "/api/regenerate-api-key"),
+    ("POST", "/api/v1/backup/restore"),
+    ("POST", "/api/dvrs/{dvr_id}/soft-delete"),
+    ("POST", "/api/dvrs/{dvr_id}/restore"),
+    ("DELETE", "/api/dvrs/{dvr_id}"),
+    ("POST", "/api/clear-activity-history"),
+    ("PUT", "/api/v1/update/policy"),
+    ("POST", "/api/v1/update/postpone"),
+    ("POST", "/api/v1/update/check"),
+    ("POST", "/api/v1/update/apply"),
+    ("POST", "/api/v1/update/retry"),
+    ("POST", "/api/v1/update/rollback"),
+    ("POST", "/api/v1/update/recovery/check"),
+    ("POST", "/api/v1/update/recovery/apply"),
+    ("POST", "/api/v1/auth/login"),
+    ("POST", "/api/v1/auth/logout"),
+    ("POST", "/api/v1/auth/change-credentials"),
+    ("POST", "/api/v1/auth/setup"),
+}
 
 
 def _contracts():
     return json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 
 
+def _all_api_routes(routes=None):
+    for route in routes or backend_main.app.routes:
+        if isinstance(route, APIRoute):
+            yield route
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            yield from _all_api_routes(original_router.routes)
+
+
 def _minimum_roles_by_route():
     roles = {}
-    for route in backend_main.app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in _all_api_routes():
         minimum_role = None
         for dependency in route.dependant.dependencies:
             candidate = getattr(
@@ -195,3 +236,116 @@ def test_browser_role_and_csrf_failures_return_structured_403(monkeypatch):
     finally:
         client.close()
         backend_main.rate_limiter._requests.clear()
+
+
+def test_every_unsafe_route_has_explicit_read_only_disposition():
+    mutations = {
+        (method, route.path)
+        for route in _all_api_routes()
+        for method in route.methods
+        if method in backend_main.CSRF_PROTECTED_METHODS
+    }
+
+    assert mutations == READ_ONLY_SAFE_MUTATIONS | READ_ONLY_BLOCKED_MUTATIONS
+    assert len(mutations) == 29
+    for method, path in READ_ONLY_SAFE_MUTATIONS:
+        assert backend_main._read_only_api_mutation_allowed(method, path)
+    for method, path in READ_ONLY_BLOCKED_MUTATIONS:
+        assert not backend_main._read_only_api_mutation_allowed(method, path)
+    assert not backend_main._read_only_api_mutation_allowed(
+        "POST", "/api/run_test/test-name/extra"
+    )
+
+
+def test_read_only_middleware_blocks_writes_before_handler_side_effects(monkeypatch):
+    history = list(backend_main.ACTIVITY_HISTORY)
+    mutate = MagicMock(side_effect=AssertionError("settings mutator reached"))
+    hard_delete = MagicMock(side_effect=AssertionError("hard delete reached"))
+    update_manager = MagicMock(side_effect=AssertionError("update manager reached"))
+    monkeypatch.setattr(backend_main, "CW_DISABLE_AUTH", True)
+    monkeypatch.setattr(backend_main, "_mutate_current_settings_locked", mutate)
+    monkeypatch.setattr(backend_main, "_hard_delete_dvr", hard_delete)
+    monkeypatch.setattr(backend_main, "_build_update_manager", update_manager)
+    backend_main.rate_limiter._requests.clear()
+
+    with patch.dict(
+        "os.environ", {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}, clear=False
+    ):
+        client = TestClient(backend_main.app, raise_server_exceptions=False)
+        try:
+            requests = (
+                ("POST", "/api/regenerate-api-key", {}),
+                ("DELETE", "/api/dvrs/dvr-test", {}),
+                ("POST", "/api/clear-activity-history", {}),
+                ("POST", "/api/v1/update/check", {}),
+                ("POST", "/api/v1/auth/login", {"json": {}}),
+            )
+            for method, path, kwargs in requests:
+                response = client.request(method, path, **kwargs)
+                assert response.status_code == 503, path
+                assert (
+                    response.json()["detail"]["code"]
+                    == backend_main.ErrorCode.RUNTIME_SETUP_REQUIRED
+                )
+        finally:
+            client.close()
+            backend_main.rate_limiter._requests.clear()
+
+    mutate.assert_not_called()
+    hard_delete.assert_not_called()
+    update_manager.assert_not_called()
+    assert backend_main.ACTIVITY_HISTORY == history
+
+
+def test_read_only_middleware_preserves_auth_and_csrf_precedence(monkeypatch):
+    async def api_key_mode():
+        return "api_key", "read-only-api-key", False
+
+    monkeypatch.setattr(backend_main, "CW_DISABLE_AUTH", False)
+    monkeypatch.setattr(backend_main, "RBAC_ENABLED", False)
+    monkeypatch.setattr(backend_main, "_get_runtime_auth_snapshot", api_key_mode)
+    backend_main.rate_limiter._requests.clear()
+    with patch.dict(
+        "os.environ", {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}, clear=False
+    ):
+        client = TestClient(backend_main.app, raise_server_exceptions=False)
+        try:
+            unauthenticated = client.post("/api/regenerate-api-key")
+            authenticated = client.post(
+                "/api/regenerate-api-key",
+                headers={"X-API-Key": "read-only-api-key"},
+            )
+        finally:
+            client.close()
+            backend_main.rate_limiter._requests.clear()
+
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["detail"]["code"] == backend_main.ErrorCode.AUTH_INVALID_KEY
+    assert authenticated.status_code == 503
+    assert (
+        authenticated.json()["detail"]["code"]
+        == backend_main.ErrorCode.RUNTIME_SETUP_REQUIRED
+    )
+
+
+def test_read_only_safe_operational_route_remains_available(monkeypatch):
+    monkeypatch.setattr(backend_main, "CW_DISABLE_AUTH", True)
+    restart = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        backend_main,
+        "_schedule_container_restart_for_update",
+        restart,
+    )
+    backend_main.rate_limiter._requests.clear()
+    with patch.dict(
+        "os.environ", {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}, clear=False
+    ):
+        client = TestClient(backend_main.app, raise_server_exceptions=False)
+        try:
+            response = client.post("/api/restart_container")
+        finally:
+            client.close()
+            backend_main.rate_limiter._requests.clear()
+
+    assert response.status_code == 202
+    restart.assert_called_once_with()

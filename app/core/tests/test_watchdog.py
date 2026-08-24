@@ -1,8 +1,9 @@
 import asyncio
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from core.watchdog import Watchdog, summarize_enabled_dvrs
+from core.watchdog import Watchdog, load_watchdog_snapshot, summarize_enabled_dvrs
 
 
 def _monitor(*, dvr_id="dvr_aaa11111", name="Living Room"):
@@ -24,6 +25,64 @@ def _monitor(*, dvr_id="dvr_aaa11111", name="Living Room"):
 
 
 class TestWatchdogSnapshot:
+    def test_read_only_config_uses_shared_ephemeral_snapshot(self, tmp_path):
+        status_file = tmp_path / "runtime" / "watchdog_status.json"
+        with (
+            patch.dict(os.environ, {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}),
+            patch("core.watchdog.EPHEMERAL_WATCHDOG_STATUS_FILE", status_file),
+        ):
+            watchdog = Watchdog()
+            snapshot = watchdog.persist({}, {}, force=True, now=100.0)
+
+        assert snapshot["generated_at"] is not None
+        assert load_watchdog_snapshot(status_file) == snapshot
+
+    def test_read_only_cross_process_snapshot_stays_fresh_beyond_five_minutes(
+        self, tmp_path
+    ):
+        ephemeral_file = tmp_path / "runtime" / "watchdog_status.json"
+        monitor = _monitor()
+        task = MagicMock()
+        task.done.return_value = False
+        enabled = [
+            {
+                "id": "dvr_aaa11111",
+                "name": "Living Room",
+                "host": "192.168.1.10",
+                "port": 8089,
+            }
+        ]
+
+        with (
+            patch.dict(os.environ, {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}),
+            patch("core.watchdog.EPHEMERAL_WATCHDOG_STATUS_FILE", ephemeral_file),
+        ):
+            watchdog = Watchdog(stale_threshold_seconds=300)
+            watchdog.mark_fresh(monitor, "poll", timestamp=100.0)
+            watchdog.persist(
+                {"dvr_aaa11111": task},
+                {"dvr_aaa11111": monitor},
+                force=True,
+                now=100.0,
+            )
+            watchdog.mark_fresh(monitor, "poll", timestamp=461.0)
+            watchdog.persist(
+                {"dvr_aaa11111": task},
+                {"dvr_aaa11111": monitor},
+                force=True,
+                now=461.0,
+            )
+            loaded_by_ui_process = load_watchdog_snapshot()
+
+        summary = summarize_enabled_dvrs(
+            enabled,
+            loaded_by_ui_process,
+            now=462.0,
+        )
+        assert summary["ready"] is True
+        assert summary["dvrs"][0]["freshness_age_seconds"] == 1.0
+        assert loaded_by_ui_process["generated_at"] is not None
+
     def test_snapshot_marks_dvr_dead_when_task_is_done(self):
         watchdog = Watchdog(stale_threshold_seconds=300)
         monitor = _monitor()

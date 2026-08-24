@@ -8,6 +8,48 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.18] - 2026-08-25
+
+### Important
+
+- The immutable published v0.9.9 and v0.9.10 entrypoints cannot activate v0.9.18 safely through their old in-app bridge. If you are still on either image, preserve `/config`, pull/recreate the v0.9.18 image once, let v0.9.18 repair any stale legacy update marker without discarding the preserved configuration, and then use the improved Update Center for future releases.
+
+### Added
+
+- Add application-managed local encryption-key creation under persistent `/config`, with no secret variable, key prompt, or manual key-generation step for fresh installations.
+- Add authenticated, rate-limited legacy recovery that can use the old wrapping value for an envelope created by v0.9.5–v0.9.17, or an original raw 32-byte key once, plus a confirmed last-resort reset that preserves non-secret settings and history.
+- Add a narrowly scoped official signed recovery-update path so an installation blocked before administrator login can still check and apply a compatible fix using short-lived same-origin CSRF and exact typed confirmation, without accepting custom sources or downgrades.
+- Add an automatic signed-update policy, defaulting to a 03:00–05:00 local maintenance window, with notify-only, bounded postpone, retry, failure quarantine, and rollback controls.
+- Show the application version, container image version, runtime source, launcher protocol, and whether an eventual image refresh is recommended or required.
+
+### Changed
+
+- Make Update Center the normal upgrade path from operational v0.9.11–v0.9.17 installations, prominently including v0.9.15, v0.9.16, and v0.9.17; compatible app updates are signed, backed up, activated atomically, validated after restart, and rollback-capable.
+- Keep the schema-1 stable feed permanently pinned to the v0.9.18 bridge for v0.9.11–v0.9.17 clients, while v0.9.18 and later independently select compatible releases from the new signed schema-2 catalog.
+- Classify v0.9.9 and v0.9.10 honestly as immutable image-pull-only exceptions; their in-bundle safeguards remain defense-in-depth and are not counted as proof that those published images can activate the bundle.
+- Remove the required `CHANNELWATCH_SECRET_STORAGE_KEY` from Compose, Helm, Unraid, and fresh-install documentation. Existing values remain accepted only as deprecated one-time legacy migration input.
+- Require v0.9.9, v0.9.10, and an already-blocked v0.9.17 missing-key installation to pull/recreate the v0.9.18 image once while preserving `/config`; operational v0.9.11–v0.9.17 installations can install v0.9.18 directly in Update Center.
+- Keep login reachable when older protected credentials need attention, pause only work that needs the locked credentials, and present generic authenticated recovery guidance without exposing key details.
+- Keep dirty support-report drafts and private attachments in page memory while showing a restart countdown and one server-authorized 24-hour postponement before a scheduled automatic update.
+
+### Fixed
+
+- Stop fresh third-party one-click and ordinary Docker installations from appearing partly healthy while monitoring is blocked by a missing deployment key.
+- Let a mature, already-secured `/config` continue read-only monitoring when its storage is later remounted read-only, while disabling persistent logs, state changes, updates, and other writes until storage is repaired.
+- Keep existing RBAC sessions and API-key access usable in read-only mode; creating or revoking sessions, changing credentials, and every other persistent mutation returns an actionable error until `/config` is writable. Monitoring and delivery continue, but secondary session, stream-count, activity, and delivery-history diagnostics may remain stale while writes are unavailable.
+- Prevent Helm upgrades from deadlocking against the single-writer `/config` lock by using a `Recreate` Deployment, and restart the pod when the chart-managed ConfigMap or Secret changes.
+- Preserve the logical encryption key and saved credentials when a recoverable v0.9.5–v0.9.17 legacy envelope is converted to the application-managed local format.
+- Preserve legacy envelopes and settings byte-for-byte when their old input is missing or wrong, and offer authenticated recovery or an explicit protected-credential-only reset instead of overwriting them.
+- Distinguish an in-app application upgrade from the container image underneath it, so a compatible v0.9.18 release is not unnecessarily blocked on an image pull.
+
+### Security
+
+- Continue encrypting DVR API keys and custom webhook URLs/secrets at rest while eliminating the fragile user-managed wrapping-key dependency from normal operation.
+- Keep official signature, digest, ABI, schema, source allowlist, release revocation, backup, activation quorum, health, quarantine, and rollback checks mandatory for every automatic or manually retried update.
+- Never place recovery values or raw key files in browser storage, settings, logs, API responses, evidence, release artifacts, or container metadata.
+- Treat full `/config` access and complete backups as credential-bearing because they contain both encrypted settings and the application-managed local decryption key.
+- Keep `settings.json`, managed keys, private backups, recovery snapshots, and maintenance transaction files owner-only, and fail closed on linked, special, oversized, or unstable key/settings paths.
+
 ## [0.9.17] - 2026-08-23
 
 ### Added
@@ -436,7 +478,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.17...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.18...HEAD
+[0.9.18]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.17...v0.9.18
 [0.9.17]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.16...v0.9.17
 [0.9.16]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.15...v0.9.16
 [0.9.15]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.14...v0.9.15

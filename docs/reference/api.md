@@ -37,7 +37,7 @@ There are no inbound webhook HTTP endpoints in `main.py`. Outbound webhook desti
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/ping"
 ```
 
@@ -61,17 +61,59 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/v1/runtime/preflight"
 ```
 
 Example response:
 
 ```json
-{"status":"setup_required","setup_required":true,"blockers":["secret_storage_key_missing"],"warnings":[]}
+{"status":"ready","setup_required":false,"blockers":[],"warnings":[]}
 ```
 
-This public bootstrap response uses only fixed blocker and warning codes. It never includes secret values, hashes, key-file contents, deployment paths, environment dumps, or DVR data. Supported blocker codes are `secret_storage_key_missing`, `secret_storage_key_too_short`, `secret_storage_key_mismatch`, and `secret_storage_key_file_unreadable`; the supported warning is `legacy_plaintext_key_migration_recommended`.
+Fresh v0.9.18 installations create their own durable local key under `/config`, so the ordinary response is `ready` without a deployment secret. This public bootstrap response uses only fixed blocker and warning codes and never includes secret values, hashes, key-file contents, deployment paths, environment dumps, or DVR data. A legacy install that cannot open protected credentials reports a generic recovery blocker while leaving authentication available for the admin-only recovery routes below.
+
+### `GET /api/v1/runtime/key-recovery/status`
+
+| Field | Value |
+| --- | --- |
+| Function | `key_recovery_status` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `KeyRecoveryStatus` |
+| Status codes | 200, 401, 403, 429, 500 |
+| Rate limit applies | yes |
+
+The response contains only a state, fixed blocker code, capability flags, and counts of affected credential fields. It does not expose a key, hash, encrypted value, DVR address, or provider destination.
+
+### `POST /api/v1/runtime/key-recovery/migrate`
+
+| Field | Value |
+| --- | --- |
+| Function | `migrate_legacy_runtime_key` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | multipart `legacy_storage_key` string or `raw_key_file` upload; exactly one |
+| Response body schema | `KeyRecoveryResult` |
+| Status codes | 200, 401, 403, 422, 429, 500 |
+| Rate limit applies | yes, with an additional failed-recovery limit |
+
+The old wrapping value for a legacy envelope created by v0.9.5–v0.9.17, or an original raw 32-byte `encryption.key`, is accepted only for this authenticated migration request. The browser keeps it in component memory and clears the input after the attempt; ChannelWatch does not save or log submitted recovery material.
+
+### `POST /api/v1/runtime/key-recovery/reset`
+
+| Field | Value |
+| --- | --- |
+| Function | `reset_runtime_protected_credentials` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `{ "confirmation": "RESET PROTECTED CREDENTIALS" }` |
+| Response body schema | `KeyRecoveryResult` |
+| Status codes | 200, 401, 403, 422, 429, 500 |
+| Rate limit applies | yes |
+
+Reset is the last-resort path when the old material is lost. It makes a recovery snapshot, preserves non-secret settings and history, and clears only credential fields that cannot be decrypted so the administrator can enter them again.
 
 ### `GET /api/health`
 
@@ -87,7 +129,7 @@ This public bootstrap response uses only fixed blocker and warning codes. It nev
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/health"
 ```
 
@@ -113,7 +155,7 @@ This is the authenticated detailed monitoring surface. Its `dvrs` entries includ
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/healthz/live"
 ```
 
@@ -137,7 +179,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/healthz/ready"
 ```
 
@@ -163,7 +205,7 @@ This unauthenticated response deliberately contains only `status` and `ready`. D
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/healthz/startup"
 ```
 
@@ -187,14 +229,14 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 ```
 
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.17","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.18","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -211,7 +253,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/metrics"
 ```
 
@@ -237,7 +279,7 @@ channelwatch_uptime_seconds 123
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/v1/security/status"
 ```
 
@@ -263,7 +305,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/settings"
 ```
 
@@ -289,7 +331,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" "$BASE_URL/api/settings" -d '{"tz":"America/Los_Angeles","dvr_servers":[]}'
 ```
 
@@ -313,7 +355,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/regenerate-api-key"
 ```
 
@@ -339,7 +381,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/discover-servers"
 ```
 
@@ -363,7 +405,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/discovery/scan"
 ```
 
@@ -387,7 +429,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" "$BASE_URL/api/v1/dvrs/test-connection" -d '{"host":"192.168.1.100","port":8089}'
 ```
 
@@ -411,7 +453,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/dvrs/archived"
 ```
 
@@ -435,7 +477,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/dvrs/main/soft-delete"
 ```
 
@@ -459,7 +501,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/dvrs/main/restore"
 ```
 
@@ -483,7 +525,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X DELETE -H "X-API-Key: $API_KEY" "$BASE_URL/api/dvrs/main"
 ```
 
@@ -507,7 +549,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs"
 ```
 
@@ -531,7 +573,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main"
 ```
 
@@ -555,7 +597,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/streams"
 ```
 
@@ -579,7 +621,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/system-info"
 ```
 
@@ -603,7 +645,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/health"
 ```
 
@@ -627,7 +669,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/recordings/upcoming?limit=5"
 ```
 
@@ -651,7 +693,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/recordings/upcoming?limit=5"
 ```
 
@@ -675,7 +717,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/recordings/active"
 ```
 
@@ -699,7 +741,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/streams/active"
 ```
 
@@ -723,7 +765,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/streams/details"
 ```
 
@@ -749,7 +791,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/recent-activity?hours=24&limit=5"
 ```
 
@@ -773,7 +815,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/activity-history?offset=0&limit=10&type=channel&sort=desc"
 ```
 
@@ -797,7 +839,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/activity-history?offset=0&limit=10&sort=desc"
 ```
 
@@ -821,7 +863,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/clear-activity-history"
 ```
 
@@ -845,7 +887,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/history/export?format=csv"
 ```
 
@@ -869,7 +911,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/notification-log?offset=0&limit=10&status=sent"
 ```
 
@@ -895,14 +937,14 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 ```
 
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.17","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"0.9.18","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
 ```
 
 ### `GET /api/v1/debug/bundle`
@@ -919,7 +961,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" -o channelwatch_debug.zip "$BASE_URL/api/v1/debug/bundle"
 ```
 
@@ -943,7 +985,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/logs?lines=50"
 ```
 
@@ -967,7 +1009,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" -o channelwatch.log "$BASE_URL/api/logs/download"
 ```
 
@@ -991,7 +1033,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/run_test/Test_Connectivity"
 ```
 
@@ -1015,7 +1057,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/restart_core"
 ```
 
@@ -1039,7 +1081,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/restart_container"
 ```
 
@@ -1065,7 +1107,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" -o channelwatch_backup.zip "$BASE_URL/api/v1/backup/download"
 ```
 
@@ -1089,7 +1131,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "X-API-Key: $API_KEY" -F "file=@channelwatch_backup.zip" "$BASE_URL/api/v1/backup/restore"
 ```
 
@@ -1102,6 +1144,48 @@ Example response:
 ## Update Center
 
 Update Center routes are admin-only when auth is enabled. If `CW_DISABLE_AUTH=true`, they follow the rest of the app's auth-disabled behavior: anyone who can reach the UI can run admin actions. Do not expose auth-disabled installs to untrusted networks.
+
+The three `/api/v1/update/recovery/*` routes are the narrow exception: they exist only while runtime credential recovery is active, use the compiled-in official signed stable channel, reject arbitrary sources and downgrades, and expose no DVR or credential data. An authenticated administrator uses the normal session/API-key rules. Before an administrator exists or can sign in, the status response provides a short-lived, same-origin bootstrap CSRF value kept only in component memory; apply also requires the exact confirmation `INSTALL OFFICIAL UPDATE`.
+
+### `GET /api/v1/update/recovery/status`
+
+| Field | Value |
+| --- | --- |
+| Function | `recovery_update_status` |
+| Auth requirement | none; intentionally public and minimal while recovery is active |
+| RBAC role required | none at the route boundary; recovery policy is enforced inside the endpoint |
+| Request body schema | `none` |
+| Response body schema | `RecoveryUpdateStatus` |
+| Status codes | 200, 403, 409, 429, 500 |
+| Rate limit applies | yes |
+
+When recovery is inactive, the response contains only a fixed inactive status and no version fingerprint. While recovery is active, it exposes only the current application version, a recovery-eligible signed target after an explicit check, fixed state/reason codes, and bootstrap authorization fields. Launcher, ABI, settings-schema, rollback, and job details remain on the authenticated Update Center surface. The bootstrap value is an anti-CSRF capability for this fixed recovery operation, not a general session token, and is never saved in browser storage.
+
+### `POST /api/v1/update/recovery/check`
+
+| Field | Value |
+| --- | --- |
+| Function | `recovery_update_check` |
+| Auth requirement | active recovery state plus admin CSRF or bootstrap CSRF |
+| RBAC role required | none at the route boundary; recovery policy is enforced inside the endpoint |
+| Request body schema | `{}` |
+| Response body schema | `RecoveryUpdateStatus` |
+| Status codes | 200, 403, 409, 429, 500 |
+| Rate limit applies | yes |
+
+### `POST /api/v1/update/recovery/apply`
+
+| Field | Value |
+| --- | --- |
+| Function | `recovery_update_apply` |
+| Auth requirement | active recovery state plus admin CSRF or bootstrap CSRF |
+| RBAC role required | none at the route boundary; recovery policy is enforced inside the endpoint |
+| Request body schema | `{ "version": "0.9.18", "confirmation": "INSTALL OFFICIAL UPDATE" }` |
+| Response body schema | `UpdateJob` |
+| Status codes | 202, 400, 403, 409, 429, 500 |
+| Rate limit applies | yes |
+
+Recovery apply still verifies the official catalog, release signature, bundle signature and digest, ABI, schema, archive allowlist, backup, and activation health. The browser cannot submit a custom catalog, release URL, bundle URL, signing key, or downgrade.
 
 ### `GET /api/v1/update/status`
 
@@ -1117,15 +1201,71 @@ Update Center routes are admin-only when auth is enabled. If `CW_DISABLE_AUTH=tr
 
 Example request:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
 ```
 
 Example response:
 
 ```json
-{"current_version":"0.9.17","runtime_abi":"channelwatch-runtime-v1","settings_schema_version":7,"active_bundle":null,"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":false,"auth_disabled_warning":false}
+{"current_version":"0.9.18","image_version":"0.9.17","runtime_abi":"channelwatch-runtime-v1","launcher_protocol":1,"runtime_source":"app_bundle","delivery_mode":"app_update_with_image_refresh","image_refresh_recommended":true,"settings_schema_version":7,"active_bundle":{"version":"0.9.18"},"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":true,"auth_disabled_warning":false}
 ```
+
+Application and image versions are intentionally separate. `delivery_mode` is one of `app_update`, `app_update_with_image_refresh`, or `image_required`. A compatible signed application update may therefore be active while the older container image remains safe to refresh later.
+
+### `GET /api/v1/update/policy`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_policy_get` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `UpdatePolicy` |
+| Status codes | 200, 401, 403, 429, 500 |
+| Rate limit applies | yes |
+
+The default policy is `automatic` with `maintenance_window_start` set to `03:00` and `maintenance_window_minutes` set to `120`, interpreted in the ChannelWatch host's local time. Official signature, compatibility, backup, activation, health, and rollback gates are not configurable.
+
+### `PUT /api/v1/update/policy`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_policy_put` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `{ "mode": "automatic\|notify_only", "maintenance_window_start": "HH:MM", "maintenance_window_minutes": 120 }`; duration must be 15–720 minutes |
+| Response body schema | `UpdatePolicy` |
+| Status codes | 200, 401, 403, 422, 429, 500 |
+| Rate limit applies | yes |
+
+### `POST /api/v1/update/postpone`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_postpone` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `{ "hours": 24 }` or `{ "hours": 168 }`; the one-time report-draft grace request is `{ "hours": 24, "reason": "dirty_report_draft" }` |
+| Response body schema | `UpdatePolicy` |
+| Status codes | 200, 401, 403, 409, 422, 429, 500 |
+| Rate limit applies | yes |
+
+A dirty in-memory support-report draft can offer one 24-hour postponement before a scheduled automatic restart. The server remains authoritative for whether postponement is available.
+
+### `POST /api/v1/update/retry`
+
+| Field | Value |
+| --- | --- |
+| Function | `update_retry` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | admin |
+| Request body schema | `none` |
+| Response body schema | `UpdateJob` |
+| Status codes | 202, 401, 403, 409, 429, 500 |
+| Rate limit applies | yes |
+
+Retry re-runs the normal trusted-manifest and compatibility gates; it is not a bypass for a quarantined, revoked, unsigned, or incompatible release.
 
 ### `POST /api/v1/update/check`
 
@@ -1148,7 +1288,7 @@ This route fetches the trusted public ChannelWatch update manifest and stores th
 | Function | `update_apply` |
 | Auth requirement | api_key or RBAC session |
 | RBAC role required | admin |
-| Request body schema | `{ "version": "0.9.17" }` |
+| Request body schema | `{ "version": "0.9.18" }` |
 | Response body schema | `UpdateJob` |
 | Status codes | 202, 401, 403, 409 (`ERR_UPDATE_LOCKED` or `ERR_UPDATE_IMAGE_REQUIRED`), 429, 500 |
 | Rate limit applies | yes |
@@ -1199,7 +1339,7 @@ Rollback restores the previous active bundle pointer, or removes `active.json` t
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "Content-Type: application/json" -c cookies.txt "$BASE_URL/api/v1/auth/login" -d '{"username":"admin","password":"change-me"}'
 ```
 
@@ -1214,17 +1354,17 @@ Example response:
 | Field | Value |
 | --- | --- |
 | Function | `auth_logout` |
-| Auth requirement | none, optional RBAC session cookie |
+| Auth requirement | RBAC session cookie plus matching `X-CSRF-Token` |
 | RBAC role required | none |
 | Request body schema | `none` |
 | Response body schema | `object` |
-| Status codes | 200, 429 |
+| Status codes | 200, 401, 403, 429 |
 | Rate limit applies | yes |
 
 Example request:
 
-```bash
-curl -sS -X POST -b cookies.txt "$BASE_URL/api/v1/auth/logout"
+```sh
+curl -sS -X POST -b cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" "$BASE_URL/api/v1/auth/logout"
 ```
 
 Example response:
@@ -1247,7 +1387,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -b cookies.txt "$BASE_URL/api/v1/auth/whoami"
 ```
 
@@ -1273,7 +1413,7 @@ Missing or invalid `X-CSRF-Token` values return `403`.
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -b cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" -H "Content-Type: application/json" "$BASE_URL/api/v1/auth/change-credentials" -d '{"current_password":"change-me","username":"admin","new_password":"new-pass"}'
 ```
 
@@ -1297,7 +1437,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/v1/auth/setup-status"
 ```
 
@@ -1321,7 +1461,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS -X POST -H "Content-Type: application/json" -c cookies.txt "$BASE_URL/api/v1/auth/setup" -d '{"mode":"rbac","username":"admin","password":"change-me"}'
 ```
 
@@ -1350,7 +1490,7 @@ The canonical feed paths are under `/api/v1/feeds/`. Bare-path aliases (`/api/v1
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/v1/feeds/calendar.ics?token=$ICS_TOKEN"
 ```
 
@@ -1375,7 +1515,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/v1/feeds/activity.rss?token=$RSS_TOKEN"
 ```
 
@@ -1400,7 +1540,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/api/v1/feeds/activity.atom?token=$RSS_TOKEN"
 ```
 
@@ -1426,7 +1566,7 @@ Example response:
 
 Example request:
 
-```bash
+```sh
 curl -sS "$BASE_URL/"
 ```
 

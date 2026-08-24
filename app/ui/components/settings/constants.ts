@@ -465,7 +465,15 @@ export const diskAdvancedBehaviorFields: Array<{
   },
 ]
 
+const newWebhookId = () => {
+  const randomUuid = globalThis.crypto?.randomUUID?.bind(globalThis.crypto)
+  return randomUuid
+    ? `webhook_${randomUuid()}`
+    : `webhook_${Date.now()}_${Math.random().toString(36).slice(2)}`
+}
+
 export const emptyWebhookEntry = (): AppSettings["webhooks"][number] => ({
+  id: newWebhookId(),
   url: "",
   secret: "",
   enabled: true,

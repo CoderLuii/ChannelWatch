@@ -93,8 +93,6 @@ jobs:
       - run: bash deploy/scripts/doc-qa/diataxis-check.sh
       - run: bash deploy/scripts/doc-qa/spell-check.sh
       - name: Validate Compose examples
-        env:
-          CHANNELWATCH_SECRET_STORAGE_KEY: ci-only-0123456789abcdef0123456789abcdef
         run: |
           for compose_file in deploy/compose/*.yml; do
             docker compose -f "${compose_file}" config --quiet
@@ -108,19 +106,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-      - name: Lint and render managed Secret
+      - name: Lint and render managed-local mode
         run: |
-          helm lint deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef
-          helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null
+          helm lint deploy/helm/channelwatch
+          helm template channelwatch deploy/helm/channelwatch >/dev/null
+      - name: Render optional legacy migration Secret
+        run: helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null
       - name: Render existing Secret mode
         run: helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.existingSecret=channelwatch-runtime >/dev/null
       - name: Verify invalid values fail
         run: |
-          if helm template channelwatch deploy/helm/channelwatch >/dev/null 2>&1; then exit 1; fi
           if helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=short >/dev/null 2>&1; then exit 1; fi
           if helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.existingSecret=external --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
-          if helm template channelwatch deploy/helm/channelwatch --set replicaCount=2 --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
-          if helm template channelwatch deploy/helm/channelwatch --set persistence.enabled=false --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set replicaCount=2 >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set persistence.enabled=false >/dev/null 2>&1; then exit 1; fi
 
   container:
     name: Container build
@@ -161,35 +160,77 @@ jobs:
             --exit-code 1 \
             --ignorefile .trivyignore.yaml \
             --skip-files deploy/docker/Dockerfile.dockerignore \
-            --helm-set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef \
             --format json \
             --output "${CHANNELWATCH_TRIVY_REPORT}" \
             .
-      - name: Prove Trivy scanned the Helm chart
+      - name: Scan the explicit Helm Secret mode
+        env:
+          CHANNELWATCH_TRIVY_SECRET_REPORT: ${{ runner.temp }}/channelwatch-trivy-secret.json
+        run: |
+          trivy config \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --ignorefile .trivyignore.yaml \
+            --helm-set-string secretConfig.apiKey=ci-only-placeholder-not-a-real-secret \
+            --format json \
+            --output "${CHANNELWATCH_TRIVY_SECRET_REPORT}" \
+            deploy/helm/channelwatch
+      - name: Prove Trivy scanned both Helm Secret modes
         env:
           CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
+          CHANNELWATCH_TRIVY_SECRET_REPORT: ${{ runner.temp }}/channelwatch-trivy-secret.json
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          report = json.loads(
+          default_report = json.loads(
               Path(os.environ["CHANNELWATCH_TRIVY_REPORT"]).read_text(encoding="utf-8")
           )
-          helm_targets = {
+          secret_report = json.loads(
+              Path(os.environ["CHANNELWATCH_TRIVY_SECRET_REPORT"]).read_text(
+                  encoding="utf-8"
+              )
+          )
+          default_targets = {
               str(result.get("Target") or "")
-              for result in report.get("Results", [])
+              for result in default_report.get("Results", [])
               if result.get("Type") == "helm"
           }
-          required = {
+          default_required = {
+              "deploy/helm/channelwatch/templates/configmap.yaml",
               "deploy/helm/channelwatch/templates/deployment.yaml",
-              "deploy/helm/channelwatch/templates/secret.yaml",
           }
-          missing = sorted(required - helm_targets)
-          if missing:
+          default_missing = sorted(default_required - default_targets)
+          default_secret = "deploy/helm/channelwatch/templates/secret.yaml"
+          if default_missing:
               raise SystemExit(
-                  "Trivy did not scan required Helm targets: " + ", ".join(missing)
+                  "Trivy did not scan required managed-local Helm targets: "
+                  + ", ".join(default_missing)
               )
-          print(f"Trivy scanned {len(helm_targets)} Helm resources.")
+          if default_secret in default_targets:
+              raise SystemExit(
+                  "The managed-local Helm render unexpectedly contains a Secret."
+              )
+
+          secret_targets = {
+              str(result.get("Target") or "")
+              for result in secret_report.get("Results", [])
+              if result.get("Type") == "helm"
+          }
+          secret_required = {
+              "templates/deployment.yaml",
+              "templates/secret.yaml",
+          }
+          secret_missing = sorted(secret_required - secret_targets)
+          if secret_missing:
+              raise SystemExit(
+                  "Trivy did not scan required explicit-Secret Helm targets: "
+                  + ", ".join(secret_missing)
+              )
+          print(
+              "Trivy scanned managed-local and explicit-Secret Helm modes "
+              f"({len(default_targets)} + {len(secret_targets)} resources)."
+          )
           PY

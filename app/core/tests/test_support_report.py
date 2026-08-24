@@ -1,27 +1,26 @@
-import json
-import io
-import zipfile
 import base64
+import io
+import json
 import struct
+import zipfile
 import zlib
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.testclient import TestClient
-
 from ui.backend.support_report import (
     DEBUG_BUNDLE_MAX_COMPRESSION_RATIO,
     DEBUG_BUNDLE_MAX_ENTRIES,
     DEBUG_BUNDLE_MAX_UNCOMPRESSED_BYTES,
     DEBUG_BUNDLE_REQUIRED_MEMBERS,
-    ReportAttachmentInvalid,
-    ReportPayloadInvalid,
-    ReportPayloadTooLarge,
     SCREENSHOT_MAX_DECODED_BYTES,
     SCREENSHOT_MAX_DIMENSION,
     SCREENSHOT_MAX_PIXELS,
+    ReportAttachmentInvalid,
+    ReportPayloadInvalid,
+    ReportPayloadTooLarge,
     build_offline_report_package,
     parse_report_payload,
     parse_schema2_support_code,
@@ -90,6 +89,32 @@ def _payload(**overrides):
 
 def _parse(payload):
     return parse_report_payload(json.dumps(payload).encode("utf-8"), 262144)
+
+
+@pytest.fixture()
+def support_api_client(tmp_path):
+    """Start the UI against disposable storage, never the host's /config."""
+    import ui.backend.main as ui_main
+
+    settings_file = tmp_path / "settings.json"
+    automation = MagicMock()
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch("ui.backend.main.CONFIG_DIR", tmp_path),
+        patch("ui.backend.main._CORE_CONFIG_DIR", tmp_path),
+        patch("ui.backend.main.CW_DISABLE_AUTH", True),
+        patch(
+            "core.update_center.guard_legacy_launcher_before_start",
+            return_value={"allowed": True},
+        ),
+        patch(
+            "ui.backend.main._get_update_automation_service",
+            return_value=automation,
+        ),
+    ):
+        with TestClient(ui_main.app, raise_server_exceptions=False) as client:
+            yield client
 
 
 def _privacy_parity_payload():
@@ -1201,19 +1226,20 @@ def test_support_report_rejects_debug_bundle_with_extra_files():
         )
 
 
-def test_support_report_dry_run_endpoint_accepts_private_attachments():
-    import ui.backend.main as ui_main
-
-    with patch("ui.backend.main.CW_DISABLE_AUTH", True):
-        with TestClient(ui_main.app, raise_server_exceptions=False) as client:
-            response = client.post(
-                "/api/v1/support/report-dry-run",
-                data={"payload": json.dumps(_payload())},
-                files=[
-                    ("screenshots", ("active-stream.png", _png_bytes(), "image/png")),
-                    ("debug_bundle", ("channelwatch_debug.zip", _zip_bytes(), "application/zip")),
-                ],
-            )
+def test_support_report_dry_run_endpoint_accepts_private_attachments(
+    support_api_client,
+):
+    response = support_api_client.post(
+        "/api/v1/support/report-dry-run",
+        data={"payload": json.dumps(_payload())},
+        files=[
+            ("screenshots", ("active-stream.png", _png_bytes(), "image/png")),
+            (
+                "debug_bundle",
+                ("channelwatch_debug.zip", _zip_bytes(), "application/zip"),
+            ),
+        ],
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -1226,35 +1252,32 @@ def test_support_report_dry_run_endpoint_accepts_private_attachments():
     assert body["attachments_sent"] is False
 
 
-def test_support_report_dry_run_endpoint_matches_worker_privacy_sanitization():
-    import ui.backend.main as ui_main
-
-    with patch("ui.backend.main.CW_DISABLE_AUTH", True):
-        with TestClient(ui_main.app, raise_server_exceptions=False) as client:
-            response = client.post(
-                "/api/v1/support/report-dry-run",
-                json=_privacy_parity_payload(),
-            )
+def test_support_report_dry_run_endpoint_matches_worker_privacy_sanitization(
+    support_api_client,
+):
+    response = support_api_client.post(
+        "/api/v1/support/report-dry-run",
+        json=_privacy_parity_payload(),
+    )
 
     assert response.status_code == 200, response.text
     _assert_public_privacy_parity(response.json()["issue_body"])
 
 
-def test_support_report_offline_package_endpoint_returns_zip():
-    import ui.backend.main as ui_main
-
-    with patch("ui.backend.main.CW_DISABLE_AUTH", True):
-        with TestClient(ui_main.app, raise_server_exceptions=False) as client:
-            payload = _payload()
-            support_code = _schema2_code(payload)
-            response = client.post(
-                "/api/v1/support/offline-package",
-                data={"support_code": support_code},
-                files=[
-                    ("screenshots", ("active-stream.png", _png_bytes(), "image/png")),
-                    ("debug_bundle", ("channelwatch_debug.zip", _zip_bytes(), "application/zip")),
-                ],
-            )
+def test_support_report_offline_package_endpoint_returns_zip(support_api_client):
+    payload = _payload()
+    support_code = _schema2_code(payload)
+    response = support_api_client.post(
+        "/api/v1/support/offline-package",
+        data={"support_code": support_code},
+        files=[
+            ("screenshots", ("active-stream.png", _png_bytes(), "image/png")),
+            (
+                "debug_bundle",
+                ("channelwatch_debug.zip", _zip_bytes(), "application/zip"),
+            ),
+        ],
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/zip"
@@ -1269,16 +1292,14 @@ def test_support_report_offline_package_endpoint_returns_zip():
     assert packaged_code == support_code
 
 
-def test_support_report_offline_issue_preview_matches_worker_privacy_sanitization():
-    import ui.backend.main as ui_main
-
+def test_support_report_offline_issue_preview_matches_worker_privacy_sanitization(
+    support_api_client,
+):
     payload = _privacy_parity_payload()
-    with patch("ui.backend.main.CW_DISABLE_AUTH", True):
-        with TestClient(ui_main.app, raise_server_exceptions=False) as client:
-            response = client.post(
-                "/api/v1/support/offline-package",
-                json={"support_code": _schema2_code(payload)},
-            )
+    response = support_api_client.post(
+        "/api/v1/support/offline-package",
+        json={"support_code": _schema2_code(payload)},
+    )
 
     assert response.status_code == 200, response.text
     with zipfile.ZipFile(io.BytesIO(response.content), "r") as package:

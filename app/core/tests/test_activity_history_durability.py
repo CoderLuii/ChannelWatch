@@ -53,6 +53,32 @@ def test_ui_loader_quarantines_malformed_history_without_erasing_memory(tmp_path
     assert not history_file.exists()
 
 
+def test_read_only_malformed_history_is_reported_once_per_file_generation(tmp_path):
+    from ui.backend import main
+
+    history_file = tmp_path / "activity_history.json"
+    history_file.write_text("[{bad json", encoding="utf-8")
+    observed_mtime = history_file.stat().st_mtime
+
+    with (
+        patch("ui.backend.main.HISTORY_FILE", history_file),
+        patch("ui.backend.main.LAST_MODIFIED_TIME", 0.0),
+        patch.dict("os.environ", {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}),
+        patch("builtins.print") as printed,
+    ):
+        assert main.check_history_file_changes() is True
+        assert main.LAST_MODIFIED_TIME == observed_mtime
+        assert main.check_history_file_changes() is False
+
+    parsing_errors = [
+        call
+        for call in printed.call_args_list
+        if "Error parsing history file" in str(call)
+    ]
+    assert len(parsing_errors) == 1
+    assert history_file.read_text(encoding="utf-8") == "[{bad json"
+
+
 @pytest.mark.asyncio
 async def test_clear_activity_history_offloads_legacy_file_truncation(tmp_path):
     from ui.backend import main

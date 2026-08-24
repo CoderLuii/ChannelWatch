@@ -13,8 +13,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .helpers.config import get_settings, CONFIG_FILE
-from .helpers.encryption import bootstrap_encryption_key
+from .helpers.atomic_io import read_regular_file_bytes
+from .helpers.config import get_settings, CONFIG_FILE, MAX_SETTINGS_FILE_BYTES
+from .helpers.encryption import ENCRYPTION_KEY_FILE, bootstrap_encryption_key
+from .helpers.key_manager import wait_for_managed_key_ready
+from .helpers.maintenance_transaction import recover_maintenance_transactions
 from .helpers.runtime_preflight import inspect_runtime_preflight
 from .watchdog import (
     Watchdog,
@@ -71,9 +74,12 @@ _monitor_stop_claim_lock = threading.Lock()
 
 
 def _read_config_snapshot() -> tuple[bytes | None, str]:
-    if not CONFIG_FILE.is_file():
+    if not CONFIG_FILE.exists() and not CONFIG_FILE.is_symlink():
         return None, ""
-    content = CONFIG_FILE.read_bytes()
+    content = read_regular_file_bytes(
+        CONFIG_FILE,
+        max_bytes=MAX_SETTINGS_FILE_BYTES,
+    )
     return content, hashlib.sha256(content).hexdigest()
 
 
@@ -149,7 +155,13 @@ def _same_connection_target(
 def _stop_alert_manager_resources(alert_manager: Any, *, dvr_name: str) -> None:
     """Permanently stop queues and alert-owned threads for one monitor attempt."""
     notification_manager = getattr(alert_manager, "notification_manager", None)
-    shutdown_queue = getattr(type(notification_manager), "shutdown_delivery_queue", None)
+    if notification_manager is not None:
+        from .notification_drain import unregister_notification_manager
+
+        unregister_notification_manager(notification_manager)
+    shutdown_queue = getattr(
+        type(notification_manager), "shutdown_delivery_queue", None
+    )
     if callable(shutdown_queue):
         # Reload must stop accepting old-configuration work immediately. Any
         # in-flight provider call remains isolated in the daemon worker.
@@ -165,9 +177,7 @@ def _stop_alert_manager_resources(alert_manager: Any, *, dvr_name: str) -> None:
             try:
                 stop_alert()
             except Exception as exc:
-                log(
-                    f"[{dvr_name}] Alert {stop_method_name} shutdown error: {exc}"
-                )
+                log(f"[{dvr_name}] Alert {stop_method_name} shutdown error: {exc}")
 
 
 def _request_monitor_stop(monitor) -> None:
@@ -253,6 +263,9 @@ def _init_dvr_monitor_sync(
     alert_manager = initialize_alerts(
         dvr_notification_manager, dvr_settings, test_mode=test_mode, dvr=dvr
     )
+    from .notification_drain import register_notification_manager
+
+    register_notification_manager(dvr_notification_manager)
 
     if "Disk-Space" in alert_manager.alert_instances:
         disk_space_alert = alert_manager.alert_instances["Disk-Space"]
@@ -1087,6 +1100,7 @@ async def _run_monitors_dynamic(
 
     watcher_started = asyncio.Event()
     watchdog_started = asyncio.Event()
+    notification_drain_started = asyncio.Event()
     watcher_task = asyncio.create_task(
         _watch_config_and_reload(
             shutdown_event,
@@ -1102,10 +1116,35 @@ async def _run_monitors_dynamic(
     watchdog_task = asyncio.create_task(
         _watchdog_loop(shutdown_event, watchdog_started), name="monitor-watchdog"
     )
+    from .notification_drain import CoreNotificationDrainResponder
 
-    all_tasks = [watcher_task, watchdog_task]
+    def _current_notification_managers() -> tuple[Any, ...]:
+        managers: list[Any] = []
+        for monitor in tuple(_dvr_monitors.values()):
+            alert_manager = getattr(monitor, "alert_manager", None)
+            manager = getattr(alert_manager, "notification_manager", None)
+            if manager is not None:
+                managers.append(manager)
+        return tuple(managers)
+
+    notification_drain_responder = CoreNotificationDrainResponder(
+        config_dir=Path(os.getenv("CONFIG_PATH", "/config")),
+        managers_provider=_current_notification_managers,
+    )
+    notification_drain_task = asyncio.create_task(
+        notification_drain_responder.run(
+            shutdown_event, started_event=notification_drain_started
+        ),
+        name="notification-drain-responder",
+    )
+
+    all_tasks = [watcher_task, watchdog_task, notification_drain_task]
     try:
-        await asyncio.gather(watcher_started.wait(), watchdog_started.wait())
+        await asyncio.gather(
+            watcher_started.wait(),
+            watchdog_started.wait(),
+            notification_drain_started.wait(),
+        )
         for runtime_task in all_tasks:
             if runtime_task.done():
                 runtime_task.result()
@@ -1119,6 +1158,7 @@ async def _run_monitors_dynamic(
         log("Received shutdown signal, stopping monitors...")
         watcher_task.cancel()
         watchdog_task.cancel()
+        notification_drain_task.cancel()
         await asyncio.gather(
             *(_stop_dvr_task(dvr_id) for dvr_id in list(_dvr_tasks)),
             return_exceptions=True,
@@ -1265,22 +1305,88 @@ async def main() -> None:
     if SIGHUP is not None:
         _install_signal_handler(loop, SIGHUP, lambda: reload_event.set())
 
-    preflight = inspect_runtime_preflight()
+    # Defense in depth for any protocol-0 child that does reach this bundle.
+    # The immutable published v0.9.9 image normally fails before importing this
+    # code and therefore remains an explicit one-time image-pull exception.
+    # When reachable, reject before key creation, migration, or provider work.
+    from .runtime_launcher import request_container_restart
+    from .update_center import guard_legacy_launcher_before_start
+
+    def _restart_legacy_container() -> bool:
+        request_container_restart()
+        return True
+
+    launcher_guard = (
+        {"allowed": True}
+        if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1"
+        else guard_legacy_launcher_before_start(
+            config_dir=Path(CONFIG_FILE).parent,
+            running_version=__version__,
+            restart_callable=_restart_legacy_container,
+        )
+    )
+    if not launcher_guard.get("allowed", True):
+        raise SystemExit(2)
+
+    # Key/settings maintenance is a coupled transaction.  Recover an
+    # interrupted restore, reset, migration, or rotation before either process
+    # is allowed to load settings or protected credentials.  Transient storage
+    # failures keep the process stable and interruptible instead of creating a
+    # second transaction or falling back to an in-memory key.
+    transaction_warning_logged = False
+    while not shutdown_event.is_set():
+        try:
+            config_root = Path(CONFIG_FILE).parent
+            transaction_root = config_root / ".channelwatch-transactions"
+            if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+                if transaction_root.exists() and any(transaction_root.iterdir()):
+                    raise RuntimeError(
+                        "An interrupted configuration transaction requires writable /config."
+                    )
+            else:
+                await asyncio.to_thread(
+                    recover_maintenance_transactions,
+                    config_root,
+                )
+        except Exception as exc:
+            if not transaction_warning_logged:
+                log(
+                    "Runtime storage recovery is waiting for durable /config "
+                    f"access ({exc.__class__.__name__}). Monitoring has not started."
+                )
+                transaction_warning_logged = True
+            if test_mode:
+                raise SystemExit(2) from exc
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=5.0)
+            except TimeoutError:
+                continue
+        else:
+            break
+    if shutdown_event.is_set():
+        return
+
+    preflight = inspect_runtime_preflight(settings_file=Path(CONFIG_FILE))
     if preflight.setup_required:
         blocker = preflight.blockers[0] if preflight.blockers else "unknown"
         log(
-            "Runtime setup required: protected local key storage is unavailable "
-            f"({blocker}). Configure CHANNELWATCH_SECRET_STORAGE_KEY with at "
-            "least 32 characters (or its supported key-file variable), then "
-            "recreate the container. Monitoring has not started."
+            "Credential protection is waiting for recovery or durable /config "
+            f"storage ({blocker}). Sign in to ChannelWatch to review recovery "
+            "options. Monitoring has not started."
         )
         if test_mode:
             raise SystemExit(2)
-        await shutdown_event.wait()
-        return
+        managed_key = await wait_for_managed_key_ready(
+            shutdown_event,
+            reload_event,
+            ENCRYPTION_KEY_FILE,
+            settings_file=Path(CONFIG_FILE),
+        )
+        if managed_key is None:
+            return
 
     # INITIALIZATION
-    bootstrap_encryption_key()
+    bootstrap_encryption_key(settings_file=Path(CONFIG_FILE))
     settings = get_settings()
 
     config_dir = os.getenv("CONFIG_PATH", "/config")
@@ -1291,15 +1397,25 @@ async def main() -> None:
     setup_logging(config_dir, retention_days, test_mode=test_mode)
 
     def _record_runtime_ready() -> None:
-        if test_mode:
+        if test_mode or os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
             return
         _record_update_core_ready(config_dir)
 
     if not test_mode:
         log(f"Starting {__app_name__} v{__version__}")
-        log(
-            f"Logging: Level {log_level} ({('Standard' if log_level == 1 else 'Verbose')}) | File: {log_file_path} | Retention: {retention_days} days | Config: {CONFIG_FILE}"
-        )
+        if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+            log(
+                f"Logging: Level {log_level} "
+                f"({('Standard' if log_level == 1 else 'Verbose')}) | "
+                f"Container output only | Config: {CONFIG_FILE}"
+            )
+        else:
+            log(
+                f"Logging: Level {log_level} "
+                f"({('Standard' if log_level == 1 else 'Verbose')}) | "
+                f"File: {log_file_path} | Retention: {retention_days} days | "
+                f"Config: {CONFIG_FILE}"
+            )
 
     if log_level not in (1, 2):
         log("Warning: Invalid log_level in config, defaulting to 1 (Standard)")

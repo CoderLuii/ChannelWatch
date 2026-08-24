@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   repository: coderluii/channelwatch
-  tag: "0.9.17"
+  tag: "0.9.18"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -44,8 +44,15 @@ persistence:
 
 resources: {}
 
+# Keys beginning with checksum/channelwatch- are reserved by the chart.
 podAnnotations: {}
 podLabels: {}
+
+# The chart adds checksums for its ConfigMap and any chart-managed Secret so
+# those changes recreate the single ChannelWatch pod. Kubernetes cannot hash
+# the contents of secretConfig.existingSecret during Helm rendering; after
+# changing that same external Secret, restart the Deployment selected by the
+# release's app.kubernetes.io/instance label in the release namespace.
 
 securityContext:
   allowPrivilegeEscalation: false
@@ -83,9 +90,11 @@ config:
 
 secretConfig:
   # Use either an existing Secret or the chart-managed values below, not both.
-  # An existing Secret must contain CHANNELWATCH_SECRET_STORAGE_KEY.
+  # CHANNELWATCH_SECRET_STORAGE_KEY is no longer required. ChannelWatch creates
+  # and manages its encryption key under the persistent /config volume.
   existingSecret: ""
-  # Required in managed mode. Use a random value with at least 32 characters.
+  # Deprecated migration-only input for an envelope created by v0.9.5-v0.9.17.
+  # Keep the old value for one successful migration restart, then remove it.
   secretStorageKey: ""
   apiKey: ""
   adminUser: ""

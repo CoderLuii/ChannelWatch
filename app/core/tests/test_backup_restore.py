@@ -9,7 +9,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from core.helpers.atomic_io import _atomic_read_secret_bytes, _is_secret_envelope
+from core.helpers.atomic_io import (
+    _atomic_read_secret_bytes,
+    _encrypt_secret_bytes,
+    _is_secret_envelope,
+    atomic_write_bytes,
+)
 
 
 def _make_config_dir(tmp_path: Path, *, schema_version: int = 7) -> Path:
@@ -61,6 +66,19 @@ class TestCreateBackupZip:
         names = zipfile.ZipFile(io.BytesIO(data)).namelist()
         assert any(f"/{_SENSITIVE_SUBFOLDER}/encryption.key" in n for n in names)
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    def test_rejects_symlinked_config_member(self, tmp_path):
+        from ui.backend.backup_restore import create_backup_zip
+
+        config_dir = _make_config_dir(tmp_path)
+        outside = tmp_path / "outside-settings.json"
+        outside.write_text('{"private": true}', encoding="utf-8")
+        (config_dir / "settings.json").unlink()
+        (config_dir / "settings.json").symlink_to(outside)
+
+        with pytest.raises(PermissionError, match="unsafe file source"):
+            create_backup_zip(config_dir)
+
     def test_security_warning_alongside_encryption_key(self, tmp_path):
         from ui.backend.backup_restore import create_backup_zip, _SENSITIVE_SUBFOLDER
 
@@ -107,11 +125,15 @@ class TestCreateBackupZip:
         assert zf.read(key_name) == original_key
 
     def test_encrypted_key_backup_keeps_stored_envelope(self, tmp_path):
-        from core.helpers.encryption import bootstrap_encryption_key
         from ui.backend.backup_restore import create_backup_zip
 
         config_dir = _make_config_dir(tmp_path)
-        logical_key = bootstrap_encryption_key(config_dir / "encryption.key")
+        logical_key = (config_dir / "encryption.key").read_bytes()
+        atomic_write_bytes(
+            config_dir / "encryption.key",
+            _encrypt_secret_bytes(logical_key),
+        )
+        (config_dir / "encryption.key").chmod(0o600)
         stored_key = (config_dir / "encryption.key").read_bytes()
 
         data = create_backup_zip(config_dir)
@@ -131,6 +153,18 @@ class TestCreateBackupZip:
         settings = {"_version": 7, "dvr_servers": [], "tz": "UTC"}
         (config_dir / "settings.json").write_text(json.dumps(settings))
         data = create_backup_zip(config_dir)
+        assert zipfile.is_zipfile(io.BytesIO(data))
+
+    def test_outer_maintenance_lock_can_be_reused_without_reacquiring(self, tmp_path):
+        from ui.backend.backup_restore import create_backup_zip
+
+        config_dir = _make_config_dir(tmp_path)
+        with patch(
+            "ui.backend.backup_restore.configuration_maintenance_lock",
+            side_effect=AssertionError("lock was reacquired"),
+        ):
+            data = create_backup_zip(config_dir, lock_already_held=True)
+
         assert zipfile.is_zipfile(io.BytesIO(data))
 
 
@@ -174,7 +208,13 @@ class TestValidateRestoreZip:
                     "settings_schema_version": settings_schema_version,
                     "created_at": "20260420T000000Z",
                     "created_by": "test",
-                    "files": ["settings.json"],
+                    "files": ["settings.json"]
+                    + [
+                        name[len(f"{prefix}/") :]
+                        for name in (extra_members or {})
+                        if name.startswith(f"{prefix}/")
+                        and not name.endswith("/backup_manifest.json")
+                    ],
                 }
                 zf.writestr(
                     f"{prefix}/backup_manifest.json",
@@ -223,7 +263,7 @@ class TestValidateRestoreZip:
         )
 
         with pytest.raises(
-            RestoreValidationError, match="backup_manifest.json not found"
+            RestoreValidationError, match="exactly one backup_manifest.json"
         ):
             validate_restore_zip(self._make_zip(include_manifest=False))
 
@@ -235,6 +275,21 @@ class TestValidateRestoreZip:
 
         with pytest.raises(RestoreValidationError, match="invalid JSON"):
             validate_restore_zip(self._make_zip(corrupt_manifest=True))
+
+    def test_rejects_non_utf8_manifest(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        prefix = "channelwatch_backup_test"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(f"{prefix}/backup_manifest.json", b"\xff\xfe")
+            zf.writestr(f"{prefix}/settings.json", "{}")
+
+        with pytest.raises(RestoreValidationError, match="invalid JSON"):
+            validate_restore_zip(buf.getvalue())
 
     def test_rejects_corrupt_member_data(self):
         from ui.backend.backup_restore import (
@@ -399,9 +454,7 @@ class TestValidateRestoreZip:
         )
 
         with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
-            with pytest.raises(
-                RestoreValidationError, match="unsupported restore member path"
-            ):
+            with pytest.raises(RestoreValidationError, match="ambiguous member path"):
                 validate_restore_zip(
                     self._make_zip(
                         settings_schema_version=7,
@@ -411,8 +464,414 @@ class TestValidateRestoreZip:
                     )
                 )
 
+    def test_rejects_duplicate_member_names(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", "{}")
+            with pytest.warns(UserWarning):
+                zf.writestr(f"{prefix}/settings.json", "{}")
+        with pytest.raises(RestoreValidationError, match="duplicate or colliding"):
+            validate_restore_zip(buf.getvalue())
+
+    def test_rejects_casefold_and_unicode_path_collisions(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        for second_name in ("SETTINGS.JSON", "se\u0301ssion_state.json"):
+            first_name = (
+                "settings.json"
+                if second_name == "SETTINGS.JSON"
+                else "s\u00e9ssion_state.json"
+            )
+            buf = io.BytesIO()
+            prefix = "channelwatch_backup_test"
+            with zipfile.ZipFile(buf, "w") as zf:
+                manifest = {
+                    "backup_schema_version": 1,
+                    "settings_schema_version": 7,
+                    "files": [first_name, second_name],
+                }
+                zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+                zf.writestr(f"{prefix}/{first_name}", "{}")
+                zf.writestr(f"{prefix}/{second_name}", "{}")
+            with pytest.raises(
+                RestoreValidationError,
+                match="duplicate or colliding|ambiguous member path",
+            ):
+                validate_restore_zip(buf.getvalue())
+
+    def test_rejects_backslash_and_multiple_manifests(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        for extra_name in (
+            "channelwatch_backup_test\\settings.json",
+            "other/backup_manifest.json",
+        ):
+            buf = io.BytesIO()
+            prefix = "channelwatch_backup_test"
+            with zipfile.ZipFile(buf, "w") as zf:
+                manifest = {
+                    "backup_schema_version": 1,
+                    "settings_schema_version": 7,
+                    "files": ["settings.json"],
+                }
+                zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+                zf.writestr(f"{prefix}/settings.json", "{}")
+                zf.writestr(extra_name, "{}")
+            with pytest.raises(RestoreValidationError):
+                validate_restore_zip(buf.getvalue())
+
+    def test_rejects_symlink_member_external_attributes(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            info = zipfile.ZipInfo(f"{prefix}/settings.json")
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(info, "target")
+        with pytest.raises(RestoreValidationError, match="not a regular"):
+            validate_restore_zip(buf.getvalue())
+
+    @pytest.mark.parametrize(
+        "member_type",
+        [stat.S_IFCHR, stat.S_IFBLK, stat.S_IFIFO, stat.S_IFSOCK],
+    )
+    def test_rejects_special_member_external_attributes(self, member_type):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            info = zipfile.ZipInfo(f"{prefix}/settings.json")
+            info.create_system = 3
+            info.external_attr = (member_type | 0o600) << 16
+            zf.writestr(info, "not-a-regular-file")
+
+        with pytest.raises(RestoreValidationError, match="not a regular"):
+            validate_restore_zip(buf.getvalue())
+
+    @pytest.mark.parametrize("extra_field_id", [0x000D, 0x756E])
+    def test_rejects_unix_link_metadata(self, extra_field_id):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            info = zipfile.ZipInfo(f"{prefix}/settings.json")
+            info.create_system = 3
+            info.external_attr = (stat.S_IFREG | 0o600) << 16
+            info.extra = extra_field_id.to_bytes(2, "little") + b"\x00\x00"
+            zf.writestr(info, "{}")
+
+        with pytest.raises(RestoreValidationError, match="link metadata"):
+            validate_restore_zip(buf.getvalue())
+
+    def test_rejects_malformed_extra_metadata(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            info = zipfile.ZipInfo(f"{prefix}/settings.json")
+            info.extra = b"\x01\x00\x00"
+            zf.writestr(info, "{}")
+
+        with pytest.raises(RestoreValidationError, match="malformed extra metadata"):
+            validate_restore_zip(buf.getvalue())
+
+    def test_rejects_unsupported_compression_method(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_BZIP2) as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", "{}")
+
+        with pytest.raises(RestoreValidationError, match="unsupported compression"):
+            validate_restore_zip(buf.getvalue())
+
+    def test_rejects_payload_from_second_top_level_prefix(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", "{}")
+            zf.writestr("other/session_state_extra.json", "{}")
+
+        with pytest.raises(RestoreValidationError, match="outside the declared prefix"):
+            validate_restore_zip(buf.getvalue())
+
+    @pytest.mark.parametrize(
+        "manifest_files",
+        [
+            ["settings.json", "settings.json"],
+            ["settings.json", "session_state_missing.json"],
+        ],
+    )
+    def test_rejects_duplicate_or_inaccurate_manifest_file_list(self, manifest_files):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        buf = io.BytesIO()
+        prefix = "channelwatch_backup_test"
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": manifest_files,
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", "{}")
+
+        with pytest.raises(
+            RestoreValidationError,
+            match="duplicate file entries|files do not match",
+        ):
+            validate_restore_zip(buf.getvalue())
+
+    def test_rejects_extreme_compression_ratio(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        payload = "0" * (2 * 1024 * 1024)
+        prefix = "channelwatch_backup_test"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            manifest = {
+                "backup_schema_version": 1,
+                "settings_schema_version": 7,
+                "files": ["settings.json", "session_state_bomb.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", "{}")
+            zf.writestr(f"{prefix}/session_state_bomb.json", payload)
+        with pytest.raises(RestoreValidationError, match="compression-ratio"):
+            validate_restore_zip(buf.getvalue())
+
+    def test_rejects_forged_key_format_and_manifest_file_list(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        prefix = "channelwatch_backup_test"
+        for files, key_format in (
+            (["settings.json"], "managed-local-raw-v1"),
+            (["settings.json", "sensitive_keys/encryption.key"], "legacy-envelope-v1"),
+        ):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                manifest = {
+                    "backup_schema_version": 2,
+                    "settings_schema_version": 7,
+                    "files": files,
+                    "encryption_key_format": key_format,
+                }
+                zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+                zf.writestr(f"{prefix}/settings.json", "{}")
+                if "sensitive_keys/encryption.key" in files:
+                    zf.writestr(
+                        f"{prefix}/sensitive_keys/encryption.key",
+                        b"r" * 32,
+                    )
+            with pytest.raises(
+                RestoreValidationError,
+                match="files do not match|encryption_key_format",
+            ):
+                validate_restore_zip(buf.getvalue())
+
+    def test_rejects_invalid_raw_key_length_even_when_manifest_claims_raw(self):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            validate_restore_zip,
+        )
+
+        prefix = "channelwatch_backup_test"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 2,
+                "settings_schema_version": 7,
+                "files": ["settings.json", "sensitive_keys/encryption.key"],
+                "encryption_key_format": "managed-local-raw-v1",
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", "{}")
+            zf.writestr(f"{prefix}/sensitive_keys/encryption.key", b"too-short")
+
+        with pytest.raises(RestoreValidationError, match="encryption_key_format"):
+            validate_restore_zip(buf.getvalue())
+
 
 class TestRestoreFromZip:
+    def test_restore_recovers_older_transaction_before_committing_new_archive(
+        self, tmp_path
+    ):
+        from core.helpers.maintenance_transaction import (
+            recover_maintenance_transactions,
+        )
+        from ui.backend.backup_restore import create_backup_zip, restore_from_zip
+
+        source = _make_config_dir(tmp_path / "source")
+        source_settings = json.loads((source / "settings.json").read_text())
+        source_settings["tz"] = "America/New_York"
+        (source / "settings.json").write_text(json.dumps(source_settings))
+        archive = create_backup_zip(source)
+        target = _make_config_dir(tmp_path / "target")
+
+        transaction = target / ".channelwatch-transactions" / "older"
+        (transaction / "old").mkdir(parents=True)
+        (transaction / "new").mkdir()
+        pending_settings = {
+            "_version": 7,
+            "tz": "America/Chicago",
+            "dvr_servers": [],
+            "webhooks": [],
+        }
+        for filename, new_bytes in (
+            ("settings.json", json.dumps(pending_settings).encode()),
+            ("encryption.key", b"p" * 32),
+        ):
+            (transaction / "old" / filename).write_bytes((target / filename).read_bytes())
+            (transaction / "new" / filename).write_bytes(new_bytes)
+        (transaction / "journal.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "state": "committing",
+                    "files": ["encryption.key", "settings.json"],
+                    "absent_before": [],
+                }
+            )
+        )
+
+        restore_from_zip(archive, target)
+
+        assert recover_maintenance_transactions(target) == 0
+        restored = json.loads((target / "settings.json").read_text())
+        assert restored["tz"] == "America/New_York"
+
+    @pytest.mark.parametrize(
+        ("invalid_settings", "marker"),
+        [
+            (
+                {"_version": 7, "webhooks": "synthetic-secret-not-a-list"},
+                "synthetic-secret-not-a-list",
+            ),
+            (
+                {"_version": "synthetic-invalid-version", "webhooks": []},
+                "synthetic-invalid-version",
+            ),
+        ],
+    )
+    def test_restore_rejects_schema_invalid_settings_before_live_mutation(
+        self, tmp_path, invalid_settings, marker
+    ):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            create_backup_zip,
+            restore_from_zip,
+        )
+
+        source = _make_config_dir(tmp_path / "source")
+        (source / "settings.json").write_text(
+            json.dumps(invalid_settings),
+            encoding="utf-8",
+        )
+        archive = create_backup_zip(source)
+        target = _make_config_dir(tmp_path / "target")
+        original_settings = (target / "settings.json").read_bytes()
+        original_key = (target / "encryption.key").read_bytes()
+
+        with pytest.raises(
+            RestoreValidationError,
+            match="do not match the supported ChannelWatch schema",
+        ) as exc_info:
+            restore_from_zip(archive, target)
+
+        assert marker not in str(exc_info.value)
+        assert (target / "settings.json").read_bytes() == original_settings
+        assert (target / "encryption.key").read_bytes() == original_key
+        assert not (target / "backups").exists()
+
     def test_restore_rejects_traversal_before_writing_outside_config(self, tmp_path):
         from ui.backend.backup_restore import restore_from_zip, RestoreValidationError
 
@@ -457,6 +916,34 @@ class TestRestoreFromZip:
         assert (target / "settings.json").exists()
         assert (target / "channelwatch.db").exists()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    def test_restore_refuses_symlinked_private_backup_directory(self, tmp_path):
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            create_backup_zip,
+            restore_from_zip,
+        )
+
+        source = _make_config_dir(tmp_path / "source")
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "settings.json").write_text(
+            '{"_version": 7, "dvr_servers": []}',
+            encoding="utf-8",
+        )
+        outside = tmp_path / "outside-backups"
+        outside.mkdir()
+        (target / "backups").symlink_to(outside, target_is_directory=True)
+
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            with pytest.raises(
+                RestoreValidationError,
+                match="backup directory is unsafe",
+            ):
+                restore_from_zip(create_backup_zip(source), target)
+
+        assert list(outside.iterdir()) == []
+
     def test_session_state_files_restored(self, tmp_path):
         from ui.backend.backup_restore import create_backup_zip, restore_from_zip
 
@@ -493,11 +980,15 @@ class TestRestoreFromZip:
         assert stat.S_IMODE((target / "encryption.key").stat().st_mode) == 0o600
 
     def test_encrypted_key_restore_preserves_logical_key(self, tmp_path):
-        from core.helpers.encryption import bootstrap_encryption_key
         from ui.backend.backup_restore import create_backup_zip, restore_from_zip
 
         source = _make_config_dir(tmp_path / "source")
-        logical_key = bootstrap_encryption_key(source / "encryption.key")
+        logical_key = (source / "encryption.key").read_bytes()
+        atomic_write_bytes(
+            source / "encryption.key",
+            _encrypt_secret_bytes(logical_key),
+        )
+        (source / "encryption.key").chmod(0o600)
         target = tmp_path / "target"
         target.mkdir()
         (target / "settings.json").write_text('{"_version": 7, "dvr_servers": []}')
@@ -508,7 +999,209 @@ class TestRestoreFromZip:
             restore_from_zip(zip_bytes, target)
 
         assert _atomic_read_secret_bytes(target / "encryption.key") == logical_key
-        assert _is_secret_envelope((target / "encryption.key").read_bytes())
+        assert not _is_secret_envelope((target / "encryption.key").read_bytes())
+
+    def test_restore_preserves_dvr_and_webhook_credentials(self, tmp_path):
+        from core.helpers.encryption import (
+            decrypt_registered_credentials_with_diagnostics,
+            encrypt_value,
+        )
+        from ui.backend.backup_restore import create_backup_zip, restore_from_zip
+
+        source = _make_config_dir(tmp_path / "source")
+        key = (source / "encryption.key").read_bytes()
+        protected_settings = {
+            "_version": 7,
+            "dvr_servers": [
+                {"id": "dvr-1", "api_key": encrypt_value("dvr-secret", key)}
+            ],
+            "webhooks": [
+                {
+                    "name": "sink",
+                    "url": encrypt_value("http://sink.test", key),
+                    "secret": encrypt_value("webhook-secret", key),
+                }
+            ],
+        }
+        (source / "settings.json").write_text(
+            json.dumps(protected_settings),
+            encoding="utf-8",
+        )
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "settings.json").write_text(
+            '{"_version": 7, "dvr_servers": []}', encoding="utf-8"
+        )
+
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            restore_from_zip(create_backup_zip(source), target)
+
+        loaded = decrypt_registered_credentials_with_diagnostics(
+            json.loads((target / "settings.json").read_text(encoding="utf-8")),
+            target / "encryption.key",
+        )
+        assert loaded.failures == ()
+        assert loaded.settings["dvr_servers"][0]["api_key"] == "dvr-secret"
+        assert loaded.settings["webhooks"][0]["url"] == "http://sink.test"
+        assert loaded.settings["webhooks"][0]["secret"] == "webhook-secret"
+
+    def test_restore_without_archived_key_requires_matching_current_key(self, tmp_path):
+        from core.helpers.encryption import encrypt_value
+        from ui.backend.backup_restore import RestoreValidationError, restore_from_zip
+
+        logical_key = os.urandom(32)
+        prefix = "channelwatch_backup_test"
+        settings = {
+            "_version": 7,
+            "dvr_servers": [
+                {"id": "dvr-1", "api_key": encrypt_value("secret", logical_key)}
+            ],
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            manifest = {
+                "backup_schema_version": 2,
+                "settings_schema_version": 7,
+                "encryption_key_format": "missing",
+                "files": ["settings.json"],
+            }
+            zf.writestr(f"{prefix}/backup_manifest.json", json.dumps(manifest))
+            zf.writestr(f"{prefix}/settings.json", json.dumps(settings))
+
+        for current_key, expected_message in (
+            (None, "no usable encryption key"),
+            (os.urandom(32), "does not open every protected credential"),
+        ):
+            target = tmp_path / f"target-{expected_message.split()[0]}"
+            target.mkdir()
+            (target / "settings.json").write_text(
+                '{"_version": 7, "dvr_servers": []}', encoding="utf-8"
+            )
+            if current_key is not None:
+                (target / "encryption.key").write_bytes(current_key)
+                if os.name != "nt":
+                    (target / "encryption.key").chmod(0o600)
+            with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+                with pytest.raises(RestoreValidationError, match=expected_message):
+                    restore_from_zip(buf.getvalue(), target)
+
+        matching_target = tmp_path / "target-matching"
+        matching_target.mkdir()
+        (matching_target / "settings.json").write_text(
+            '{"_version": 7, "dvr_servers": []}', encoding="utf-8"
+        )
+        (matching_target / "encryption.key").write_bytes(logical_key)
+        if os.name != "nt":
+            (matching_target / "encryption.key").chmod(0o600)
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            restore_from_zip(buf.getvalue(), matching_target)
+        assert (matching_target / "encryption.key").read_bytes() == logical_key
+
+    def test_legacy_backup_accepts_one_time_key_or_explicit_credential_reset(
+        self, tmp_path, monkeypatch
+    ):
+        from core.helpers.encryption import encrypt_value
+        from ui.backend.backup_restore import (
+            RestoreValidationError,
+            create_backup_zip,
+            restore_from_zip,
+        )
+
+        monkeypatch.delenv("CHANNELWATCH_SECRET_STORAGE_KEY", raising=False)
+        monkeypatch.delenv("CHANNELWATCH_SECRET_STORAGE_KEY_FILE", raising=False)
+        source = _make_config_dir(tmp_path / "source")
+        logical_key = (source / "encryption.key").read_bytes()
+        legacy_material = b"legacy-restore-0123456789abcdef0123456789"
+        (source / "settings.json").write_text(
+            json.dumps(
+                {
+                    "_version": 7,
+                    "dvr_servers": [
+                        {
+                            "id": "dvr-1",
+                            "host": "dvr.lan",
+                            "enabled": True,
+                            "api_key": encrypt_value("secret", logical_key),
+                        },
+                        {
+                            "id": "dvr-2",
+                            "host": "unconfigured.lan",
+                            "enabled": True,
+                            "api_key": "",
+                        },
+                    ],
+                    "webhooks": [
+                        {
+                            "name": "configured-sink",
+                            "enabled": True,
+                            "url": encrypt_value("http://sink.test", logical_key),
+                            "secret": encrypt_value("hook-secret", logical_key),
+                        },
+                        {
+                            "name": "unconfigured-sink",
+                            "enabled": True,
+                            "url": "",
+                            "secret": "",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (source / "encryption.key").write_bytes(
+            _encrypt_secret_bytes(logical_key, material=legacy_material)
+        )
+        if os.name != "nt":
+            (source / "encryption.key").chmod(0o600)
+        backup = create_backup_zip(source)
+
+        blocked = tmp_path / "blocked"
+        blocked.mkdir()
+        (blocked / "settings.json").write_text(
+            '{"_version": 7, "dvr_servers": []}', encoding="utf-8"
+        )
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            with pytest.raises(RestoreValidationError, match="Supply the original"):
+                restore_from_zip(backup, blocked)
+
+        recovered = tmp_path / "recovered"
+        recovered.mkdir()
+        (recovered / "settings.json").write_text(
+            '{"_version": 7, "dvr_servers": []}', encoding="utf-8"
+        )
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            restore_from_zip(
+                backup,
+                recovered,
+                legacy_storage_key=legacy_material,
+            )
+        assert (recovered / "encryption.key").read_bytes() == logical_key
+
+        reset = tmp_path / "reset"
+        reset.mkdir()
+        (reset / "settings.json").write_text(
+            '{"_version": 7, "dvr_servers": []}', encoding="utf-8"
+        )
+        with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
+            restore_from_zip(
+                backup,
+                reset,
+                legacy_storage_key=b"wrong-but-long-enough-0123456789abcdef",
+                reset_protected_credentials=True,
+            )
+        reset_settings = json.loads(
+            (reset / "settings.json").read_text(encoding="utf-8")
+        )
+        assert reset_settings["dvr_servers"][0]["api_key"] == ""
+        assert reset_settings["dvr_servers"][0]["enabled"] is False
+        assert reset_settings["dvr_servers"][0]["host"] == "dvr.lan"
+        assert reset_settings["dvr_servers"][1]["enabled"] is True
+        assert reset_settings["dvr_servers"][1]["host"] == "unconfigured.lan"
+        assert reset_settings["webhooks"][0]["url"] == ""
+        assert reset_settings["webhooks"][0]["secret"] == ""
+        assert reset_settings["webhooks"][0]["enabled"] is False
+        assert reset_settings["webhooks"][1]["enabled"] is True
+        assert len((reset / "encryption.key").read_bytes()) == 32
 
     def test_pre_restore_snapshot_created(self, tmp_path):
         from ui.backend.backup_restore import create_backup_zip, restore_from_zip
@@ -526,6 +1219,33 @@ class TestRestoreFromZip:
         snapshots = list((target / "backups").glob("pre-restore.*.zip"))
         assert len(snapshots) == 1
         assert zipfile.is_zipfile(snapshots[0])
+        if os.name != "nt":
+            assert snapshots[0].stat().st_mode & 0o777 == 0o600
+
+    def test_pre_restore_snapshots_are_unique_within_same_second(self, tmp_path):
+        from ui.backend.backup_restore import create_backup_zip, restore_from_zip
+
+        source = _make_config_dir(tmp_path / "source")
+        target = _make_config_dir(tmp_path / "target")
+        zip_bytes = create_backup_zip(source)
+
+        with (
+            patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7),
+            patch(
+                "ui.backend.backup_restore._utc_timestamp",
+                return_value="20260824T120000Z",
+            ),
+            patch(
+                "ui.backend.backup_restore._private_snapshot_token",
+                side_effect=["collision", "collision", "unique"],
+            ),
+        ):
+            restore_from_zip(zip_bytes, target)
+            restore_from_zip(zip_bytes, target)
+
+        snapshots = list((target / "backups").glob("pre-restore.*.zip"))
+        assert len(snapshots) == 2
+        assert len({path.name for path in snapshots}) == 2
 
     def test_pre_restore_snapshot_can_rollback_failed_restore(self, tmp_path):
         from ui.backend.backup_restore import create_backup_zip, restore_from_zip
@@ -554,26 +1274,14 @@ class TestRestoreFromZip:
         (source / "session_state_dvr_abc.json").write_text(
             '{"last_seen": 999}', encoding="utf-8"
         )
-        (source / "encryption.key").write_bytes(b"restored-key-material")
+        (source / "encryption.key").write_bytes(b"r" * 32)
 
         zip_bytes = create_backup_zip(source)
 
-        real_atomic_write = __import__(
-            "core.helpers.atomic_io", fromlist=["atomic_write_bytes"]
-        ).atomic_write_bytes
-        write_calls = {"count": 0}
-
-        def fail_mid_restore(path, data):
-            real_atomic_write(path, data)
-            if Path(path).name == "settings.json":
-                write_calls["count"] += 1
-                if write_calls["count"] == 1:
-                    raise OSError("simulated restore failure after snapshot")
-
         with (
             patch(
-                "core.helpers.atomic_io.atomic_write_bytes",
-                side_effect=fail_mid_restore,
+                "core.helpers.maintenance_transaction._install_staged_files",
+                side_effect=OSError("simulated restore failure after snapshot"),
             ),
             patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7),
         ):
@@ -586,15 +1294,15 @@ class TestRestoreFromZip:
 
         assert (
             json.loads((target / "settings.json").read_text(encoding="utf-8"))["tz"]
-            == "US/Eastern"
+            == "UTC"
         )
 
         with patch("ui.backend.backup_restore.CURRENT_SCHEMA_VERSION", 7):
             restore_from_zip(snapshot_bytes, target)
 
-        assert (target / "settings.json").read_text(
-            encoding="utf-8"
-        ) == original_settings
+        assert json.loads(
+            (target / "settings.json").read_text(encoding="utf-8")
+        ) == json.loads(original_settings)
         assert (target / "channelwatch.db").read_bytes() == original_db
         assert (target / "session_state_dvr_abc.json").read_text(
             encoding="utf-8"

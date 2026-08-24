@@ -77,6 +77,20 @@ describe("applyUpdateAndReconnect", () => {
     expect(reload).not.toHaveBeenCalled()
   })
 
+  it("does not poll for a terminal failed job even when restart_required remains true", async () => {
+    const job = { job_id: "job-failed", status: "failed", restart_required: true }
+    const fetchStatus = vi.fn()
+    const reload = vi.fn()
+
+    await expect(applyUpdateAndReconnect("0.9.16", {
+      apply: vi.fn().mockResolvedValue(job),
+      fetchStatus,
+      reload,
+    })).resolves.toBe(job)
+    expect(fetchStatus).not.toHaveBeenCalled()
+    expect(reload).not.toHaveBeenCalled()
+  })
+
   it("reloads only after a restart-required update reaches the target runtime", async () => {
     const apply = vi.fn().mockResolvedValue({ job_id: "job-1", restart_required: true })
     const fetchStatus = vi.fn()

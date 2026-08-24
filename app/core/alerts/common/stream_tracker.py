@@ -54,6 +54,8 @@ class StreamTracker:
 
     def _write_stream_count(self, count: int):
         """Safely writes the current stream count to the per-DVR file."""
+        if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+            return
         try:
             with open(self._stream_count_file, "w") as f:
                 f.write(str(count))

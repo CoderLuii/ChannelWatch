@@ -117,13 +117,15 @@ These three `/healthz/*` routes are unauthenticated. They are also exempt from t
 
 The bundled single-replica Helm chart sets `service.publishNotReadyAddresses=true`. Monitoring readiness therefore remains visible on the Pod without making the setup and diagnostics UI unreachable through the Service when no DVR is configured or an enabled DVR is degraded. Operators who deliberately want Kubernetes to remove a NotReady pod from Service endpoints can set `service.publishNotReadyAddresses=false`, but must provide another path to the UI during first-run setup and degraded monitoring.
 
+The chart also forces the Deployment strategy to `Recreate`. ChannelWatch holds a container-lifetime single-writer lock for persistent `/config`, so Kubernetes must terminate the old pod before it starts the replacement. Checksums on the rendered ConfigMap and chart-managed Secret recreate the pod when those resources change. Helm cannot inspect the contents of a same-name `secretConfig.existingSecret`; after updating that external Secret, run `kubectl rollout restart deployment -l app.kubernetes.io/instance=<release-name>` in the release namespace.
+
 ## `channelwatch doctor` CLI
 
 The CLI source is `app/core/cli/doctor.py`. The callable entry point is `run(argv: list[str] | None = None) -> None`, and the parser program name is `channelwatch doctor`.
 
 Invoke it inside a running container:
 
-```bash
+```sh
 docker exec <container_name_or_id> channelwatch doctor config-check
 docker exec <container_name_or_id> channelwatch doctor diagnose
 docker exec <container_name_or_id> channelwatch doctor debug bundle --output /config/channelwatch_debug_bundle.zip
@@ -134,7 +136,7 @@ Available commands:
 * `config-check` dry runs settings validation through both the core loader and UI schema loader. It reports how many DVRs each loader accepted.
 * `diagnose` validates configured, enabled, non deleted DVRs. It checks TCP connectivity, reads each DVR `/status` response, checks DVR version compatibility, and verifies `/api/v1/channels` authentication behavior with the configured DVR API key when present.
 * `debug bundle` writes a sanitized debug bundle zip to the requested output path. The default output path is `channelwatch_debug_bundle.zip` in the current working directory.
-* `rotate-encryption-key` rotates the local encryption key and re-encrypts stored DVR API keys.
+* `rotate-encryption-key` rotates the local encryption key and re-encrypts stored DVR API keys plus protected webhook URLs and secrets in one transaction.
 * `reset-admin-password` resets an RBAC admin password when secure login is active. Pass `--password` for automation, or omit it to enter the new password through a hidden prompt.
 
 Exit behavior:
@@ -172,7 +174,7 @@ Current scope notes:
 
 Debug bundles are available from the admin only API endpoint and from the CLI:
 
-```bash
+```sh
 curl -sS -H "X-API-Key: $API_KEY" -o channelwatch_debug.zip "$BASE_URL/api/v1/debug/bundle"
 docker exec <container_name_or_id> channelwatch doctor debug bundle --output /config/channelwatch_debug_bundle.zip
 ```

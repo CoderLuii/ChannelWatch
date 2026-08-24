@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import json
+import os
 import time
 from typing import Dict, Any, Optional, List
 
@@ -150,6 +151,8 @@ class AlertManager:
         return json.loads(self._state_file.read_text())
 
     async def save_all_state(self):
+        if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+            return
         async with self._state_lock:
             all_state = {}
             for alert_type, alert_instance in self.alert_instances.items():

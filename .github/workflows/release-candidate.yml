@@ -1,0 +1,555 @@
+name: ChannelWatch - Nonpublishing Signed Release Candidate
+run-name: signed candidate ${{ inputs.candidate_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact local-review candidate SHA to reproduce
+        required: true
+        type: string
+
+concurrency:
+  group: channelwatch-release-candidate-${{ inputs.candidate_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  signed-candidate:
+    name: Build and verify private signed candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate identity
+        env:
+          EXPECTED_SHA: ${{ inputs.candidate_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::candidate_sha must be a complete 40-character commit SHA."
+            exit 1
+          fi
+          if [ "${actual_sha}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::Checked-out SHA does not match the requested candidate."
+            exit 1
+          fi
+          if [ "${GITHUB_SHA}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::Dispatch this workflow from the exact candidate ref."
+            exit 1
+          fi
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            deploy/requirements/runtime.txt
+            deploy/requirements/dev.txt
+            deploy/requirements/dev.constraints.txt
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install constrained Python dependencies
+        run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/dev.constraints.txt \
+            -r deploy/requirements/runtime.txt \
+            -r deploy/requirements/dev.txt
+
+      - name: Run source gates
+        run: |
+          python -m compileall app/core app/ui/backend
+          PYTHONPATH=app python -m pytest app/core/tests
+
+      - name: Build verified static frontend
+        working-directory: app/ui
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test
+
+      - name: Build deterministic signed candidate twice
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CHANNELWATCH_UPDATE_SIGNING_KEY}" ]; then
+            echo "::error::CHANNELWATCH_UPDATE_SIGNING_KEY is required."
+            exit 1
+          fi
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          publication_time="$(jq -r '.publication_time' scripts/release/release-config.json)"
+          automatic_install_after="$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
+          common_args=(
+            --version "${version}"
+            --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}"
+            --delivery-mode "${delivery_mode}"
+            --minimum-image-version "${minimum_image_version}"
+            --updater-protocol "${updater_protocol}"
+            --recommended-image-version "${recommended_image_version}"
+            --publication-time "${publication_time}"
+            --automatic-install-after "${automatic_install_after}"
+          )
+          python scripts/release/build-update-bundle.py \
+            "${common_args[@]}" --out-dir dist/candidate-one
+          python scripts/release/build-update-bundle.py \
+            "${common_args[@]}" --out-dir dist/candidate-two
+          diff -u \
+            <(cd dist/candidate-one && sha256sum ./*) \
+            <(cd dist/candidate-two && sha256sum ./*)
+
+      - name: Build exact deterministic multi-architecture image twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          source_epoch="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          build_date="$(python -c 'from datetime import datetime, timezone; import sys; print(datetime.fromtimestamp(int(sys.argv[1]), timezone.utc).isoformat().replace("+00:00", "Z"))' "${source_epoch}")"
+          {
+            echo "CANDIDATE_VERSION=${version}"
+            echo "CANDIDATE_SOURCE_EPOCH=${source_epoch}"
+            echo "CANDIDATE_BUILD_DATE=${build_date}"
+          } >> "${GITHUB_ENV}"
+          echo "Building exact candidate image from normalized source timestamp ${build_date}."
+
+      - name: Build first exact multi-architecture image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: false
+          tags: channelwatch:release-candidate
+          outputs: type=oci,dest=${{ runner.temp }}/channelwatch-candidate-one.oci,tar=false,rewrite-timestamp=true
+          provenance: false
+          no-cache: true
+          build-args: |
+            VERSION=${{ env.CANDIDATE_VERSION }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ env.CANDIDATE_BUILD_DATE }}
+            SOURCE_DATE_EPOCH=${{ env.CANDIDATE_SOURCE_EPOCH }}
+
+      - name: Build second exact multi-architecture image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: false
+          tags: channelwatch:release-candidate
+          outputs: type=oci,dest=${{ runner.temp }}/channelwatch-candidate-two.oci,tar=false,rewrite-timestamp=true
+          provenance: false
+          no-cache: true
+          build-args: |
+            VERSION=${{ env.CANDIDATE_VERSION }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ env.CANDIDATE_BUILD_DATE }}
+            SOURCE_DATE_EPOCH=${{ env.CANDIDATE_SOURCE_EPOCH }}
+
+      - name: Verify and retain the exact candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${CANDIDATE_VERSION}"
+          descriptor="dist/candidate-one/channelwatch-image-${tag}.json"
+          digest="dist/candidate-one/channelwatch-image-${tag}.digest"
+          archive="dist/candidate-one/channelwatch-image-${tag}.oci.tar"
+          python scripts/release/describe-oci-image.py \
+            --oci-layout "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+            --output "${descriptor}" \
+            --digest-output "${digest}"
+          python scripts/release/describe-oci-image.py \
+            --oci-layout "${RUNNER_TEMP}/channelwatch-candidate-two.oci" \
+            --output "${RUNNER_TEMP}/channelwatch-image-second.json" \
+            --digest-output "${RUNNER_TEMP}/channelwatch-image-second.digest"
+          cmp --silent "${descriptor}" "${RUNNER_TEMP}/channelwatch-image-second.json"
+          cmp --silent "${digest}" "${RUNNER_TEMP}/channelwatch-image-second.digest"
+          tar --sort=name \
+            --mtime="@${CANDIDATE_SOURCE_EPOCH}" \
+            --owner=0 --group=0 --numeric-owner \
+            --format=posix \
+            --pax-option=delete=atime,delete=ctime \
+            -C "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+            -cf "${archive}" .
+          second_archive="${RUNNER_TEMP}/channelwatch-image-second.oci.tar"
+          tar --sort=name \
+            --mtime="@${CANDIDATE_SOURCE_EPOCH}" \
+            --owner=0 --group=0 --numeric-owner \
+            --format=posix \
+            --pax-option=delete=atime,delete=ctime \
+            -C "${RUNNER_TEMP}/channelwatch-candidate-two.oci" \
+            -cf "${second_archive}" .
+          cmp --silent "${archive}" "${second_archive}"
+
+      - name: Load exact-source AMD64 image for historical recovery canaries
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: channelwatch:v0.9.18-historical-recovery
+          provenance: false
+          build-args: |
+            VERSION=${{ env.CANDIDATE_VERSION }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ env.CANDIDATE_BUILD_DATE }}
+            SOURCE_DATE_EPOCH=${{ env.CANDIDATE_SOURCE_EPOCH }}
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: true
+
+      - name: Scan exact nonpublishing candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            trivy image \
+              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+              --platform "${platform}" \
+              --scanners vuln,secret,misconfig \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1
+          done
+
+      - name: Verify pinned bridge or run v0.9.18 historical canaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          if [ "${version}" != "0.9.18" ]; then
+            python scripts/release/verify-pinned-v1-bridge.py
+            exit 0
+          fi
+          python scripts/release/verify-historical-image-canaries.py \
+            --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
+            --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+            --version "${version}" \
+            --recovery-image "channelwatch:v0.9.18-historical-recovery" \
+            --evidence-json "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json"
+          python - "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json" "${version}" <<'PY'
+          import json
+          import re
+          import sys
+
+          evidence_path, expected_version = sys.argv[1:]
+          with open(evidence_path, encoding="utf-8") as handle:
+              evidence = json.load(handle)
+
+          expected_keys = {
+              *(f'activation_success:0.9.{patch}' for patch in range(11, 18)),
+              'activation_failure:0.9.15:ui',
+              'activation_failure:0.9.17:core',
+              'tamper_rejection:0.9.15:manifest',
+              'tamper_rejection:0.9.15:bundle',
+              'tamper_rejection:0.9.17:manifest',
+              'tamper_rejection:0.9.17:bundle',
+              'image_refresh_recovery:0.9.9',
+              'image_refresh_recovery:0.9.10',
+          }
+
+          def fail(message):
+              raise SystemExit(f"historical canary evidence is invalid: {message}")
+
+          def row_key(row):
+              scenario = row.get("scenario")
+              source_version = row.get("source_version")
+              scenario_id = row.get("scenario_key")
+              if not all(isinstance(value, str) and value for value in (
+                  scenario, source_version, scenario_id
+              )):
+                  fail("every result row must have scenario, scenario_key, and source_version")
+              variant = (
+                  row.get("failed_component") if scenario == "activation_failure"
+                  else row.get("tamper_case") if scenario == "tamper_rejection"
+                  else None
+              )
+              expected_id = ":".join(
+                  str(value) for value in (scenario, source_version, variant) if value
+              )
+              if scenario_id != expected_id:
+                  fail(f"scenario key {scenario_id!r} does not match {expected_id!r}")
+              return scenario_id
+
+          def require_fields(row, fields, key):
+              missing = sorted(fields - row.keys())
+              if missing:
+                  fail(f"{key} is missing fields: {missing}")
+
+          def require_exact(row, expected, key):
+              for field, value in expected.items():
+                  if row.get(field) != value:
+                      fail(f"{key} has {field}={row.get(field)!r}, expected {value!r}")
+
+          if evidence.get("schema") != 2:
+              fail("schema must be exactly 2")
+          if evidence.get("target_version") != expected_version:
+              fail("target_version does not match the candidate")
+          if evidence.get("platform") != "linux/amd64":
+              fail("platform must be linux/amd64")
+          if evidence.get("passed") is not True:
+              fail("top-level passed must be true")
+          results = evidence.get("results")
+          if not isinstance(results, list):
+              fail("results must be a list")
+
+          keyed = {}
+          for raw_row in results:
+              if not isinstance(raw_row, dict):
+                  fail("every result must be an object")
+              row = dict(raw_row)
+              key = row_key(row)
+              if key in keyed:
+                  fail(f"duplicate scenario row {key}")
+              keyed[key] = row
+
+          actual_keys = set(keyed)
+          if actual_keys != expected_keys:
+              fail(
+                  f"scenario rows differ; missing={sorted(expected_keys - actual_keys)}, "
+                  f"unexpected={sorted(actual_keys - expected_keys)}"
+              )
+
+          sha40 = re.compile(r"[0-9a-f]{40}\Z")
+          sha64 = re.compile(r"[0-9a-f]{64}\Z")
+          digest64 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+          bundle_digests = set()
+          for key, row in keyed.items():
+              scenario = row["scenario"]
+              source_version = row["source_version"]
+              failed_component = row.get("failed_component")
+              tamper_case = row.get("tamper_case")
+              expected_protocol = 0 if source_version == "0.9.9" else 1 if source_version <= "0.9.15" else 2
+              if row.get("launcher_protocol") != expected_protocol:
+                  fail(f"{key} has an incorrect launcher protocol")
+
+              if scenario == "activation_success":
+                  require_fields(row, {
+                      "source_sha", "image_index_digest", "amd64_digest", "bundle_sha256",
+                      "check_status", "apply_status", "final_job_status", "core_bundle",
+                      "ui_bundle", "portal_api_verified", "restart_count_delta",
+                      "supervisor_stable", "rollback_target_verified",
+                      "active_identity_verified", "managed_key_verified",
+                      "stale_control_file_count", "result",
+                  }, key)
+                  require_exact(row, {
+                      "check_status": "available", "final_job_status": "success",
+                      "core_bundle": True, "ui_bundle": True, "portal_api_verified": True,
+                      "supervisor_stable": True, "rollback_target_verified": True,
+                      "active_identity_verified": True, "managed_key_verified": True,
+                      "stale_control_file_count": 0, "result": "passed",
+                  }, key)
+                  if not isinstance(row.get("apply_status"), str) or not row["apply_status"]:
+                      fail(f"{key} has no apply status")
+                  if type(row.get("restart_count_delta")) is not int or row["restart_count_delta"] < 1:
+                      fail(f"{key} has an invalid restart delta")
+              elif scenario == "activation_failure":
+                  require_fields(row, {
+                      "failed_component", "bundle_sha256", "portal_api_verified",
+                      "restart_count_delta", "final_job_status", "rollback_applied",
+                      "failed_identity_quarantined", "image_runtime_restored",
+                      "supervisor_stable", "stale_control_file_count", "result",
+                  }, key)
+                  require_exact(row, {
+                      "failed_component": failed_component, "portal_api_verified": True,
+                      "final_job_status": "failed", "rollback_applied": True,
+                      "failed_identity_quarantined": True, "image_runtime_restored": True,
+                      "supervisor_stable": True, "stale_control_file_count": 0,
+                      "result": "passed",
+                  }, key)
+                  if type(row.get("restart_count_delta")) is not int or row["restart_count_delta"] < 1:
+                      fail(f"{key} has an invalid restart delta")
+              elif scenario == "tamper_rejection":
+                  require_fields(row, {
+                      "tamper_case", "rejected_before_selection", "active_unchanged",
+                      "restart_count_delta", "result",
+                  }, key)
+                  require_exact(row, {
+                      "tamper_case": tamper_case, "rejected_before_selection": True,
+                      "active_unchanged": True, "restart_count_delta": 0,
+                      "result": "passed",
+                  }, key)
+              elif scenario == "image_refresh_recovery":
+                  require_fields(row, {
+                      "source_sha", "image_index_digest", "amd64_digest", "bundle_sha256",
+                      "check_status", "apply_status", "image_refresh_required",
+                      "recovery_job_status", "recovery_quorum_verified",
+                      "recovery_image_runtime_verified", "managed_key_verified",
+                      "supervisor_stable", "stale_control_file_count", "result",
+                  }, key)
+                  require_exact(row, {
+                      "check_status": "available",
+                      "image_refresh_required": True,
+                      "recovery_job_status": "success", "recovery_quorum_verified": True,
+                      "recovery_image_runtime_verified": True, "managed_key_verified": True,
+                      "supervisor_stable": True, "stale_control_file_count": 0,
+                      "result": "passed_with_documented_image_only_limitation",
+                  }, key)
+                  if not isinstance(row.get("apply_status"), str) or not row["apply_status"]:
+                      fail(f"{key} has no apply status")
+                  if source_version == "0.9.9":
+                      require_exact(row, {
+                          "immutable_false_success_observed": True,
+                          "legacy_core_launcher_failure_observed": True,
+                          "legacy_ui_image_runtime_verified": True,
+                          "recovery_image_cleared_false_success": True,
+                      }, key)
+                  else:
+                      require_exact(row, {
+                          "portal_api_verified": True,
+                          "immutable_entrypoint_failure_observed": True,
+                          "legacy_restart_loop_observed": True,
+                          "legacy_restart_count_at_least": 2,
+                          "legacy_staged_identity_preserved": True,
+                          "recovery_image_cleared_failed_activation": True,
+                      }, key)
+              else:
+                  fail(f"{key} has an unsupported scenario {scenario!r}")
+
+              if scenario in {"activation_success", "image_refresh_recovery"}:
+                  if not sha40.fullmatch(str(row.get("source_sha", ""))):
+                      fail(f"{key} has an invalid source SHA")
+                  if not digest64.fullmatch(str(row.get("image_index_digest", ""))):
+                      fail(f"{key} has an invalid image index digest")
+                  if not digest64.fullmatch(str(row.get("amd64_digest", ""))):
+                      fail(f"{key} has an invalid amd64 digest")
+              if "bundle_sha256" in row:
+                  if not sha64.fullmatch(str(row["bundle_sha256"])):
+                      fail(f"{key} has an invalid bundle digest")
+                  bundle_digests.add(row["bundle_sha256"])
+
+          if len(bundle_digests) != 1:
+              fail("all applicable rows must attest the same bundle digest")
+          PY
+
+      - name: Verify signed v1 bridge, v2 catalog, and exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
+          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          python scripts/release/verify-update-assets.py \
+            --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
+            --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
+            --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+            --expected-version "${version}" \
+            --expected-channel stable \
+            --expected-runtime-abi channelwatch-runtime-v1 \
+            --expected-settings-schema-version 7 \
+            --expected-image-required "${image_required}" \
+            --expected-delivery-mode "${delivery_mode}" \
+            --expected-recommended-image-version "${recommended_image_version}" \
+            --expected-git-sha "${GITHUB_SHA}" \
+            --expected-release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}" \
+            --expected-bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip" \
+            --source-root "${GITHUB_WORKSPACE}"
+          compatibility_args=()
+          if [ "${version}" = "0.9.18" ]; then
+            python scripts/release/verify-legacy-update-bridge.py \
+              --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
+              --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+              --version "${version}"
+            compatibility_args=(
+              --compatibility-manifest "dist/candidate-one/channelwatch-update-${tag}.json"
+              --compatibility-bundle "dist/candidate-one/channelwatch-app-${tag}.zip"
+              --historical-image-evidence "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json"
+            )
+          fi
+          base_ref="$(git tag --sort=-version:refname --merged "${GITHUB_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          if [ -z "${base_ref}" ]; then
+            echo "::error::A previous semantic-version release tag is required for impact classification."
+            exit 1
+          fi
+          python scripts/release/classify-release-impact.py \
+            --base-ref "${base_ref}" \
+            --target-ref "${GITHUB_SHA}" \
+            "${compatibility_args[@]}"
+          python scripts/release/verify-publication-window.py \
+            --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
+            --version "${version}" \
+            --prospective-publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
+          checksum_tmp="${RUNNER_TEMP}/channelwatch-candidate-SHA256SUMS.txt"
+          (
+            cd dist/candidate-one
+            find . -maxdepth 1 -type f -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > "${checksum_tmp}"
+            sha256sum --check "${checksum_tmp}"
+          )
+          mv "${checksum_tmp}" dist/candidate-one/SHA256SUMS.txt
+
+      - name: Seal production-signed candidate for private retention
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sealed_dir="dist/candidate-sealed"
+          archive="${RUNNER_TEMP}/channelwatch-release-candidate-${GITHUB_SHA}.tar"
+          sealed="${sealed_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
+          mkdir -p "${sealed_dir}"
+          tar -C dist/candidate-one -cf "${archive}" .
+          python scripts/release/seal-candidate-artifact.py seal \
+            --input "${archive}" \
+            --output "${sealed}"
+          rm -f "${archive}"
+          if [ ! -s "${sealed}" ]; then
+            echo "::error::Sealed candidate artifact was not created."
+            exit 1
+          fi
+
+      - name: Retain sealed nonpublishing candidate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: channelwatch-release-candidate-${{ inputs.candidate_sha }}
+          path: dist/candidate-sealed/*.sealed
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

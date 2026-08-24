@@ -23,7 +23,7 @@ from .. import __app_name__, __version__
 from ..helpers.url_validator import build_safe_url_request, is_safe_url, redact_url
 from ..helpers.trusted_destinations import (
     build_trusted_notification_request,
-    is_trusted_notification_destination,
+    matches_trusted_notification_destination,
 )
 from ..helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 
@@ -191,15 +191,15 @@ class WebhookManager:
         trusted_destinations = getattr(
             self.settings, "trusted_notification_destinations", []
         )
-        destination_is_safe = is_safe_url(url)
-        destination_is_trusted = False
-
-        if not destination_is_safe:
-            destination_is_trusted = is_trusted_notification_destination(
-                url,
-                "webhook",
-                trusted_destinations,
-            )
+        destination_is_trusted = matches_trusted_notification_destination(
+            url,
+            "webhook",
+            trusted_destinations,
+        )
+        # A saved trust tuple is only an operator authorization. Avoid resolving
+        # it here; the trusted request builder resolves, validates, and pins the
+        # complete address set immediately before each delivery attempt.
+        destination_is_safe = False if destination_is_trusted else is_safe_url(url)
 
         if not destination_is_safe and not destination_is_trusted:
             log(

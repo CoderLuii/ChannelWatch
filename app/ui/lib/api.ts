@@ -1,9 +1,11 @@
-import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus } from "@/lib/types"
+import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus, KeyRecoveryResult, KeyRecoveryStatus } from "@/lib/types"
 import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
 import { encodeReportChallengeProof, solveReportChallenge, type ReportChallenge } from "@/lib/report-proof"
 
 const API_BASE = "/api"
 let runtimeApiKey = ""
+
+export const RUNTIME_PREFLIGHT_CHANGED_EVENT = "channelwatch-runtime-preflight-changed"
 
 export class ApiError extends Error {
   readonly payload: ErrorPayload
@@ -335,6 +337,24 @@ export interface UpdateManifestPayload {
   bundle_url?: string | null
   highlights?: string[]
   published_at?: string | null
+  delivery_mode?: UpdateDeliveryMode
+  image_refresh_recommended?: boolean
+}
+
+export type UpdateDeliveryMode = "app_update" | "app_update_with_image_refresh" | "image_required"
+export type UpdatePolicyMode = "automatic" | "notify_only"
+
+export interface UpdatePolicy {
+  mode: UpdatePolicyMode
+  maintenance_window_start: string
+  maintenance_window_minutes: number
+  postponed_until?: string | null
+  next_attempt_at?: string | null
+  last_attempt_at?: string | null
+  retry_count?: number
+  last_error?: string | null
+  scheduled_restart_at?: string | null
+  postpone_available?: boolean
 }
 
 export interface UpdateJob {
@@ -352,7 +372,12 @@ export interface UpdateJob {
 
 export interface UpdateStatus {
   current_version: string
+  image_version?: string | null
   runtime_abi: string
+  launcher_protocol?: number | null
+  runtime_source?: "image" | "app_bundle" | string
+  delivery_mode?: UpdateDeliveryMode
+  image_refresh_recommended?: boolean
   settings_schema_version: number
   active_bundle?: Record<string, unknown> | null
   latest?: UpdateManifestPayload | null
@@ -361,6 +386,160 @@ export interface UpdateStatus {
   last_job?: UpdateJob | null
   rollback_available: boolean
   auth_disabled_warning: boolean
+}
+
+export interface RecoveryUpdateStatus {
+  status: "active" | "inactive"
+  reason_code: "official_recovery_active" | "official_recovery_inactive"
+  current_version: string
+  active_bundle?: { version?: string | null } | null
+  latest?: UpdateManifestPayload | null
+  update_available: boolean
+  image_required: boolean
+  recovery_waiting_for_newer_release?: boolean
+  recovery_active: boolean
+  bootstrap_csrf?: string | null
+  confirmation_required: boolean
+}
+
+function recoveryUpdateHeaders(bootstrapCsrf?: string | null): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...authHeaders(),
+    ...(bootstrapCsrf ? { "X-CSRF-Token": bootstrapCsrf } : {}),
+  }
+}
+
+export async function fetchRecoveryUpdateStatus(): Promise<RecoveryUpdateStatus> {
+  const response = await fetch(`${API_BASE}/v1/update/recovery/status`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function checkRecoveryUpdate(bootstrapCsrf?: string | null): Promise<RecoveryUpdateStatus> {
+  const response = await fetch(`${API_BASE}/v1/update/recovery/check`, {
+    method: "POST",
+    headers: recoveryUpdateHeaders(bootstrapCsrf),
+    credentials: "same-origin",
+    body: JSON.stringify({}),
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function applyRecoveryUpdate(
+  version: string,
+  bootstrapCsrf?: string | null,
+): Promise<UpdateJob> {
+  const response = await fetch(`${API_BASE}/v1/update/recovery/apply`, {
+    method: "POST",
+    headers: recoveryUpdateHeaders(bootstrapCsrf),
+    credentials: "same-origin",
+    body: JSON.stringify({
+      version,
+      confirmation: "INSTALL OFFICIAL UPDATE",
+    }),
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function fetchUpdatePolicy(): Promise<UpdatePolicy> {
+  const response = await fetch(`${API_BASE}/v1/update/policy`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function saveUpdatePolicy(policy: Pick<UpdatePolicy, "mode" | "maintenance_window_start" | "maintenance_window_minutes">): Promise<UpdatePolicy> {
+  const response = await fetch(`${API_BASE}/v1/update/policy`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    credentials: "same-origin",
+    body: JSON.stringify(policy),
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function postponeUpdate(hours: 24 | 168, reason?: "dirty_report_draft"): Promise<UpdatePolicy> {
+  const response = await fetch(`${API_BASE}/v1/update/postpone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    credentials: "same-origin",
+    body: JSON.stringify(reason ? { hours, reason } : { hours }),
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function retryUpdate(): Promise<UpdateJob> {
+  const response = await fetch(`${API_BASE}/v1/update/retry`, {
+    method: "POST",
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function fetchKeyRecoveryStatus(): Promise<KeyRecoveryStatus> {
+  const response = await fetch(`${API_BASE}/v1/runtime/key-recovery/status`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function migrateLegacyKey(options: { legacyWrappingKey?: string; rawKeyFile?: File }): Promise<KeyRecoveryResult> {
+  const body = new FormData()
+  if (options.legacyWrappingKey) body.set("legacy_storage_key", options.legacyWrappingKey)
+  if (options.rawKeyFile) body.set("raw_key_file", options.rawKeyFile, options.rawKeyFile.name)
+  const response = await fetch(`${API_BASE}/v1/runtime/key-recovery/migrate`, {
+    method: "POST",
+    headers: authHeaders(),
+    credentials: "same-origin",
+    body,
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
+}
+
+export async function resetProtectedCredentials(confirmation: "RESET PROTECTED CREDENTIALS"): Promise<KeyRecoveryResult> {
+  const response = await fetch(`${API_BASE}/v1/runtime/key-recovery/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    credentials: "same-origin",
+    body: JSON.stringify({ confirmation }),
+  })
+  if (!response.ok) {
+    throw new ApiError(await parseApiError(response))
+  }
+  return response.json()
 }
 
 export async function fetchUpdateStatus(): Promise<UpdateStatus> {

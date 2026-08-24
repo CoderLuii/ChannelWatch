@@ -44,6 +44,26 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "channelwatch.hasSecretConfig" -}}
+{{- if or
+      (.Values.secretConfig.existingSecret | trim)
+      (.Values.secretConfig.secretStorageKey | trim)
+      (.Values.secretConfig.apiKey | trim)
+      (.Values.secretConfig.adminUser | trim)
+      (.Values.secretConfig.adminPass | trim)
+      (.Values.secretConfig.appriseDiscord | trim)
+      (.Values.secretConfig.apprisePushover | trim)
+      (.Values.secretConfig.appriseTelegram | trim)
+      (.Values.secretConfig.appriseEmail | trim)
+      (.Values.secretConfig.appriseEmailTo | trim)
+      (.Values.secretConfig.appriseSlack | trim)
+      (.Values.secretConfig.appriseGotify | trim)
+      (.Values.secretConfig.appriseMatrix | trim)
+      (.Values.secretConfig.appriseCustom | trim) -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "channelwatch.pvcName" -}}
 {{- if .Values.persistence.existingClaim -}}
 {{- .Values.persistence.existingClaim -}}

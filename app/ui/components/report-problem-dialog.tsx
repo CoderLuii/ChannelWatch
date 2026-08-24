@@ -44,6 +44,8 @@ import {
   downloadDebugBundle,
   downloadOfflineReportPackage,
   fetchReportConfig,
+  fetchUpdatePolicy,
+  postponeUpdate,
   retryPrivateReport,
   submitReport,
   type ReportAttachmentSummary,
@@ -53,6 +55,7 @@ import {
   type ReportMode,
   type ReportPreviewResponse,
   type ReportProblemPayload,
+  type UpdatePolicy,
 } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import {
@@ -87,6 +90,15 @@ const requiredDebugBundleMembers = new Set([
   "logs/app.log",
   "health_snapshot.json",
 ])
+
+function formatRestartCountdown(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const remainingSeconds = safeSeconds % 60
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(remainingSeconds).padStart(2, "0")}s`
+  return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`
+}
 
 const optionalUsername = (pattern: RegExp, message: string) =>
   z
@@ -660,12 +672,29 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   const [offlinePackageStatus, setOfflinePackageStatus] = useState<
     "idle" | "downloading" | "downloaded" | "error"
   >("idle")
+  const [updatePolicy, setUpdatePolicy] = useState<UpdatePolicy | null>(null)
+  const [restartClock, setRestartClock] = useState(() => Date.now())
+  const [postponingRestart, setPostponingRestart] = useState(false)
+  const [postponeError, setPostponeError] = useState<string | null>(null)
 
   const diagnostics = useMemo(
     () => buildDiagnostics(systemInfo, appSettings),
     [systemInfo, appSettings],
   )
   const supportCodeRequired = externalEndpointRequiresSupportCode(config)
+  const hasDirtyDraft = Boolean(
+    Object.values(form).some((value) => value.trim().length > 0)
+    || screenshots.length > 0
+    || debugBundle
+    || draftPayload,
+  )
+  const scheduledRestartAt = updatePolicy?.scheduled_restart_at
+    ? Date.parse(updatePolicy.scheduled_restart_at)
+    : Number.NaN
+  const scheduledRestartSeconds = Number.isFinite(scheduledRestartAt)
+    ? Math.max(0, Math.ceil((scheduledRestartAt - restartClock) / 1000))
+    : null
+  const hasScheduledRestart = scheduledRestartSeconds !== null
 
   useEffect(() => {
     if (!open) return
@@ -688,6 +717,32 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
       cancelled = true
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || !hasDirtyDraft) {
+      setUpdatePolicy(null)
+      setPostponeError(null)
+      return
+    }
+    let cancelled = false
+    fetchUpdatePolicy()
+      .then((next) => {
+        if (!cancelled) setUpdatePolicy(next)
+      })
+      .catch(() => {
+        // Update policy is an authenticated convenience. Report drafting must
+        // remain available if the current role cannot read it.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hasDirtyDraft, open])
+
+  useEffect(() => {
+    if (!open || !hasDirtyDraft || !hasScheduledRestart) return
+    const timer = window.setInterval(() => setRestartClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [hasDirtyDraft, hasScheduledRestart, open])
 
   useEffect(() => {
     if (open) return
@@ -1171,6 +1226,44 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
           </div>
 
           <div className="space-y-4 px-5 py-5 sm:px-6">
+            {hasDirtyDraft && scheduledRestartSeconds !== null ? (
+              <Alert className="border-amber-500/40 bg-amber-500/10" data-testid="report-scheduled-restart-warning">
+                <AlertCircle className="h-4 w-4 text-amber-500" />
+                <AlertTitle>{t("supportReport.updateRestart.title")}</AlertTitle>
+                <AlertDescription className="space-y-3">
+                  <p aria-live="polite">
+                    {t("supportReport.updateRestart.countdown", { countdown: formatRestartCountdown(scheduledRestartSeconds) })}
+                  </p>
+                  <p>{t("supportReport.updateRestart.draftSafe")}</p>
+                  {postponeError ? <p role="alert" className="text-destructive">{postponeError}</p> : null}
+                  {updatePolicy?.postpone_available !== false ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={postponingRestart}
+                      onClick={async () => {
+                        setPostponingRestart(true)
+                        setPostponeError(null)
+                        try {
+                          setUpdatePolicy(await postponeUpdate(24, "dirty_report_draft"))
+                        } catch (nextError) {
+                          setPostponeError(nextError instanceof Error ? nextError.message : t("supportReport.updateRestart.postponeError"))
+                        } finally {
+                          setPostponingRestart(false)
+                        }
+                      }}
+                    >
+                      {postponingRestart ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      {t("supportReport.updateRestart.postpone")}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{t("supportReport.updateRestart.postponeUsed")}</p>
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
             {loadingConfig && (
               <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />

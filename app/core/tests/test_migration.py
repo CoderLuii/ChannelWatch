@@ -2,8 +2,11 @@
 
 import json
 import os
+import stat
 from unittest.mock import patch
 from dataclasses import dataclass
+
+import pytest
 
 from core.helpers.migration import (
     defaults_merge,
@@ -310,6 +313,58 @@ class TestAutoBackup:
         auto_backup(tmp_path, 0, 1)
         backup = list((tmp_path / "backups").iterdir())[0]
         assert json.loads(backup.read_text()) == V07_SETTINGS
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+    def test_backup_is_owner_only_even_when_legacy_settings_are_group_readable(
+        self, tmp_path
+    ):
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "_version": 0,
+                    "dvr_servers": [{"api_key": "synthetic-legacy-secret"}],
+                }
+            )
+        )
+        settings_file.chmod(0o640)
+
+        assert auto_backup(tmp_path, 0, 1) is True
+
+        backup_dir = tmp_path / "backups"
+        backup = next(backup_dir.iterdir())
+        assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+        assert "synthetic-legacy-secret" in backup.read_text()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    def test_backup_refuses_symlinked_private_directory(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps(V07_SETTINGS))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "backups").symlink_to(outside, target_is_directory=True)
+
+        assert auto_backup(tmp_path, 0, 1) is False
+        assert list(outside.iterdir()) == []
+
+    def test_migration_fails_closed_when_private_backup_cannot_be_created(
+        self, tmp_path
+    ):
+        original = {
+            "_version": 0,
+            "dvr_servers": [{"api_key": "synthetic-legacy-secret"}],
+        }
+        (tmp_path / "settings.json").write_text(json.dumps(original))
+        (tmp_path / "backups").write_text("not a directory")
+
+        with pytest.raises(RuntimeError, match="requires a private, durable"):
+            migrate_settings(tmp_path, original)
+
+        assert json.loads((tmp_path / "settings.json").read_text()) == original
+        journal = json.loads((tmp_path / "migration.journal").read_text())
+        assert journal["step"] == "backup"
+        assert journal["status"] == "failed"
 
     def test_backup_rotation_keeps_max_10(self, tmp_path):
         settings_file = tmp_path / "settings.json"

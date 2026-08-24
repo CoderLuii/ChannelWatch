@@ -1,6 +1,7 @@
 """Regression tests for supervisor credential handling."""
 
 import importlib.util
+import errno
 import json
 import os
 import stat
@@ -72,6 +73,39 @@ def _write_restart_journal(path: Path, **kwargs) -> dict:
     return journal
 
 
+def _seed_mature_read_only_config(entrypoint, tmp_path: Path, settings=None) -> Path:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_file = config_dir / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            settings
+            or {
+                "_version": entrypoint.CURRENT_SCHEMA_VERSION,
+                "dvr_servers": [],
+                "webhooks": [],
+                "tz": "UTC",
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings_file.chmod(0o600)
+    key_file = config_dir / "encryption.key"
+    key_file.write_bytes(b"k" * 32)
+    key_file.chmod(0o600)
+    key_lock = config_dir / ".encryption-key.lock"
+    key_lock.write_bytes(b"")
+    key_lock.chmod(0o600)
+
+    entrypoint.CONFIG_DIR = config_dir
+    entrypoint.SETTINGS_FILE = settings_file
+    entrypoint.CHANNELWATCH_RUNTIME_DIR = config_dir / "channelwatch-runtime"
+    entrypoint.RESTART_REQUIRED_PATH = (
+        entrypoint.CHANNELWATCH_RUNTIME_DIR / entrypoint.RESTART_REQUIRED_FILE
+    )
+    return config_dir
+
+
 class TestEntrypointWritesSupervisorSocketConfig:
     def test_entrypoint_sets_verified_private_umask_before_exec(
         self, monkeypatch
@@ -81,18 +115,28 @@ class TestEntrypointWritesSupervisorSocketConfig:
 
         for name in (
             "_ensure_real_directory",
+            "config_filesystem_is_read_only",
             "cleanup_restart_journal_candidates_before_validation",
             "validate_config_tree",
             "merge_bootstrap_env",
+            "recover_v099_update_marker_after_image_pull",
             "chown_tree",
             "chmod_config_tree",
             "render_supervisor_config",
             "prepare_standard_streams",
             "drop_privileges",
             "verify_config_tree_writable",
+            "verify_container_instance_lock",
         ):
             monkeypatch.setattr(entrypoint, name, lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(entrypoint, "ensure_settings", lambda *_args: False)
+        monkeypatch.setattr(
+            entrypoint,
+            "acquire_container_instance_lock",
+            lambda *_args, **_kwargs: os.open(os.devnull, os.O_RDONLY),
+        )
+        monkeypatch.setattr(
+            entrypoint, "ensure_settings", lambda *_args, **_kwargs: False
+        )
         monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint", "supervisord"])
 
         def inspect_exec(_program, _argv):
@@ -221,7 +265,11 @@ class TestEntrypointWritesSupervisorSocketConfig:
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
         monkeypatch.setattr(entrypoint, "RESTART_REQUIRED_PATH", restart_required)
-        monkeypatch.setattr(entrypoint, "select_app_runtime_dir", lambda: restored_app)
+        monkeypatch.setattr(
+            entrypoint,
+            "select_app_runtime_dir",
+            lambda **_kwargs: restored_app,
+        )
 
         entrypoint.render_supervisor_config(1000, 1000)
 
@@ -337,6 +385,212 @@ class TestEntrypointWritesSupervisorSocketConfig:
             (runtime_state / "update-job.json").read_text(encoding="utf-8")
         )["job_id"] == "job-test"
         assert restart_required.exists()
+
+    def test_v0918_image_pull_recovers_stale_v099_marker_without_app_data_changes(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        runtime_state = config_dir / "channelwatch-runtime"
+        release_dir = runtime_state / "releases" / "v0.9.18"
+        release_dir.mkdir(parents=True)
+        settings = config_dir / "settings.json"
+        key_file = config_dir / "encryption.key"
+        settings.write_bytes(
+            b'{"dvr_servers":[{"id":"dvr-1","api_key":"enc:v1:private"}],'
+            b'"webhooks":[{"id":"hook-1","url":"enc:v1:url",'
+            b'"secret":"enc:v1:secret"}]}\n'
+        )
+        key_file.write_bytes(b"CWKEY3\nmanaged-envelope-bytes\n")
+        (runtime_state / "active.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.9.18",
+                    "path": str(release_dir),
+                    "runtime_abi": "channelwatch-runtime-v1",
+                    "settings_schema_version": 7,
+                    "activated_at": "2026-08-24T12:00:00Z",
+                    "manifest": {"bundle_sha256": "a" * 64},
+                    "metadata": {"version": "0.9.18"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (runtime_state / "update-job.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "published-v099-job",
+                    "operation": "apply",
+                    "status": "success",
+                    "version": "0.9.18",
+                    "backup_path": "/private/path-that-must-not-survive",
+                    "message": "Update activated and ChannelWatch started successfully.",
+                }
+            ),
+            encoding="utf-8",
+        )
+        rollback = runtime_state / "rollback.json"
+        rollback.write_bytes(b'{"previous_active":null,"backup_path":"private"}\n')
+        protected_before = {
+            "settings": settings.read_bytes(),
+            "key": key_file.read_bytes(),
+        }
+        active_before = (runtime_state / "active.json").read_bytes()
+        job_before = (runtime_state / "update-job.json").read_bytes()
+
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(entrypoint, "SETTINGS_FILE", settings)
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        restart_required = runtime_state / "restart-required.json"
+        monkeypatch.setattr(entrypoint, "RESTART_REQUIRED_PATH", restart_required)
+
+        assert entrypoint.recover_v099_update_marker_after_image_pull(
+            image_version="0.9.18"
+        ) is True
+
+        # Publication is write-ahead: before replay, either both old records
+        # remain authoritative or the complete journal is available.
+        assert (runtime_state / "active.json").read_bytes() == active_before
+        assert (runtime_state / "update-job.json").read_bytes() == job_before
+        assert restart_required.is_file()
+        assert entrypoint.recover_v099_update_marker_after_image_pull(
+            image_version="0.9.18"
+        ) is False
+
+        journal = entrypoint.replay_restart_required_journal()
+        assert isinstance(journal, dict)
+        assert not (runtime_state / "active.json").exists()
+        job = json.loads(
+            (runtime_state / "update-job.json").read_text(encoding="utf-8")
+        )
+        assert job["operation"] == "image_refresh_recovery"
+        assert job["status"] == "validating"
+        assert job["image_pull_completed"] is False
+        assert job["legacy_pointer_deactivated"] is True
+        assert job["startup_validation_pending"] is True
+        assert job["startup_components"] == {}
+        assert job["restart_required"] is False
+        assert "/private/path" not in json.dumps(job)
+        assert entrypoint.clear_completed_restart_handoff(journal) is True
+        assert not restart_required.exists()
+        assert settings.read_bytes() == protected_before["settings"]
+        assert key_file.read_bytes() == protected_before["key"]
+        assert json.loads(rollback.read_text()) == {
+            "previous_active": None,
+            "backup_path": "private",
+        }
+
+    def test_v0918_image_pull_does_not_reclassify_adopted_activation(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_state = tmp_path / "channelwatch-runtime"
+        runtime_state.mkdir()
+        active = {
+            "version": "0.9.18",
+            "path": str(runtime_state / "releases" / "v0.9.18"),
+            "activation_id": "adopted-generation",
+            "activation_protocol": 1,
+        }
+        job = {
+            "operation": "apply",
+            "status": "success",
+            "version": "0.9.18",
+        }
+        (runtime_state / "active.json").write_text(json.dumps(active))
+        (runtime_state / "update-job.json").write_text(json.dumps(job))
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        monkeypatch.setattr(
+            entrypoint,
+            "RESTART_REQUIRED_PATH",
+            runtime_state / "restart-required.json",
+        )
+
+        assert entrypoint.recover_v099_update_marker_after_image_pull(
+            image_version="0.9.18"
+        ) is False
+        assert json.loads((runtime_state / "active.json").read_text()) == active
+        assert json.loads((runtime_state / "update-job.json").read_text()) == job
+
+    def test_v0918_image_pull_restarts_incomplete_validation_generation(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_state = tmp_path / "channelwatch-runtime"
+        runtime_state.mkdir()
+        original_job = {
+            "job_id": "old-container-attempt",
+            "operation": "image_refresh_recovery",
+            "status": "validating",
+            "version": "0.9.18",
+            "legacy_pointer_deactivated": True,
+            "startup_validation_id": "old-generation",
+            "startup_validation_pending": True,
+            "startup_components": {
+                "core": {"healthy": True, "ready_at": "old"}
+            },
+            "image_pull_completed": False,
+        }
+        (runtime_state / "update-job.json").write_text(json.dumps(original_job))
+        entrypoint = _load_entrypoint()
+        restart_required = runtime_state / "restart-required.json"
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        monkeypatch.setattr(entrypoint, "RESTART_REQUIRED_PATH", restart_required)
+
+        assert entrypoint.recover_v099_update_marker_after_image_pull(
+            image_version="0.9.18"
+        ) is True
+        assert json.loads((runtime_state / "update-job.json").read_text()) == (
+            original_job
+        )
+
+        journal = entrypoint.replay_restart_required_journal()
+        assert isinstance(journal, dict)
+        retried = json.loads((runtime_state / "update-job.json").read_text())
+        assert retried["status"] == "validating"
+        assert retried["job_id"] != original_job["job_id"]
+        assert retried["startup_validation_id"] != "old-generation"
+        assert retried["startup_components"] == {}
+        assert retried["image_pull_completed"] is False
+
+    def test_v0918_image_pull_journal_write_failure_preserves_old_pair(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_state = tmp_path / "channelwatch-runtime"
+        runtime_state.mkdir()
+        active = {
+            "version": "0.9.18",
+            "path": str(runtime_state / "releases" / "v0.9.18"),
+            "runtime_abi": "channelwatch-runtime-v1",
+            "settings_schema_version": 7,
+        }
+        job = {
+            "job_id": "published-v099-job",
+            "operation": "apply",
+            "status": "success",
+            "version": "0.9.18",
+        }
+        (runtime_state / "active.json").write_text(json.dumps(active))
+        (runtime_state / "update-job.json").write_text(json.dumps(job))
+        entrypoint = _load_entrypoint()
+        restart_required = runtime_state / "restart-required.json"
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        monkeypatch.setattr(entrypoint, "RESTART_REQUIRED_PATH", restart_required)
+        real_atomic_write_json = entrypoint.atomic_write_json
+
+        def fail_journal_write(path, payload, *, indent=2):
+            if path == restart_required:
+                raise OSError("injected journal publication failure")
+            return real_atomic_write_json(path, payload, indent=indent)
+
+        monkeypatch.setattr(entrypoint, "atomic_write_json", fail_journal_write)
+
+        with pytest.raises(OSError, match="injected journal"):
+            entrypoint.recover_v099_update_marker_after_image_pull(
+                image_version="0.9.18"
+            )
+        assert json.loads((runtime_state / "active.json").read_text()) == active
+        assert json.loads((runtime_state / "update-job.json").read_text()) == job
+        assert not restart_required.exists()
 
     @pytest.mark.parametrize(
         "journal_mutation",
@@ -535,6 +789,134 @@ class TestEntrypointWritesSupervisorSocketConfig:
         assert (external.stat().st_uid, external.stat().st_gid) == original_owner
         assert inside.stat().st_ino == external.stat().st_ino
 
+    def test_config_walk_retries_transient_virtiofs_identity_until_it_converges(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        settings_file = config_dir / "settings.json"
+        settings_file.write_text("{}", encoding="utf-8")
+        entrypoint = _load_entrypoint()
+        real_fstat = entrypoint.os.fstat
+        remaining_mismatches = 2
+        sleeps = []
+
+        def transient_virtualized_fstat(file_descriptor):
+            nonlocal remaining_mismatches
+            metadata = real_fstat(file_descriptor)
+            if stat.S_ISREG(metadata.st_mode) and remaining_mismatches:
+                remaining_mismatches -= 1
+                fields = list(metadata)
+                fields[1] += 1
+                return os.stat_result(fields)
+            return metadata
+
+        monkeypatch.setattr(entrypoint.os, "fstat", transient_virtualized_fstat)
+        monkeypatch.setattr(
+            entrypoint, "ownership_metadata_is_virtualized", lambda _path: True
+        )
+        monkeypatch.setattr(entrypoint.time, "sleep", sleeps.append)
+
+        entrypoint.validate_config_tree(config_dir)
+
+        assert remaining_mismatches == 0
+        assert sleeps == [0.05, 0.1]
+
+    def test_config_walk_rejects_persistent_virtiofs_identity_mismatch(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "settings.json").write_text("{}", encoding="utf-8")
+        entrypoint = _load_entrypoint()
+        real_fstat = entrypoint.os.fstat
+        sleeps = []
+
+        def persistently_virtualized_fstat(file_descriptor):
+            metadata = real_fstat(file_descriptor)
+            if stat.S_ISREG(metadata.st_mode):
+                fields = list(metadata)
+                fields[1] += 1
+                return os.stat_result(fields)
+            return metadata
+
+        monkeypatch.setattr(entrypoint.os, "fstat", persistently_virtualized_fstat)
+        monkeypatch.setattr(
+            entrypoint, "ownership_metadata_is_virtualized", lambda _path: True
+        )
+        monkeypatch.setattr(entrypoint.time, "sleep", sleeps.append)
+
+        with pytest.raises(RuntimeError, match="remained inconsistent"):
+            entrypoint.validate_config_tree(config_dir)
+
+        assert sleeps == list(
+            entrypoint.VIRTUALIZED_IDENTITY_RETRY_DELAYS_SECONDS
+        )
+
+    def test_config_walk_rejects_non_virtiofs_replacement_without_retry(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        settings_file = config_dir / "settings.json"
+        settings_file.write_text("original", encoding="utf-8")
+        replacement = tmp_path / "replacement"
+        replacement.write_text("replacement", encoding="utf-8")
+        entrypoint = _load_entrypoint()
+        real_open = entrypoint.os.open
+        replaced = False
+        sleeps = []
+
+        def replace_before_open(path, flags, *args, **kwargs):
+            nonlocal replaced
+            if path == "settings.json" and not replaced:
+                replaced = True
+                replacement.replace(settings_file)
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint.os, "open", replace_before_open)
+        monkeypatch.setattr(
+            entrypoint, "ownership_metadata_is_virtualized", lambda _path: False
+        )
+        monkeypatch.setattr(entrypoint.time, "sleep", sleeps.append)
+
+        with pytest.raises(RuntimeError, match="changed while it was inspected"):
+            entrypoint.validate_config_tree(config_dir)
+
+        assert replaced is True
+        assert sleeps == []
+
+    @pytest.mark.parametrize("unsafe_kind", ["symlink", "hardlink", "fifo"])
+    def test_config_walk_never_retries_unsafe_objects_on_virtiofs(
+        self, tmp_path, monkeypatch, unsafe_kind
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        external = tmp_path / "outside"
+        external.write_text("outside", encoding="utf-8")
+        unsafe = config_dir / "settings.json"
+        if unsafe_kind == "symlink":
+            unsafe.symlink_to(external)
+        elif unsafe_kind == "hardlink":
+            os.link(external, unsafe)
+        else:
+            if not hasattr(os, "mkfifo"):
+                pytest.skip("FIFOs are unavailable on this platform")
+            os.mkfifo(unsafe)
+        entrypoint = _load_entrypoint()
+        sleeps = []
+
+        monkeypatch.setattr(
+            entrypoint, "ownership_metadata_is_virtualized", lambda _path: True
+        )
+        monkeypatch.setattr(entrypoint.time, "sleep", sleeps.append)
+
+        with pytest.raises(RuntimeError):
+            entrypoint.validate_config_tree(config_dir)
+
+        assert sleeps == []
+        assert external.read_text(encoding="utf-8") == "outside"
+
     def test_supervisor_config_hard_link_is_rejected_without_touching_target(
         self, tmp_path
     ):
@@ -601,6 +983,112 @@ class TestEntrypointWritesSupervisorSocketConfig:
             entrypoint.main()
 
         assert external.read_text(encoding="utf-8") == '{"outside":true}'
+
+    @pytest.mark.parametrize("unsafe_kind", ["symlink", "hardlink", "directory", "fifo"])
+    def test_entrypoint_settings_reader_rejects_linked_and_special_paths(
+        self, tmp_path, monkeypatch, unsafe_kind
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        external = tmp_path / "outside-settings.json"
+        external.write_text('{"root_only_secret":"must-not-be-read"}', encoding="utf-8")
+        settings_file = config_dir / "settings.json"
+        if unsafe_kind == "symlink":
+            settings_file.symlink_to(external)
+        elif unsafe_kind == "hardlink":
+            os.link(external, settings_file)
+        elif unsafe_kind == "directory":
+            settings_file.mkdir()
+        else:
+            if not hasattr(os, "mkfifo"):
+                pytest.skip("FIFOs are unavailable on this platform")
+            os.mkfifo(settings_file)
+
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(entrypoint, "SETTINGS_FILE", settings_file)
+
+        settings, can_write = entrypoint.load_settings()
+
+        assert can_write is False
+        assert "root_only_secret" not in settings
+
+    def test_entrypoint_settings_reader_rejects_oversized_file(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        settings_file = config_dir / "settings.json"
+        settings_file.write_bytes(b"x" * ((8 * 1024 * 1024) + 1))
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(entrypoint, "SETTINGS_FILE", settings_file)
+
+        settings, can_write = entrypoint.load_settings()
+
+        assert can_write is False
+        assert settings == entrypoint.DEFAULT_SETTINGS
+
+    def test_entrypoint_settings_reader_rejects_post_validation_symlink_swap(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        settings_file = config_dir / "settings.json"
+        settings_file.write_text('{"tz":"UTC"}', encoding="utf-8")
+        external = tmp_path / "outside-settings.json"
+        external.write_text('{"root_only_secret":"must-not-be-read"}', encoding="utf-8")
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(entrypoint, "SETTINGS_FILE", settings_file)
+        original_open_directory = entrypoint._open_real_directory
+
+        def swap_after_directory_open(path, *, purpose):
+            directory_fd = original_open_directory(path, purpose=purpose)
+            settings_file.unlink()
+            settings_file.symlink_to(external)
+            return directory_fd
+
+        monkeypatch.setattr(entrypoint, "_open_real_directory", swap_after_directory_open)
+
+        settings, can_write = entrypoint.load_settings()
+
+        assert can_write is False
+        assert "root_only_secret" not in settings
+
+    def test_entrypoint_settings_reader_rejects_same_size_in_place_change(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        settings_file = config_dir / "settings.json"
+        settings_file.write_text('{"tz":"UTC"}', encoding="utf-8")
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(entrypoint, "SETTINGS_FILE", settings_file)
+        original_read = os.read
+        changed = False
+
+        def change_after_first_read(descriptor, count):
+            nonlocal changed
+            payload = original_read(descriptor, count)
+            if payload and not changed:
+                changed = True
+                original_mtime = settings_file.stat().st_mtime_ns
+                settings_file.write_text('{"tz":"PST"}', encoding="utf-8")
+                changed_time = original_mtime + 1_000_000_000
+                os.utime(
+                    settings_file,
+                    ns=(changed_time, changed_time),
+                )
+            return payload
+
+        monkeypatch.setattr(entrypoint.os, "read", change_after_first_read)
+
+        settings, can_write = entrypoint.load_settings()
+
+        assert can_write is False
+        assert settings == entrypoint.DEFAULT_SETTINGS
 
     def test_supervisor_runtime_directory_symlink_is_rejected_without_chowning_target(
         self, tmp_path, monkeypatch
@@ -685,6 +1173,83 @@ class TestEntrypointWritesSupervisorSocketConfig:
 
         assert lock_path.is_symlink()
         assert external.read_text(encoding="utf-8") == "outside"
+
+    @pytest.mark.skipif(os.name == "nt", reason="requires POSIX read-only fallback")
+    def test_existing_restart_lock_supports_read_only_open_without_chmod(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_state = tmp_path / "channelwatch-runtime"
+        runtime_state.mkdir()
+        lock_path = runtime_state / "restart-required.lock"
+        lock_path.write_bytes(b"")
+        lock_path.chmod(0o600)
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        real_open = entrypoint.os.open
+        fchmod_calls: list[tuple] = []
+
+        def read_only_open(path, flags, *args, **kwargs):
+            if path == entrypoint.RESTART_JOURNAL_LOCK_FILE and flags & os.O_RDWR:
+                raise OSError(errno.EROFS, "simulated read-only remount")
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint.os, "open", read_only_open)
+        monkeypatch.setattr(
+            entrypoint.os,
+            "fchmod",
+            lambda *args: fchmod_calls.append(args),
+        )
+
+        with entrypoint.restart_transition_lock():
+            assert lock_path.is_file()
+
+        assert fchmod_calls == []
+        assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="requires POSIX read-only fallback")
+    def test_read_only_restart_lock_with_wrong_mode_fails_closed(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_state = tmp_path / "channelwatch-runtime"
+        runtime_state.mkdir()
+        lock_path = runtime_state / "restart-required.lock"
+        lock_path.write_bytes(b"")
+        lock_path.chmod(0o640)
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        real_open = entrypoint.os.open
+
+        def read_only_open(path, flags, *args, **kwargs):
+            if path == entrypoint.RESTART_JOURNAL_LOCK_FILE and flags & os.O_RDWR:
+                raise OSError(errno.EROFS, "simulated read-only remount")
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint.os, "open", read_only_open)
+
+        with pytest.raises(RuntimeError, match="open runtime transition lock safely"):
+            with entrypoint.restart_transition_lock():
+                pass
+
+    @pytest.mark.skipif(os.name == "nt", reason="requires POSIX read-only fallback")
+    def test_read_only_runtime_without_existing_restart_lock_fails_closed(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_state = tmp_path / "channelwatch-runtime"
+        runtime_state.mkdir()
+        entrypoint = _load_entrypoint()
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_state)
+        real_open = entrypoint.os.open
+
+        def read_only_open(path, flags, *args, **kwargs):
+            if path == entrypoint.RESTART_JOURNAL_LOCK_FILE and flags & os.O_RDWR:
+                raise OSError(errno.EROFS, "simulated read-only remount")
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint.os, "open", read_only_open)
+
+        with pytest.raises(RuntimeError, match="open runtime transition lock safely"):
+            with entrypoint.restart_transition_lock():
+                pass
 
     def test_supervisor_socket_symlink_is_rejected_without_touching_target(
         self, tmp_path, monkeypatch
@@ -1006,3 +1571,208 @@ class TestRestartControlEndpoints:
         detail = resp.json()["detail"]
         assert detail["code"] == "ERR_SUPERVISOR_NOT_AVAILABLE"
         restart.assert_called_once_with()
+
+
+class TestReadOnlyRuntimePreflight:
+    def test_mature_managed_config_is_accepted_without_changing_files(
+        self, tmp_path
+    ):
+        entrypoint = _load_entrypoint()
+        config_dir = _seed_mature_read_only_config(entrypoint, tmp_path)
+        before = {
+            path.relative_to(config_dir): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in config_dir.iterdir()
+            if path.is_file()
+        }
+
+        entrypoint.validate_read_only_runtime_state()
+
+        after = {
+            path.relative_to(config_dir): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in config_dir.iterdir()
+            if path.is_file()
+        }
+        assert after == before
+
+    @pytest.mark.parametrize(
+        ("case", "message"),
+        [
+            ("missing_settings", "valid existing settings"),
+            ("broad_settings_mode", "settings.json must be owner-only"),
+            ("old_schema", "settings schema must be reconciled"),
+            ("future_schema", "settings schema must be reconciled"),
+            ("invalid_migration", "migration journal is invalid"),
+            ("unknown_migration", "interrupted settings migration"),
+            ("started_migration", "interrupted settings migration"),
+            ("missing_key", "managed key must already exist"),
+            ("wrong_key_mode", "managed key is not a private"),
+            ("short_key", "managed key requires migration"),
+            ("missing_key_lock", "managed-key lock must already exist"),
+            ("wrong_key_lock_mode", "managed-key lock is not a private"),
+            ("hot_wal", "SQLite WAL requires writable"),
+            ("hot_journal", "SQLite rollback journal requires writable"),
+            ("plaintext_dvr", "Protected plaintext credentials"),
+            ("plaintext_webhook", "Protected plaintext credentials"),
+            ("pending_transaction", "configuration transaction"),
+            ("restart_journal", "runtime transition journal"),
+            ("invalid_active", "active runtime selection is invalid"),
+            ("invalid_job", "update job is invalid"),
+            ("transition_job", "update validation is incomplete"),
+            ("activation_record", "activation record requires writable"),
+            ("legacy_active", "legacy active runtime"),
+            ("inconsistent_recovery", "recovery marker requires writable"),
+        ],
+    )
+    def test_unsafe_or_incomplete_state_fails_closed(
+        self, tmp_path, case, message
+    ):
+        entrypoint = _load_entrypoint()
+        config_dir = _seed_mature_read_only_config(entrypoint, tmp_path)
+        settings_file = config_dir / "settings.json"
+        runtime_dir = entrypoint.CHANNELWATCH_RUNTIME_DIR
+
+        if case == "missing_settings":
+            settings_file.unlink()
+        elif case == "broad_settings_mode":
+            settings_file.chmod(0o640)
+        elif case == "old_schema":
+            settings_file.write_text('{"_version":6}', encoding="utf-8")
+        elif case == "future_schema":
+            settings_file.write_text('{"_version":8}', encoding="utf-8")
+        elif case == "invalid_migration":
+            (config_dir / "migration.journal").write_text("{", encoding="utf-8")
+        elif case == "started_migration":
+            (config_dir / "migration.journal").write_text(
+                '{"status":"started"}', encoding="utf-8"
+            )
+        elif case == "unknown_migration":
+            (config_dir / "migration.journal").write_text(
+                '{"status":"unknown"}', encoding="utf-8"
+            )
+        elif case == "missing_key":
+            (config_dir / "encryption.key").unlink()
+        elif case == "wrong_key_mode":
+            (config_dir / "encryption.key").chmod(0o640)
+        elif case == "short_key":
+            (config_dir / "encryption.key").write_bytes(b"short")
+        elif case == "missing_key_lock":
+            (config_dir / ".encryption-key.lock").unlink()
+        elif case == "wrong_key_lock_mode":
+            (config_dir / ".encryption-key.lock").chmod(0o640)
+        elif case == "hot_wal":
+            (config_dir / "channelwatch.db-wal").write_bytes(b"hot")
+        elif case == "hot_journal":
+            (config_dir / "channelwatch.db-journal").write_bytes(b"hot")
+        elif case == "plaintext_dvr":
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "_version": entrypoint.CURRENT_SCHEMA_VERSION,
+                        "dvr_servers": [{"api_key": "plaintext"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        elif case == "plaintext_webhook":
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "_version": entrypoint.CURRENT_SCHEMA_VERSION,
+                        "webhooks": [{"url": "https://example.test/hook"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        elif case == "pending_transaction":
+            transaction_dir = config_dir / ".channelwatch-transactions"
+            transaction_dir.mkdir()
+            (transaction_dir / "journal.json").write_text("{}", encoding="utf-8")
+        else:
+            runtime_dir.mkdir()
+            if case == "restart_journal":
+                entrypoint.RESTART_REQUIRED_PATH.write_text("{}", encoding="utf-8")
+            elif case == "invalid_active":
+                (runtime_dir / "active.json").write_text("{", encoding="utf-8")
+            elif case == "invalid_job":
+                (runtime_dir / "update-job.json").write_text("{", encoding="utf-8")
+            elif case == "transition_job":
+                (runtime_dir / "update-job.json").write_text(
+                    '{"status":"applying"}', encoding="utf-8"
+                )
+            elif case == "activation_record":
+                (runtime_dir / "activation-core-ready.json").write_text(
+                    "{}", encoding="utf-8"
+                )
+            elif case == "legacy_active":
+                (runtime_dir / "active.json").write_text(
+                    '{"version":"0.9.18"}', encoding="utf-8"
+                )
+            elif case == "inconsistent_recovery":
+                (runtime_dir / "active.json").write_text(
+                    json.dumps(
+                        {
+                            "version": "0.9.18",
+                            "activation_id": "activation-1",
+                            "manifest": {"bundle_sha256": "a" * 64},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (runtime_dir / "official-recovery-mode.json").write_text(
+                    json.dumps(
+                        {
+                            "failed_version": "0.9.19",
+                            "failed_bundle_sha256": "b" * 64,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+        with pytest.raises(RuntimeError, match=message):
+            entrypoint.validate_read_only_runtime_state()
+
+    def test_completed_journal_empty_sqlite_sidecars_and_terminal_job_are_safe(
+        self, tmp_path
+    ):
+        entrypoint = _load_entrypoint()
+        config_dir = _seed_mature_read_only_config(entrypoint, tmp_path)
+        (config_dir / "migration.journal").write_text(
+            '{"status":"completed"}', encoding="utf-8"
+        )
+        (config_dir / "channelwatch.db-wal").write_bytes(b"")
+        (config_dir / "channelwatch.db-journal").write_bytes(b"")
+        runtime_dir = entrypoint.CHANNELWATCH_RUNTIME_DIR
+        runtime_dir.mkdir()
+        (runtime_dir / "update-job.json").write_text(
+            '{"status":"success"}', encoding="utf-8"
+        )
+
+        entrypoint.validate_read_only_runtime_state()
+
+    def test_consistent_official_recovery_marker_is_safe(self, tmp_path):
+        entrypoint = _load_entrypoint()
+        _seed_mature_read_only_config(entrypoint, tmp_path)
+        runtime_dir = entrypoint.CHANNELWATCH_RUNTIME_DIR
+        runtime_dir.mkdir()
+        digest = "a" * 64
+        (runtime_dir / "active.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.9.18",
+                    "activation_id": "activation-1",
+                    "manifest": {"bundle_sha256": digest},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (runtime_dir / "official-recovery-mode.json").write_text(
+            json.dumps(
+                {
+                    "failed_version": "0.9.18",
+                    "failed_bundle_sha256": digest,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        entrypoint.validate_read_only_runtime_state()

@@ -13,7 +13,7 @@ Recommended tags:
 
 - `latest` for the newest stable image
 - `0.9` for the current compatible v0.9 release
-- `0.9.17` for the v0.9.17 release
+- `0.9.18` for the v0.9.18 release
 
 ## Quick Start
 
@@ -28,7 +28,6 @@ services:
       - ./config:/config
     environment:
       TZ: America/Los_Angeles
-      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "1000"
       PGID: "1000"
     restart: unless-stopped
@@ -38,19 +37,23 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v0.9.17, `0.9`, or `latest` for the current v0.9 release. It provides an actionable blocked state when a required deployment key is missing, makes notification tests reflect real delivery, preserves report drafts, separates restart recovery from DVR readiness, and accepts safely resolved LAN and Tailscale DVR hostnames.
+Use v0.9.18, `0.9`, or `latest` for the current v0.9 release. It removes the normal deployment-key setup, automatically manages encryption under `/config`, and makes the signed in-app Update Center the default upgrade path.
 
-After installing a version with Update Center support through Docker, Unraid, Compose, or Helm, compatible app-only releases can be checked, verified, backed up, applied, and rolled back from **Settings > Updates**.
+Operational v0.9.11–v0.9.17 installations can update directly to v0.9.18 from **Settings > Updates**, including the common v0.9.15, v0.9.16, and v0.9.17 installations. Compatible updates are signed, backed up, validated after restart, and rollback-capable. Automatic updates default to the local 03:00–05:00 maintenance window; notify-only is available.
 
-v0.9.17 requires a normal container image update. Pull and recreate the container because missing-key recovery must work before the core monitor starts; the Update Center intentionally reports this release as **container image update required**.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v0.9.18 image once. The immutable published entrypoints in those images cannot safely activate v0.9.18. The v0.9.18 image repairs any stale legacy update marker without discarding the preserved configuration; after this one-time image refresh, use Update Center normally.
+
+An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v0.9.18 once, or provide the correct old key for one migration restart.
+
+After v0.9.18 is installed, a setup or legacy-recovery state can use a narrowly scoped official signed recovery update before normal admin navigation is available. It requires same-origin anti-CSRF state and exact typed confirmation and does not accept custom feeds, URLs, uploads, keys, or downgrades.
 
 Releases that change the container runtime still require a normal image update. ChannelWatch will show **container image update required** when that is the safe path.
 
 ## Configuration
 
-ChannelWatch stores its settings, logs, database, backups, and encryption key under `/config`. Set `CHANNELWATCH_SECRET_STORAGE_KEY` to a unique value of at least 32 characters so new local secret files are written with envelope encryption.
+ChannelWatch stores its settings, logs, database, backups, and managed encryption key under `/config`. There is no key to generate for a new installation. Protect the volume and app backups like credential storage.
 
-The external Project One-Click template currently omits that variable. If a fresh one-click install shows **Runtime setup required**, generate a stable value with `openssl rand -base64 48`, add it to the stack as `CHANNELWATCH_SECRET_STORAGE_KEY`, and recreate the container without deleting its `/config` volume. Preserve the same value across upgrades and restores; ChannelWatch cannot recover it if it is lost.
+For an existing legacy envelope created by v0.9.5–v0.9.17, keep the old `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input for the first v0.9.18 restart. ChannelWatch converts the same logical key to local managed storage. v0.9.9 and v0.9.10 still need the documented one-time v0.9.18 image pull before that migration can run. If the old key is lost, the authenticated Security page can reset only unrecoverable DVR API keys and custom webhook URLs/secrets while preserving other settings and history.
 
 DVR setup is easiest through the web UI. For bootstrap-only deployments, `CHANNELS_DVR_SERVERS` supports comma-separated `Name@host:port` entries.
 

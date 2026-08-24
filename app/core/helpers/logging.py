@@ -33,6 +33,7 @@ def setup_logging(config_path: str, retention_days: int = 7, test_mode: bool = F
             return
 
     log_file = os.path.join(config_path, "channelwatch.log")
+    log_handler = None
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -49,12 +50,30 @@ def setup_logging(config_path: str, retention_days: int = 7, test_mode: bool = F
             "[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
 
-    log_handler = TimedRotatingFileHandler(
-        log_file,
-        when="midnight",
-        interval=1,
-        backupCount=retention_days,
-    )
+    if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        print(
+            "[Logging] /config is read-only; persistent file logging is disabled.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+
+    try:
+        log_handler = TimedRotatingFileHandler(
+            log_file,
+            when="midnight",
+            interval=1,
+            backupCount=retention_days,
+        )
+    except OSError as exc:
+        log_handler = None
+        print(
+            "[Logging] Persistent file logging is unavailable; continuing with "
+            f"container output only: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
     log_handler.setFormatter(formatter)
     root_logger.addHandler(log_handler)
 

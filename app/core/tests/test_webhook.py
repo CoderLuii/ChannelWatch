@@ -250,6 +250,75 @@ def test_delivery_allows_exact_trusted_private_webhook_destination():
     assert mock_post.call_args.kwargs["sni_hostname"] is None
 
 
+def test_delivery_pins_trusted_private_hostname_and_preserves_https_identity():
+    url = "https://mattermost.lan:8443/hooks/channelwatch"
+    settings = type(
+        "Settings",
+        (),
+        {
+            "webhooks": [{"url": url, "secret": "super-secret", "enabled": True}],
+            "trusted_notification_destinations": [
+                {
+                    "source": "webhook",
+                    "scheme": "https",
+                    "host": "mattermost.lan",
+                    "port": 8443,
+                }
+            ],
+        },
+    )()
+    manager = WebhookManager(settings)
+    response = MagicMock(status_code=204)
+
+    with (
+        patch(
+            "core.helpers.trusted_destinations._resolve_hostname",
+            return_value={"192.168.1.20"},
+        ) as resolver,
+        patch.object(manager, "_post", return_value=response) as mock_post,
+    ):
+        assert manager.send_notification("Test title", "Test message") is True
+
+    resolver.assert_called_once_with("mattermost.lan")
+    assert mock_post.call_args.args[0] == "https://192.168.1.20:8443/hooks/channelwatch"
+    assert mock_post.call_args.args[2]["Host"] == "mattermost.lan:8443"
+    assert mock_post.call_args.kwargs["sni_hostname"] == "mattermost.lan"
+
+
+def test_delivery_revalidates_trusted_hostname_on_retry_and_blocks_rebind():
+    url = "http://mattermost.lan:8065/hooks/channelwatch"
+    settings = type(
+        "Settings",
+        (),
+        {
+            "webhooks": [{"url": url, "secret": "super-secret", "enabled": True}],
+            "trusted_notification_destinations": [
+                {
+                    "source": "webhook",
+                    "scheme": "http",
+                    "host": "mattermost.lan",
+                    "port": 8065,
+                }
+            ],
+        },
+    )()
+    manager = WebhookManager(settings)
+    retry_response = MagicMock(status_code=503)
+
+    with (
+        patch(
+            "core.helpers.trusted_destinations._resolve_hostname",
+            side_effect=[{"192.168.1.20"}, {"169.254.169.254"}],
+        ),
+        patch.object(manager, "_post", return_value=retry_response) as mock_post,
+        patch("core.notifications.webhook.time.sleep"),
+    ):
+        assert manager.send_notification("Test title", "Test message") is False
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.args[0] == "http://192.168.1.20:8065/hooks/channelwatch"
+
+
 def test_delivery_rejects_loopback_webhook_even_when_trusted():
     settings = type(
         "Settings",

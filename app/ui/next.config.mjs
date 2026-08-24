@@ -8,6 +8,9 @@ export default function createNextConfig(phase) {
   /** @type {import('next').NextConfig} */
   const nextConfig = {
     ...(developmentServer ? {} : { output: 'export' }),
+    ...(process.env.CHANNELWATCH_BUILD_ID
+      ? { generateBuildId: async () => process.env.CHANNELWATCH_BUILD_ID }
+      : {}),
     typescript: {
       ignoreBuildErrors: true,
     },

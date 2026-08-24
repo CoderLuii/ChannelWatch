@@ -208,16 +208,21 @@ class TestDoctorRotateEncryptionKey:
 
         output = capsys.readouterr().out
         assert (
-            "Encryption key rotated successfully. Re-encrypted 2 DVR API key(s)."
+            "Encryption key rotated successfully. Re-encrypted 2 protected credential(s)."
             in output
         )
 
         new_key = _atomic_read_secret_bytes(key_file)
         assert new_key != old_key
-        assert (tmp_path / "encryption.key.bak").exists()
+        recovery_keys = list(
+            (tmp_path / "backups" / "key-recovery").glob(
+                "encryption-key-rotation-*/encryption.key"
+            )
+        )
+        assert len(recovery_keys) == 1
         if os.name != "nt":
             assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
-            assert stat.S_IMODE((tmp_path / "encryption.key.bak").stat().st_mode) == 0o600
+            assert stat.S_IMODE(recovery_keys[0].stat().st_mode) == 0o600
 
         raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
         new_ciphertexts = [server["api_key"] for server in raw["dvr_servers"]]
@@ -264,16 +269,24 @@ class TestDoctorRotateEncryptionKey:
 
         with (
             _PatchStack(_patch_config_paths(tmp_path)),
-            patch("core.cli.doctor.atomic_write_json", side_effect=fail_write),
+            patch(
+                "core.helpers.credential_maintenance.replace_config_files_transactionally",
+                side_effect=fail_write,
+            ),
         ):
             with pytest.raises(RuntimeError, match="settings write failed"):
                 run(["rotate-encryption-key"])
 
         assert _atomic_read_secret_bytes(key_file) == old_key
-        assert (tmp_path / "encryption.key.bak").exists()
+        recovery_keys = list(
+            (tmp_path / "backups" / "key-recovery").glob(
+                "encryption-key-rotation-*/encryption.key"
+            )
+        )
+        assert len(recovery_keys) == 1
         if os.name != "nt":
             assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
-            assert stat.S_IMODE((tmp_path / "encryption.key.bak").stat().st_mode) == 0o600
+            assert stat.S_IMODE(recovery_keys[0].stat().st_mode) == 0o600
         raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
         decrypted = decrypt_dvr_api_keys(raw["dvr_servers"], key_file)
         assert [server["api_key"] for server in decrypted] == ["secret-one"]

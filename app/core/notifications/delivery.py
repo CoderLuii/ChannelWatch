@@ -178,6 +178,8 @@ def _persist(
     activity_event_id: Optional[str] = None,
     db_engine: Any = None,
 ) -> None:
+    if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        return
     engine = db_engine if db_engine is not None else _get_delivery_db_engine()
     if engine is None:
         return

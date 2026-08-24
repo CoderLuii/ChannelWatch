@@ -9,13 +9,14 @@ import json
 import os
 import shutil
 import stat as stat_module
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 import zipfile
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -30,8 +31,21 @@ except ImportError:  # pragma: no cover - container runtime is POSIX
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from core.helpers.atomic_io import atomic_write_bytes, atomic_write_json, fsync_directory
-
+from core.helpers.atomic_io import (
+    _atomic_write_secret_bytes,
+    atomic_write_bytes,
+    atomic_write_json,
+    fsync_directory,
+)
+from core.update_catalog import (
+    CATALOG_SCHEMA_VERSION,
+    DEFAULT_UPDATE_CATALOG_URL,
+    DeliveryMode,
+    LauncherProtocol,
+    launcher_protocol_for_image_version,
+    normalize_catalog,
+    select_catalog_release,
+)
 
 RUNTIME_ABI = "channelwatch-runtime-v1"
 MANIFEST_SCHEMA_VERSION = 1
@@ -52,6 +66,16 @@ LOCK_STALE_SECONDS = 60 * 60
 ACTIVATION_TIMEOUT_SECONDS = 120
 RESTART_REQUIRED_FILE = "restart-required.json"
 RESTART_JOURNAL_LOCK_FILE = "restart-required.lock"
+PROTOCOL_THREE_HANDOFF_FILE = "restart-services-accepted.json"
+PROTOCOL_THREE_HANDOFF_SCHEMA = 1
+PROTOCOL_THREE_HANDOFF_FIELDS = {"schema", "journal", "old_processes"}
+PROTOCOL_THREE_PROCESS_NAMES = {"core", "ui"}
+PROTOCOL_THREE_PROCESS_IDENTITY_FIELDS = {"pid", "start"}
+PROTOCOL_THREE_RESTART_HELPER_LOCK_FILE = "restart-services.lock"
+PROTOCOL_THREE_RECONCILE_GRACE_SECONDS = 0.25
+PROTOCOL_THREE_RECONCILE_TIMEOUT_SECONDS = 12.0
+PROTOCOL_THREE_RECONCILE_INTERVAL_SECONDS = 0.05
+RUNTIME_CONTROL_MAX_BYTES = 256 * 1024
 ACTIVATION_OUTCOME_LOCK_FILE = "activation-outcome.lock"
 RESTART_JOURNAL_SCHEMA = 2
 RESTART_CONTROL_FILES = (
@@ -75,6 +99,83 @@ RESTART_JOURNAL_FIELDS = {
     "created_at",
     "control",
 }
+
+
+def _read_runtime_json_strict(path: Path, *, label: str) -> Any:
+    """Read one bounded, unchanged, single-link runtime control file."""
+
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise UpdateLockedError(f"Safe {label} reads are unavailable.")
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise UpdateLockedError(f"The {label} cannot be inspected safely.") from exc
+    if (
+        not stat_module.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != os.geteuid()
+        or before.st_size < 0
+        or before.st_size > RUNTIME_CONTROL_MAX_BYTES
+    ):
+        raise UpdateLockedError(f"The {label} is not a trusted bounded regular file.")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise UpdateLockedError(f"The {label} cannot be opened safely.") from exc
+    try:
+        opened = os.fstat(fd)
+        if (
+            opened.st_dev != before.st_dev
+            or opened.st_ino != before.st_ino
+            or not stat_module.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or opened.st_size > RUNTIME_CONTROL_MAX_BYTES
+        ):
+            raise UpdateLockedError(f"The {label} changed before it was opened.")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(65_536, RUNTIME_CONTROL_MAX_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > RUNTIME_CONTROL_MAX_BYTES:
+                raise UpdateLockedError(f"The {label} exceeds the safe size limit.")
+        after_fd = os.fstat(fd)
+    finally:
+        os.close(fd)
+    try:
+        after_name = os.lstat(path)
+    except OSError as exc:
+        raise UpdateLockedError(f"The {label} changed while being read.") from exc
+    identity_fields = (
+        "st_dev",
+        "st_ino",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+        "st_nlink",
+        "st_uid",
+    )
+    if any(
+        getattr(before, field) != getattr(opened, field)
+        or getattr(opened, field) != getattr(after_fd, field)
+        or getattr(after_fd, field) != getattr(after_name, field)
+        for field in identity_fields
+    ):
+        raise UpdateLockedError(f"The {label} changed while being read.")
+    try:
+        return json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise UpdateLockedError(f"The {label} does not contain valid JSON.") from exc
+
+
 BUNDLE_LEGAL_MEMBERS = frozenset(
     {
         "LICENSE",
@@ -114,6 +215,110 @@ class UpdateLockedError(UpdateCenterError):
 
 class UpdateRestartError(UpdateCenterError):
     """Raised when a required coordinated container restart cannot be started."""
+
+
+def launcher_compatibility_status(
+    *, image_version: str | None = None, running_app_dir: str | None = None
+) -> dict[str, Any]:
+    """Return non-sensitive launcher/image compatibility for API diagnostics."""
+
+    configured_image = (
+        str(
+            image_version
+            or os.environ.get("CHANNELWATCH_IMAGE_VERSION", "")
+            or "unknown"
+        )
+        .strip()
+        .lstrip("v")
+    )
+    protocol = int(launcher_protocol_for_image_version(configured_image))
+    try:
+        minimum_image_satisfied = compare_versions(configured_image, "0.9.11") >= 0
+    except (TypeError, ValueError):
+        minimum_image_satisfied = False
+    app_dir = str(running_app_dir or os.environ.get("CHANNELWATCH_APP_DIR", "")).strip()
+    image_dir = str(DEFAULT_IMAGE_APP_DIR.resolve())
+    try:
+        bundle_active = bool(app_dir and str(Path(app_dir).resolve()) != image_dir)
+    except OSError:
+        bundle_active = bool(app_dir)
+    return {
+        "image_version": configured_image,
+        "launcher_protocol": protocol,
+        "bundle_active": bundle_active,
+        "minimum_safe_image_version": "0.9.11",
+        "safe_for_app_updates": (
+            minimum_image_satisfied and protocol >= int(LauncherProtocol.LEGACY_ADOPT)
+        ),
+        "recovery_capable": protocol >= int(LauncherProtocol.RECOVERY_CAPABLE),
+    }
+
+
+def guard_legacy_launcher_before_start(
+    *,
+    config_dir: Path,
+    running_version: str,
+    restart_callable: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    """Defense-in-depth if a bundle is ever selected by a protocol-0 launcher.
+
+    The v0.9.9 core launcher rejects Supervisor's ``--stay-alive`` argument
+    before importing bundle code, so this hook is not evidence that the
+    immutable published image can recover itself. If any child does reach the
+    bundle, the hook restores the prior image selection and requests one
+    whole-container restart. No network or unsigned input is used here.
+    """
+
+    status = launcher_compatibility_status()
+    if not status["bundle_active"] or status["safe_for_app_updates"]:
+        return {**status, "allowed": True, "recovery_started": False}
+
+    runtime_dir = runtime_dir_for_config(Path(config_dir))
+    active_path = runtime_dir / "active.json"
+    rollback_path = runtime_dir / "rollback.json"
+    job_path = runtime_dir / "update-job.json"
+    lock_path = runtime_dir / "legacy-launcher-guard.lock"
+    with UpdateOperationLock(lock_path, wait_timeout=5.0):
+        rollback = load_json(rollback_path, None)
+        previous = (
+            rollback.get("previous_active") if isinstance(rollback, dict) else None
+        )
+        if isinstance(previous, dict) and previous.get("path"):
+            atomic_write_json(active_path, previous)
+            rolled_back_to = str(previous.get("version") or "previous bundle")
+        else:
+            try:
+                active_path.unlink()
+            except FileNotFoundError:
+                pass
+            rolled_back_to = "image"
+        atomic_write_json(
+            job_path,
+            {
+                "job_id": f"legacy-launcher-guard-{int(time.time())}",
+                "operation": "activation_guard",
+                "status": "image_required",
+                "version": running_version.strip().lstrip("v"),
+                "message": (
+                    "This container image predates safe in-app activation. "
+                    "ChannelWatch restored the image runtime; preserve /config, "
+                    "pull/recreate v0.9.18, and do not retry the v0.9.9 updater."
+                ),
+                "minimum_image_version": "0.9.18",
+                "rollback_applied": True,
+                "rolled_back_to": rolled_back_to,
+                "updated_at": utc_now(),
+            },
+        )
+    restart_started = False
+    if restart_callable is not None:
+        restart_started = bool(restart_callable())
+    return {
+        **status,
+        "allowed": False,
+        "recovery_started": restart_started,
+        "reason": "launcher_protocol_0_requires_image_refresh",
+    }
 
 
 def utc_now() -> str:
@@ -198,10 +403,14 @@ class _TrustedUpdateRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def fetch_bytes(url: str, *, max_bytes: int, timeout: float = 20.0) -> bytes:
     validate_trusted_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": "ChannelWatch-UpdateCenter"})
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "ChannelWatch-UpdateCenter"}
+    )
     opener = urllib.request.build_opener(_TrustedUpdateRedirectHandler())
     try:
-        with opener.open(req, timeout=timeout) as response:  # nosec B310: every URL is allowlisted.
+        with opener.open(
+            req, timeout=timeout
+        ) as response:  # nosec B310: every URL is allowlisted.
             # A custom handler or transport must not be able to bypass the
             # redirect check above. Validate the final URL before reading any
             # response bytes.
@@ -214,7 +423,9 @@ def fetch_bytes(url: str, *, max_bytes: int, timeout: float = 20.0) -> bytes:
                     break
                 total += len(chunk)
                 if total > max_bytes:
-                    raise UpdateManifestError("Downloaded update data exceeds size limit.")
+                    raise UpdateManifestError(
+                        "Downloaded update data exceeds size limit."
+                    )
                 chunks.append(chunk)
             return b"".join(chunks)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -223,7 +434,9 @@ def fetch_bytes(url: str, *, max_bytes: int, timeout: float = 20.0) -> bytes:
         ) from exc
 
 
-def normalize_manifest(raw: dict[str, Any], public_keys: dict[str, str]) -> dict[str, Any]:
+def normalize_manifest(
+    raw: dict[str, Any], public_keys: dict[str, str]
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise UpdateManifestError("Update manifest must be a JSON object.")
     if raw.get("schema") != MANIFEST_SCHEMA_VERSION:
@@ -237,7 +450,9 @@ def normalize_manifest(raw: dict[str, Any], public_keys: dict[str, str]) -> dict
     value = str(signature.get("value") or "")
     if signature.get("alg") != "ed25519" or not key_id or not value:
         raise UpdateManifestError("Update manifest signature is incomplete.")
-    verify_ed25519_signature(public_keys, key_id, value, canonical_payload_bytes(payload))
+    verify_ed25519_signature(
+        public_keys, key_id, value, canonical_payload_bytes(payload)
+    )
 
     version = str(payload.get("version") or "").strip().lstrip("v")
     parse_version(version)
@@ -248,6 +463,55 @@ def normalize_manifest(raw: dict[str, Any], public_keys: dict[str, str]) -> dict
     if release_url:
         validate_trusted_url(release_url)
 
+    image_required_value = payload.get("image_required", False)
+    if type(image_required_value) is not bool:
+        raise UpdateManifestError(
+            "Update manifest image_required must be an explicit boolean."
+        )
+    image_required = image_required_value
+    delivery_value = str(payload.get("delivery_mode") or "")
+    if not delivery_value:
+        delivery_mode = (
+            DeliveryMode.IMAGE_REQUIRED if image_required else DeliveryMode.APP_UPDATE
+        )
+    else:
+        try:
+            delivery_mode = DeliveryMode(delivery_value)
+        except ValueError as exc:
+            raise UpdateManifestError(
+                "Update manifest delivery mode is unsupported."
+            ) from exc
+        if image_required != (delivery_mode is DeliveryMode.IMAGE_REQUIRED):
+            raise UpdateManifestError(
+                "Update manifest delivery mode conflicts with image_required."
+            )
+
+    minimum_image_version = (
+        str(payload.get("minimum_image_version") or "0.9.10").strip().lstrip("v")
+    )
+    parse_version(minimum_image_version)
+    minimum_launcher_protocol = payload.get("minimum_launcher_protocol", 1)
+    updater_protocol = payload.get("updater_protocol", 2)
+    if type(minimum_launcher_protocol) is not int or minimum_launcher_protocol < 0:
+        raise UpdateManifestError(
+            "Update manifest minimum_launcher_protocol must be a non-negative integer."
+        )
+    if type(updater_protocol) is not int or updater_protocol < 1:
+        raise UpdateManifestError(
+            "Update manifest updater_protocol must be a positive integer."
+        )
+
+    automatic_install_allowed = payload.get("automatic_install_allowed", True)
+    recovery_compatible = payload.get("recovery_compatible", False)
+    if type(automatic_install_allowed) is not bool:
+        raise UpdateManifestError(
+            "Update manifest automatic_install_allowed must be an explicit boolean."
+        )
+    if type(recovery_compatible) is not bool:
+        raise UpdateManifestError(
+            "Update manifest recovery_compatible must be an explicit boolean."
+        )
+
     return {
         "schema": MANIFEST_SCHEMA_VERSION,
         "payload": {
@@ -256,7 +520,22 @@ def normalize_manifest(raw: dict[str, Any], public_keys: dict[str, str]) -> dict
             "version_tag": str(payload.get("version_tag") or f"v{version}"),
             "runtime_abi": str(payload.get("runtime_abi") or ""),
             "settings_schema_version": int(payload.get("settings_schema_version") or 0),
-            "image_required": bool(payload.get("image_required", False)),
+            "image_required": image_required,
+            "delivery_mode": delivery_mode.value,
+            "image_refresh_recommended": (
+                delivery_mode is DeliveryMode.APP_UPDATE_WITH_IMAGE_REFRESH
+            ),
+            "minimum_image_version": minimum_image_version,
+            "minimum_launcher_protocol": minimum_launcher_protocol,
+            "updater_protocol": updater_protocol,
+            "automatic_install_allowed": automatic_install_allowed,
+            "automatic_install_after": payload.get("automatic_install_after"),
+            "recovery_compatible": recovery_compatible,
+            "recommended_image_version": str(
+                payload.get("recommended_image_version") or version
+            )
+            .strip()
+            .lstrip("v"),
             "highlights": [
                 str(item) for item in payload.get("highlights", []) if str(item).strip()
             ],
@@ -277,6 +556,76 @@ def read_manifest_bytes(data: bytes, public_keys: dict[str, str]) -> dict[str, A
     except json.JSONDecodeError as exc:
         raise UpdateManifestError("Update manifest is not valid JSON.") from exc
     return normalize_manifest(raw, public_keys)
+
+
+def read_update_document_bytes(
+    data: bytes,
+    public_keys: dict[str, str],
+    *,
+    current_version: str,
+    runtime_abi: str,
+    settings_schema_version: int,
+    launcher_protocol: int,
+    recovery: bool = False,
+) -> dict[str, Any]:
+    """Read either the immutable schema-1 bridge or a signed schema-2 catalog.
+
+    The return shape deliberately matches the historical selected-manifest
+    contract so existing API and UI code needs no schema switch. Catalog
+    provenance is additive under ``catalog``.
+    """
+
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise UpdateManifestError("Update metadata exceeds size limit.")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise UpdateManifestError("Update metadata is not valid JSON.") from exc
+    if not isinstance(raw, dict):
+        raise UpdateManifestError("Update metadata must be a JSON object.")
+    if raw.get("schema") == MANIFEST_SCHEMA_VERSION:
+        manifest = normalize_manifest(raw, public_keys)
+        if recovery and manifest["payload"].get("recovery_compatible") is not True:
+            raise UpdateManifestError(
+                "The signed legacy update is not approved for recovery mode."
+            )
+        return manifest
+    if raw.get("schema") != CATALOG_SCHEMA_VERSION:
+        raise UpdateManifestError("Unsupported update metadata schema.")
+    try:
+        catalog = normalize_catalog(
+            raw,
+            public_keys=public_keys,
+            verify_signature=verify_ed25519_signature,
+            canonical_payload=canonical_payload_bytes,
+            validate_url=validate_trusted_url,
+        )
+        selection = select_catalog_release(
+            catalog,
+            current_version=current_version,
+            runtime_abi=runtime_abi,
+            settings_schema_version=settings_schema_version,
+            launcher_protocol=launcher_protocol,
+            recovery=recovery,
+        )
+    except (TypeError, ValueError) as exc:
+        raise UpdateManifestError(str(exc)) from exc
+    if selection.release is None:
+        raise UpdateManifestError(
+            "The signed catalog contains no release compatible with this installation."
+        )
+    return {
+        "schema": CATALOG_SCHEMA_VERSION,
+        "payload": selection.release,
+        "signature": catalog["signature"],
+        "catalog": {
+            "channel": catalog["payload"]["channel"],
+            "published_at": catalog["payload"].get("published_at"),
+            "selection_reason": selection.reason,
+            "considered_versions": list(selection.considered_versions),
+            "payload_sha256": sha256_hex(canonical_payload_bytes(catalog["payload"])),
+        },
+    }
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -323,7 +672,10 @@ def _is_allowed_bundle_member(name: str) -> bool:
     }
     if any(part in blocked_parts for part in path.parts):
         return False
-    if path.name in {"AGENTS.md", "RELEASE.md", ".env"} or path.suffix in {".pyc", ".pyo"}:
+    if path.name in {"AGENTS.md", "RELEASE.md", ".env"} or path.suffix in {
+        ".pyc",
+        ".pyo",
+    }:
         return False
     if path.name.startswith(".env"):
         return False
@@ -377,7 +729,9 @@ def validate_bundle_archive(
         if zf.testzip() is not None:
             raise UpdateBundleError("Update bundle integrity check failed.")
         if "channelwatch-bundle.json" not in names:
-            raise UpdateBundleError("Update bundle is missing channelwatch-bundle.json.")
+            raise UpdateBundleError(
+                "Update bundle is missing channelwatch-bundle.json."
+            )
         try:
             metadata = json.loads(zf.read("channelwatch-bundle.json").decode("utf-8"))
         except Exception as exc:
@@ -390,16 +744,25 @@ def validate_bundle_archive(
             raise UpdateBundleError("Update bundle version does not match manifest.")
         if metadata.get("runtime_abi") != expected_runtime_abi:
             raise UpdateBundleError("Update bundle runtime ABI is not compatible.")
-        if int(metadata.get("settings_schema_version") or 0) != expected_settings_schema_version:
-            raise UpdateBundleError("Update bundle schema version does not match manifest.")
+        if (
+            int(metadata.get("settings_schema_version") or 0)
+            != expected_settings_schema_version
+        ):
+            raise UpdateBundleError(
+                "Update bundle schema version does not match manifest."
+            )
         if "core/main.py" not in names or "ui/backend/main.py" not in names:
-            raise UpdateBundleError("Update bundle is missing required app entrypoints.")
+            raise UpdateBundleError(
+                "Update bundle is missing required app entrypoints."
+            )
         return metadata
 
 
 def extract_bundle_archive(bundle_bytes: bytes, destination: Path) -> None:
     destination = destination.resolve()
-    temp_destination = destination.with_name(f".{destination.name}.tmp-{uuid.uuid4().hex}")
+    temp_destination = destination.with_name(
+        f".{destination.name}.tmp-{uuid.uuid4().hex}"
+    )
     if temp_destination.exists():
         shutil.rmtree(temp_destination)
     temp_destination.mkdir(parents=True, exist_ok=False)
@@ -444,6 +807,7 @@ def resolve_active_app_dir(
     image_version: str,
     runtime_abi: str = RUNTIME_ABI,
     settings_schema_version: int,
+    read_only: bool | None = None,
 ) -> RuntimeSelection:
     runtime_dir = runtime_dir_for_config(config_dir)
     active_path = runtime_dir / "active.json"
@@ -478,6 +842,16 @@ def resolve_active_app_dir(
         reason = "active-bundle-metadata-invalid"
 
     if reason:
+        effective_read_only = (
+            os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1"
+            if read_only is None
+            else read_only
+        )
+        if effective_read_only:
+            raise UpdateCenterError(
+                "The active runtime selection requires writable reconciliation: "
+                f"{reason}."
+            )
         status_path = runtime_dir / "startup-status.json"
         atomic_write_json(
             status_path,
@@ -504,7 +878,9 @@ def resolve_active_app_dir(
                 pass
         return RuntimeSelection(image_app_dir, "image", active=active, reason=reason)
 
-    return RuntimeSelection(bundle_path, "bundle", active=active, reason="active-compatible")
+    return RuntimeSelection(
+        bundle_path, "bundle", active=active, reason="active-compatible"
+    )
 
 
 def is_process_running(pid: int) -> bool:
@@ -529,9 +905,9 @@ def get_process_identity(pid: int) -> str | None:
     if pid <= 0:
         return None
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
-            encoding="utf-8"
-        ).strip()
+        boot_id = (
+            Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        )
         stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         # The command name is parenthesized and can contain spaces. Splitting
         # after its final ')' makes index 19 the kernel starttime field (22).
@@ -549,7 +925,7 @@ class UpdateOperationLock:
         self._fd: int | None = None
         self._inode: int | None = None
 
-    def __enter__(self) -> "UpdateOperationLock":
+    def __enter__(self) -> UpdateOperationLock:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.wait_timeout
         while True:
@@ -643,11 +1019,14 @@ class UpdateManager:
         runtime_abi: str = RUNTIME_ABI,
         settings_schema_version: int = 7,
         public_keys: dict[str, str] | None = None,
-        manifest_url: str = DEFAULT_UPDATE_MANIFEST_URL,
+        manifest_url: str = DEFAULT_UPDATE_CATALOG_URL,
+        image_version: str | None = None,
+        launcher_protocol: int | None = None,
         fetcher: Callable[[str, int], bytes] | None = None,
         backup_callable: Callable[[Path], bytes] | None = None,
         restart_callable: Callable[[], bool] | None = None,
         healthcheck_callable: Callable[[], bool] | None = None,
+        maintenance_lock: Callable[[], AbstractContextManager[Any]] | None = None,
     ):
         self.config_dir = Path(config_dir)
         self.runtime_dir = runtime_dir_for_config(self.config_dir)
@@ -656,10 +1035,44 @@ class UpdateManager:
         self.settings_schema_version = int(settings_schema_version)
         self.public_keys = dict(public_keys or UPDATE_PUBLIC_KEYS)
         self.manifest_url = manifest_url
+        configured_image_version = os.environ.get(
+            "CHANNELWATCH_IMAGE_VERSION", ""
+        ).strip()
+        fallback_image_version = self.current_version
+        if not image_version and not configured_image_version:
+            # Library/unit-test callers outside a container have no immutable
+            # image generation. Treat the current Python runtime as at least
+            # the first safe launcher; real images always set the env value.
+            try:
+                if compare_versions(fallback_image_version, "0.9.10") < 0:
+                    fallback_image_version = "0.9.10"
+            except ValueError:
+                fallback_image_version = "0.9.10"
+        self.image_version = (
+            str(image_version or configured_image_version or fallback_image_version)
+            .strip()
+            .lstrip("v")
+        )
+        if launcher_protocol is None:
+            self.launcher_protocol = int(
+                launcher_protocol_for_image_version(configured_image_version)
+                if configured_image_version
+                else LauncherProtocol.RECOVERY_CAPABLE
+            )
+        else:
+            self.launcher_protocol = int(launcher_protocol)
         self.fetcher = fetcher
         self.backup_callable = backup_callable
         self.restart_callable = restart_callable
         self.healthcheck_callable = healthcheck_callable
+        self.maintenance_lock = maintenance_lock
+
+    def _maintenance_context(
+        self, *, already_held: bool = False
+    ) -> AbstractContextManager[Any]:
+        if already_held or self.maintenance_lock is None:
+            return nullcontext()
+        return self.maintenance_lock()
 
     @property
     def releases_dir(self) -> Path:
@@ -684,6 +1097,10 @@ class UpdateManager:
     @property
     def restart_required_path(self) -> Path:
         return self.runtime_dir / RESTART_REQUIRED_FILE
+
+    @property
+    def protocol_three_handoff_path(self) -> Path:
+        return self.runtime_dir / PROTOCOL_THREE_HANDOFF_FILE
 
     def activation_ready_path(self, component: str) -> Path:
         if component not in {"core", "ui"}:
@@ -754,9 +1171,7 @@ class UpdateManager:
         """Serialize startup quorum and deadline outcomes across all processes."""
 
         if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
-            raise UpdateLockedError(
-                "Safe activation outcome locking is unavailable."
-            )
+            raise UpdateLockedError("Safe activation outcome locking is unavailable.")
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self.runtime_dir / ACTIVATION_OUTCOME_LOCK_FILE
         try:
@@ -835,8 +1250,13 @@ class UpdateManager:
             raise UpdateCenterError(f"Unsupported restart phase: {phase}.")
         if set(control) != set(RESTART_CONTROL_FILES):
             raise UpdateCenterError("Restart journal control mapping is incomplete.")
-        if any(value is not None and not isinstance(value, dict) for value in control.values()):
-            raise UpdateCenterError("Restart journal control values must be objects or null.")
+        if any(
+            value is not None and not isinstance(value, dict)
+            for value in control.values()
+        ):
+            raise UpdateCenterError(
+                "Restart journal control values must be objects or null."
+            )
         return {
             "schema": RESTART_JOURNAL_SCHEMA,
             "reason": reason,
@@ -863,7 +1283,9 @@ class UpdateManager:
         )
         return staged_path
 
-    def _cleanup_restart_journal_candidates(self, *, exclude: Path | None = None) -> None:
+    def _cleanup_restart_journal_candidates(
+        self, *, exclude: Path | None = None
+    ) -> None:
         """Remove only regular internal candidates abandoned by a dead writer."""
 
         removed = False
@@ -889,46 +1311,14 @@ class UpdateManager:
 
     def _load_restart_journal_strict(self) -> dict[str, Any]:
         try:
-            before = os.lstat(self.restart_required_path)
+            payload = _read_runtime_json_strict(
+                self.restart_required_path,
+                label="runtime transition journal",
+            )
         except FileNotFoundError as exc:
             raise UpdateLockedError(
                 "The expected runtime transition journal no longer exists."
             ) from exc
-        except OSError as exc:
-            raise UpdateLockedError(
-                "The runtime transition journal cannot be inspected safely."
-            ) from exc
-        if not stat_module.S_ISREG(before.st_mode):
-            raise UpdateLockedError(
-                "The runtime transition journal is not a regular file."
-            )
-        if before.st_nlink != 1:
-            raise UpdateLockedError(
-                "The runtime transition journal is hard-linked."
-            )
-        try:
-            payload = json.loads(self.restart_required_path.read_text(encoding="utf-8"))
-            after = os.lstat(self.restart_required_path)
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise UpdateLockedError(
-                "The runtime transition journal cannot be read safely."
-            ) from exc
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_nlink,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_nlink,
-        ):
-            raise UpdateLockedError(
-                "The runtime transition journal changed while it was being read."
-            )
         try:
             return self._validate_restart_journal(payload)
         except UpdateCenterError as exc:
@@ -952,7 +1342,7 @@ class UpdateManager:
         journal: dict[str, Any],
         *,
         expected: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         """Create a journal without clobbering, or replace its exact owner."""
 
         validated = self._validate_restart_journal(journal)
@@ -961,6 +1351,18 @@ class UpdateManager:
             staged_path = self._stage_restart_journal(validated)
             try:
                 if expected is None:
+                    try:
+                        os.lstat(self.protocol_three_handoff_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        raise UpdateLockedError(
+                            "The protocol-3 handoff marker cannot be inspected."
+                        ) from exc
+                    else:
+                        raise UpdateLockedError(
+                            "A protocol-3 restart handoff is still active."
+                        )
                     self._restart_transition_checkpoint("journal:before-create")
                     try:
                         os.link(staged_path, self.restart_required_path)
@@ -971,6 +1373,8 @@ class UpdateManager:
                 else:
                     self._restart_transition_checkpoint("journal:before-replace")
                     self._require_restart_journal_owner(expected)
+                    if self._protocol_three_handoff_matches_locked(expected):
+                        return False
                     os.replace(staged_path, self.restart_required_path)
                 fsync_directory(self.runtime_dir)
             finally:
@@ -981,6 +1385,7 @@ class UpdateManager:
                 else:
                     fsync_directory(self.runtime_dir)
         self._restart_transition_checkpoint("journal")
+        return True
 
     def _restart_transition_checkpoint(self, phase: str) -> None:
         """No-op fault-injection boundary for restart transaction tests."""
@@ -1007,9 +1412,258 @@ class UpdateManager:
                     "A runtime transition is waiting for the next container entrypoint."
                 )
 
+    def _protocol_three_restart_helper_active(self) -> bool:
+        """Return true only while the trusted image-owned helper holds its lock."""
+
+        if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
+            return False
+        runtime_dir = Path(
+            os.environ.get("CHANNELWATCH_RUNTIME_DIR", "/tmp/channelwatch")
+        )
+        lock_path = runtime_dir / PROTOCOL_THREE_RESTART_HELPER_LOCK_FILE
+        try:
+            parent = os.lstat(runtime_dir)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise UpdateLockedError(
+                "The restart helper runtime directory cannot be inspected."
+            ) from exc
+        try:
+            fd = os.open(
+                lock_path,
+                os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            )
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise UpdateLockedError(
+                "The restart helper lock cannot be opened safely."
+            ) from exc
+        try:
+            metadata = os.fstat(fd)
+            if (
+                not stat_module.S_ISDIR(parent.st_mode)
+                or parent.st_uid != os.geteuid()
+                or stat_module.S_IMODE(parent.st_mode) != 0o700
+                or not stat_module.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_uid != os.geteuid()
+            ):
+                raise UpdateLockedError("The restart helper lock is not trusted.")
+            try:
+                named_before = os.stat(lock_path, follow_symlinks=False)
+            except OSError as exc:
+                raise UpdateLockedError(
+                    "The restart helper lock changed ownership."
+                ) from exc
+            if (
+                named_before.st_dev != metadata.st_dev
+                or named_before.st_ino != metadata.st_ino
+                or not stat_module.S_ISREG(named_before.st_mode)
+                or named_before.st_nlink != 1
+                or named_before.st_uid != os.geteuid()
+            ):
+                raise UpdateLockedError("The restart helper lock changed ownership.")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            else:
+                try:
+                    named = os.stat(lock_path, follow_symlinks=False)
+                except OSError as exc:
+                    raise UpdateLockedError(
+                        "The restart helper lock changed ownership."
+                    ) from exc
+                if (
+                    named.st_dev != metadata.st_dev
+                    or named.st_ino != metadata.st_ino
+                    or not stat_module.S_ISREG(named.st_mode)
+                    or named.st_nlink != 1
+                    or named.st_uid != os.geteuid()
+                ):
+                    raise UpdateLockedError(
+                        "The restart helper lock changed ownership."
+                    )
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                return False
+        finally:
+            os.close(fd)
+
+    def _protocol_three_handoff_result(
+        self,
+        expected_journal: dict[str, Any],
+        *,
+        wait_for_active_helper: bool = False,
+    ) -> dict[str, Any] | None:
+        """Reconcile a durable result, optionally waiting for the active helper."""
+
+        result = self._protocol_three_handoff_result_once(expected_journal)
+        if result is not None or not wait_for_active_helper:
+            return result
+        started_at = time.monotonic()
+        grace_deadline = started_at + PROTOCOL_THREE_RECONCILE_GRACE_SECONDS
+        deadline = started_at + PROTOCOL_THREE_RECONCILE_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if (
+                time.monotonic() >= grace_deadline
+                and not self._protocol_three_restart_helper_active()
+            ):
+                # The helper can release its operation lock immediately after
+                # publishing the marker while a replacement child is consuming
+                # the journal under the owner lock. Perform one final blocking
+                # exact-state reconciliation before considering an abort.
+                return self._protocol_three_handoff_result_once(expected_journal)
+            time.sleep(PROTOCOL_THREE_RECONCILE_INTERVAL_SECONDS)
+            result = self._protocol_three_handoff_result_once(expected_journal)
+            if result is not None:
+                return result
+        return self._protocol_three_handoff_result_once(expected_journal)
+
+    def _protocol_three_handoff_result_once(
+        self,
+        expected_journal: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return the exact durable outcome after a lost restart reply.
+
+        The authenticated protocol-3 helper can accept a transition and restart
+        both children even if the initiating process disappears before receiving
+        its pipe acknowledgement. A replacement child then consumes the journal.
+        The replacement can also fail activation, complete the journaled rollback,
+        and record its terminal failed job before the initiating process resumes.
+        Never replace either durable generation with a stale abort.
+        """
+
+        if self.launcher_protocol != int(LauncherProtocol.RECOVERY_CAPABLE):
+            return None
+        validated = self._validate_restart_journal(expected_journal)
+        with self._restart_journal_lock():
+            if self._restart_journal_present():
+                current_journal = self._load_restart_journal_strict()
+                if current_journal != validated:
+                    return None
+                if not self._protocol_three_handoff_matches_locked(validated):
+                    return None
+            current = self._read_control_state()
+            expected = validated["control"]
+
+            expected_job = expected["update-job.json"]
+            current_job = current["update-job.json"]
+            if not isinstance(expected_job, dict) or not isinstance(current_job, dict):
+                return None
+            expected_job_id = str(expected_job.get("job_id") or "")
+            if not expected_job_id or str(current_job.get("job_id") or "") != (
+                expected_job_id
+            ):
+                return None
+            expected_operation = str(expected_job.get("operation") or "")
+            if (
+                not expected_operation
+                or str(current_job.get("operation") or "") != expected_operation
+            ):
+                return None
+
+            expected_pending = expected["activation-pending.json"]
+            current_pending = current["activation-pending.json"]
+            if (
+                current["active.json"] == expected["active.json"]
+                and current["rollback.json"] == expected["rollback.json"]
+            ):
+                if expected_pending is None and current_pending is None:
+                    return current_job
+                if current_pending == expected_pending:
+                    return current_job
+                if current_pending is None and current_job.get("status") == "success":
+                    return current_job
+
+            # An apply can reach activation, fail, and finish its separately
+            # journaled rollback before a lost callback reply is reconciled.
+            # Bind that terminal state to the original generation and digest.
+            expected_active = expected["active.json"]
+            if (
+                validated.get("operation") == "apply"
+                and validated.get("phase") == "commit"
+                and current["active.json"] == validated.get("source_active")
+                and current["rollback.json"] == expected["rollback.json"]
+                and current_pending is None
+                and current["activation-core-ready.json"] is None
+                and current["activation-ui-ready.json"] is None
+                and current_job.get("status") == "failed"
+                and current_job.get("rollback_applied") is True
+                and isinstance(expected_active, dict)
+                and str(current_job.get("rolled_back_from") or "").lstrip("v")
+                == str(expected_active.get("version") or "").lstrip("v")
+            ):
+                expected_digest = str(expected_job.get("bundle_sha256") or "")
+                current_digest = str(current_job.get("bundle_sha256") or "")
+                if expected_digest and current_digest != expected_digest:
+                    return None
+                return current_job
+            return None
+
+    def _protocol_three_handoff_matches_locked(
+        self,
+        expected_journal: dict[str, Any],
+    ) -> bool:
+        """Validate an exact post-barrier marker while the journal lock is held."""
+
+        if self.launcher_protocol != int(LauncherProtocol.RECOVERY_CAPABLE):
+            return False
+        expected = self._validate_restart_journal(expected_journal)
+        path = self.protocol_three_handoff_path
+        try:
+            payload = _read_runtime_json_strict(
+                path,
+                label="protocol-3 handoff marker",
+            )
+        except FileNotFoundError:
+            return False
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != PROTOCOL_THREE_HANDOFF_FIELDS
+            or payload.get("schema") != PROTOCOL_THREE_HANDOFF_SCHEMA
+        ):
+            raise UpdateLockedError("The protocol-3 handoff marker is invalid.")
+        try:
+            marker_journal = self._validate_restart_journal(payload.get("journal"))
+        except UpdateCenterError as exc:
+            raise UpdateLockedError(
+                "The protocol-3 handoff marker contains an invalid journal."
+            ) from exc
+        old_processes = payload.get("old_processes")
+        if not isinstance(old_processes, dict) or set(old_processes) != (
+            PROTOCOL_THREE_PROCESS_NAMES
+        ):
+            raise UpdateLockedError(
+                "The protocol-3 handoff marker contains invalid process identities."
+            )
+        for identity in old_processes.values():
+            if (
+                not isinstance(identity, dict)
+                or set(identity) != PROTOCOL_THREE_PROCESS_IDENTITY_FIELDS
+                or isinstance(identity.get("pid"), bool)
+                or not isinstance(identity.get("pid"), int)
+                or identity["pid"] <= 0
+                or isinstance(identity.get("start"), bool)
+                or not isinstance(identity.get("start"), int)
+                or identity["start"] < 0
+            ):
+                raise UpdateLockedError(
+                    "The protocol-3 handoff marker contains invalid process identities."
+                )
+        if marker_journal != expected:
+            raise UpdateLockedError(
+                "The protocol-3 handoff marker belongs to another generation."
+            )
+        return True
+
     @staticmethod
     def _validate_restart_journal(journal: Any) -> dict[str, Any]:
-        if not isinstance(journal, dict) or journal.get("schema") != RESTART_JOURNAL_SCHEMA:
+        if (
+            not isinstance(journal, dict)
+            or journal.get("schema") != RESTART_JOURNAL_SCHEMA
+        ):
             raise UpdateCenterError("Restart journal schema is invalid.")
         if set(journal) != RESTART_JOURNAL_FIELDS:
             raise UpdateCenterError("Restart journal fields are invalid.")
@@ -1040,11 +1694,16 @@ class UpdateManager:
         control = journal.get("control")
         if not isinstance(control, dict) or set(control) != set(RESTART_CONTROL_FILES):
             raise UpdateCenterError("Restart journal control mapping is invalid.")
-        if any(value is not None and not isinstance(value, dict) for value in control.values()):
+        if any(
+            value is not None and not isinstance(value, dict)
+            for value in control.values()
+        ):
             raise UpdateCenterError("Restart journal control values are invalid.")
         return journal
 
-    def apply_restart_journal(self, journal: dict[str, Any] | None = None) -> dict[str, Any]:
+    def apply_restart_journal(
+        self, journal: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Idempotently publish the exact control state in a schema-2 journal."""
 
         with self._restart_journal_lock():
@@ -1225,9 +1884,7 @@ class UpdateManager:
             return False
         self._recover_pending_activation(active)
         pending = load_json(self.activation_pending_path, None)
-        if isinstance(pending, dict) and self._pending_matches_active(
-            pending, active
-        ):
+        if isinstance(pending, dict) and self._pending_matches_active(pending, active):
             return True
 
         return bool(self._matching_activation_claims(active))
@@ -1247,9 +1904,7 @@ class UpdateManager:
             if claim_path.name in excluded:
                 continue
             claim = load_json(claim_path, None)
-            if isinstance(claim, dict) and self._pending_matches_active(
-                claim, active
-            ):
+            if isinstance(claim, dict) and self._pending_matches_active(claim, active):
                 matches.append(claim_path)
         return matches
 
@@ -1262,13 +1917,83 @@ class UpdateManager:
         atomic_write_json(self.job_path, job)
         return job
 
-    def _read_manifest_from_url(self, url: str | None = None) -> dict[str, Any]:
+    def _read_manifest_from_url(
+        self, url: str | None = None, *, recovery: bool = False
+    ) -> dict[str, Any]:
         target = url or self.manifest_url
-        data = self.fetcher(target, MAX_MANIFEST_BYTES) if self.fetcher else fetch_bytes(target, max_bytes=MAX_MANIFEST_BYTES)
-        return read_manifest_bytes(data, self.public_keys)
+        data = (
+            self.fetcher(target, MAX_MANIFEST_BYTES)
+            if self.fetcher
+            else fetch_bytes(target, max_bytes=MAX_MANIFEST_BYTES)
+        )
+        return read_update_document_bytes(
+            data,
+            self.public_keys,
+            current_version=self.current_version,
+            runtime_abi=self.runtime_abi,
+            settings_schema_version=self.settings_schema_version,
+            launcher_protocol=self.launcher_protocol,
+            recovery=recovery,
+        )
 
     def _fetch_bundle(self, url: str) -> bytes:
-        return self.fetcher(url, MAX_BUNDLE_BYTES) if self.fetcher else fetch_bytes(url, max_bytes=MAX_BUNDLE_BYTES)
+        return (
+            self.fetcher(url, MAX_BUNDLE_BYTES)
+            if self.fetcher
+            else fetch_bytes(url, max_bytes=MAX_BUNDLE_BYTES)
+        )
+
+    def _payload_requires_image(self, payload: dict[str, Any]) -> bool:
+        if bool(payload.get("image_required", False)):
+            return True
+        try:
+            if (
+                compare_versions(
+                    self.image_version,
+                    str(payload.get("minimum_image_version") or "0.0.0"),
+                )
+                < 0
+            ):
+                return True
+        except ValueError:
+            return True
+        if int(payload.get("minimum_launcher_protocol") or 0) > int(
+            self.launcher_protocol
+        ):
+            return True
+        if payload.get("runtime_abi") != self.runtime_abi:
+            return True
+        return (
+            int(payload.get("settings_schema_version") or 0)
+            != self.settings_schema_version
+        )
+
+    def _runtime_source(self, active: Any) -> str:
+        """Report a bundle runtime only when its durable selection is valid."""
+
+        if not isinstance(active, dict) or not active.get("path"):
+            return "image"
+        try:
+            version = str(active.get("version") or "").strip().lstrip("v")
+            bundle_path = Path(str(active["path"])).expanduser()
+            if not bundle_path.is_absolute():
+                bundle_path = self.releases_dir / bundle_path
+            bundle_path = bundle_path.resolve()
+            releases_root = self.releases_dir.resolve()
+            valid = (
+                is_path_within(bundle_path, releases_root)
+                and bundle_path.is_dir()
+                and str(active.get("runtime_abi") or "") == self.runtime_abi
+                and int(active.get("settings_schema_version") or 0)
+                == self.settings_schema_version
+                and compare_versions(version, self.current_version) == 0
+                and compare_versions(version, self.image_version) > 0
+                and (bundle_path / "core" / "main.py").is_file()
+                and (bundle_path / "ui" / "backend" / "main.py").is_file()
+            )
+        except (OSError, TypeError, ValueError):
+            valid = False
+        return "app_bundle" if valid else "image"
 
     def status(self) -> dict[str, Any]:
         self._ensure_runtime()
@@ -1281,18 +2006,41 @@ class UpdateManager:
         image_required = False
         if isinstance(payload, dict):
             try:
-                update_available = compare_versions(str(payload.get("version") or "0.0.0"), self.current_version) > 0
-                image_required = bool(payload.get("image_required"))
+                update_available = (
+                    compare_versions(
+                        str(payload.get("version") or "0.0.0"), self.current_version
+                    )
+                    > 0
+                )
+                image_required = self._payload_requires_image(payload)
             except Exception:
                 update_available = False
         return {
             "current_version": self.current_version,
+            "image_version": self.image_version,
+            "launcher_protocol": self.launcher_protocol,
             "runtime_abi": self.runtime_abi,
             "settings_schema_version": self.settings_schema_version,
-            "active_bundle": active if isinstance(active, dict) and active.get("path") else None,
+            "runtime_source": self._runtime_source(active),
+            "active_bundle": (
+                active if isinstance(active, dict) and active.get("path") else None
+            ),
             "latest": payload if isinstance(payload, dict) else None,
             "update_available": update_available,
             "image_required": image_required if update_available else False,
+            "delivery_mode": (
+                str(payload.get("delivery_mode") or DeliveryMode.APP_UPDATE.value)
+                if isinstance(payload, dict)
+                else None
+            ),
+            "image_refresh_recommended": bool(
+                isinstance(payload, dict) and payload.get("image_refresh_recommended")
+            ),
+            "recommended_image_version": (
+                payload.get("recommended_image_version")
+                if isinstance(payload, dict)
+                else None
+            ),
             "last_job": job if isinstance(job, dict) else None,
             "rollback_available": (
                 isinstance(active, dict)
@@ -1300,24 +2048,35 @@ class UpdateManager:
                 and isinstance(rollback, dict)
                 and "previous_active" in rollback
             ),
-            "auth_disabled_warning": os.environ.get("CW_DISABLE_AUTH", "").lower() == "true",
+            "auth_disabled_warning": os.environ.get("CW_DISABLE_AUTH", "").lower()
+            == "true",
         }
 
-    def check(self) -> dict[str, Any]:
-        with UpdateOperationLock(self.lock_path):
+    def runtime_transition_pending(self) -> bool:
+        """Return true while apply/rollback handoff or activation is unresolved."""
+
+        if self._restart_journal_present():
+            return True
+        active = load_json(self.active_path, None)
+        return self._activation_in_flight(active)
+
+    def check(
+        self, *, recovery: bool = False, maintenance_lock_held: bool = False
+    ) -> dict[str, Any]:
+        with (
+            self._maintenance_context(already_held=maintenance_lock_held),
+            UpdateOperationLock(self.lock_path),
+        ):
             # Avoid a needless network request when a handoff is already known,
             # then repeat the check while holding the cross-version journal lock
             # before changing either canonical update control file.
             self._require_restart_journal_absent()
-            manifest = self._read_manifest_from_url()
+            manifest = self._read_manifest_from_url(recovery=recovery)
             payload = manifest["payload"]
-            update_available = compare_versions(payload["version"], self.current_version) > 0
-            image_required = bool(payload.get("image_required", False))
-            if update_available and not image_required:
-                if payload.get("runtime_abi") != self.runtime_abi:
-                    image_required = True
-                if int(payload.get("settings_schema_version") or 0) != self.settings_schema_version:
-                    image_required = True
+            update_available = (
+                compare_versions(payload["version"], self.current_version) > 0
+            )
+            image_required = self._payload_requires_image(payload)
             with self._restart_journal_lock():
                 if self._restart_journal_present():
                     raise UpdateLockedError(
@@ -1328,9 +2087,18 @@ class UpdateManager:
                 job = self._write_job(
                     {
                         "operation": "check",
-                        "status": "image_required" if image_required and update_available else "available" if update_available else "current",
+                        "recovery": recovery,
+                        "status": (
+                            "image_required"
+                            if image_required and update_available
+                            else "available" if update_available else "current"
+                        ),
                         "version": payload["version"],
-                        "message": "Container image update required." if image_required and update_available else "Update check completed.",
+                        "message": (
+                            "Container image update required."
+                            if image_required and update_available
+                            else "Update check completed."
+                        ),
                     }
                 )
                 return {
@@ -1341,7 +2109,9 @@ class UpdateManager:
                     "last_job": job,
                 }
 
-    def _verify_bundle_signature(self, payload: dict[str, Any], bundle_bytes: bytes) -> None:
+    def _verify_bundle_signature(
+        self, payload: dict[str, Any], bundle_bytes: bytes
+    ) -> None:
         expected_hash = str(payload.get("bundle_sha256") or "").lower()
         actual_hash = sha256_hex(bundle_bytes)
         if not expected_hash or actual_hash != expected_hash:
@@ -1354,11 +2124,23 @@ class UpdateManager:
             manifest_sig = load_json(self.latest_path, {}).get("signature", {})
             if isinstance(manifest_sig, dict):
                 key_id = str(manifest_sig.get("key_id") or "")
-        verify_ed25519_signature(self.public_keys, key_id, signature_b64, bytes.fromhex(actual_hash))
+        verify_ed25519_signature(
+            self.public_keys, key_id, signature_b64, bytes.fromhex(actual_hash)
+        )
 
-    def apply(self, version: str | None = None) -> dict[str, Any]:
-        job_id = uuid.uuid4().hex
+    def apply(
+        self,
+        version: str | None = None,
+        *,
+        recovery: bool = False,
+        maintenance_lock_held: bool = False,
+        job_id: str | None = None,
+        scheduler_attempt_id: str | None = None,
+        expected_bundle_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        job_id = job_id or uuid.uuid4().hex
         with (
+            self._maintenance_context(already_held=maintenance_lock_held),
             self._activation_outcome_lock(wait=False),
             UpdateOperationLock(self.lock_path),
             UpdateOperationLock(self.activation_lock_path),
@@ -1369,14 +2151,64 @@ class UpdateManager:
                 raise UpdateLockedError(
                     "The previous update is still waiting for startup validation."
                 )
-            latest = load_json(self.latest_path, None)
-            if not isinstance(latest, dict):
-                latest = self._read_manifest_from_url()
-                atomic_write_json(self.latest_path, latest)
+            cached_latest = load_json(self.latest_path, None)
+            cached_payload = (
+                cached_latest.get("payload")
+                if isinstance(cached_latest, dict)
+                else None
+            )
+            # Every apply re-fetches and verifies the authoritative feed. This
+            # prevents a stale v0.9.17 latest.json, a changed catalog, or an
+            # incompatible feed projection from being applied after v0.9.18
+            # activation. The selected version and digest are bound together.
+            latest = self._read_manifest_from_url(recovery=recovery)
             payload = latest["payload"]
+            if isinstance(cached_payload, dict):
+                try:
+                    cached_is_newer = (
+                        compare_versions(
+                            str(cached_payload.get("version") or "0.0.0"),
+                            self.current_version,
+                        )
+                        > 0
+                    )
+                except ValueError:
+                    cached_is_newer = False
+                cached_version = str(cached_payload.get("version") or "").lstrip("v")
+                cached_digest = str(cached_payload.get("bundle_sha256") or "").lower()
+                fresh_version = str(payload.get("version") or "").lstrip("v")
+                fresh_digest = str(payload.get("bundle_sha256") or "").lower()
+                requested_matches_cached = not version or (
+                    version.strip().lstrip("v") == cached_version
+                )
+                if (
+                    cached_is_newer
+                    and requested_matches_cached
+                    and (cached_version, cached_digest) != (fresh_version, fresh_digest)
+                ):
+                    atomic_write_json(self.latest_path, latest)
+                    raise UpdateManifestError(
+                        "The signed update catalog changed after the previous check. "
+                        "Review the newly selected release before applying it."
+                    )
+            atomic_write_json(self.latest_path, latest)
             target_version = str(payload["version"]).lstrip("v")
+            bundle_sha256 = str(payload.get("bundle_sha256") or "").strip().lower()
+            if expected_bundle_sha256 is not None and (
+                expected_bundle_sha256.strip().lower() != bundle_sha256
+            ):
+                raise UpdateManifestError(
+                    "The signed update digest changed after scheduling. Review the "
+                    "new release before applying it."
+                )
+            job_identity = {
+                "scheduler_attempt_id": scheduler_attempt_id,
+                "bundle_sha256": bundle_sha256,
+            }
             if version and version.strip().lstrip("v") != target_version:
-                raise UpdateManifestError("Requested update version does not match the latest trusted manifest.")
+                raise UpdateManifestError(
+                    "Requested update version does not match the latest trusted manifest."
+                )
             if compare_versions(target_version, self.current_version) <= 0:
                 return self._write_job(
                     {
@@ -1384,6 +2216,7 @@ class UpdateManager:
                         "operation": "apply",
                         "status": "current",
                         "version": target_version,
+                        **job_identity,
                         "message": "ChannelWatch is already current.",
                     }
                 )
@@ -1394,7 +2227,35 @@ class UpdateManager:
                         "operation": "apply",
                         "status": "image_required",
                         "version": target_version,
+                        **job_identity,
                         "message": "This release requires a new container image.",
+                    }
+                )
+            try:
+                image_too_old = (
+                    compare_versions(
+                        self.image_version,
+                        str(payload.get("minimum_image_version") or "0.0.0"),
+                    )
+                    < 0
+                )
+            except ValueError:
+                image_too_old = True
+            launcher_too_old = int(payload.get("minimum_launcher_protocol") or 0) > int(
+                self.launcher_protocol
+            )
+            if image_too_old or launcher_too_old:
+                return self._write_job(
+                    {
+                        "job_id": job_id,
+                        "operation": "apply",
+                        "status": "image_required",
+                        "version": target_version,
+                        **job_identity,
+                        "message": (
+                            "This release requires a newer ChannelWatch container "
+                            "launcher before it can be installed in-app."
+                        ),
                     }
                 )
             if payload.get("runtime_abi") != self.runtime_abi:
@@ -1404,16 +2265,21 @@ class UpdateManager:
                         "operation": "apply",
                         "status": "image_required",
                         "version": target_version,
+                        **job_identity,
                         "message": "This release requires a compatible runtime image.",
                     }
                 )
-            if int(payload.get("settings_schema_version") or 0) != self.settings_schema_version:
+            if (
+                int(payload.get("settings_schema_version") or 0)
+                != self.settings_schema_version
+            ):
                 return self._write_job(
                     {
                         "job_id": job_id,
                         "operation": "apply",
                         "status": "image_required",
                         "version": target_version,
+                        **job_identity,
                         "message": "This release changes persistent settings schema and needs a new image update.",
                     }
                 )
@@ -1424,6 +2290,7 @@ class UpdateManager:
                     "operation": "apply",
                     "status": "backing_up",
                     "version": target_version,
+                    **job_identity,
                     "message": "Creating pre-update backup.",
                 }
             )
@@ -1431,9 +2298,33 @@ class UpdateManager:
             if self.backup_callable is not None:
                 backup_bytes = self.backup_callable(self.config_dir)
                 backup_dir = self.config_dir / "backups"
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                backup_path = backup_dir / f"pre-update.v{target_version}.{int(time.time())}.zip"
-                atomic_write_bytes(backup_path, backup_bytes)
+                try:
+                    backup_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+                    backup_metadata = backup_dir.lstat()
+                except OSError as exc:
+                    raise UpdateCenterError(
+                        "The private pre-update backup directory is unavailable."
+                    ) from exc
+                if stat_module.S_ISLNK(
+                    backup_metadata.st_mode
+                ) or not stat_module.S_ISDIR(backup_metadata.st_mode):
+                    raise UpdateCenterError(
+                        "Refusing unsafe pre-update backup directory."
+                    )
+                os.chmod(backup_dir, 0o700)
+                backup_path = backup_dir / (
+                    f"pre-update.v{target_version}.{int(time.time())}.{job_id[:8]}.zip"
+                )
+                _atomic_write_secret_bytes(backup_path, backup_bytes)
+                backup_file_metadata = backup_path.lstat()
+                if (
+                    not stat_module.S_ISREG(backup_file_metadata.st_mode)
+                    or stat_module.S_IMODE(backup_file_metadata.st_mode) != 0o600
+                    or backup_file_metadata.st_nlink != 1
+                ):
+                    raise UpdateCenterError(
+                        "Pre-update backup permissions could not be secured."
+                    )
 
             self._write_job(
                 {
@@ -1441,13 +2332,16 @@ class UpdateManager:
                     "operation": "apply",
                     "status": "verifying",
                     "version": target_version,
+                    **job_identity,
                     "backup_path": str(backup_path) if backup_path else None,
                     "message": "Downloading and verifying update bundle.",
                 }
             )
             bundle_url = str(payload.get("bundle_url") or "")
             if not bundle_url:
-                raise UpdateManifestError("Update manifest does not include a bundle URL.")
+                raise UpdateManifestError(
+                    "Update manifest does not include a bundle URL."
+                )
             bundle_bytes = self._fetch_bundle(bundle_url)
             self._verify_bundle_signature(payload, bundle_bytes)
             metadata = validate_bundle_archive(
@@ -1464,6 +2358,7 @@ class UpdateManager:
                     "operation": "apply",
                     "status": "applying",
                     "version": target_version,
+                    **job_identity,
                     "backup_path": str(backup_path) if backup_path else None,
                     "message": "Installing verified update bundle.",
                 }
@@ -1475,6 +2370,7 @@ class UpdateManager:
             next_active = {
                 "version": target_version,
                 "activation_id": uuid.uuid4().hex,
+                "activation_protocol": self.launcher_protocol,
                 "path": str(destination),
                 "runtime_abi": self.runtime_abi,
                 "settings_schema_version": self.settings_schema_version,
@@ -1482,16 +2378,19 @@ class UpdateManager:
                 "manifest": {
                     "release_url": payload.get("release_url"),
                     "bundle_sha256": payload.get("bundle_sha256"),
-                    "key_id": payload.get("key_id") or latest.get("signature", {}).get("key_id"),
+                    "key_id": payload.get("key_id")
+                    or latest.get("signature", {}).get("key_id"),
                 },
                 "metadata": metadata,
             }
             pending = {
                 "job_id": job_id,
                 "version": target_version,
+                **job_identity,
                 "activation_id": next_active["activation_id"],
                 "path": str(destination),
                 "started_at": utc_now(),
+                "launcher_protocol": self.launcher_protocol,
                 "deadline_at": (
                     datetime.now(timezone.utc)
                     + timedelta(seconds=ACTIVATION_TIMEOUT_SECONDS)
@@ -1505,6 +2404,7 @@ class UpdateManager:
                     "operation": "apply",
                     "status": "restarting",
                     "version": target_version,
+                    **job_identity,
                     "backup_path": str(backup_path) if backup_path else None,
                     "message": "Update installed. Restarting ChannelWatch to activate it.",
                     "restart_required": True,
@@ -1526,6 +2426,68 @@ class UpdateManager:
                 "activation-ui-ready.json": None,
                 "update-job.json": job,
             }
+            if self.launcher_protocol == int(LauncherProtocol.LEGACY_ADOPT):
+                # Protocol-1 images do not know the schema-2 restart journal.
+                # Publish all subordinate state first and active.json last so
+                # an interruption cannot select a generation without its
+                # rollback target, pending deadline, and job record.
+                for name in (
+                    "rollback.json",
+                    "activation-pending.json",
+                    "activation-core-ready.json",
+                    "activation-ui-ready.json",
+                    "update-job.json",
+                    "active.json",
+                ):
+                    path = self._control_path(name)
+                    value = target_control[name]
+                    if value is None:
+                        try:
+                            path.unlink()
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        atomic_write_json(path, value)
+                fsync_directory(self.runtime_dir)
+                if self.restart_callable is not None:
+                    restart_error: Exception | None = None
+                    try:
+                        restart_started = bool(self.restart_callable())
+                    except Exception as exc:
+                        restart_started = False
+                        restart_error = exc
+                    if not restart_started:
+                        # Active was the last published file, so restoring the
+                        # complete pre-apply snapshot returns both old children
+                        # to an internally consistent selection.
+                        for name in RESTART_CONTROL_FILES:
+                            path = self._control_path(name)
+                            value = previous_control[name]
+                            if value is None:
+                                try:
+                                    path.unlink()
+                                except FileNotFoundError:
+                                    pass
+                            else:
+                                atomic_write_json(path, value)
+                        failed_job = self._write_job(
+                            {
+                                **job,
+                                "status": "failed",
+                                "message": (
+                                    "Update restart could not be started. "
+                                    "The previous runtime remains selected."
+                                ),
+                                "rollback_applied": True,
+                                "error": (
+                                    str(restart_error)[:2000]
+                                    if restart_error is not None
+                                    else None
+                                ),
+                            }
+                        )
+                        return failed_job
+                return job
             commit_journal = self._build_restart_journal(
                 reason="runtime_transition",
                 operation="apply",
@@ -1550,6 +2512,12 @@ class UpdateManager:
                     restart_started = False
                     restart_error = exc
                 if not restart_started:
+                    handoff_job = self._protocol_three_handoff_result(
+                        commit_journal,
+                        wait_for_active_helper=True,
+                    )
+                    if handoff_job is not None:
+                        return handoff_job
                     failed_job = self._prepare_job(
                         {
                             **job,
@@ -1580,17 +2548,28 @@ class UpdateManager:
                     )
                     # Atomic journal replacement is the reversal linearization
                     # point. Replay may be repeated after any later crash.
-                    self._write_restart_journal(
-                        abort_journal, expected=commit_journal
-                    )
+                    if not self._write_restart_journal(
+                        abort_journal,
+                        expected=commit_journal,
+                    ):
+                        handoff_job = self._protocol_three_handoff_result(
+                            commit_journal
+                        )
+                        if handoff_job is None:
+                            raise UpdateRestartError(
+                                "The accepted protocol-3 restart handoff could not "
+                                "be reconciled safely."
+                            )
+                        return handoff_job
                     self.apply_restart_journal(abort_journal)
                     self._clear_restart_journal(abort_journal)
                     return failed_job
             return job
 
-    def rollback(self) -> dict[str, Any]:
+    def rollback(self, *, maintenance_lock_held: bool = False) -> dict[str, Any]:
         job_id = uuid.uuid4().hex
         with (
+            self._maintenance_context(already_held=maintenance_lock_held),
             self._activation_outcome_lock(wait=False),
             UpdateOperationLock(self.lock_path),
             UpdateOperationLock(self.activation_lock_path),
@@ -1618,7 +2597,9 @@ class UpdateManager:
                     "version": rollback.get("target_version"),
                     "message": "Rollback activated. Restarting ChannelWatch.",
                     "restart_required": True,
-                    "rolled_back_from": current.get("version") if isinstance(current, dict) else None,
+                    "rolled_back_from": (
+                        current.get("version") if isinstance(current, dict) else None
+                    ),
                 }
             )
             target_control = {
@@ -1633,6 +2614,59 @@ class UpdateManager:
                 "activation-ui-ready.json": None,
                 "update-job.json": job,
             }
+            if self.launcher_protocol == int(LauncherProtocol.LEGACY_ADOPT):
+                for name in (
+                    "activation-pending.json",
+                    "activation-core-ready.json",
+                    "activation-ui-ready.json",
+                    "update-job.json",
+                    "active.json",
+                ):
+                    path = self._control_path(name)
+                    value = target_control[name]
+                    if value is None:
+                        try:
+                            path.unlink()
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        atomic_write_json(path, value)
+                fsync_directory(self.runtime_dir)
+                if self.restart_callable is not None:
+                    restart_error: Exception | None = None
+                    try:
+                        restart_started = bool(self.restart_callable())
+                    except Exception as exc:
+                        restart_started = False
+                        restart_error = exc
+                    if not restart_started:
+                        for name in RESTART_CONTROL_FILES:
+                            path = self._control_path(name)
+                            value = previous_control[name]
+                            if value is None:
+                                try:
+                                    path.unlink()
+                                except FileNotFoundError:
+                                    pass
+                            else:
+                                atomic_write_json(path, value)
+                        return self._write_job(
+                            {
+                                **job,
+                                "status": "failed",
+                                "message": (
+                                    "Rollback restart could not be started. "
+                                    "The current runtime remains selected."
+                                ),
+                                "rollback_applied": False,
+                                "error": (
+                                    str(restart_error)[:2000]
+                                    if restart_error is not None
+                                    else None
+                                ),
+                            }
+                        )
+                return job
             commit_journal = self._build_restart_journal(
                 reason="runtime_transition",
                 operation="manual_rollback",
@@ -1652,6 +2686,12 @@ class UpdateManager:
                     restart_started = False
                     restart_error = exc
                 if not restart_started:
+                    handoff_job = self._protocol_three_handoff_result(
+                        commit_journal,
+                        wait_for_active_helper=True,
+                    )
+                    if handoff_job is not None:
+                        return handoff_job
                     failed_job = self._prepare_job(
                         {
                             **job,
@@ -1684,44 +2724,74 @@ class UpdateManager:
                         ),
                         control=abort_control,
                     )
-                    self._write_restart_journal(
-                        abort_journal, expected=commit_journal
-                    )
+                    if not self._write_restart_journal(
+                        abort_journal,
+                        expected=commit_journal,
+                    ):
+                        handoff_job = self._protocol_three_handoff_result(
+                            commit_journal
+                        )
+                        if handoff_job is None:
+                            raise UpdateRestartError(
+                                "The accepted protocol-3 rollback handoff could "
+                                "not be reconciled safely."
+                            )
+                        return handoff_job
                     self.apply_restart_journal(abort_journal)
                     self._clear_restart_journal(abort_journal)
                     return failed_job
             return job
 
     def record_activation_failure_and_rollback(
-        self, error: str, *, job_id: str | None = None
+        self,
+        error: str,
+        *,
+        job_id: str | None = None,
+        pending_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._require_restart_journal_absent()
         source_control = self._read_control_state()
         rollback = source_control["rollback.json"]
         current = source_control["active.json"]
-        pending = source_control["activation-pending.json"]
-        previous = rollback.get("previous_active") if isinstance(rollback, dict) else None
+        source_pending = source_control["activation-pending.json"]
+        pending = (
+            pending_identity if isinstance(pending_identity, dict) else source_pending
+        )
+        previous = (
+            rollback.get("previous_active") if isinstance(rollback, dict) else None
+        )
         rolled_back_to = (
             str(previous.get("version") or "previous bundle")
             if isinstance(previous, dict) and previous.get("path")
             else "image"
         )
-        resolved_job_id = (
-            job_id
-            or (pending.get("job_id") if isinstance(pending, dict) else None)
+        resolved_job_id = job_id or (
+            pending.get("job_id") if isinstance(pending, dict) else None
         )
         job = self._prepare_job(
             {
                 "job_id": resolved_job_id,
                 "operation": "apply",
                 "status": "failed",
-                "version": current.get("version") if isinstance(current, dict) else None,
+                "version": (
+                    current.get("version") if isinstance(current, dict) else None
+                ),
                 "message": "Update activation failed. ChannelWatch rolled back to the previous runtime.",
                 "error": error[:2000],
                 "rollback_applied": True,
-                "rolled_back_from": current.get("version") if isinstance(current, dict) else None,
+                "rolled_back_from": (
+                    current.get("version") if isinstance(current, dict) else None
+                ),
                 "rolled_back_to": rolled_back_to,
                 "failed_at": utc_now(),
+                "scheduler_attempt_id": (
+                    pending.get("scheduler_attempt_id")
+                    if isinstance(pending, dict)
+                    else None
+                ),
+                "bundle_sha256": (
+                    pending.get("bundle_sha256") if isinstance(pending, dict) else None
+                ),
             }
         )
         target_control = {
@@ -1736,6 +2806,30 @@ class UpdateManager:
             "activation-ui-ready.json": None,
             "update-job.json": job,
         }
+        if self.launcher_protocol == int(LauncherProtocol.LEGACY_ADOPT):
+            for name in (
+                "activation-pending.json",
+                "activation-core-ready.json",
+                "activation-ui-ready.json",
+                "update-job.json",
+                "active.json",
+            ):
+                path = self._control_path(name)
+                value = target_control[name]
+                if value is None:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+                else:
+                    atomic_write_json(path, value)
+            fsync_directory(self.runtime_dir)
+            self._record_activation_quarantine(
+                pending=pending,
+                active=current,
+                job=job,
+            )
+            return job
         journal = self._build_restart_journal(
             reason="activation_rollback",
             operation="activation_rollback",
@@ -1746,7 +2840,36 @@ class UpdateManager:
         )
         self._write_restart_journal(journal)
         self.apply_restart_journal(journal)
+        self._record_activation_quarantine(
+            pending=pending,
+            active=current,
+            job=job,
+        )
         return job
+
+    def _record_activation_quarantine(
+        self,
+        *,
+        pending: Any,
+        active: Any,
+        job: dict[str, Any],
+    ) -> None:
+        """Persist exact failed identity only after durable control rollback."""
+
+        try:
+            from core.update_policy import record_failed_activation_quarantine
+
+            record_failed_activation_quarantine(
+                self.config_dir,
+                pending=pending if isinstance(pending, dict) else None,
+                active=active if isinstance(active, dict) else None,
+                job=job,
+            )
+        except Exception:
+            # Runtime selection always takes precedence over scheduler
+            # bookkeeping. The exact failed job remains available for a later
+            # reconciliation if policy storage is temporarily unavailable.
+            return
 
     def _capture_activation_restart_journal(
         self, job: dict[str, Any]
@@ -1764,6 +2887,209 @@ class UpdateManager:
                 )
             return journal
 
+    def _adopt_protocol_one_activation(
+        self,
+        active: dict[str, Any],
+        *,
+        running_version: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool] | None:
+        """Upgrade a v0.9.10-v0.9.15 selection to the readiness quorum.
+
+        Protocol-1 launchers write ``active.json`` and restart Supervisor, but
+        do not create a generation ID or pending deadline. Once the signed
+        v0.9.18 bundle is running, its first healthy component adopts that
+        exact selected path/version and creates the protocol-2 transaction.
+        """
+
+        if str(active.get("activation_id") or ""):
+            return None
+        if self.launcher_protocol != int(LauncherProtocol.LEGACY_ADOPT):
+            return None
+        job = load_json(self.job_path, None)
+        if not isinstance(job, dict):
+            return None
+        active_version = str(active.get("version") or "").strip().lstrip("v")
+        normalized_running = running_version.strip().lstrip("v")
+        if (
+            job.get("operation") != "apply"
+            or job.get("status") not in {"restarting", "validating"}
+            or str(job.get("version") or "").strip().lstrip("v") != active_version
+            or normalized_running != active_version
+        ):
+            return None
+        selected_dir = os.environ.get("CHANNELWATCH_APP_DIR", "").strip()
+        if not selected_dir:
+            return None
+        try:
+            selected_path = Path(selected_dir).resolve()
+            active_path = Path(str(active.get("path") or "")).resolve()
+            active_path.relative_to(self.releases_dir.resolve())
+        except (OSError, ValueError):
+            return None
+        if selected_path != active_path:
+            return None
+
+        activation_id = uuid.uuid4().hex
+        adopted_at = datetime.now(timezone.utc)
+        active_manifest = active.get("manifest")
+        active_manifest = active_manifest if isinstance(active_manifest, dict) else {}
+        legacy_attempt_id = str(
+            job.get("scheduler_attempt_id")
+            or f"activation@{job.get('job_id') or activation_id}"
+        )
+        legacy_bundle_sha256 = (
+            str(job.get("bundle_sha256") or active_manifest.get("bundle_sha256") or "")
+            .strip()
+            .lower()
+        )
+        pending = {
+            "job_id": job.get("job_id"),
+            "version": active_version,
+            "scheduler_attempt_id": legacy_attempt_id,
+            "bundle_sha256": legacy_bundle_sha256 or None,
+            "activation_id": activation_id,
+            "path": str(active_path),
+            "started_at": adopted_at.isoformat().replace("+00:00", "Z"),
+            "deadline_at": (adopted_at + timedelta(seconds=ACTIVATION_TIMEOUT_SECONDS))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "adopted_launcher_protocol": int(LauncherProtocol.LEGACY_ADOPT),
+        }
+        adopted_active = {
+            **active,
+            "activation_id": activation_id,
+            "activation_protocol": int(LauncherProtocol.LEGACY_ADOPT),
+            "activation_adopted_at": pending["started_at"],
+        }
+
+        # Pending-first is recoverable: a crash before active replacement
+        # leaves an unmatched marker that the next adopter clears. Publishing
+        # active last prevents a selected generation ID with no deadline.
+        self._clear_activation_state()
+        atomic_write_json(self.activation_pending_path, pending)
+        atomic_write_json(self.active_path, adopted_active)
+        self._write_job(
+            {
+                **job,
+                "status": "validating",
+                "message": (
+                    "Update started through a legacy launcher; waiting for core "
+                    "and UI startup validation."
+                ),
+                "activation_id": activation_id,
+                "adopted_launcher_protocol": int(LauncherProtocol.LEGACY_ADOPT),
+                "scheduler_attempt_id": legacy_attempt_id,
+                "bundle_sha256": legacy_bundle_sha256 or None,
+            }
+        )
+        return adopted_active, pending, True
+
+    @staticmethod
+    def _start_adopted_activation_watchdog(app_dir: Path) -> None:
+        """Start the bundle watchdog after the caller releases activation locks."""
+
+        try:
+            from core.runtime_launcher import start_activation_watchdog
+
+            start_activation_watchdog(app_dir)
+        except Exception:
+            # Both children independently attempt this. The durable deadline is
+            # also re-evaluated on later v0.9.18 process starts.
+            return
+
+    def _record_image_refresh_recovery_startup(
+        self,
+        *,
+        component: str,
+        running_version: str,
+        healthy: bool,
+    ) -> bool:
+        """Complete image-pull recovery only after a healthy core/UI quorum.
+
+        The image entrypoint removes an unsafe legacy active pointer through a
+        replayable journal, but it cannot claim that ChannelWatch started. Each
+        child records only its own startup here while the existing update and
+        activation locks serialize the cross-process read/modify/write.
+        """
+
+        job = load_json(self.job_path, None)
+        if not isinstance(job, dict):
+            return False
+        normalized_version = running_version.strip().lstrip("v")
+        if (
+            job.get("operation") != "image_refresh_recovery"
+            or str(job.get("version") or "").strip().lstrip("v") != normalized_version
+            or job.get("legacy_pointer_deactivated") is not True
+        ):
+            return False
+        status = str(job.get("status") or "")
+        if status in {"success", "failed"}:
+            return True
+        validation_id = str(job.get("startup_validation_id") or "")
+        if status != "validating" or not validation_id:
+            return False
+
+        base_job = {
+            "job_id": str(job.get("job_id") or "") or uuid.uuid4().hex,
+            "operation": "image_refresh_recovery",
+            "version": normalized_version,
+            "legacy_pointer_deactivated": True,
+            "startup_validation_id": validation_id,
+            "restart_required": False,
+        }
+        components = job.get("startup_components")
+        if not isinstance(components, dict):
+            components = {}
+        else:
+            components = {
+                name: marker
+                for name, marker in components.items()
+                if name in {"core", "ui"} and isinstance(marker, dict)
+            }
+
+        if not healthy:
+            self._write_job(
+                {
+                    **base_job,
+                    "status": "failed",
+                    "message": (
+                        "The v0.9.18 image runtime was selected, but "
+                        f"{component} startup validation failed."
+                    ),
+                    "image_pull_completed": False,
+                    "startup_validation_pending": False,
+                    "startup_components": components,
+                    "failed_component": component,
+                    "failed_at": utc_now(),
+                }
+            )
+            return True
+
+        components[component] = {"healthy": True, "ready_at": utc_now()}
+        complete = all(
+            isinstance(components.get(name), dict)
+            and components[name].get("healthy") is True
+            for name in ("core", "ui")
+        )
+        self._write_job(
+            {
+                **base_job,
+                "status": "success" if complete else "validating",
+                "message": (
+                    "The v0.9.18 image runtime started successfully; /config "
+                    "was preserved and the legacy update marker was cleared."
+                    if complete
+                    else "The v0.9.18 image runtime is waiting for core and UI "
+                    "startup validation."
+                ),
+                "image_pull_completed": complete,
+                "startup_validation_pending": not complete,
+                "startup_components": components,
+                **({"validated_at": utc_now()} if complete else {}),
+            }
+        )
+        return True
+
     def record_startup_success(
         self,
         *,
@@ -1779,7 +3105,9 @@ class UpdateManager:
 
         restart_needed = False
         committed_restart_journal: dict[str, Any] | None = None
+        adopted_watchdog_dir: Path | None = None
         with (
+            self._maintenance_context(),
             self._activation_outcome_lock(),
             UpdateOperationLock(self.activation_lock_path, wait_timeout=5.0),
         ):
@@ -1791,19 +3119,82 @@ class UpdateManager:
                     return
                 active = load_json(self.active_path, None)
                 if not isinstance(active, dict):
+                    self._record_image_refresh_recovery_startup(
+                        component=component,
+                        running_version=running_version,
+                        healthy=healthy,
+                    )
                     return
+                adoption = self._adopt_protocol_one_activation(
+                    active, running_version=running_version
+                )
+                if adoption is not None:
+                    active, _adopted_pending, _ = adoption
+                    adopted_watchdog_dir = Path(str(active["path"])).resolve()
+                    threading.Thread(
+                        target=self._start_adopted_activation_watchdog,
+                        args=(adopted_watchdog_dir,),
+                        daemon=True,
+                        name="legacy-activation-watchdog-starter",
+                    ).start()
                 self._recover_pending_activation(active)
                 pending = load_json(self.activation_pending_path, None)
                 if not isinstance(pending, dict):
                     return
                 if not self._pending_matches_active(pending, active):
                     return
+                active_manifest = active.get("manifest")
+                active_manifest = (
+                    active_manifest if isinstance(active_manifest, dict) else {}
+                )
+                job_id = str(pending.get("job_id") or "")
+                enriched_pending = {
+                    **pending,
+                    "scheduler_attempt_id": str(
+                        pending.get("scheduler_attempt_id")
+                        or f"activation@{job_id or active.get('activation_id')}"
+                    ),
+                    "bundle_sha256": str(
+                        pending.get("bundle_sha256")
+                        or active_manifest.get("bundle_sha256")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                    or None,
+                }
+                if enriched_pending != pending:
+                    atomic_write_json(self.activation_pending_path, enriched_pending)
+                    pending = enriched_pending
+                if (
+                    int(active.get("activation_protocol") or 0)
+                    == int(LauncherProtocol.LEGACY_ADOPT)
+                    and adopted_watchdog_dir is None
+                ):
+                    try:
+                        adopted_watchdog_dir = Path(str(active["path"])).resolve()
+                    except (KeyError, OSError):
+                        adopted_watchdog_dir = None
+                    if adopted_watchdog_dir is not None:
+                        threading.Thread(
+                            target=self._start_adopted_activation_watchdog,
+                            args=(adopted_watchdog_dir,),
+                            daemon=True,
+                            name="protocol-one-activation-watchdog-starter",
+                        ).start()
 
             expected_activation_id = str(active.get("activation_id") or "")
             active_version = str(active.get("version") or "").strip().lstrip("v")
             normalized_running_version = running_version.strip().lstrip("v")
+            effective_activation_id = activation_id
+            if not effective_activation_id and int(
+                active.get("activation_protocol") or 0
+            ) == int(LauncherProtocol.LEGACY_ADOPT):
+                # Protocol-1 launchers cannot export a generation ID. Path and
+                # version were already bound during adoption under both locks.
+                effective_activation_id = expected_activation_id
             if (
-                activation_id != expected_activation_id
+                effective_activation_id != expected_activation_id
                 or normalized_running_version != active_version
                 or not healthy
             ):
@@ -1819,6 +3210,7 @@ class UpdateManager:
                     rollback_job = self.record_activation_failure_and_rollback(
                         "Update runtime identity or health did not match the selected activation.",
                         job_id=str(pending.get("job_id") or "") or None,
+                        pending_identity=pending,
                     )
                 except Exception:
                     if (
@@ -1829,9 +3221,10 @@ class UpdateManager:
                         os.replace(claim, self.activation_pending_path)
                     raise
                 else:
-                    committed_restart_journal = (
-                        self._capture_activation_restart_journal(rollback_job)
-                    )
+                    if self.launcher_protocol != int(LauncherProtocol.LEGACY_ADOPT):
+                        committed_restart_journal = (
+                            self._capture_activation_restart_journal(rollback_job)
+                        )
                     try:
                         claim.unlink()
                     except FileNotFoundError:
@@ -1875,9 +3268,8 @@ class UpdateManager:
 
                 health_error: str | None = None
                 try:
-                    health_ok = (
-                        self.healthcheck_callable is None
-                        or bool(self.healthcheck_callable())
+                    health_ok = self.healthcheck_callable is None or bool(
+                        self.healthcheck_callable()
                     )
                 except Exception as exc:
                     health_ok = False
@@ -1901,6 +3293,7 @@ class UpdateManager:
                             "Update health validation failed."
                             + (f" {health_error}" if health_error else ""),
                             job_id=str(pending.get("job_id") or "") or None,
+                            pending_identity=pending,
                         )
                     except Exception:
                         if (
@@ -1911,9 +3304,10 @@ class UpdateManager:
                             os.replace(claim, self.activation_pending_path)
                         raise
                     else:
-                        committed_restart_journal = (
-                            self._capture_activation_restart_journal(rollback_job)
-                        )
+                        if self.launcher_protocol != int(LauncherProtocol.LEGACY_ADOPT):
+                            committed_restart_journal = (
+                                self._capture_activation_restart_journal(rollback_job)
+                            )
                         try:
                             claim.unlink()
                         except FileNotFoundError:
@@ -1969,6 +3363,12 @@ class UpdateManager:
                                     "job_id": claimed_pending.get("job_id"),
                                     "operation": "apply",
                                     "version": active_version,
+                                    "scheduler_attempt_id": claimed_pending.get(
+                                        "scheduler_attempt_id"
+                                    ),
+                                    "bundle_sha256": claimed_pending.get(
+                                        "bundle_sha256"
+                                    ),
                                     "status": "success",
                                     "message": (
                                         "Update activated and ChannelWatch started successfully."
@@ -1992,7 +3392,8 @@ class UpdateManager:
                             raise
 
         if restart_needed and self.restart_callable is not None:
-            if committed_restart_journal is None:
+            protocol_one = self.launcher_protocol == int(LauncherProtocol.LEGACY_ADOPT)
+            if not protocol_one and committed_restart_journal is None:
                 raise UpdateRestartError(
                     "Activation rollback did not retain journal ownership."
                 )
@@ -2003,8 +3404,20 @@ class UpdateManager:
                 restart_started = False
                 restart_error = exc
             if not restart_started:
-                existing_job = committed_restart_journal["control"].get(
-                    "update-job.json"
+                if (
+                    not protocol_one
+                    and committed_restart_journal is not None
+                    and self._protocol_three_handoff_result(
+                        committed_restart_journal,
+                        wait_for_active_helper=True,
+                    )
+                    is not None
+                ):
+                    return
+                existing_job = (
+                    load_json(self.job_path, None)
+                    if protocol_one
+                    else committed_restart_journal["control"].get("update-job.json")
                 )
                 if not isinstance(existing_job, dict):
                     existing_job = {}
@@ -2031,9 +3444,15 @@ class UpdateManager:
                         "updated_at": utc_now(),
                     }
                 )
+                if protocol_one:
+                    self._write_job(failed_job)
+                    raise UpdateRestartError(
+                        "Update activation rollback completed, but the legacy "
+                        "container restart could not be started."
+                    ) from restart_error
+                assert committed_restart_journal is not None
                 if (
-                    committed_restart_journal.get("operation")
-                    != "activation_rollback"
+                    committed_restart_journal.get("operation") != "activation_rollback"
                     or committed_restart_journal.get("phase") != "commit"
                 ):
                     raise UpdateCenterError(
@@ -2061,7 +3480,7 @@ class UpdateManager:
                 # callback failure itself crash-replayable as part of the same
                 # committed transition.
                 try:
-                    self._write_restart_journal(
+                    journal_replaced = self._write_restart_journal(
                         updated_journal,
                         expected=committed_restart_journal,
                     )
@@ -2070,6 +3489,16 @@ class UpdateManager:
                         "Update activation rollback completed, but its restart "
                         "journal was replaced by another generation."
                     ) from ownership_error
+                if not journal_replaced:
+                    if (
+                        self._protocol_three_handoff_result(committed_restart_journal)
+                        is None
+                    ):
+                        raise UpdateRestartError(
+                            "The accepted protocol-3 activation rollback could "
+                            "not be reconciled safely."
+                        )
+                    return
                 self.apply_restart_journal(updated_journal)
                 raise UpdateRestartError(
                     "Update activation rollback completed, but the coordinated "

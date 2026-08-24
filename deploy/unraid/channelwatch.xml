@@ -22,7 +22,6 @@
   <DonateLink/>
   <Requires/>
   <Config Name="config" Target="/config" Default="/mnt/user/appdata/channelwatch" Mode="rw" Description="Stores ChannelWatch settings, logs, and runtime data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/channelwatch</Config>
-  <Config Name="Secret storage key" Target="CHANNELWATCH_SECRET_STORAGE_KEY" Default="" Mode="" Description="Required key used to encrypt new local secret files. Generate a unique value containing at least 32 characters and preserve it with your deployment secrets." Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID used to run ChannelWatch inside the container. The Unraid default is usually 99." Type="Variable" Display="always" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID used to run ChannelWatch inside the container. The Unraid default is usually 100." Type="Variable" Display="always" Required="false" Mask="false">100</Config>
   <Config Name="Timezone" Target="TZ" Default="America/Los_Angeles" Mode="" Description="Container timezone. Change this to your local timezone, for example America/New_York." Type="Variable" Display="always" Required="false" Mask="false">America/Los_Angeles</Config>

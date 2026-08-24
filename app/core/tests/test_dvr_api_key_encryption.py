@@ -103,13 +103,15 @@ class TestEncryptDvrApiKeysList:
         decrypted = decrypt_dvr_api_keys(encrypted, kf)
         assert decrypted[0]["api_key"] == "secret123"
 
-    def test_decrypt_missing_key_file_returns_unchanged(self, tmp_path):
+    def test_decrypt_missing_key_file_clears_unreadable_token(self, tmp_path):
         kf = self._key_file(tmp_path)
         servers = [{"id": "dvr_aaa", "api_key": "secret"}]
         encrypted = encrypt_dvr_api_keys(servers, kf)
         missing = tmp_path / "gone.key"
-        result = decrypt_dvr_api_keys(encrypted, missing)
-        assert result[0]["api_key"].startswith(FERNET_PREFIX)
+        failures = []
+        result = decrypt_dvr_api_keys(encrypted, missing, failure_paths=failures)
+        assert result[0]["api_key"] == ""
+        assert failures == ["dvr_servers[0].api_key"]
 
 
 class TestSavedJsonEncryption:
@@ -165,19 +167,87 @@ class TestSavedJsonEncryption:
         servers = loaded.dvr_servers
         assert servers[0].get("api_key") == "secret123"
 
+    def test_unrelated_save_preserves_corrupt_registered_ciphertext(self, tmp_path):
+        """A degraded credential must never be emitted or silently erased."""
+
+        from core.helpers.encryption import decrypt_dvr_api_keys
+        from core.helpers.protected_credentials import get_protected_credential_failures
+        from ui.backend.config import load_settings, save_settings
+
+        key_file = tmp_path / "encryption.key"
+        raw_key = bootstrap_encryption_key(key_file)
+        valid_token = encrypt_value("working-secret", raw_key)
+        corrupt_token = "fernet:not-a-valid-token"
+        cfg_file = tmp_path / "settings.json"
+        cfg_file.write_text(
+            json.dumps(
+                {
+                    "dvr_servers": [
+                        {
+                            "id": "dvr_good",
+                            "host": "192.168.1.20",
+                            "port": 8089,
+                            "enabled": True,
+                            "api_key": valid_token,
+                        },
+                        {
+                            "id": "dvr_degraded",
+                            "host": "192.168.1.21",
+                            "port": 8089,
+                            "enabled": True,
+                            "api_key": corrupt_token,
+                        },
+                    ],
+                    "_version": 7,
+                }
+            )
+        )
+
+        with (
+            patch("ui.backend.config.CONFIG_FILE", cfg_file),
+            patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        ):
+            loaded = load_settings()
+            assert loaded.dvr_servers[0]["api_key"] == "working-secret"
+            assert loaded.dvr_servers[1]["api_key"] == ""
+            assert get_protected_credential_failures() == (
+                "dvr_servers[1].api_key",
+            )
+
+            loaded.tz = "UTC"
+            save_settings(loaded)
+
+            raw_after_unrelated_save = json.loads(cfg_file.read_text())
+            assert raw_after_unrelated_save["dvr_servers"][1]["api_key"] == corrupt_token
+            assert (
+                decrypt_dvr_api_keys(
+                    [raw_after_unrelated_save["dvr_servers"][0]], key_file
+                )[0]["api_key"]
+                == "working-secret"
+            )
+
+            loaded.dvr_servers[1]["api_key"] = "replacement-secret"
+            save_settings(loaded)
+
+        raw_after_replacement = json.loads(cfg_file.read_text())
+        replacement = raw_after_replacement["dvr_servers"][1]["api_key"]
+        assert replacement != corrupt_token
+        assert decrypt_value(replacement, raw_key) == "replacement-secret"
+
     def test_save_settings_raises_when_key_unavailable(self, cfg):
         from ui.backend.config import load_settings, save_settings
 
         with (
             patch("ui.backend.config.CONFIG_FILE", cfg["file"]),
             patch("ui.backend.config.CONFIG_DIR", cfg["dir"]),
-            patch(
-                "core.helpers.encryption.bootstrap_encryption_key",
-                side_effect=PermissionError("bad perms"),
-            ),
         ):
-            with pytest.raises(EncryptionKeyUnavailableError):
-                save_settings(load_settings())
+            settings = load_settings()
+            with patch(
+                "core.helpers.encryption.ensure_managed_key",
+                side_effect=PermissionError("bad perms"),
+            ):
+                with pytest.raises(EncryptionKeyUnavailableError):
+                    save_settings(settings)
 
     def test_migration_encrypts_existing_plaintext_keys(self, tmp_path):
         v6_settings = {

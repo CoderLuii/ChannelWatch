@@ -52,6 +52,16 @@ def _resolve_hostname(hostname: str) -> set[str]:
     return {cast(str, result[4][0]) for result in results}
 
 
+def _is_ascii_hostname(hostname: str) -> bool:
+    """Require callers to supply the exact ASCII/Punycode DNS identity."""
+
+    try:
+        hostname.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _format_host_for_netloc(host: str) -> str:
     try:
         addr = ipaddress.ip_address(host)
@@ -168,6 +178,13 @@ def is_safe_url(url: Optional[str]) -> bool:
         return False
 
     hostname_lower = hostname.lower()
+
+    # Python's legacy IDNA conversion has had security-sensitive mismatches.
+    # Require the operator/provider to supply an explicit ASCII/Punycode host
+    # so no untrusted hostname reaches that implicit conversion path.
+    if not _is_ascii_hostname(hostname):
+        log("URL blocked: hostname must use ASCII/Punycode", level=LOG_STANDARD)
+        return False
 
     # Block known internal hostnames
     if hostname_lower in BLOCKED_HOSTNAMES:

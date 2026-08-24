@@ -98,9 +98,15 @@ def client(settings_file, mem_engine, tmp_path):
         patch("ui.backend.main._activity_db_engine", mem_engine),
         patch("ui.backend.main._STORAGE_AVAILABLE", True),
     ):
-        from ui.backend.main import app
+        from ui.backend import main as ui_main
 
-        yield TestClient(app, raise_server_exceptions=False)
+        with ui_main.rate_limiter._lock:
+            ui_main.rate_limiter._requests.clear()
+        try:
+            yield TestClient(ui_main.app, raise_server_exceptions=False)
+        finally:
+            with ui_main.rate_limiter._lock:
+                ui_main.rate_limiter._requests.clear()
 
 
 class TestListDvrs:

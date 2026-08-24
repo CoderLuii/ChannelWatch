@@ -10,6 +10,7 @@ import { StatusOverview } from "@/components/status-overview"
 import { WatchHistory } from "@/components/watch-history"
 import { NotificationLog } from "@/components/notification-log"
 import { FirstRunWizard } from "@/components/first-run-wizard"
+import { OfficialRecoveryUpdateActions } from "@/components/recovery-update-actions"
 import { Button } from "@/components/base/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
 import { Input } from "@/components/base/input"
@@ -17,7 +18,7 @@ import { Label } from "@/components/base/label"
 import { DvrSelectionProvider } from "@/lib/dvr-selection-context"
 import { useToast } from "@/hooks/use-toast"
 import type { AppSettings, AuthMode, AuthSetupStatus, SecurityStatus, RuntimePreflightStatus } from "@/lib/types"
-import { AuthRequiredError, RESTART_RECOVERED_EVENT, SessionRequiredError, cacheApiKey, clearCachedAuthState, completeInitialSetup, fetchRuntimePreflight, fetchSecurityStatus, fetchSettings, fetchSetupStatus, loginWithPassword } from "@/lib/api"
+import { AuthRequiredError, RESTART_RECOVERED_EVENT, RUNTIME_PREFLIGHT_CHANGED_EVENT, SessionRequiredError, cacheApiKey, clearCachedAuthState, completeInitialSetup, fetchRuntimePreflight, fetchSecurityStatus, fetchSettings, fetchSetupStatus, loginWithPassword } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { Loader2 } from "lucide-react"
 
@@ -41,7 +42,7 @@ function hasActiveDvrs(settings: AppSettings | null): boolean {
   return servers.some((s) => !s.deleted_at)
 }
 
-export type DashboardAuthShell = "app" | "runtime" | "bootstrap" | "login" | "api_key" | "noauth"
+export type DashboardAuthShell = "app" | "bootstrap" | "login" | "api_key" | "noauth"
 
 export function resolveDashboardBootstrapShell(
   setupStatus: Pick<AuthSetupStatus, "configured_mode" | "effective_mode" | "persisted_mode" | "setup_required">,
@@ -125,11 +126,6 @@ export function Dashboard() {
 
       const nextRuntimePreflight = await fetchRuntimePreflight()
       setRuntimePreflight(nextRuntimePreflight)
-      if (nextRuntimePreflight.setup_required) {
-        setAuthShell("runtime")
-        setSettings(null)
-        return
-      }
 
       const [setupStatus, securityStatus] = await Promise.all([fetchSetupStatus(), fetchSecurityStatus()])
       const bootstrapShell = resolveDashboardBootstrapShell(setupStatus, securityStatus)
@@ -183,6 +179,17 @@ export function Dashboard() {
   useEffect(() => {
     bootstrapApp()
   }, [bootstrapApp])
+
+  useEffect(() => {
+    const refreshRuntimePreflight = () => {
+      void fetchRuntimePreflight().then(setRuntimePreflight).catch(() => {
+        // The recovery card reports its own actionable error. Retain the last
+        // known banner state if this best-effort refresh cannot complete.
+      })
+    }
+    window.addEventListener(RUNTIME_PREFLIGHT_CHANGED_EVENT, refreshRuntimePreflight)
+    return () => window.removeEventListener(RUNTIME_PREFLIGHT_CHANGED_EVENT, refreshRuntimePreflight)
+  }, [])
 
   useEffect(() => {
     const handleRestartRecovered = () => {
@@ -260,51 +267,6 @@ export function Dashboard() {
   }, [apiKeyInput, loadSettings])
 
   const renderContent = () => {
-    if (authShell === "runtime") {
-      const blocker = runtimePreflight?.blockers[0] ?? "secret_storage_key_missing"
-      return (
-        <div data-testid="runtime-setup-required-shell" className="flex min-h-[75vh] w-full items-center justify-center px-4">
-          <Card className="w-full max-w-2xl border-amber-500/40 shadow-lg">
-            <CardHeader>
-              <CardTitle><h1>{t("runtimeSetup.title")}</h1></CardTitle>
-              <CardDescription>{t("runtimeSetup.description")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div role="alert" className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-                <p className="font-medium">{t(`runtimeSetup.blocker.${blocker}`)}</p>
-                <p className="mt-1 text-muted-foreground">{t("runtimeSetup.protection")}</p>
-              </div>
-              <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
-                <li>{t("runtimeSetup.step.generate")}</li>
-                <li>{t("runtimeSetup.step.configure")}</li>
-                <li>{t("runtimeSetup.step.restart")}</li>
-              </ol>
-              <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs"><code>openssl rand -base64 48</code></pre>
-              <div className="space-y-3 text-sm">
-                <div>
-                  <p className="mb-1 font-medium">{t("runtimeSetup.examples.compose")}</p>
-                  <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs"><code>{`environment:
-  CHANNELWATCH_SECRET_STORAGE_KEY: "\${CHANNELWATCH_SECRET_STORAGE_KEY}"`}</code></pre>
-                </div>
-                <div>
-                  <p className="mb-1 font-medium">{t("runtimeSetup.examples.unraid")}</p>
-                  <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs"><code>Variable name: CHANNELWATCH_SECRET_STORAGE_KEY</code></pre>
-                </div>
-                <div>
-                  <p className="mb-1 font-medium">{t("runtimeSetup.examples.kubernetes")}</p>
-                  <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs"><code>Secret data key: CHANNELWATCH_SECRET_STORAGE_KEY</code></pre>
-                </div>
-              </div>
-              <p className="text-sm font-medium text-foreground">{t("runtimeSetup.preserve")}</p>
-              <Button type="button" variant="outline" onClick={() => window.location.reload()}>
-                {t("runtimeSetup.checkAgain")}
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      )
-    }
-
     if (showSetupPrompt) {
       return (
         <div data-testid="auth-bootstrap-shell" className="flex h-[80vh] w-full items-center justify-center px-4">
@@ -314,6 +276,7 @@ export function Dashboard() {
               <CardDescription>{t("dashboard.setup.description")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
+              <OfficialRecoveryUpdateActions compact />
               <div className="space-y-2">
                 <Label htmlFor="auth-mode">{t("dashboard.setup.modeLabel")}</Label>
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -449,7 +412,25 @@ export function Dashboard() {
                 tabIndex={-1}
                 className="flex-1 overflow-y-auto overflow-x-hidden p-3 pt-24 md:p-6 md:pt-24"
               >
-                {runtimePreflight?.warnings.includes("legacy_plaintext_key_migration_recommended") && (
+                {(runtimePreflight?.setup_required || runtimePreflight?.status === "recovery_required" || runtimePreflight?.status === "storage_unavailable") && (
+                  <div data-testid="runtime-recovery-warning" role="alert" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground">
+                    <p className="font-medium">{t("runtimeRecovery.bannerTitle")}</p>
+                    <p className="mt-1 text-muted-foreground">{t("runtimeRecovery.bannerDescription")}</p>
+                    {settings ? (
+                      <Button type="button" variant="outline" className="mt-3" onClick={() => navigate("settings:security")}>
+                        {t("runtimeRecovery.openSecurity")}
+                      </Button>
+                    ) : (
+                      <div className="mt-3 space-y-3">
+                        <p className="font-medium">
+                          {showSetupPrompt ? t("runtimeRecovery.setupHint") : t("runtimeRecovery.signInHint")}
+                        </p>
+                        {!showSetupPrompt ? <OfficialRecoveryUpdateActions compact /> : null}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {(runtimePreflight?.warnings.includes("legacy_plaintext_key_migration_recommended") || runtimePreflight?.warnings.includes("legacy_envelope_migration_available")) && (
                   <div data-testid="runtime-migration-warning" role="status" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground">
                     {t("runtimeSetup.migrationWarning")}
                   </div>

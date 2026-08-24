@@ -80,7 +80,6 @@ services:
       - /mnt/user/appdata/channelwatch:/config
     environment:
       TZ: America/Los_Angeles
-      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "99"
       PGID: "100"
     restart: unless-stopped
@@ -88,7 +87,7 @@ services:
 
 Start it:
 
-```bash
+```sh
 docker compose up -d
 ```
 
@@ -134,7 +133,6 @@ Useful startup variables:
 | --- | --- |
 | `TZ` | Timezone used for timestamps, for example `America/Los_Angeles`. |
 | `PUID` / `PGID` | Container file ownership for `/config`, useful on Unraid and NAS installs. |
-| `CHANNELWATCH_SECRET_STORAGE_KEY` | Required for new local secret-key writes. Set this to a unique value of at least 32 characters and keep it with your deployment secrets. |
 | `CHANNELS_DVR_SERVERS` | Optional bootstrap list for multiple DVRs, for example `Home@192.168.1.10:8089,Garage@192.168.1.11:8089`. |
 | `CHANNELS_DVR_HOST` / `CHANNELS_DVR_PORT` | Legacy single-DVR bootstrap variables. They still work, but multi-DVR setup through the UI or `CHANNELS_DVR_SERVERS` is preferred. |
 | `CW_DISABLE_AUTH` | Temporary break-glass override. Do not use it as the normal auth model. |
@@ -191,7 +189,8 @@ Security behavior in v0.9:
 - Legacy API-key compatibility remains for older installs and automation paths.
 - Sensitive settings are masked in browser API responses.
 - Webhook secrets are masked and should be rotated if exposed.
-- New local secret-key writes use envelope encryption with `CHANNELWATCH_SECRET_STORAGE_KEY`.
+- ChannelWatch creates and manages a random encryption key under `/config`; users do not generate or preserve a separate deployment key.
+- `/config` and ChannelWatch backup archives contain credential-bearing material and must be protected accordingly.
 - Debug bundles are sanitized before download.
 - ChannelWatch does not include a phone-home telemetry client by default.
 
@@ -213,15 +212,19 @@ Read more:
 
 The Docker image is published for `linux/amd64` and `linux/arm64`. Docker selects the matching platform automatically for normal pulls.
 
-The Helm chart is single-replica by design because ChannelWatch uses writable application state under `/config`.
+The Helm chart is single-replica by design because ChannelWatch uses writable application state under `/config`. It uses Kubernetes' `Recreate` deployment strategy so an upgrade stops the old `/config` writer before starting its replacement. Chart-managed ConfigMap and Secret changes automatically replace the pod; after changing the contents of a same-name external Secret, run `kubectl rollout restart deployment -l app.kubernetes.io/instance=<release-name>` in the release namespace.
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:0.9.17`, `0.9`, or `latest` for the current v0.9 release. v0.9.17 makes missing deployment-key setup explicit, makes notification diagnostics reflect real delivery, preserves report attachments across preparation failures, separates restart recovery from DVR readiness, and safely supports LAN and Tailscale DVR hostnames.
+Use `coderluii/channelwatch:0.9.18`, `0.9`, or `latest` for the current v0.9 release. v0.9.18 removes the normal deployment-key setup, migrates healthy older encrypted installations, and makes the signed Update Center the default upgrade path.
 
-After installing a version with Update Center support through Docker, Unraid, Compose, or Helm, open **Settings > Updates** and use the in-app Update Center for compatible app-only releases.
+Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 
-v0.9.17 requires a normal container image update because recovery from a missing secret-storage key must work before the core monitor can start. Pull and recreate the container; an app-only update is intentionally unavailable.
+Operational v0.9.11–v0.9.17 installations can update directly to v0.9.18 through the portal, including the common v0.9.15, v0.9.16, and v0.9.17 installations. An already-blocked v0.9.17 installation that cannot open its old envelope cannot reach its old Update Center; preserve `/config` and pull/recreate v0.9.18 once, or provide the correct old deployment key for one migration restart.
+
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** The immutable published entrypoints in those images cannot safely activate v0.9.18. Preserve the existing `/config` volume and pull/recreate the v0.9.18 image once. v0.9.18 repairs any stale legacy update marker without discarding the preserved configuration, and its improved Update Center becomes the normal path for future compatible releases.
+
+Once v0.9.18 is installed, its setup and legacy-recovery shell can use only the official signed stable recovery channel before normal administrator navigation is available. The narrow recovery action uses same-origin anti-CSRF state and exact typed confirmation; it cannot accept custom feeds, URLs, uploads, signing keys, or downgrades.
 
 The Update Center checks trusted public ChannelWatch release metadata, verifies signed app bundles, creates a pre-update backup, activates the update, restarts ChannelWatch, and keeps rollback available when the previous runtime can be restored. It does not add telemetry.
 
@@ -229,29 +232,23 @@ Some releases still require a normal container image update. ChannelWatch will s
 
 ## Troubleshooting
 
-### Project One-Click installs that ask for runtime setup
+### Project One-Click and older deployment-key installs
 
-The third-party Project One-Click template currently omits ChannelWatch's required secret-storage key. A fresh install made from that template will therefore show the v0.9.17 **Runtime setup required** screen. ChannelWatch intentionally stops monitoring rather than generating a fallback key under `/config`.
+Fresh v0.9.18 Project One-Click installations no longer need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
 
-Generate a stable key locally:
+If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first v0.9.18 restart. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. v0.9.9 and v0.9.10 still require the one-time image pull described above; their preserved envelopes migrate after v0.9.18 starts.
 
-```bash
-openssl rand -base64 48
-```
-
-Edit the Project One-Click stack, add `CHANNELWATCH_SECRET_STORAGE_KEY` with that generated value, and recreate the ChannelWatch container while preserving its existing `/config` volume. Preserve the same key with your deployment secrets across upgrades, restores, and host migrations. Once an envelope-encrypted `/config/encryption.key` exists, removing or changing the deployment key blocks access to the protected local key material. ChannelWatch cannot print, upload, or recover a lost deployment key.
-
-This is a documented manual correction for the external template. ChannelWatch v0.9.17 does not modify or redistribute that third-party repository.
+If the old value is unavailable or incorrect, ChannelWatch does not overwrite the protected data. Sign in and open **Settings > Security** to retry migration after restoring the value, or explicitly reset only the unrecoverable DVR API keys and custom webhook URLs/secrets while preserving other settings and history. The third-party Project One-Click repository is not modified or redistributed by ChannelWatch.
 
 Start here:
 
-```bash
+```sh
 docker logs -f channelwatch
 ```
 
 Useful in-container checks:
 
-```bash
+```sh
 docker exec -it channelwatch channelwatch doctor config-check
 docker exec -it channelwatch channelwatch doctor diagnose
 docker exec -it channelwatch channelwatch doctor reset-admin-password --username <admin>

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import stat
 import threading
 import time
@@ -32,6 +33,7 @@ DEFAULT_POLL_SECONDS = 0.05
 DEFAULT_HOLD_LEASE_SECONDS = 30.0
 DEFAULT_LEASE_REFRESH_SECONDS = 5.0
 LEASE_RENEWAL_HANDOFF_GRACE_SECONDS = 1.0
+MAX_HOLD_LEASE_SECONDS = 240.0
 
 
 def _utc_now() -> str:
@@ -195,7 +197,9 @@ class CoreNotificationDrainResponder:
         self.poll_seconds = max(0.01, float(poll_seconds))
 
     @staticmethod
-    def _validated_request(raw: Any) -> tuple[str, float] | None:
+    def _validated_request(
+        raw: Any,
+    ) -> tuple[str, float, int | None, float | None] | None:
         if not isinstance(raw, dict) or raw.get("schema") != REQUEST_SCHEMA:
             return None
         request_id = str(raw.get("request_id") or "")
@@ -207,9 +211,83 @@ class CoreNotificationDrainResponder:
         ):
             return None
         deadline_value = float(deadline)
-        if not deadline_value or deadline_value > time.time() + 5 * 60:
+        if not math.isfinite(deadline_value) or deadline_value <= 0:
             return None
-        return request_id, deadline_value
+        lease_sequence = raw.get("lease_sequence")
+        lease_seconds = raw.get("lease_seconds")
+        if lease_sequence is None and lease_seconds is None:
+            # v0.9.18 development candidates briefly wrote wall-clock-only
+            # leases. Retain bounded compatibility for an in-flight file.
+            return request_id, deadline_value, None, None
+        if (
+            type(lease_sequence) is not int
+            or lease_sequence < 0
+            or type(lease_seconds) not in {int, float}
+        ):
+            return None
+        lease_seconds_value = float(lease_seconds)
+        if not 0.1 <= lease_seconds_value <= MAX_HOLD_LEASE_SECONDS:
+            return None
+        return (
+            request_id,
+            deadline_value,
+            lease_sequence,
+            lease_seconds_value,
+        )
+
+    async def _wait_for_legacy_release(
+        self,
+        request_id: str,
+        deadline_unix: float,
+        shutdown_event: asyncio.Event,
+    ) -> None:
+        """Honor one bounded wall-clock lease from an earlier candidate."""
+
+        current_deadline = deadline_unix
+        while not shutdown_event.is_set():
+            raw = await asyncio.to_thread(_safe_json_object, self.request_path)
+            validated = self._validated_request(raw)
+            if validated is None or validated[0] != request_id:
+                break
+            if validated[2] is not None:
+                return
+            current_deadline = max(current_deadline, validated[1])
+            if time.time() >= current_deadline:
+                grace_deadline = (
+                    time.monotonic() + LEASE_RENEWAL_HANDOFF_GRACE_SECONDS
+                )
+                renewed = False
+                while (
+                    not shutdown_event.is_set()
+                    and time.monotonic() < grace_deadline
+                ):
+                    remaining_grace = grace_deadline - time.monotonic()
+                    try:
+                        await asyncio.wait_for(
+                            shutdown_event.wait(),
+                            timeout=min(self.poll_seconds, remaining_grace),
+                        )
+                    except TimeoutError:
+                        pass
+                    refreshed_raw = await asyncio.to_thread(
+                        _safe_json_object, self.request_path
+                    )
+                    refreshed = self._validated_request(refreshed_raw)
+                    if refreshed is None or refreshed[0] != request_id:
+                        return
+                    if refreshed[2] is not None:
+                        return
+                    if refreshed[1] > current_deadline:
+                        current_deadline = refreshed[1]
+                        renewed = True
+                        break
+                if not renewed:
+                    break
+                continue
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=self.poll_seconds)
+            except TimeoutError:
+                pass
 
     def _write_ack(
         self,
@@ -237,51 +315,41 @@ class CoreNotificationDrainResponder:
         self,
         request_id: str,
         deadline_unix: float,
+        lease_sequence: int | None,
+        lease_seconds: float | None,
         shutdown_event: asyncio.Event,
     ) -> None:
-        current_deadline = deadline_unix
+        if lease_sequence is None or lease_seconds is None:
+            await self._wait_for_legacy_release(
+                request_id,
+                deadline_unix,
+                shutdown_event,
+            )
+            return
+
+        current_sequence = lease_sequence
+        expected_lease_seconds = lease_seconds
+        lease_deadline_monotonic = time.monotonic() + expected_lease_seconds
         while not shutdown_event.is_set():
             raw = await asyncio.to_thread(_safe_json_object, self.request_path)
             validated = self._validated_request(raw)
             if validated is None or validated[0] != request_id:
                 break
-            current_deadline = max(current_deadline, validated[1])
-            if time.time() >= current_deadline:
-                # The UI extends the short acquisition deadline immediately
-                # after it observes the drained acknowledgement.  The core
-                # can otherwise read the old request just before that atomic
-                # replacement and release queues from the stale deadline.
-                # Give only that in-flight handoff a small bounded grace and
-                # require a strictly newer deadline before continuing.
-                grace_deadline = (
-                    time.monotonic() + LEASE_RENEWAL_HANDOFF_GRACE_SECONDS
+            next_sequence = validated[2]
+            next_lease_seconds = validated[3]
+            if (
+                next_sequence is None
+                or next_lease_seconds != expected_lease_seconds
+                or next_sequence < current_sequence
+            ):
+                break
+            if next_sequence > current_sequence:
+                current_sequence = next_sequence
+                lease_deadline_monotonic = (
+                    time.monotonic() + expected_lease_seconds
                 )
-                renewed = False
-                while (
-                    not shutdown_event.is_set()
-                    and time.monotonic() < grace_deadline
-                ):
-                    remaining_grace = grace_deadline - time.monotonic()
-                    try:
-                        await asyncio.wait_for(
-                            shutdown_event.wait(),
-                            timeout=min(self.poll_seconds, remaining_grace),
-                        )
-                    except TimeoutError:
-                        pass
-                    refreshed_raw = await asyncio.to_thread(
-                        _safe_json_object, self.request_path
-                    )
-                    refreshed = self._validated_request(refreshed_raw)
-                    if refreshed is None or refreshed[0] != request_id:
-                        return
-                    if refreshed[1] > current_deadline:
-                        current_deadline = refreshed[1]
-                        renewed = True
-                        break
-                if not renewed:
-                    break
-                continue
+            if time.monotonic() >= lease_deadline_monotonic:
+                break
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=self.poll_seconds)
             except TimeoutError:
@@ -310,10 +378,14 @@ class CoreNotificationDrainResponder:
             raw = await asyncio.to_thread(_safe_json_object, self.request_path)
             validated = self._validated_request(raw)
             if validated is not None and validated[0] != last_request_id:
-                request_id, deadline_unix = validated
+                request_id, deadline_unix, lease_sequence, lease_seconds = validated
                 last_request_id = request_id
                 remaining = deadline_unix - time.time()
                 manager_count = 0
+                if remaining > 5 * 60:
+                    # Ignore forged or corrupt acquisition windows without
+                    # making their wall-clock value part of an active lease.
+                    continue
                 if remaining <= 0:
                     self._write_ack(
                         request_id=request_id,
@@ -345,7 +417,11 @@ class CoreNotificationDrainResponder:
                             )
                             if drained:
                                 await self._wait_for_release(
-                                    request_id, deadline_unix, shutdown_event
+                                    request_id,
+                                    deadline_unix,
+                                    lease_sequence,
+                                    lease_seconds,
+                                    shutdown_event,
                                 )
                         finally:
                             self.registry.release(request_id)
@@ -365,17 +441,19 @@ def _write_drain_request(
     request_id: str,
     requested_at: str,
     deadline_unix: float,
+    lease_sequence: int | None = None,
+    lease_seconds: float | None = None,
 ) -> None:
-    atomic_write_json(
-        request_path,
-        {
-            "schema": REQUEST_SCHEMA,
-            "request_id": request_id,
-            "requested_at": requested_at,
-            "deadline_unix": deadline_unix,
-        },
-        sort_keys=True,
-    )
+    payload: dict[str, Any] = {
+        "schema": REQUEST_SCHEMA,
+        "request_id": request_id,
+        "requested_at": requested_at,
+        "deadline_unix": deadline_unix,
+    }
+    if lease_sequence is not None and lease_seconds is not None:
+        payload["lease_sequence"] = lease_sequence
+        payload["lease_seconds"] = lease_seconds
+    atomic_write_json(request_path, payload, sort_keys=True)
 
 
 def _renew_drain_lease(
@@ -385,19 +463,25 @@ def _renew_drain_lease(
     requested_at: str,
     lease_seconds: float,
     refresh_seconds: float,
+    acquisition_deadline_unix: float,
+    initial_sequence: int,
     stop_event: threading.Event,
 ) -> None:
     """Renew only this process's active request until explicit release."""
 
+    lease_sequence = initial_sequence
     while not stop_event.wait(refresh_seconds):
         if not _request_matches(request_path, request_id):
             return
         try:
+            lease_sequence += 1
             _write_drain_request(
                 request_path,
                 request_id=request_id,
                 requested_at=requested_at,
-                deadline_unix=time.time() + lease_seconds,
+                deadline_unix=acquisition_deadline_unix,
+                lease_sequence=lease_sequence,
+                lease_seconds=lease_seconds,
             )
         except (OSError, TypeError, ValueError):
             # The existing bounded lease remains authoritative. A failed
@@ -416,7 +500,10 @@ def request_core_notification_drain(
     """Ask the core to drain, then renew the bounded hold until release."""
 
     bounded_timeout = min(60.0, max(0.1, float(timeout)))
-    bounded_lease = min(240.0, max(0.1, float(hold_lease_seconds)))
+    bounded_lease = min(
+        MAX_HOLD_LEASE_SECONDS,
+        max(0.1, float(hold_lease_seconds)),
+    )
     bounded_refresh = min(
         bounded_lease / 2,
         max(0.01, float(lease_refresh_seconds)),
@@ -441,6 +528,8 @@ def request_core_notification_drain(
             request_id=request_id,
             requested_at=requested_at,
             deadline_unix=deadline_unix,
+            lease_sequence=0,
+            lease_seconds=bounded_lease,
         )
         deadline_monotonic = time.monotonic() + bounded_timeout
         while time.monotonic() < deadline_monotonic:
@@ -459,7 +548,9 @@ def request_core_notification_drain(
                         request_path,
                         request_id=request_id,
                         requested_at=requested_at,
-                        deadline_unix=time.time() + bounded_lease,
+                        deadline_unix=deadline_unix,
+                        lease_sequence=1,
+                        lease_seconds=bounded_lease,
                     )
                     renewal = threading.Thread(
                         target=_renew_drain_lease,
@@ -469,6 +560,8 @@ def request_core_notification_drain(
                             "requested_at": requested_at,
                             "lease_seconds": bounded_lease,
                             "refresh_seconds": bounded_refresh,
+                            "acquisition_deadline_unix": deadline_unix,
+                            "initial_sequence": 1,
                             "stop_event": stop_event,
                         },
                         name="channelwatch-notification-drain-lease",

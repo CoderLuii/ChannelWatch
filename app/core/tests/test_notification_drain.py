@@ -228,11 +228,102 @@ async def test_expired_acquisition_read_rechecks_in_flight_lease_renewal(
     await responder._wait_for_release(
         request_id,
         expired_deadline,
+        None,
+        None,
         asyncio.Event(),
     )
 
     with pytest.raises(StopIteration):
         next(reads)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wall_clock_offset", [-60 * 60, 60 * 60])
+async def test_monotonic_lease_is_not_expired_by_a_wall_clock_jump(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wall_clock_offset: int,
+):
+    registry = NotificationDrainRegistry()
+    manager = _FakeQueueManager()
+    shutdown = asyncio.Event()
+    started = asyncio.Event()
+    responder = CoreNotificationDrainResponder(
+        config_dir=tmp_path,
+        managers_provider=lambda: (manager,),
+        registry=registry,
+        poll_seconds=0.01,
+    )
+    task = asyncio.create_task(responder.run(shutdown, started_event=started))
+    await started.wait()
+
+    try:
+        assert await asyncio.to_thread(
+            request_core_notification_drain,
+            tmp_path,
+            0.5,
+            poll_seconds=0.01,
+            hold_lease_seconds=1.0,
+            lease_refresh_seconds=0.05,
+        )
+        real_time = time.time
+        monkeypatch.setattr(
+            notification_drain_module.time,
+            "time",
+            lambda: real_time() + wall_clock_offset,
+        )
+        await asyncio.sleep(0.2)
+
+        assert registry.is_active() is True
+        assert manager.resumes == 0
+        assert release_core_notification_drain(tmp_path) is True
+    finally:
+        shutdown.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_repeated_lease_sequence_cannot_hold_queues_forever(tmp_path: Path):
+    runtime = tmp_path / "channelwatch-runtime"
+    runtime.mkdir()
+    request_id = "b" * 32
+    notification_drain_module._write_drain_request(
+        runtime / notification_drain_module.REQUEST_FILE,
+        request_id=request_id,
+        requested_at="2026-08-25T00:00:00Z",
+        deadline_unix=time.time() + 1.0,
+        lease_sequence=0,
+        lease_seconds=0.1,
+    )
+    registry = NotificationDrainRegistry()
+    manager = _FakeQueueManager()
+    shutdown = asyncio.Event()
+    started = asyncio.Event()
+    responder = CoreNotificationDrainResponder(
+        config_dir=tmp_path,
+        managers_provider=lambda: (manager,),
+        registry=registry,
+        poll_seconds=0.01,
+    )
+    task = asyncio.create_task(responder.run(shutdown, started_event=started))
+    await started.wait()
+
+    try:
+        for _ in range(50):
+            if registry.is_active():
+                break
+            await asyncio.sleep(0.01)
+        assert registry.is_active() is True
+
+        for _ in range(50):
+            if not registry.is_active():
+                break
+            await asyncio.sleep(0.01)
+        assert registry.is_active() is False
+        assert manager.resumes == 1
+    finally:
+        shutdown.set()
+        await task
 
 
 @pytest.mark.asyncio
@@ -288,6 +379,35 @@ def test_stale_acknowledgement_cannot_authorize_an_update(tmp_path: Path):
 
     assert request_core_notification_drain(tmp_path, 0.1, poll_seconds=0.01) is False
     assert release_core_notification_drain(tmp_path) is False
+
+
+@pytest.mark.parametrize(
+    ("lease_sequence", "lease_seconds"),
+    (
+        (None, 30.0),
+        (0, None),
+        (True, 30.0),
+        (-1, 30.0),
+        (0, 0.09),
+        (0, notification_drain_module.MAX_HOLD_LEASE_SECONDS + 0.01),
+    ),
+)
+def test_malformed_lease_metadata_is_rejected(
+    lease_sequence: object,
+    lease_seconds: object,
+):
+    assert (
+        CoreNotificationDrainResponder._validated_request(
+            {
+                "schema": 1,
+                "request_id": "c" * 32,
+                "deadline_unix": time.time() + 1.0,
+                "lease_sequence": lease_sequence,
+                "lease_seconds": lease_seconds,
+            }
+        )
+        is None
+    )
 
 
 def test_global_registry_starts_idle_for_core_runtime_tests():

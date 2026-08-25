@@ -665,7 +665,7 @@ def test_release_config_declares_0918_legacy_update_bridge():
         "minimum_image_version": "0.9.11",
         "updater_protocol": 2,
         "recommended_image_version": "0.9.18",
-        "publication_time": "2026-08-25T16:20:00Z",
+        "publication_time": "2026-08-25T17:10:00Z",
         "automatic_install_after": "2026-09-03T12:00:00Z",
         "compatible_source_application_versions": ["0.9.18"],
         "compatible_launcher_protocols": [1, 2, 3],

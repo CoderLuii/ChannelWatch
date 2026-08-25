@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import importlib
 import json
 import os
 import runpy
@@ -1273,7 +1274,51 @@ def selected_static_ui_dir(app_dir: Path) -> Path:
     return app_dir / "ui" / "backend" / "static_ui"
 
 
+def _evict_image_owned_app_modules(app_dir: Path) -> None:
+    """Remove mutable image packages before importing a selected bundle.
+
+    Protocol 3 resolves the active bundle with the image-owned Update Center.
+    That lookup necessarily imports ``core`` before the selected application
+    path is installed.  Python otherwise keeps those image modules cached and
+    a later ``runpy.run_module('core.main')`` can execute a new entrypoint with
+    the old package identity.  The launcher itself is running as ``__main__``,
+    so removing the mutable application namespaces is safe while keeping the
+    image-owned launcher and third-party dependencies resident.
+    """
+
+    try:
+        selected_is_image = app_dir.resolve() == IMAGE_APP_DIR.resolve()
+    except OSError:
+        selected_is_image = False
+    if selected_is_image:
+        return
+
+    mutable_roots = ("core", "ui")
+    image_root = IMAGE_APP_DIR.resolve()
+    for module_name, module in tuple(sys.modules.items()):
+        if not any(
+            module_name == root or module_name.startswith(f"{root}.")
+            for root in mutable_roots
+        ):
+            continue
+        origins = []
+        module_file = getattr(module, "__file__", None)
+        if module_file:
+            origins.append(module_file)
+        module_paths = getattr(module, "__path__", ())
+        origins.extend(str(path) for path in module_paths)
+        for origin in origins:
+            try:
+                if Path(origin).resolve().is_relative_to(image_root):
+                    sys.modules.pop(module_name, None)
+                    break
+            except OSError:
+                continue
+    importlib.invalidate_caches()
+
+
 def prepare_import_path(app_dir: Path) -> None:
+    _evict_image_owned_app_modules(app_dir)
     sys.path = [str(app_dir), *(item for item in sys.path if item != str(app_dir))]
     os.environ["PYTHONPATH"] = str(app_dir)
     os.environ["CHANNELWATCH_APP_DIR"] = str(app_dir)

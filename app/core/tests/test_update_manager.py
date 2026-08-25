@@ -385,6 +385,116 @@ def test_apply_correlation_and_digest_survive_activation_success(tmp_path: Path)
     assert completed["bundle_sha256"] == digest
 
 
+def test_manual_rollback_to_image_finishes_after_core_and_ui_quorum(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "rollback-image",
+                "operation": "rollback",
+                "status": "restarting",
+                "version": "0.9.19",
+                "rolled_back_from": "0.9.19",
+                "restart_required": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(image_dir))
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_APP_DIR", str(image_dir))
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        image_version="0.9.18",
+        launcher_protocol=3,
+    )
+
+    manager.record_startup_success(
+        component="core",
+        running_version="0.9.18",
+        activation_id="",
+        healthy=True,
+    )
+    validating = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert validating["status"] == "validating"
+    assert validating["rollback_applied"] is True
+
+    manager.record_startup_success(
+        component="ui",
+        running_version="0.9.18",
+        activation_id="",
+        healthy=True,
+    )
+    completed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert completed["status"] == "success"
+    assert completed["restored_version"] == "0.9.18"
+    assert completed["restart_required"] is False
+    assert set(completed["startup_components"]) == {"core", "ui"}
+
+
+def test_manual_rollback_to_bundle_rejects_stale_runtime_then_finishes(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    bundle_dir = runtime_dir / "releases" / "v0.9.18"
+    (bundle_dir / "core").mkdir(parents=True)
+    (bundle_dir / "ui" / "backend").mkdir(parents=True)
+    (bundle_dir / "core" / "main.py").write_text("# core\n", encoding="utf-8")
+    (bundle_dir / "ui" / "backend" / "main.py").write_text(
+        "# ui\n", encoding="utf-8"
+    )
+    active = {
+        "version": "0.9.18",
+        "path": str(bundle_dir),
+        "runtime_abi": RUNTIME_ABI,
+        "settings_schema_version": 7,
+    }
+    (runtime_dir / "active.json").write_text(json.dumps(active), encoding="utf-8")
+    initial_job = {
+        "job_id": "rollback-bundle",
+        "operation": "rollback",
+        "status": "restarting",
+        "version": "0.9.19",
+        "rolled_back_from": "0.9.19",
+        "restart_required": True,
+    }
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(initial_job), encoding="utf-8"
+    )
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        image_version="0.9.17",
+        launcher_protocol=3,
+    )
+
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(tmp_path / "stale-runtime"))
+    manager.record_startup_success(
+        component="core",
+        running_version="0.9.18",
+        activation_id="",
+        healthy=True,
+    )
+    assert json.loads(manager.job_path.read_text(encoding="utf-8")) == initial_job
+
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(bundle_dir))
+    for component in ("core", "ui"):
+        manager.record_startup_success(
+            component=component,
+            running_version="0.9.18",
+            activation_id="",
+            healthy=True,
+        )
+    completed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert completed["status"] == "success"
+    assert completed["restored_version"] == "0.9.18"
+
+
 def test_apply_rejects_scheduler_digest_changed_after_check(tmp_path: Path):
     private, public = _key_pair()
     bundle = _bundle()

@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1546,6 +1547,58 @@ def test_prepare_import_path_tracks_only_the_selected_activation(
     runtime_launcher.prepare_import_path(other_dir)
     assert runtime_launcher.ACTIVATION_ID_ENV not in os.environ
     assert runtime_launcher.ACTIVATION_VERSION_ENV not in os.environ
+
+
+def test_prepare_import_path_evicts_image_package_before_selected_bundle_import(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime"
+    bundle_dir = tmp_path / "bundle"
+    bundle_core = bundle_dir / "core"
+    runtime_dir.mkdir()
+    bundle_core.mkdir(parents=True)
+    (bundle_core / "__init__.py").write_text(
+        '__version__ = "0.9.19"\n', encoding="utf-8"
+    )
+    (bundle_core / "identity.py").write_text(
+        "from core import __version__\nSELECTED_VERSION = __version__\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    image_root = Path(runtime_launcher.__file__).resolve().parents[1]
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_root)
+    original_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "core"
+        or name.startswith("core.")
+        or name == "ui"
+        or name.startswith("ui.")
+    }
+    original_path = list(sys.path)
+    try:
+        assert "core.runtime_launcher" in sys.modules
+
+        runtime_launcher.prepare_import_path(bundle_dir)
+
+        assert "core" not in sys.modules
+        assert "core.runtime_launcher" not in sys.modules
+        from core.identity import SELECTED_VERSION
+
+        assert SELECTED_VERSION == "0.9.19"
+        assert Path(sys.modules["core"].__file__).resolve().is_relative_to(bundle_dir)
+    finally:
+        for name in tuple(sys.modules):
+            if (
+                name == "core"
+                or name.startswith("core.")
+                or name == "ui"
+                or name.startswith("ui.")
+            ):
+                sys.modules.pop(name, None)
+        sys.modules.update(original_modules)
+        sys.path[:] = original_path
 
 
 def test_coordinated_restart_rejects_unsupported_or_invalid_supervisor(

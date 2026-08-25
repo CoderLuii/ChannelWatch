@@ -3090,6 +3090,117 @@ class UpdateManager:
         )
         return True
 
+    def _record_manual_rollback_startup(
+        self,
+        *,
+        component: str,
+        running_version: str,
+        healthy: bool,
+        active: dict[str, Any] | None,
+    ) -> bool:
+        """Finish a manual rollback only after the restored runtime quorum.
+
+        The restart journal durably restores the previous selection before
+        either replacement child starts.  Without this second-stage quorum,
+        the persisted job remains ``restarting`` forever even though rollback
+        succeeded.  Bind completion to the restored image or bundle identity
+        so a stale child cannot acknowledge a different selection.
+        """
+
+        job = load_json(self.job_path, None)
+        if (
+            not isinstance(job, dict)
+            or job.get("operation") != "rollback"
+            or job.get("status") not in {"restarting", "validating"}
+        ):
+            return False
+
+        normalized_running = running_version.strip().lstrip("v")
+        selected_dir = os.environ.get("CHANNELWATCH_APP_DIR", "").strip()
+        try:
+            running_dir = Path(selected_dir).resolve()
+            if isinstance(active, dict) and active.get("path"):
+                expected_dir = Path(str(active.get("path") or "")).resolve()
+                expected_version = str(active.get("version") or "").strip().lstrip(
+                    "v"
+                )
+            else:
+                expected_dir = Path(
+                    os.environ.get("CHANNELWATCH_IMAGE_APP_DIR", "/app")
+                ).resolve()
+                expected_version = self.image_version
+        except OSError:
+            return False
+        if (
+            not selected_dir
+            or running_dir != expected_dir
+            or normalized_running != expected_version
+        ):
+            return False
+
+        components = job.get("startup_components")
+        if not isinstance(components, dict):
+            components = {}
+        else:
+            components = {
+                name: marker
+                for name, marker in components.items()
+                if name in {"core", "ui"} and isinstance(marker, dict)
+            }
+
+        base_job = {
+            **job,
+            "status": "validating",
+            "restart_required": True,
+            "rollback_applied": True,
+            "restored_version": expected_version,
+        }
+        if not healthy:
+            self._write_job(
+                {
+                    **base_job,
+                    "status": "failed",
+                    "message": (
+                        "Rollback restored the previous runtime, but "
+                        f"{component} startup validation failed."
+                    ),
+                    "restart_required": False,
+                    "startup_components": components,
+                    "failed_component": component,
+                    "failed_at": utc_now(),
+                }
+            )
+            return True
+
+        components[component] = {
+            "healthy": True,
+            "version": expected_version,
+            "ready_at": utc_now(),
+        }
+        complete = all(
+            isinstance(components.get(name), dict)
+            and components[name].get("healthy") is True
+            and components[name].get("version") == expected_version
+            for name in ("core", "ui")
+        )
+        self._write_job(
+            {
+                **base_job,
+                "status": "success" if complete else "validating",
+                "message": (
+                    "Rollback completed and the previous ChannelWatch runtime "
+                    "started successfully."
+                    if complete
+                    else "Rollback restored the previous runtime; waiting for "
+                    "core and UI startup validation."
+                ),
+                "restart_required": not complete,
+                "startup_components": components,
+                **({"validated_at": utc_now()} if complete else {}),
+            }
+        )
+        return True
+
     def record_startup_success(
         self,
         *,
@@ -3118,6 +3229,13 @@ class UpdateManager:
                 if self._restart_journal_present():
                     return
                 active = load_json(self.active_path, None)
+                if self._record_manual_rollback_startup(
+                    component=component,
+                    running_version=running_version,
+                    healthy=healthy,
+                    active=active if isinstance(active, dict) else None,
+                ):
+                    return
                 if not isinstance(active, dict):
                     self._record_image_refresh_recovery_startup(
                         component=component,

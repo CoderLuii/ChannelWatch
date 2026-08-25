@@ -31,6 +31,7 @@ MAX_CONTROL_FILE_BYTES = 16 * 1024
 DEFAULT_POLL_SECONDS = 0.05
 DEFAULT_HOLD_LEASE_SECONDS = 30.0
 DEFAULT_LEASE_REFRESH_SECONDS = 5.0
+LEASE_RENEWAL_HANDOFF_GRACE_SECONDS = 1.0
 
 
 def _utc_now() -> str:
@@ -246,7 +247,41 @@ class CoreNotificationDrainResponder:
                 break
             current_deadline = max(current_deadline, validated[1])
             if time.time() >= current_deadline:
-                break
+                # The UI extends the short acquisition deadline immediately
+                # after it observes the drained acknowledgement.  The core
+                # can otherwise read the old request just before that atomic
+                # replacement and release queues from the stale deadline.
+                # Give only that in-flight handoff a small bounded grace and
+                # require a strictly newer deadline before continuing.
+                grace_deadline = (
+                    time.monotonic() + LEASE_RENEWAL_HANDOFF_GRACE_SECONDS
+                )
+                renewed = False
+                while (
+                    not shutdown_event.is_set()
+                    and time.monotonic() < grace_deadline
+                ):
+                    remaining_grace = grace_deadline - time.monotonic()
+                    try:
+                        await asyncio.wait_for(
+                            shutdown_event.wait(),
+                            timeout=min(self.poll_seconds, remaining_grace),
+                        )
+                    except TimeoutError:
+                        pass
+                    refreshed_raw = await asyncio.to_thread(
+                        _safe_json_object, self.request_path
+                    )
+                    refreshed = self._validated_request(refreshed_raw)
+                    if refreshed is None or refreshed[0] != request_id:
+                        return
+                    if refreshed[1] > current_deadline:
+                        current_deadline = refreshed[1]
+                        renewed = True
+                        break
+                if not renewed:
+                    break
+                continue
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=self.poll_seconds)
             except TimeoutError:

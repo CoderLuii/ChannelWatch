@@ -270,8 +270,15 @@ def test_markers_and_scenario_keys_are_explicit(tmp_path: Path):
                 {"scenario_key": "activation_success:0.9.15"},
             ]
         )
-    with pytest.raises(canary.CanaryError, match="missing or unreadable"):
-        canary.read_canary_marker(str(tmp_path), ".canary-tamper-applied")
+    with pytest.raises(
+        canary.CanaryError,
+        match="tamper_rejection:0.9.17:bundle.*missing or unreadable",
+    ):
+        canary.read_canary_marker(
+            str(tmp_path),
+            ".canary-tamper-applied",
+            scenario="tamper_rejection:0.9.17:bundle",
+        )
 
 
 def test_sitecustomize_records_fault_and_tamper_proof(tmp_path: Path):
@@ -283,8 +290,23 @@ def test_sitecustomize_records_fault_and_tamper_proof(tmp_path: Path):
     source = sitecustomize.read_text(encoding="utf-8")
     assert ".canary-fault-applied" in source
     assert ".canary-tamper-applied" in source
-    assert "tamper_applied.write_text('manifest\\n')" in source
-    assert "tamper_applied.write_text('bundle\\n')" in source
+    assert "write_canary_marker(tamper_applied, 'manifest')" in source
+    assert "write_canary_marker(tamper_applied, 'bundle')" in source
+
+
+def test_sitecustomize_publishes_durable_host_readable_markers(tmp_path: Path):
+    canary = _load_canary_module()
+    sitecustomize = tmp_path / "sitecustomize.py"
+
+    canary.write_sitecustomize(sitecustomize)
+
+    source = sitecustomize.read_text(encoding="utf-8")
+    assert "os.O_EXCL" in source
+    assert "os.O_NOFOLLOW" in source
+    assert "os.fchmod(descriptor, 0o644)" in source
+    assert "os.fsync(descriptor)" in source
+    assert "os.replace(temporary, path)" in source
+    assert "write_canary_marker(fetch_complete, 'bundle')" in source
 
 
 def test_manifest_tamper_canary_requires_applied_transport_proof(

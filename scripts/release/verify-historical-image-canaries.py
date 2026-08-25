@@ -64,16 +64,21 @@ def is_transient_docker_restart_error(error: BaseException) -> bool:
     return any(message in detail for message in TRANSIENT_DOCKER_RESTART_MESSAGES)
 
 
-def read_canary_marker(volume: str, name: str) -> str:
+def read_canary_marker(
+    volume: str,
+    name: str,
+    *,
+    scenario: str = "historical canary",
+) -> str:
     path = Path(volume, name)
     try:
         value = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError) as exc:
         raise CanaryError(
-            f"required canary marker {name} is missing or unreadable"
+            f"{scenario}: required canary marker {name} is missing or unreadable"
         ) from exc
     if not value:
-        raise CanaryError(f"required canary marker {name} is empty")
+        raise CanaryError(f"{scenario}: required canary marker {name} is empty")
     return value
 
 
@@ -401,6 +406,38 @@ fetch_complete = canary_state / '.canary-fetch-complete'
 fault = canary_state / '.canary-fault.json'
 fault_applied = canary_state / '.canary-fault-applied'
 
+def write_canary_marker(path, value):
+    # The historical image runs with a private umask.  Canary markers contain
+    # only fixed proof values and public asset URLs, so publish each one as a
+    # durable 0644 file that the GitHub runner can read from the bind mount.
+    # A same-directory replacement prevents the host from observing a partial
+    # marker if the historical process is restarted while writing it.
+    temporary = path.with_name('.' + path.name + '.' + str(os.getpid()) + '.tmp')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    descriptor = None
+    try:
+        descriptor = os.open(str(temporary), flags, 0o600)
+        os.fchmod(descriptor, 0o644)
+        remaining = memoryview((value + '\\n').encode('utf-8'))
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError('canary marker write made no progress')
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, path)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
 if fault.is_file() and not fault_applied.exists():
     try:
         active = json.loads((runtime / 'active.json').read_text())
@@ -414,7 +451,7 @@ if fault.is_file() and not fault_applied.exists():
         if target.is_file() and stat.S_ISREG(target.lstat().st_mode):
             target.write_text("raise RuntimeError('deterministic canary activation failure')\\n")
             target.chmod(0o640)
-            fault_applied.write_text(component + '\\n')
+            write_canary_marker(fault_applied, component)
     except Exception:
         pass
 
@@ -435,14 +472,14 @@ if not fetch_complete.exists():
 
         def hermetic_fetch(url, max_bytes, timeout=20.0):
             del timeout
-            (canary_state / '.canary-fetch-last').write_text(url + '\\n')
+            write_canary_marker(canary_state / '.canary-fetch-last', url)
             update_center.validate_trusted_url(url)
             if url.endswith('.zip'):
                 data = (assets / bundle_name).read_bytes()
                 if tamper_case == 'bundle':
                     data = data[:-1] + bytes([data[-1] ^ 1])
-                    tamper_applied.write_text('bundle\\n')
-                fetch_complete.write_text('bundle\\n')
+                    write_canary_marker(tamper_applied, 'bundle')
+                write_canary_marker(fetch_complete, 'bundle')
             elif url == 'https://channelwatch.coderluii.dev/updates/stable.json':
                 data = (assets / manifest_name).read_bytes()
                 if tamper_case == 'manifest':
@@ -452,7 +489,7 @@ if not fetch_complete.exists():
                         ('A' if value[0] != 'A' else 'B') + value[1:]
                     )
                     data = (json.dumps(document, sort_keys=True) + '\\n').encode()
-                    tamper_applied.write_text('manifest\\n')
+                    write_canary_marker(tamper_applied, 'manifest')
             else:
                 raise RuntimeError('canary transport rejected an unexpected URL')
             if len(data) > max_bytes:
@@ -460,10 +497,10 @@ if not fetch_complete.exists():
             return data
 
         update_center.fetch_bytes = hermetic_fetch
-        (canary_state / '.canary-patch-status').write_text('patched\\n')
+        write_canary_marker(canary_state / '.canary-patch-status', 'patched')
     except Exception as exc:
-        (canary_state / '.canary-patch-status').write_text(
-            type(exc).__name__ + '\\n'
+        write_canary_marker(
+            canary_state / '.canary-patch-status', type(exc).__name__
         )
 """.strip() + "\n",
         encoding="utf-8",
@@ -1371,17 +1408,41 @@ def run_activation_failure_canary(
         previous_restart_count=before_restart,
         timeout_seconds=startup_timeout,
     )
+    canary_scenario = scenario_key(
+        "activation_failure", lock["version"], component
+    )
     if final_restart - before_restart != 2:
         raise CanaryError(
             f"{lock['version']} rollback did not use exactly two restarts"
         )
-    if read_canary_marker(str(canary_state), ".canary-fault-applied") != component:
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-fault-applied",
+            scenario=canary_scenario,
+        )
+        != component
+    ):
         raise CanaryError(
             f"{lock['version']} did not apply the requested {component} fault"
         )
-    if read_canary_marker(str(canary_state), ".canary-patch-status") != "patched":
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-patch-status",
+            scenario=canary_scenario,
+        )
+        != "patched"
+    ):
         raise CanaryError(f"{lock['version']} did not install the hermetic fetch patch")
-    if read_canary_marker(str(canary_state), ".canary-fetch-complete") != "bundle":
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-fetch-complete",
+            scenario=canary_scenario,
+        )
+        != "bundle"
+    ):
         raise CanaryError(f"{lock['version']} did not fetch the exact candidate bundle")
     manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
     expected_bundle_url = str(
@@ -1389,7 +1450,11 @@ def run_activation_failure_canary(
     )
     if (
         not expected_bundle_url
-        or read_canary_marker(str(canary_state), ".canary-fetch-last")
+        or read_canary_marker(
+            str(canary_state),
+            ".canary-fetch-last",
+            scenario=canary_scenario,
+        )
         != expected_bundle_url
     ):
         raise CanaryError(f"{lock['version']} did not fetch the expected bundle URL")
@@ -1481,6 +1546,9 @@ def run_tamper_canary(
     initial_supervisor = require_stable_children(name)
     initial_apps = running_app_dirs(name)
     before_restart = restart_count(name)
+    canary_scenario = scenario_key(
+        "tamper_rejection", lock["version"], case
+    )
     checked = post_api(name, "/api/v1/update/check")
     if case == "manifest":
         rejected = isinstance(checked.get("status"), int) and checked["status"] >= 400
@@ -1494,11 +1562,25 @@ def run_tamper_canary(
         )
         rejected = isinstance(applied.get("status"), int) and applied["status"] >= 400
     state = runtime_state(name)
-    if read_canary_marker(str(canary_state), ".canary-patch-status") != "patched":
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-patch-status",
+            scenario=canary_scenario,
+        )
+        != "patched"
+    ):
         raise CanaryError(
             f"{lock['version']} tamper canary did not patch historical fetch"
         )
-    if read_canary_marker(str(canary_state), ".canary-tamper-applied") != case:
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-tamper-applied",
+            scenario=canary_scenario,
+        )
+        != case
+    ):
         raise CanaryError(
             f"{lock['version']} did not apply the requested {case} tamper"
         )
@@ -1510,7 +1592,12 @@ def run_tamper_canary(
     )
     if (
         not expected_url
-        or read_canary_marker(str(canary_state), ".canary-fetch-last") != expected_url
+        or read_canary_marker(
+            str(canary_state),
+            ".canary-fetch-last",
+            scenario=canary_scenario,
+        )
+        != expected_url
     ):
         raise CanaryError(f"{lock['version']} tamper canary fetched an unexpected URL")
     if (
@@ -1751,9 +1838,24 @@ def run_v010_recovery_canary(
         previous_restart_count=initial_restart_count,
         timeout_seconds=startup_timeout,
     )
-    if read_canary_marker(str(canary_state), ".canary-patch-status") != "patched":
+    canary_scenario = scenario_key("image_refresh_recovery", "0.9.10")
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-patch-status",
+            scenario=canary_scenario,
+        )
+        != "patched"
+    ):
         raise CanaryError("v0.9.10 did not install the hermetic fetch patch")
-    if read_canary_marker(str(canary_state), ".canary-fetch-complete") != "bundle":
+    if (
+        read_canary_marker(
+            str(canary_state),
+            ".canary-fetch-complete",
+            scenario=canary_scenario,
+        )
+        != "bundle"
+    ):
         raise CanaryError("v0.9.10 did not fetch the exact candidate bundle")
     manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
     expected_bundle_url = str(
@@ -1761,7 +1863,11 @@ def run_v010_recovery_canary(
     )
     if (
         not expected_bundle_url
-        or read_canary_marker(str(canary_state), ".canary-fetch-last")
+        or read_canary_marker(
+            str(canary_state),
+            ".canary-fetch-last",
+            scenario=canary_scenario,
+        )
         != expected_bundle_url
     ):
         raise CanaryError("v0.9.10 did not fetch the expected candidate URL")

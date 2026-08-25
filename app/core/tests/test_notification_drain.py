@@ -1,10 +1,12 @@
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
+import core.notification_drain as notification_drain_module
 from core.notification_drain import (
     ACK_FILE,
     CORE_NOTIFICATION_DRAIN_REGISTRY,
@@ -132,7 +134,22 @@ async def test_cross_process_handshake_holds_until_exact_ui_release(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_drain_lease_renews_for_an_apply_longer_than_acquisition_timeout(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    lease_renewed = threading.Event()
+    original_write_drain_request = notification_drain_module._write_drain_request
+
+    def tracking_write_drain_request(*args, **kwargs):
+        original_write_drain_request(*args, **kwargs)
+        if threading.current_thread().name == "channelwatch-notification-drain-lease":
+            lease_renewed.set()
+
+    monkeypatch.setattr(
+        notification_drain_module,
+        "_write_drain_request",
+        tracking_write_drain_request,
+    )
+
     registry = NotificationDrainRegistry()
     manager = _FakeQueueManager()
     shutdown = asyncio.Event()
@@ -152,11 +169,12 @@ async def test_drain_lease_renews_for_an_apply_longer_than_acquisition_timeout(
             tmp_path,
             0.15,
             poll_seconds=0.01,
-            hold_lease_seconds=0.12,
+            hold_lease_seconds=2.0,
             lease_refresh_seconds=0.03,
         )
 
-        await asyncio.sleep(0.45)
+        assert await asyncio.to_thread(lease_renewed.wait, 1.0)
+        await asyncio.sleep(0.2)
         assert registry.is_active() is True
         assert manager.resumes == 0
 
@@ -170,6 +188,51 @@ async def test_drain_lease_renews_for_an_apply_longer_than_acquisition_timeout(
     finally:
         shutdown.set()
         await task
+
+
+@pytest.mark.asyncio
+async def test_expired_acquisition_read_rechecks_in_flight_lease_renewal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    responder = CoreNotificationDrainResponder(
+        config_dir=tmp_path,
+        managers_provider=tuple,
+        registry=NotificationDrainRegistry(),
+        poll_seconds=0.01,
+    )
+    request_id = "a" * 32
+    expired_deadline = time.time() - 0.01
+    renewed_deadline = time.time() + 2.0
+    reads = iter(
+        (
+            {
+                "schema": 1,
+                "request_id": request_id,
+                "deadline_unix": expired_deadline,
+            },
+            {
+                "schema": 1,
+                "request_id": request_id,
+                "deadline_unix": renewed_deadline,
+            },
+            None,
+        )
+    )
+    monkeypatch.setattr(
+        notification_drain_module,
+        "_safe_json_object",
+        lambda _path: next(reads),
+    )
+
+    await responder._wait_for_release(
+        request_id,
+        expired_deadline,
+        asyncio.Event(),
+    )
+
+    with pytest.raises(StopIteration):
+        next(reads)
 
 
 @pytest.mark.asyncio

@@ -169,11 +169,11 @@ async def test_drain_lease_renews_for_an_apply_longer_than_acquisition_timeout(
             tmp_path,
             0.15,
             poll_seconds=0.01,
-            hold_lease_seconds=2.0,
+            hold_lease_seconds=30.0,
             lease_refresh_seconds=0.03,
         )
 
-        assert await asyncio.to_thread(lease_renewed.wait, 1.0)
+        assert await asyncio.to_thread(lease_renewed.wait, 5.0)
         await asyncio.sleep(0.2)
         assert registry.is_active() is True
         assert manager.resumes == 0

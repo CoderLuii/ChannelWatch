@@ -2023,6 +2023,31 @@ def test_release_workflow_recovery_is_bound_to_one_immutable_reviewed_target():
     assert "head_sha=${RELEASE_SHA}" in release_job
 
 
+def test_recovery_release_runs_the_historical_drain_test_separately_without_retry():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
+        "\n  build-and-push:",
+        1,
+    )[0]
+    gate = release_job.split("      - name: Run Python release gates", 1)[1].split(
+        "\n      - name: Build frontend for app bundle",
+        1,
+    )[0]
+
+    test_id = (
+        "app/core/tests/test_notification_drain.py::"
+        "test_drain_lease_renews_for_an_apply_longer_than_acquisition_timeout"
+    )
+    assert f'drain_test="{test_id}"' in gate
+    assert 'if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]' in gate
+    assert 'python -m pytest app/core/tests --deselect="${drain_test}"' in gate
+    assert 'python -m pytest "${drain_test}"' in gate
+    assert "retry" not in gate.lower()
+    assert "||" not in gate
+
+
 def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"

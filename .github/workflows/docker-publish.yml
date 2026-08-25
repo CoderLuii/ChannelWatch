@@ -198,8 +198,20 @@ jobs:
             -r deploy/requirements/dev.txt
 
       - name: Run Python release gates
+        shell: bash
         run: |
-          python -m pytest app/core/tests
+          set -euo pipefail
+          drain_test="app/core/tests/test_notification_drain.py::test_drain_lease_renews_for_an_apply_longer_than_acquisition_timeout"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            # The immutable v0.9.18 source used a deliberately tiny two-second
+            # integration lease. Run it in isolation so unrelated full-suite
+            # runner scheduling cannot consume that artificial margin. The
+            # test remains mandatory and is never retried or ignored.
+            python -m pytest app/core/tests --deselect="${drain_test}"
+            python -m pytest "${drain_test}"
+          else
+            python -m pytest app/core/tests
+          fi
           python -m compileall app/core app/ui/backend
 
       - name: Build frontend for app bundle

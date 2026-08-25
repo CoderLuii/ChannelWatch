@@ -15,13 +15,13 @@ Env vars are mostly startup inputs. Saved application settings live in `/config/
 ## Container runtime
 
 - `PUID`
-  - Default: `1000`
+  - Default: `501`
   - Purpose: Sets the UID used for `/config`, `/app`, and the final application process.
   - Scope: startup-only.
   - Related `settings.json` path: none.
 
 - `PGID`
-  - Default: `1000`
+  - Default: `20`
   - Purpose: Sets the GID used for `/config`, `/app`, and the final application process.
   - Scope: startup-only.
   - Related `settings.json` path: none.
@@ -242,17 +242,17 @@ Env vars are mostly startup inputs. Saved application settings live in `/config/
 
 - `CHANNELWATCH_SECRET_STORAGE_KEY`
   - Default: unset.
-  - Purpose: Provides the wrapping secret used to envelope-encrypt newly written local secret files such as `/config/encryption.key`.
-  - Scope: startup and any write path that creates, rotates, or restores local secret material.
+  - Purpose: Deprecated one-time migration input for a legacy envelope created by v0.9.5 through v0.9.17.
+  - Scope: startup migration only when an existing legacy envelope is present.
   - Related `settings.json` path: none.
-  - Operator guidance: set this to a unique stable value of at least 32 trimmed characters and keep it outside the repo. Existing plaintext key files can still be read with a migration warning, but fresh installs and envelope-encrypted key files enter a stable setup-required state if this value is absent, short, or incorrect. Generate a value locally with `openssl rand -base64 48`; ChannelWatch never generates or displays this deployment secret.
+  - Operator guidance: new installs must not create this value. If an older install already used it, keep the same value for the first successful v0.9.18 migration restart, confirm migration in **Settings > Security**, then remove it. v0.9.9 and v0.9.10 require a one-time v0.9.18 image pull before migration. A missing or incorrect old value never causes ChannelWatch to overwrite protected credentials.
 
 - `CHANNELWATCH_SECRET_STORAGE_KEY_FILE`
   - Default: unset.
-  - Purpose: Reads the wrapping secret from a mounted file instead of an environment variable.
-  - Scope: startup and any write path that creates, rotates, or restores local secret material.
+  - Purpose: Deprecated file-based equivalent of the one-time legacy envelope migration input.
+  - Scope: startup migration only when an existing legacy envelope is present.
   - Related `settings.json` path: none.
-  - Operator guidance: prefer this when your container platform supports Docker/Kubernetes secrets. The file is evaluated under the same minimum-length and envelope-decryption rules as the environment variable. An unreadable file enters setup-required state without exposing its path or contents through public diagnostics.
+  - Operator guidance: keep an existing file mounted for one successful migration, then remove the variable and mount. New installations do not need a key Secret.
 
 ## Supervisor
 
@@ -270,7 +270,6 @@ services:
   ChannelWatch:
     environment:
       TZ: "America/New_York"
-      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
       PUID: "1000"
       PGID: "1000"
       CHANNELS_DVR_SERVERS: "Main@192.168.1.100:8089"

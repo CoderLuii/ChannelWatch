@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 from core.notifications.notification import NotificationManager
 from core.notifications.providers.base import NotificationProvider
 from core.notifications.providers.plugin_loader import load_notification_plugins
@@ -265,10 +264,10 @@ class TestLoadOnceViaInitialize:
     def test_initialize_notifications_calls_plugin_loader(self, tmp_path):
         _write_plugin(tmp_path, "good_plugin.py", _GOOD_PLUGIN_SOURCE)
 
-        from core.helpers.initialize import initialize_notifications
         from core.helpers.config import CoreSettings
+        from core.helpers.initialize import initialize_notifications
 
-        settings = CoreSettings()
+        settings = CoreSettings(_config_root=tmp_path)
         mgr = initialize_notifications(settings, test_mode=True, plugin_dir=tmp_path)
 
         assert mgr is not None
@@ -277,10 +276,10 @@ class TestLoadOnceViaInitialize:
     def test_initialize_notifications_with_no_plugins_still_returns_manager_when_webhook_configured(
         self, tmp_path
     ):
-        from core.helpers.initialize import initialize_notifications
         from core.helpers.config import CoreSettings
+        from core.helpers.initialize import initialize_notifications
 
-        settings = CoreSettings()
+        settings = CoreSettings(_config_root=tmp_path)
         mgr = initialize_notifications(settings, test_mode=True, plugin_dir=tmp_path)
         assert mgr is None or isinstance(mgr, NotificationManager)
 

@@ -73,6 +73,20 @@ def test_dockerfile_builds_static_ui_on_native_build_platform():
     assert "FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/python" not in dockerfile
 
 
+def test_official_image_normalizes_generated_python_and_ui_artifacts():
+    dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    next_config = (_REPO_DIR / "app" / "ui" / "next.config.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'ENV CHANNELWATCH_BUILD_ID="${GIT_SHA}"' in dockerfile
+    assert 'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"' in dockerfile
+    assert "generateBuildId" in next_config
+    assert "process.env.CHANNELWATCH_BUILD_ID" in next_config
+
+
 def test_official_image_bundles_project_and_third_party_legal_notices():
     dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
         encoding="utf-8"
@@ -147,6 +161,22 @@ def test_runtime_diagnostics_are_not_under_legacy_test_package():
     assert (_REPO_DIR / "app" / "core" / "diagnostics" / "__init__.py").is_file()
 
 
+def test_api_reference_matches_public_recovery_and_logout_csrf_contracts():
+    api_reference = (_REPO_DIR / "docs/reference/api.md").read_text(encoding="utf-8")
+    recovery = api_reference.split(
+        "### `GET /api/v1/update/recovery/status`", 1
+    )[1].split("### `POST /api/v1/update/recovery/check`", 1)[0]
+    logout = api_reference.split("### `POST /api/v1/auth/logout`", 1)[1].split(
+        "### `GET /api/v1/auth/whoami`", 1
+    )[0]
+
+    assert "intentionally public and minimal" in recovery
+    assert "no version fingerprint" in recovery
+    assert "RBAC session cookie plus matching `X-CSRF-Token`" in logout
+    assert "200, 401, 403, 429" in logout
+    assert '-H "X-CSRF-Token: $CSRF_TOKEN"' in logout
+
+
 def test_release_workflow_changelog_gate_precedes_publish_steps():
     release = (
         _REPO_DIR / ".github" / "workflows" / "docker-publish.yml"
@@ -159,7 +189,7 @@ def test_release_workflow_changelog_gate_precedes_publish_steps():
 
     publish_markers = [
         "      - name: Login to Docker Hub",
-        "      - name: Extract metadata",
+        "      - name: Download exact approved candidate image",
         "      - name: Publish the scanned images and assemble exact manifests",
         "      - name: Attest build provenance",
     ]

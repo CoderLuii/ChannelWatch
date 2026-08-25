@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 import threading
 import time
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -13,6 +13,16 @@ from core.diagnostics.alerts.recording_events import (
 )
 from core.notifications.notification import NotificationManager
 from core.notifications.providers.base import NotificationProvider
+
+
+@pytest.fixture(autouse=True)
+def _legacy_unconfigured_notification_routing():
+    """Keep diagnostic delivery isolated from any host `/config` state."""
+
+    with patch(
+        "core.notifications.notification._load_routing_config", return_value={}
+    ):
+        yield
 
 
 class _ConfiguredProvider(NotificationProvider):

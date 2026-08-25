@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,11 +9,14 @@ from types import SimpleNamespace
 import pytest
 
 from core import runtime_launcher
-from core.update_center import RUNTIME_ABI, UpdateManager, resolve_active_app_dir
-
-_START_RESTART_REQUIRED_WATCHDOG = (
-    runtime_launcher.start_restart_required_watchdog
+from core.update_center import (
+    RUNTIME_ABI,
+    UpdateManager,
+    launcher_compatibility_status,
+    resolve_active_app_dir,
 )
+
+_START_RESTART_REQUIRED_WATCHDOG = runtime_launcher.start_restart_required_watchdog
 
 
 class _SimulatedPowerLoss(BaseException):
@@ -50,7 +54,14 @@ def _bundle(root: Path, version: str = "0.9.10") -> Path:
     return bundle_dir
 
 
-def _write_active(config_dir: Path, bundle_dir: Path, *, version: str = "0.9.10", abi: str = RUNTIME_ABI, schema: int = 7):
+def _write_active(
+    config_dir: Path,
+    bundle_dir: Path,
+    *,
+    version: str = "0.9.10",
+    abi: str = RUNTIME_ABI,
+    schema: int = 7,
+):
     active = {
         "version": version,
         "path": str(bundle_dir),
@@ -60,6 +71,22 @@ def _write_active(config_dir: Path, bundle_dir: Path, *, version: str = "0.9.10"
     active_path = config_dir / "channelwatch-runtime" / "active.json"
     active_path.parent.mkdir(parents=True, exist_ok=True)
     active_path.write_text(json.dumps(active))
+
+
+@pytest.mark.parametrize("image_version", ["0.9.9", "0.9.10", "unknown"])
+def test_launcher_compatibility_rejects_images_without_a_safe_bridge(image_version):
+    status = launcher_compatibility_status(image_version=image_version)
+
+    assert status["minimum_safe_image_version"] == "0.9.11"
+    assert status["safe_for_app_updates"] is False
+
+
+@pytest.mark.parametrize("image_version", ["0.9.11", "0.9.15", "0.9.18"])
+def test_launcher_compatibility_accepts_verified_bridge_images(image_version):
+    status = launcher_compatibility_status(image_version=image_version)
+
+    assert status["minimum_safe_image_version"] == "0.9.11"
+    assert status["safe_for_app_updates"] is True
 
 
 def test_newer_compatible_active_bundle_wins(tmp_path: Path):
@@ -119,7 +146,7 @@ def test_corrupt_or_missing_active_bundle_falls_back_to_image(tmp_path: Path):
     image_dir = tmp_path / "image"
     image_dir.mkdir()
     runtime_dir = tmp_path / "channelwatch-runtime"
-    runtime_dir.mkdir()
+    runtime_dir.mkdir(exist_ok=True)
     (runtime_dir / "active.json").write_text("{not json")
 
     selection = resolve_active_app_dir(
@@ -176,9 +203,7 @@ def test_runtime_launcher_records_failed_activation_and_restores_previous_bundle
     assert job["rollback_applied"] is True
     assert job["rolled_back_from"] == "0.9.10"
     assert job["rolled_back_to"] == "0.9.9"
-    restart_required = json.loads(
-        (runtime_dir / "restart-required.json").read_text()
-    )
+    restart_required = json.loads((runtime_dir / "restart-required.json").read_text())
     assert restart_required["schema"] == 2
     assert restart_required["reason"] == "activation_rollback"
     assert restart_required["operation"] == "activation_rollback"
@@ -186,6 +211,49 @@ def test_runtime_launcher_records_failed_activation_and_restores_previous_bundle
     assert restart_required["source_active"]["version"] == "0.9.10"
     assert restart_required["control"]["active.json"]["version"] == "0.9.9"
     assert restart_required["control"]["update-job.json"] == job
+
+
+def test_protocol_one_activation_rollback_restores_controls_without_journal(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    current_dir = _bundle(tmp_path, "0.9.18")
+    previous_dir = _bundle(tmp_path, "0.9.17")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "active.json").write_text(
+        json.dumps({"version": "0.9.18", "path": str(current_dir)}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "rollback.json").write_text(
+        json.dumps(
+            {
+                "previous_active": {
+                    "version": "0.9.17",
+                    "path": str(previous_dir),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in (
+        runtime_launcher.ACTIVATION_PENDING_FILE,
+        "activation-core-ready.json",
+        "activation-ui-ready.json",
+    ):
+        (runtime_dir / name).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.15")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    runtime_launcher.rollback_failed_activation("protocol one startup failed")
+
+    assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.17"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["status"] == "failed"
+    )
+    assert not (runtime_dir / runtime_launcher.ACTIVATION_PENDING_FILE).exists()
+    assert not (runtime_dir / "activation-core-ready.json").exists()
+    assert not (runtime_dir / "activation-ui-ready.json").exists()
+    assert not (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).exists()
 
 
 @pytest.mark.parametrize("crash_phase", _RESTART_REPLAY_PHASES)
@@ -232,7 +300,9 @@ def test_runtime_activation_rollback_power_loss_is_replayable_and_blocks_launch(
     assert runtime_launcher.main(["core"]) == 1
     runtime_launcher.apply_restart_journal()
     assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.9"
-    assert json.loads((runtime_dir / "update-job.json").read_text())["status"] == "failed"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["status"] == "failed"
+    )
 
 
 def _write_pending_activation(
@@ -273,9 +343,7 @@ def _write_pending_activation(
                 "version": "0.9.10",
                 "activation_id": activation_id,
                 "path": str(current_dir),
-                "deadline_at": (
-                    datetime.now(timezone.utc) - timedelta(seconds=1)
-                )
+                "deadline_at": (datetime.now(timezone.utc) - timedelta(seconds=1))
                 .isoformat()
                 .replace("+00:00", "Z"),
             }
@@ -298,7 +366,9 @@ def test_bundle_startup_failure_requests_whole_container_restart(
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
     monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: bundle_dir)
     monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
-    monkeypatch.setattr(runtime_launcher, "start_activation_watchdog", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher, "start_activation_watchdog", lambda _path: None
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "run_core",
@@ -320,7 +390,7 @@ def test_restart_required_sentinel_blocks_and_retries_each_child_launch(
     tmp_path: Path, monkeypatch
 ):
     runtime_dir = tmp_path / "channelwatch-runtime"
-    runtime_dir.mkdir()
+    runtime_dir.mkdir(exist_ok=True)
     sentinel = runtime_dir / "restart-required.json"
     sentinel.write_text("{malformed but still fail closed", encoding="utf-8")
     restart_attempts: list[bool] = []
@@ -352,6 +422,303 @@ def test_restart_required_sentinel_blocks_and_retries_each_child_launch(
     assert restart_attempts == [True, True]
     assert delays == [runtime_launcher.RESTART_REQUIRED_PRELAUNCH_DELAY_SECONDS] * 2
     assert all(delay > 1.0 for delay in delays)
+    assert sentinel.is_file()
+
+
+def _write_protocol_three_apply_journal(
+    runtime_dir: Path,
+    target_dir: Path,
+    *,
+    operation: str = "apply",
+) -> dict[str, object]:
+    active = {
+        "version": "0.9.19",
+        "path": str(target_dir),
+        "activation_id": "protocol-three-activation",
+        "runtime_abi": RUNTIME_ABI,
+        "settings_schema_version": 7,
+    }
+    pending = {
+        **active,
+        "job_id": "protocol-three-job",
+        "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=120))
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+    control = {
+        "active.json": active,
+        "rollback.json": {
+            "target_version": "0.9.19",
+            "previous_active": None,
+        },
+        "activation-pending.json": pending,
+        "activation-core-ready.json": None,
+        "activation-ui-ready.json": None,
+        "update-job.json": {
+            "job_id": "protocol-three-job",
+            "operation": "apply",
+            "status": "restarting",
+            "version": "0.9.19",
+        },
+    }
+    journal = runtime_launcher._build_restart_journal(
+        reason=(
+            "activation_rollback"
+            if operation == "activation_rollback"
+            else "runtime_transition"
+        ),
+        operation=operation,
+        phase="commit",
+        job_id="protocol-three-job",
+        source_active=None,
+        control=control,
+    )
+    runtime_launcher._write_restart_journal(journal)
+    return journal
+
+
+def _protocol_three_old_processes() -> dict[str, dict[str, int]]:
+    return {
+        "core": {"pid": 101, "start": 1_700_000_001},
+        "ui": {"pid": 102, "start": 1_700_000_002},
+    }
+
+
+def test_protocol_three_child_consumes_valid_restart_journal_before_launch(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    restart_attempts: list[bool] = []
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    journal = _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: restart_attempts.append(True),
+    )
+
+    assert runtime_launcher.handoff_required_restart_before_launch() is False
+    assert restart_attempts == []
+    assert not (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).exists()
+    assert (
+        json.loads((runtime_dir / "active.json").read_text())
+        == journal["control"]["active.json"]
+    )
+    assert json.loads((runtime_dir / "activation-pending.json").read_text()) == (
+        journal["control"]["activation-pending.json"]
+    )
+    assert json.loads((runtime_dir / "update-job.json").read_text())["status"] == (
+        "restarting"
+    )
+    assert runtime_launcher.handoff_required_restart_before_launch() is False
+
+
+def test_protocol_three_journal_acknowledgement_is_power_loss_replayable(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    journal = _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+
+    def crash(phase: str) -> None:
+        if phase == "journal:before-clear":
+            raise _SimulatedPowerLoss(phase)
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "_restart_transition_checkpoint", crash)
+
+    with pytest.raises(_SimulatedPowerLoss, match="journal:before-clear"):
+        runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+
+    assert (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).is_file()
+    assert (
+        json.loads((runtime_dir / "active.json").read_text())
+        == journal["control"]["active.json"]
+    )
+
+    monkeypatch.setattr(
+        runtime_launcher, "_restart_transition_checkpoint", lambda _phase: None
+    )
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert not (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).exists()
+
+
+def test_protocol_three_child_cannot_consume_before_restart_handoff_is_accepted(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    restart_attempts: list[bool] = []
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "time",
+        SimpleNamespace(sleep=lambda _delay: None),
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: restart_attempts.append(True),
+    )
+
+    assert runtime_launcher.handoff_required_restart_before_launch() is True
+    assert restart_attempts == [True]
+    assert (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).is_file()
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+
+
+def test_protocol_three_recovers_abandoned_same_inode_journal_candidate(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    journal = _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    canonical = runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE
+    abandoned = runtime_dir / ".restart-required.json.candidate-crashed"
+    os.link(canonical, abandoned)
+
+    assert canonical.stat().st_nlink == 2
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+    assert not abandoned.exists()
+    assert canonical.stat().st_nlink == 1
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert not canonical.exists()
+    assert (
+        json.loads((runtime_dir / "active.json").read_text())
+        == journal["control"]["active.json"]
+    )
+
+
+def test_protocol_three_never_follows_nonregular_abandoned_candidate(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    candidate = runtime_dir / ".restart-required.json.candidate-untrusted"
+    candidate.symlink_to(runtime_dir / "missing-target")
+
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+    assert candidate.is_symlink()
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert candidate.is_symlink()
+
+
+def test_protocol_three_concurrent_children_consume_one_accepted_journal(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+    barrier = threading.Barrier(3)
+    results: list[bool] = []
+    failures: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            barrier.wait()
+            results.append(
+                runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    workers = [threading.Thread(target=consume) for _index in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert failures == []
+    assert all(not worker.is_alive() for worker in workers)
+    assert sorted(results) == [False, True]
+    assert not (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).exists()
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+
+
+@pytest.mark.parametrize("operation", ["manual_rollback", "activation_rollback"])
+def test_protocol_three_consumes_accepted_rollback_journal(
+    tmp_path: Path, monkeypatch, operation: str
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    target_dir = _bundle(tmp_path, "0.9.17")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(
+        runtime_dir,
+        target_dir,
+        operation=operation,
+    )
+
+    assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+        old_processes=_protocol_three_old_processes()
+    )
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert not (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).exists()
+
+
+def test_protocol_three_malformed_restart_journal_remains_fail_closed(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    runtime_dir.mkdir(exist_ok=True)
+    sentinel = runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE
+    sentinel.write_text("{malformed", encoding="utf-8")
+    restart_attempts: list[bool] = []
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "time",
+        SimpleNamespace(sleep=lambda _delay: None),
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: restart_attempts.append(True),
+    )
+
+    assert runtime_launcher.handoff_required_restart_before_launch() is True
+    assert restart_attempts == [True]
     assert sentinel.is_file()
 
 
@@ -486,15 +853,14 @@ def test_runtime_rollback_restores_failed_selection_if_sentinel_write_fails(
     with pytest.raises(OSError, match="sentinel storage unavailable"):
         runtime_launcher.rollback_failed_activation("startup failed")
 
-    assert (
-        json.loads((runtime_dir / "active.json").read_text())["version"]
-        == "0.9.10"
-    )
+    assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.10"
     assert (runtime_dir / "activation-pending.json").is_file()
     assert not (runtime_dir / "restart-required.json").exists()
 
 
-def test_bundle_system_exit_requests_whole_container_restart(tmp_path: Path, monkeypatch):
+def test_bundle_system_exit_requests_whole_container_restart(
+    tmp_path: Path, monkeypatch
+):
     image_dir = tmp_path / "image"
     image_dir.mkdir()
     bundle_dir = _bundle(tmp_path, "0.9.10")
@@ -507,7 +873,9 @@ def test_bundle_system_exit_requests_whole_container_restart(tmp_path: Path, mon
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
     monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: bundle_dir)
     monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
-    monkeypatch.setattr(runtime_launcher, "start_activation_watchdog", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher, "start_activation_watchdog", lambda _path: None
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "run_ui",
@@ -537,7 +905,9 @@ def test_bundle_failure_restores_pending_claim_when_rollback_write_fails(
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
     monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: bundle_dir)
     monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
-    monkeypatch.setattr(runtime_launcher, "start_activation_watchdog", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher, "start_activation_watchdog", lambda _path: None
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "run_core",
@@ -638,7 +1008,9 @@ def test_activation_watchdog_rolls_back_when_component_marker_is_missing(
 
     assert runtime_launcher.enforce_activation_deadline() is True
     assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.9"
-    assert json.loads((runtime_dir / "update-job.json").read_text())["job_id"] == "job-1"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["job_id"] == "job-1"
+    )
     assert restart_requests == [True]
     assert not (runtime_dir / "activation-pending.json").exists()
 
@@ -703,7 +1075,9 @@ def test_activation_watchdog_recovers_success_when_both_components_are_ready(
 
     assert runtime_launcher.enforce_activation_deadline() is False
     assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.10"
-    assert json.loads((runtime_dir / "update-job.json").read_text())["status"] == "success"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["status"] == "success"
+    )
     assert restart_requests == []
     assert not (runtime_dir / "activation-pending.json").exists()
 
@@ -781,7 +1155,9 @@ def test_deadline_claim_wins_before_late_quorum_without_live_claim_recovery(
     assert errors == []
     assert deadline_result == [True]
     assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.9"
-    assert json.loads((runtime_dir / "update-job.json").read_text())["status"] == "failed"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["status"] == "failed"
+    )
     assert (runtime_dir / "restart-required.json").is_file()
 
 
@@ -852,7 +1228,9 @@ def test_quorum_claim_wins_before_deadline_and_cannot_be_rolled_back(
     assert errors == []
     assert deadline_result == [False]
     assert json.loads((runtime_dir / "active.json").read_text())["version"] == "0.9.10"
-    assert json.loads((runtime_dir / "update-job.json").read_text())["status"] == "success"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["status"] == "success"
+    )
     assert not (runtime_dir / "restart-required.json").exists()
 
 
@@ -878,9 +1256,10 @@ def test_abandoned_outcome_lock_inode_does_not_block_claim_crash_recovery(
     outcome_lock = runtime_dir / runtime_launcher.ACTIVATION_OUTCOME_LOCK_FILE
     assert outcome_lock.is_file()
     assert runtime_launcher.is_pending_activation(current_dir) is True
-    assert json.loads(
-        (runtime_dir / runtime_launcher.ACTIVATION_PENDING_FILE).read_text()
-    ) == pending
+    assert (
+        json.loads((runtime_dir / runtime_launcher.ACTIVATION_PENDING_FILE).read_text())
+        == pending
+    )
 
 
 def test_outcome_lock_rejects_hard_link_without_chmodding_external_inode(
@@ -953,6 +1332,184 @@ def test_successfully_activated_bundle_crash_does_not_request_rollback(
     assert restart_requests == []
 
 
+def test_protocol_three_post_success_crash_enters_official_recovery_mode(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    bundle_dir = _bundle(tmp_path, "0.9.18")
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    digest = "a" * 64
+    _write_active(tmp_path, bundle_dir, version="0.9.18")
+    active_path = runtime_dir / "active.json"
+    active = json.loads(active_path.read_text(encoding="utf-8"))
+    active["manifest"] = {"bundle_sha256": digest}
+    active_path.write_text(json.dumps(active), encoding="utf-8")
+
+    restart_requests: list[bool] = []
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: bundle_dir)
+    monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher, "start_activation_watchdog", lambda _path: None
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "run_core",
+        lambda _args: (_ for _ in ()).throw(RuntimeError("post-success crash")),
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: restart_requests.append(True),
+    )
+
+    assert runtime_launcher.main(["core"]) == 1
+    marker = json.loads(
+        (runtime_dir / runtime_launcher.RECOVERY_MODE_FILE).read_text(encoding="utf-8")
+    )
+    assert restart_requests == [True]
+    assert marker["mode"] == "official_signed_only"
+    assert marker["failed_version"] == "0.9.18"
+    assert marker["failed_bundle_sha256"] == digest
+    assert "path" not in marker
+    assert "error" not in marker
+
+
+def test_protocol_three_recovery_hold_uses_exact_version_and_digest(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    bundle_dir = _bundle(tmp_path, "0.9.18")
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    digest = "b" * 64
+    _write_active(tmp_path, bundle_dir, version="0.9.18")
+    active_path = runtime_dir / "active.json"
+    active = json.loads(active_path.read_text(encoding="utf-8"))
+    active["manifest"] = {"bundle_sha256": digest}
+    active_path.write_text(json.dumps(active), encoding="utf-8")
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    assert runtime_launcher.enter_official_recovery_mode(bundle_dir) is True
+    assert runtime_launcher.selected_app_dir() == image_dir
+
+    # Replacing the selected signed asset with a different digest releases the
+    # failed identity instead of permanently pinning the image runtime.
+    active["manifest"] = {"bundle_sha256": "c" * 64}
+    active_path.write_text(json.dumps(active), encoding="utf-8")
+    runtime_launcher.selected_app_dir()
+    assert not (runtime_dir / runtime_launcher.RECOVERY_MODE_FILE).exists()
+    assert runtime_launcher.RECOVERY_MODE_ENV not in os.environ
+
+
+@pytest.mark.parametrize(
+    ("version", "protocol"),
+    [
+        ("not-a-version", 0),
+        ("0.9.12", 1),
+        ("0.9.16", 2),
+        ("0.9.18", runtime_launcher.LAUNCHER_PROTOCOL_RECOVERY_CAPABLE),
+    ],
+)
+def test_image_launcher_protocol_boundaries(version, protocol):
+    assert runtime_launcher.image_launcher_protocol(version) == protocol
+
+
+def test_launcher_protocol_status_and_legacy_selection_fallback(
+    tmp_path: Path, monkeypatch
+):
+    fallback = tmp_path / "legacy-active"
+    fallback.mkdir()
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.15")
+    monkeypatch.setenv("CHANNELWATCH_ACTIVE_APP_DIR", str(fallback))
+    monkeypatch.setenv(runtime_launcher.RECOVERY_MODE_ENV, "1")
+
+    status = runtime_launcher.launcher_protocol_status()
+
+    assert status == {
+        "image_version": "0.9.15",
+        "launcher_protocol": 1,
+        "recovery_capable": False,
+        "recovery_mode": True,
+    }
+    assert runtime_launcher.selected_app_dir() == fallback.resolve()
+
+
+def test_protocol_three_selection_failure_falls_back_and_invalid_schema_defaults(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime"
+    image_dir = tmp_path / "image"
+    fallback = tmp_path / "pinned"
+    runtime_dir.mkdir()
+    image_dir.mkdir()
+    fallback.mkdir()
+    messages = []
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setenv("CHANNELWATCH_ACTIVE_APP_DIR", str(fallback))
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(runtime_launcher, "log", messages.append)
+    monkeypatch.setattr(
+        "core.update_center.resolve_active_app_dir",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("selection failed")),
+    )
+    monkeypatch.setattr(runtime_launcher, "load_json", lambda *_args: [])
+
+    assert runtime_launcher._image_settings_schema_version() == 7
+    assert runtime_launcher.selected_app_dir() == fallback.resolve()
+    assert messages and "failed safely" in messages[0]
+
+
+def test_official_recovery_entry_rejects_unsupported_or_unselected_runtime(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime"
+    image_dir = tmp_path / "image"
+    bundle_dir = tmp_path / "bundle"
+    other_dir = tmp_path / "other"
+    for path in (runtime_dir, image_dir, bundle_dir, other_dir):
+        path.mkdir()
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.17")
+    assert runtime_launcher.enter_official_recovery_mode(bundle_dir) is False
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    assert runtime_launcher.enter_official_recovery_mode(bundle_dir) is False
+    (runtime_dir / "active.json").write_text(
+        json.dumps({"version": "0.9.18", "path": str(other_dir)}),
+        encoding="utf-8",
+    )
+    assert runtime_launcher.enter_official_recovery_mode(bundle_dir) is False
+    (runtime_dir / "active.json").write_text(
+        json.dumps({"version": "", "path": str(bundle_dir)}),
+        encoding="utf-8",
+    )
+    assert runtime_launcher.enter_official_recovery_mode(bundle_dir) is False
+
+
+def test_protocol_three_image_recovery_ignores_failed_bundle_static_ui(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image"
+    image_static = image_dir / "ui" / "backend" / "static_ui"
+    failed_static = tmp_path / "failed-bundle" / "ui" / "backend" / "static_ui"
+    image_static.mkdir(parents=True)
+    failed_static.mkdir(parents=True)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_STATIC_UI_DIR", image_static)
+    monkeypatch.setenv("CHANNELWATCH_ACTIVE_STATIC_UI_DIR", str(failed_static))
+
+    assert runtime_launcher.selected_static_ui_dir(image_dir) == image_static
+
+
 def test_prepare_import_path_tracks_only_the_selected_activation(
     tmp_path: Path, monkeypatch
 ):
@@ -992,6 +1549,58 @@ def test_prepare_import_path_tracks_only_the_selected_activation(
     assert runtime_launcher.ACTIVATION_VERSION_ENV not in os.environ
 
 
+def test_prepare_import_path_evicts_image_package_before_selected_bundle_import(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime"
+    bundle_dir = tmp_path / "bundle"
+    bundle_core = bundle_dir / "core"
+    runtime_dir.mkdir()
+    bundle_core.mkdir(parents=True)
+    (bundle_core / "__init__.py").write_text(
+        '__version__ = "0.9.19"\n', encoding="utf-8"
+    )
+    (bundle_core / "identity.py").write_text(
+        "from core import __version__\nSELECTED_VERSION = __version__\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    image_root = Path(runtime_launcher.__file__).resolve().parents[1]
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_root)
+    original_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "core"
+        or name.startswith("core.")
+        or name == "ui"
+        or name.startswith("ui.")
+    }
+    original_path = list(sys.path)
+    try:
+        assert "core.runtime_launcher" in sys.modules
+
+        runtime_launcher.prepare_import_path(bundle_dir)
+
+        assert "core" not in sys.modules
+        assert "core.runtime_launcher" not in sys.modules
+        from core.identity import SELECTED_VERSION
+
+        assert SELECTED_VERSION == "0.9.19"
+        assert Path(sys.modules["core"].__file__).resolve().is_relative_to(bundle_dir)
+    finally:
+        for name in tuple(sys.modules):
+            if (
+                name == "core"
+                or name.startswith("core.")
+                or name == "ui"
+                or name.startswith("ui.")
+            ):
+                sys.modules.pop(name, None)
+        sys.modules.update(original_modules)
+        sys.path[:] = original_path
+
+
 def test_coordinated_restart_rejects_unsupported_or_invalid_supervisor(
     monkeypatch,
 ):
@@ -1022,6 +1631,692 @@ def test_coordinated_restart_propagates_supervisor_signal_failure(monkeypatch):
 
     with pytest.raises(PermissionError, match="denied"):
         runtime_launcher.request_container_restart()
+
+
+def test_protocol_three_restart_uses_image_owned_helper(monkeypatch):
+    calls = []
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_spawn_protocol_three_restart_helper",
+        lambda: calls.append("helper"),
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_supervisor_parent_pid",
+        lambda: (_ for _ in ()).throw(AssertionError("must not stop PID 1")),
+    )
+
+    runtime_launcher.request_container_restart()
+
+    assert calls == ["helper"]
+
+
+def test_image_owned_helper_performs_ordinary_restart_without_update_journal(
+    tmp_path: Path,
+    monkeypatch,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.identities = _protocol_three_old_processes()
+            self.calls: list[tuple[str, str]] = []
+
+        def getProcessInfo(self, name):
+            return {"name": name, **self.identities[name], "statename": "RUNNING"}
+
+        def signalProcess(self, name, signal_name):
+            self.calls.append((name, signal_name))
+            self.identities[name] = {
+                "pid": self.identities[name]["pid"] + 100,
+                "start": self.identities[name]["start"] + 10,
+            }
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    runtime_dir.mkdir()
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    supervisor = FakeSupervisor()
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: SimpleNamespace(supervisor=supervisor),
+    )
+    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _seconds: None)
+    read_fd, write_fd = os.pipe()
+
+    assert (
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=write_fd,
+        )
+        == 0
+    )
+
+    assert os.read(read_fd, 64) == b"ready\n"
+    os.close(read_fd)
+    assert supervisor.calls == [("core", "TERM"), ("ui", "TERM")]
+    assert not runtime_launcher.restart_journal_present()
+    assert not runtime_launcher.protocol_three_handoff_present()
+
+
+@pytest.mark.parametrize(
+    ("unavailable_process", "state"),
+    [("core", "STOPPED"), ("ui", "FATAL")],
+)
+def test_ordinary_restart_recovers_one_stopped_child_before_restart(
+    tmp_path: Path,
+    monkeypatch,
+    unavailable_process: str,
+    state: str,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.identities = _protocol_three_old_processes()
+            self.states = {"core": "RUNNING", "ui": "RUNNING"}
+            self.identities[unavailable_process] = {"pid": 0, "start": 0}
+            self.states[unavailable_process] = state
+            self.calls: list[tuple[str, str, object]] = []
+
+        def getProcessInfo(self, name):
+            return {
+                "name": name,
+                **self.identities[name],
+                "statename": self.states[name],
+            }
+
+        def startProcess(self, name, wait):
+            self.calls.append(("start", name, wait))
+            self.identities[name] = {"pid": 301, "start": 1_700_000_003}
+            self.states[name] = "RUNNING"
+            return True
+
+        def signalProcess(self, name, signal_name):
+            self.calls.append(("signal", name, signal_name))
+            self.identities[name] = {
+                "pid": self.identities[name]["pid"] + 100,
+                "start": self.identities[name]["start"] + 10,
+            }
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    runtime_dir.mkdir()
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    supervisor = FakeSupervisor()
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: SimpleNamespace(supervisor=supervisor),
+    )
+    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _seconds: None)
+    read_fd, write_fd = os.pipe()
+
+    assert (
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=write_fd,
+        )
+        == 0
+    )
+
+    assert os.read(read_fd, 64) == b"ready\n"
+    os.close(read_fd)
+    assert supervisor.calls == [
+        ("start", unavailable_process, False),
+        ("signal", "core", "TERM"),
+        ("signal", "ui", "TERM"),
+    ]
+    assert all(supervisor.states[name] == "RUNNING" for name in ("core", "ui"))
+    assert not runtime_launcher.restart_journal_present()
+    assert not runtime_launcher.protocol_three_handoff_present()
+
+
+@pytest.mark.parametrize(
+    ("unavailable_process", "state"),
+    [("core", "STOPPED"), ("ui", "FATAL")],
+)
+def test_update_handoff_rejects_unsignalable_child_before_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+    unavailable_process: str,
+    state: str,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.identities = _protocol_three_old_processes()
+            self.calls: list[tuple[str, str]] = []
+
+        def getProcessInfo(self, name):
+            if name == unavailable_process:
+                return {"name": name, "pid": 0, "start": 0, "statename": state}
+            return {"name": name, **self.identities[name], "statename": "RUNNING"}
+
+        def signalProcess(self, name, signal_name):
+            self.calls.append((name, signal_name))
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    supervisor = FakeSupervisor()
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: SimpleNamespace(supervisor=supervisor),
+    )
+    read_fd, write_fd = os.pipe()
+
+    assert (
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=write_fd,
+        )
+        == 1
+    )
+
+    assert os.read(read_fd, 64) == b"error:RuntimeError\n"
+    os.close(read_fd)
+    assert supervisor.calls == []
+    assert runtime_launcher.restart_journal_present()
+    assert not runtime_launcher.protocol_three_handoff_present()
+
+
+def test_image_owned_restart_helper_signals_both_old_generations_before_handoff(
+    tmp_path: Path,
+    monkeypatch,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.identities = _protocol_three_old_processes()
+            self.calls: list[tuple[str, str]] = []
+
+        def getProcessInfo(self, name):
+            return {"name": name, **self.identities[name], "statename": "RUNNING"}
+
+        def signalProcess(self, name, signal_name):
+            self.calls.append((name, signal_name))
+            self.identities[name] = {
+                "pid": self.identities[name]["pid"] + 100,
+                "start": self.identities[name]["start"] + 10,
+            }
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+
+    supervisor = FakeSupervisor()
+    proxy = SimpleNamespace(supervisor=supervisor)
+    monkeypatch.setattr(
+        runtime_launcher, "_validated_supervisor_proxy", lambda _path: proxy
+    )
+    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _seconds: None)
+    read_fd, write_fd = os.pipe()
+
+    result = runtime_launcher.restart_supervisor_services(
+        socket_path=supervisor_runtime / "supervisor.sock",
+        ack_fd=write_fd,
+    )
+
+    assert os.read(read_fd, 64) == b"ready\n"
+    os.close(read_fd)
+    assert result == 0
+    assert supervisor.calls == [("core", "TERM"), ("ui", "TERM")]
+    marker = json.loads(
+        (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).read_text()
+    )
+    assert marker["old_processes"] == _protocol_three_old_processes()
+    assert (
+        runtime_launcher.stat_module.S_IMODE(
+            (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).stat().st_mode
+        )
+        == 0o600
+    )
+    duplicate_read_fd, duplicate_write_fd = os.pipe()
+    assert (
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=duplicate_write_fd,
+        )
+        == 0
+    )
+    assert os.read(duplicate_read_fd, 64) == b"ready\n"
+    os.close(duplicate_read_fd)
+    assert supervisor.calls == [("core", "TERM"), ("ui", "TERM")]
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+
+
+@pytest.mark.parametrize("crash_phase", ["signal-sent:core", "signal-sent:ui"])
+def test_restart_helper_death_before_stop_barrier_never_publishes_handoff(
+    tmp_path: Path,
+    monkeypatch,
+    crash_phase: str,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.identities = _protocol_three_old_processes()
+            self.calls: list[str] = []
+
+        def getProcessInfo(self, name):
+            return {"name": name, **self.identities[name], "statename": "RUNNING"}
+
+        def signalProcess(self, name, signal_name):
+            assert signal_name == "TERM"
+            self.calls.append(name)
+            self.identities[name] = {
+                "pid": self.identities[name]["pid"] + 100,
+                "start": self.identities[name]["start"] + 10,
+            }
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    supervisor = FakeSupervisor()
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: SimpleNamespace(supervisor=supervisor),
+    )
+    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _seconds: None)
+
+    def crash(phase: str) -> None:
+        if phase == crash_phase:
+            raise _SimulatedPowerLoss(phase)
+
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_protocol_three_restart_helper_checkpoint",
+        crash,
+    )
+    read_fd, write_fd = os.pipe()
+
+    with pytest.raises(_SimulatedPowerLoss, match=crash_phase):
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=write_fd,
+        )
+
+    assert os.read(read_fd, 64) == b"ready\n"
+    os.close(read_fd)
+    expected_calls = ["core"] if crash_phase.endswith("core") else ["core", "ui"]
+    assert supervisor.calls == expected_calls
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+    assert (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).is_file()
+
+
+def test_restart_helper_broken_ack_pipe_changes_no_process_or_handoff(
+    tmp_path: Path,
+    monkeypatch,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.calls: list[tuple[str, str]] = []
+
+        def getProcessInfo(self, name):
+            return {
+                "name": name,
+                **_protocol_three_old_processes()[name],
+                "statename": "RUNNING",
+            }
+
+        def signalProcess(self, name, signal_name):
+            self.calls.append((name, signal_name))
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    supervisor = FakeSupervisor()
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: SimpleNamespace(supervisor=supervisor),
+    )
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+
+    assert (
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=write_fd,
+        )
+        == 1
+    )
+
+    assert supervisor.calls == []
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+    assert (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).is_file()
+
+
+def test_restart_helper_barrier_timeout_preserves_unaccepted_journal(
+    tmp_path: Path,
+    monkeypatch,
+):
+    class FakeSupervisor:
+        def __init__(self):
+            self.identities = _protocol_three_old_processes()
+            self.calls: list[str] = []
+
+        def getProcessInfo(self, name):
+            return {"name": name, **self.identities[name], "statename": "RUNNING"}
+
+        def signalProcess(self, name, signal_name):
+            assert signal_name == "TERM"
+            self.calls.append(name)
+            return True
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    supervisor = FakeSupervisor()
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: SimpleNamespace(supervisor=supervisor),
+    )
+    monotonic_values = iter([0.0, 11.0])
+    monkeypatch.setattr(
+        runtime_launcher.time,
+        "monotonic",
+        lambda: next(monotonic_values),
+    )
+    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _seconds: None)
+    read_fd, write_fd = os.pipe()
+
+    assert (
+        runtime_launcher.restart_supervisor_services(
+            socket_path=supervisor_runtime / "supervisor.sock",
+            ack_fd=write_fd,
+        )
+        == 1
+    )
+
+    assert os.read(read_fd, 64) == b"ready\n"
+    os.close(read_fd)
+    assert supervisor.calls == ["core", "ui"]
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+    assert (runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE).is_file()
+
+
+def test_restart_helper_lock_rejects_duplicate_owner(tmp_path: Path):
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    socket_path = supervisor_runtime / "supervisor.sock"
+
+    with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
+        with pytest.raises(RuntimeError, match="already active"):
+            with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
+                pytest.fail("a duplicate helper must never acquire ownership")
+
+
+@pytest.mark.parametrize("lock_kind", ["symlink", "hardlink"])
+def test_restart_helper_lock_rejects_untrusted_inode_without_mutation(
+    tmp_path: Path,
+    lock_kind: str,
+):
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    socket_path = supervisor_runtime / "supervisor.sock"
+    lock_path = (
+        supervisor_runtime / runtime_launcher.PROTOCOL_THREE_RESTART_HELPER_LOCK_FILE
+    )
+    external = tmp_path / "external-lock"
+    external.write_bytes(b"external")
+    external.chmod(0o640)
+    original_bytes = external.read_bytes()
+    original_mode = external.stat().st_mode
+    if lock_kind == "symlink":
+        lock_path.symlink_to(external)
+    else:
+        os.link(external, lock_path)
+
+    with pytest.raises(RuntimeError, match="cannot be opened|single-link"):
+        with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
+            pytest.fail("an untrusted helper lock must never be acquired")
+
+    assert external.read_bytes() == original_bytes
+    assert external.stat().st_mode == original_mode
+
+
+def test_protocol_one_bridge_precedes_import_failure_and_restarts_coherently(
+    tmp_path: Path, monkeypatch
+):
+    config_dir = tmp_path / "config"
+    runtime_dir = config_dir / "channelwatch-runtime"
+    bundle_dir = runtime_dir / "releases" / "v0.9.18"
+    image_dir = tmp_path / "image"
+    bundle_dir.mkdir(parents=True)
+    (image_dir / "core").mkdir(parents=True)
+    digest = "b" * 64
+    (runtime_dir / "active.json").write_text(
+        json.dumps(
+            {
+                "version": "0.9.18",
+                "path": str(bundle_dir),
+                "manifest": {"bundle_sha256": digest},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "rollback.json").write_text(
+        json.dumps({"target_version": "0.9.18", "previous_active": None}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "legacy-job",
+                "operation": "apply",
+                "status": "restarting",
+                "version": "0.9.18",
+            }
+        ),
+        encoding="utf-8",
+    )
+    historical = SimpleNamespace(
+        __file__=str(image_dir / "core" / "runtime_launcher.py"),
+        rollback_failed_activation=lambda _error: None,
+    )
+    watchdogs: list[Path] = []
+    restarts: list[bool] = []
+    monkeypatch.setitem(runtime_launcher.sys.modules, "__main__", historical)
+    monkeypatch.setattr(runtime_launcher, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(runtime_launcher, "start_activation_watchdog", watchdogs.append)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: restarts.append(True),
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.15")
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(bundle_dir))
+
+    assert runtime_launcher.install_historical_launcher_bridge() is True
+    pending = json.loads((runtime_dir / "activation-pending.json").read_text())
+    assert pending["job_id"] == "legacy-job"
+    assert pending["bundle_sha256"] == digest
+    assert watchdogs == [bundle_dir]
+
+    with pytest.raises(SystemExit) as stopped:
+        historical.rollback_failed_activation("candidate UI import failed")
+    assert stopped.value.code == 75
+    assert restarts == [True]
+    assert not (runtime_dir / "active.json").exists()
+    assert not list(runtime_dir.glob("activation-*.json"))
+    failed = json.loads((runtime_dir / "update-job.json").read_text())
+    assert failed["job_id"] == "legacy-job"
+    assert failed["bundle_sha256"] == digest
+    assert failed["rollback_applied"] is True
+    scheduler = json.loads((runtime_dir / "update-scheduler.json").read_text())
+    assert scheduler["quarantines"][f"0.9.18:{digest}"]["reason"] == (
+        "activation_failed"
+    )
+
+
+def test_protocol_one_bridge_retries_rejected_parent_handoff_before_app_import(
+    tmp_path: Path, monkeypatch
+):
+    config_dir = tmp_path / "config"
+    runtime_dir = config_dir / "channelwatch-runtime"
+    bundle_dir = runtime_dir / "releases" / "v0.9.18"
+    image_dir = tmp_path / "image"
+    bundle_dir.mkdir(parents=True)
+    (image_dir / "core").mkdir(parents=True)
+    digest = "c" * 64
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "legacy-job",
+                "operation": "apply",
+                "status": "failed",
+                "version": "0.9.18",
+                "rolled_back_from": "0.9.18",
+                "rolled_back_to": "image",
+                "rollback_applied": True,
+                "bundle_sha256": digest,
+            }
+        ),
+        encoding="utf-8",
+    )
+    historical = SimpleNamespace(
+        __file__=str(image_dir / "core" / "runtime_launcher.py"),
+        rollback_failed_activation=lambda _error: None,
+    )
+    attempts: list[bool] = []
+    monkeypatch.setitem(runtime_launcher.sys.modules, "__main__", historical)
+    monkeypatch.setattr(runtime_launcher, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: attempts.append(True),
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.15")
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(bundle_dir))
+
+    with pytest.raises(SystemExit) as stopped:
+        runtime_launcher.install_historical_launcher_bridge()
+    assert stopped.value.code == 75
+    assert attempts == [True]
+    assert not (runtime_dir / "active.json").exists()
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["bundle_sha256"]
+        == digest
+    )
+
+
+def test_protocol_two_bridge_enriches_historical_rollback_with_exact_quarantine(
+    tmp_path: Path, monkeypatch
+):
+    config_dir = tmp_path / "config"
+    runtime_dir = config_dir / "channelwatch-runtime"
+    bundle_dir = runtime_dir / "releases" / "v0.9.18"
+    image_dir = tmp_path / "image"
+    bundle_dir.mkdir(parents=True)
+    (image_dir / "core").mkdir(parents=True)
+    digest = "d" * 64
+    activation_id = "activation-protocol-two"
+    pending = {
+        "job_id": "protocol-two-job",
+        "version": "0.9.18",
+        "scheduler_attempt_id": "activation@protocol-two-job",
+        "bundle_sha256": digest,
+        "activation_id": activation_id,
+        "path": str(bundle_dir),
+    }
+    (runtime_dir / "active.json").write_text(
+        json.dumps(
+            {
+                "version": "0.9.18",
+                "path": str(bundle_dir),
+                "activation_id": activation_id,
+                "activation_protocol": 2,
+                "manifest": {"bundle_sha256": digest},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "rollback.json").write_text(
+        json.dumps({"target_version": "0.9.18", "previous_active": None}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "protocol-two-job",
+                "operation": "apply",
+                "status": "validating",
+                "version": "0.9.18",
+                "bundle_sha256": digest,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "activation-pending.json").write_text(
+        json.dumps(pending), encoding="utf-8"
+    )
+    original_calls: list[str] = []
+    historical = SimpleNamespace(
+        __file__=str(image_dir / "core" / "runtime_launcher.py"),
+        rollback_failed_activation=lambda error, **_kwargs: original_calls.append(
+            error
+        ),
+        request_container_restart=lambda: None,
+    )
+    monkeypatch.setitem(runtime_launcher.sys.modules, "__main__", historical)
+    monkeypatch.setattr(runtime_launcher, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.17")
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(bundle_dir))
+
+    assert runtime_launcher.install_historical_launcher_bridge() is True
+    historical.rollback_failed_activation(
+        "candidate core import failed",
+        pending=pending,
+        _outcome_lock_held=True,
+    )
+
+    assert original_calls == []
+    assert not (runtime_dir / "active.json").exists()
+    failed = json.loads((runtime_dir / "update-job.json").read_text())
+    assert failed["job_id"] == "protocol-two-job"
+    assert failed["bundle_sha256"] == digest
+    assert failed["rollback_applied"] is True
+    restart = json.loads((runtime_dir / "restart-required.json").read_text())
+    assert restart["job_id"] == "protocol-two-job"
+    scheduler = json.loads((runtime_dir / "update-scheduler.json").read_text())
+    assert scheduler["quarantines"][f"0.9.18:{digest}"]["reason"] == (
+        "activation_failed"
+    )
 
 
 def test_supervisor_identity_rejects_arbitrary_direct_parent(monkeypatch):
@@ -1081,17 +2376,23 @@ def test_pending_identity_rejects_mismatch_and_resolution_failure(tmp_path: Path
         "version": "0.9.16",
         "path": str(tmp_path),
     }
-    assert runtime_launcher._pending_matches_active(
-        pending, {**pending, "activation_id": "generation-b"}
-    ) is False
+    assert (
+        runtime_launcher._pending_matches_active(
+            pending, {**pending, "activation_id": "generation-b"}
+        )
+        is False
+    )
 
     class UnresolvablePath:
         def resolve(self):
             raise OSError("mount disappeared")
 
-    assert runtime_launcher._pending_matches_active(
-        pending, dict(pending), UnresolvablePath()
-    ) is False
+    assert (
+        runtime_launcher._pending_matches_active(
+            pending, dict(pending), UnresolvablePath()
+        )
+        is False
+    )
 
 
 def test_pending_claim_handles_lost_race_and_unexpected_generation(
@@ -1381,7 +2682,9 @@ def test_activation_success_claim_is_restored_when_completion_write_fails(
         (runtime_dir / runtime_launcher.ACTIVATION_PENDING_FILE).read_text()
     )
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
-    monkeypatch.setattr(runtime_launcher, "_marker_matches_pending", lambda *_args: True)
+    monkeypatch.setattr(
+        runtime_launcher, "_marker_matches_pending", lambda *_args: True
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "_complete_activation_from_markers",
@@ -1548,7 +2851,9 @@ def test_image_keyboard_interrupt_and_system_exit_preserve_exit_semantics(
     monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
     monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: image_dir)
     monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
-    monkeypatch.setattr(runtime_launcher, "start_activation_watchdog", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher, "start_activation_watchdog", lambda _path: None
+    )
 
     monkeypatch.setattr(
         runtime_launcher,
@@ -1582,7 +2887,9 @@ def test_bundle_restart_request_failure_is_logged_after_durable_rollback(
     monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
     monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: bundle_dir)
     monkeypatch.setattr(runtime_launcher, "prepare_import_path", lambda _path: None)
-    monkeypatch.setattr(runtime_launcher, "start_activation_watchdog", lambda _path: None)
+    monkeypatch.setattr(
+        runtime_launcher, "start_activation_watchdog", lambda _path: None
+    )
     monkeypatch.setattr(
         runtime_launcher,
         "run_core",
@@ -1635,12 +2942,14 @@ def test_launcher_initial_journal_publish_never_clobbers_foreign_owner(
     with pytest.raises(RuntimeError, match="won publication"):
         runtime_launcher.rollback_failed_activation("simulated failure")
 
-    assert runtime_launcher.load_json(
-        runtime_launcher.restart_required_path(), None
-    ) == foreign
-    assert runtime_launcher.load_json(runtime_dir / "active.json", None)[
-        "version"
-    ] == "0.9.10"
+    assert (
+        runtime_launcher.load_json(runtime_launcher.restart_required_path(), None)
+        == foreign
+    )
+    assert (
+        runtime_launcher.load_json(runtime_dir / "active.json", None)["version"]
+        == "0.9.10"
+    )
 
 
 def test_launcher_stale_local_journal_cannot_replay_under_foreign_owner(
@@ -1683,6 +2992,7 @@ def test_launcher_stale_local_journal_cannot_replay_under_foreign_owner(
         runtime_launcher.apply_restart_journal(stale)
 
     assert runtime_launcher.load_json(runtime_dir / "active.json", None) == seed_active
-    assert runtime_launcher.load_json(
-        runtime_launcher.restart_required_path(), None
-    ) == foreign
+    assert (
+        runtime_launcher.load_json(runtime_launcher.restart_required_path(), None)
+        == foreign
+    )

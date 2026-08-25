@@ -161,7 +161,9 @@ def _bundle(version: str = "0.9.10", *, extra: dict[str, str] | None = None) -> 
     return buf.getvalue()
 
 
-def _manifest(private, bundle: bytes, version: str = "0.9.10", *, image_required: bool = False) -> bytes:
+def _manifest(
+    private, bundle: bytes, version: str = "0.9.10", *, image_required: bool = False
+) -> bytes:
     digest = bytes.fromhex(sha256_hex(bundle))
     payload = {
         "version": version,
@@ -183,7 +185,9 @@ def _manifest(private, bundle: bytes, version: str = "0.9.10", *, image_required
         "signature": {
             "alg": "ed25519",
             "key_id": "test-key",
-            "value": base64.b64encode(private.sign(canonical_payload_bytes(payload))).decode("ascii"),
+            "value": base64.b64encode(
+                private.sign(canonical_payload_bytes(payload))
+            ).decode("ascii"),
         },
     }
     return json.dumps(manifest).encode("utf-8")
@@ -289,10 +293,13 @@ def test_fetch_bytes_accepts_github_release_asset_cdn_redirect(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: Opener())
 
-    assert fetch_bytes(
-        "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.16/channelwatch-app-v0.9.16.zip",
-        max_bytes=1024,
-    ) == b"bundle"
+    assert (
+        fetch_bytes(
+            "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.16/channelwatch-app-v0.9.16.zip",
+            max_bytes=1024,
+        )
+        == b"bundle"
+    )
 
 
 def test_check_marks_image_required_release(tmp_path: Path):
@@ -341,8 +348,202 @@ def test_apply_verified_bundle_records_backup_and_active_bundle(tmp_path: Path):
     active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
     assert job["status"] == "restarting"
     assert active["version"] == "0.9.10"
-    assert (tmp_path / "channelwatch-runtime" / "releases" / "v0.9.10" / "core" / "main.py").exists()
+    assert (
+        tmp_path / "channelwatch-runtime" / "releases" / "v0.9.10" / "core" / "main.py"
+    ).exists()
     assert list((tmp_path / "backups").glob("pre-update.v0.9.10.*.zip"))
+
+
+def test_apply_correlation_and_digest_survive_activation_success(tmp_path: Path):
+    private, public = _key_pair()
+    bundle = _bundle()
+    digest = sha256_hex(bundle)
+    manifest = _manifest(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.9",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        restart_callable=lambda: True,
+    )
+    manager.check()
+
+    job = manager.apply(
+        job_id="scheduler-job-1",
+        scheduler_attempt_id="window-attempt-1",
+        expected_bundle_sha256=digest,
+    )
+    assert job["job_id"] == "scheduler-job-1"
+    assert job["scheduler_attempt_id"] == "window-attempt-1"
+    assert job["bundle_sha256"] == digest
+    _complete_selected_activation(manager)
+
+    completed = manager.status()["last_job"]
+    assert completed["status"] == "success"
+    assert completed["job_id"] == "scheduler-job-1"
+    assert completed["scheduler_attempt_id"] == "window-attempt-1"
+    assert completed["bundle_sha256"] == digest
+
+
+def test_manual_rollback_to_image_finishes_after_core_and_ui_quorum(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "rollback-image",
+                "operation": "rollback",
+                "status": "restarting",
+                "version": "0.9.19",
+                "rolled_back_from": "0.9.19",
+                "restart_required": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(image_dir))
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_APP_DIR", str(image_dir))
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        image_version="0.9.18",
+        launcher_protocol=3,
+    )
+
+    manager.record_startup_success(
+        component="core",
+        running_version="0.9.18",
+        activation_id="",
+        healthy=True,
+    )
+    validating = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert validating["status"] == "validating"
+    assert validating["rollback_applied"] is True
+
+    manager.record_startup_success(
+        component="ui",
+        running_version="0.9.18",
+        activation_id="",
+        healthy=True,
+    )
+    completed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert completed["status"] == "success"
+    assert completed["restored_version"] == "0.9.18"
+    assert completed["restart_required"] is False
+    assert set(completed["startup_components"]) == {"core", "ui"}
+
+
+def test_manual_rollback_to_bundle_rejects_stale_runtime_then_finishes(
+    tmp_path: Path, monkeypatch
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    bundle_dir = runtime_dir / "releases" / "v0.9.18"
+    (bundle_dir / "core").mkdir(parents=True)
+    (bundle_dir / "ui" / "backend").mkdir(parents=True)
+    (bundle_dir / "core" / "main.py").write_text("# core\n", encoding="utf-8")
+    (bundle_dir / "ui" / "backend" / "main.py").write_text(
+        "# ui\n", encoding="utf-8"
+    )
+    active = {
+        "version": "0.9.18",
+        "path": str(bundle_dir),
+        "runtime_abi": RUNTIME_ABI,
+        "settings_schema_version": 7,
+    }
+    (runtime_dir / "active.json").write_text(json.dumps(active), encoding="utf-8")
+    initial_job = {
+        "job_id": "rollback-bundle",
+        "operation": "rollback",
+        "status": "restarting",
+        "version": "0.9.19",
+        "rolled_back_from": "0.9.19",
+        "restart_required": True,
+    }
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(initial_job), encoding="utf-8"
+    )
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        image_version="0.9.17",
+        launcher_protocol=3,
+    )
+
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(tmp_path / "stale-runtime"))
+    manager.record_startup_success(
+        component="core",
+        running_version="0.9.18",
+        activation_id="",
+        healthy=True,
+    )
+    assert json.loads(manager.job_path.read_text(encoding="utf-8")) == initial_job
+
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(bundle_dir))
+    for component in ("core", "ui"):
+        manager.record_startup_success(
+            component=component,
+            running_version="0.9.18",
+            activation_id="",
+            healthy=True,
+        )
+    completed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert completed["status"] == "success"
+    assert completed["restored_version"] == "0.9.18"
+
+
+def test_apply_rejects_scheduler_digest_changed_after_check(tmp_path: Path):
+    private, public = _key_pair()
+    bundle = _bundle()
+    manifest = _manifest(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.9",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+    )
+    manager.check()
+
+    with pytest.raises(UpdateManifestError, match="digest changed"):
+        manager.apply(
+            job_id="scheduler-job-1",
+            scheduler_attempt_id="window-attempt-1",
+            expected_bundle_sha256="f" * 64,
+        )
+
+    assert not manager.active_path.exists()
+
+
+def test_apply_correlation_and_digest_survive_activation_rollback(tmp_path: Path):
+    private, public = _key_pair()
+    bundle = _bundle()
+    digest = sha256_hex(bundle)
+    manifest = _manifest(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.9",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        restart_callable=lambda: True,
+    )
+    manager.check()
+    manager.apply(
+        job_id="scheduler-job-2",
+        scheduler_attempt_id="window-attempt-2",
+        expected_bundle_sha256=digest,
+    )
+    _acknowledge_entrypoint_handoff(manager)
+
+    failed = manager.record_activation_failure_and_rollback("simulated failure")
+
+    assert failed["status"] == "failed"
+    assert failed["rollback_applied"] is True
+    assert failed["job_id"] == "scheduler-job-2"
+    assert failed["scheduler_attempt_id"] == "window-attempt-2"
+    assert failed["bundle_sha256"] == digest
 
 
 @pytest.mark.parametrize("crash_phase", _RESTART_REPLAY_PHASES)
@@ -597,6 +798,452 @@ def test_apply_production_restart_adapter_restores_previous_runtime_selection(
     assert not (runtime_dir / "activation-pending.json").exists()
 
 
+@pytest.mark.parametrize("callback_outcome", ["false", "raise"])
+def test_protocol_three_apply_keeps_consumed_handoff_when_callback_reply_is_lost(
+    tmp_path: Path, monkeypatch, callback_outcome: str
+):
+    from core import runtime_launcher
+
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        launcher_protocol=3,
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+
+    def consume_then_lose_reply() -> bool:
+        assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+            old_processes={
+                "core": {"pid": 101, "start": 1_700_000_001},
+                "ui": {"pid": 102, "start": 1_700_000_002},
+            }
+        )
+        assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+        if callback_outcome == "raise":
+            raise RuntimeError("restart acknowledgement connection closed")
+        return False
+
+    manager.restart_callable = consume_then_lose_reply
+    manager.check()
+    job = manager.apply()
+
+    assert job["status"] == "restarting"
+    assert job["version"] == "0.9.19"
+    assert not manager.restart_required_path.exists()
+    assert not (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).exists()
+    assert json.loads(manager.active_path.read_text())["version"] == "0.9.19"
+    assert json.loads(manager.activation_pending_path.read_text())["job_id"] == (
+        job["job_id"]
+    )
+    assert json.loads(manager.job_path.read_text())["status"] == "restarting"
+
+
+@pytest.mark.parametrize("callback_outcome", ["false", "raise"])
+def test_protocol_three_apply_keeps_published_handoff_when_reply_is_lost(
+    tmp_path: Path, monkeypatch, callback_outcome: str
+):
+    from core import runtime_launcher
+
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        launcher_protocol=3,
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+
+    def publish_then_lose_reply() -> bool:
+        assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+            old_processes={
+                "core": {"pid": 101, "start": 1_700_000_001},
+                "ui": {"pid": 102, "start": 1_700_000_002},
+            }
+        )
+        if callback_outcome == "raise":
+            raise RuntimeError("restart acknowledgement connection closed")
+        return False
+
+    manager.restart_callable = publish_then_lose_reply
+    manager.check()
+    job = manager.apply()
+
+    assert job["status"] == "restarting"
+    assert manager.restart_required_path.is_file()
+    assert manager.protocol_three_handoff_path.is_file()
+    assert json.loads(manager.restart_required_path.read_text())["phase"] == "commit"
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert not manager.restart_required_path.exists()
+    assert not manager.protocol_three_handoff_path.exists()
+
+
+def test_protocol_three_abort_rechecks_marker_published_after_reconciliation(
+    tmp_path: Path, monkeypatch
+):
+    from core import runtime_launcher
+
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        launcher_protocol=3,
+        restart_callable=lambda: False,
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    original_result = manager._protocol_three_handoff_result
+    reconciliation_calls = 0
+
+    def publish_at_abort_boundary(
+        expected_journal,
+        *,
+        wait_for_active_helper=False,
+    ):
+        del wait_for_active_helper
+        nonlocal reconciliation_calls
+        reconciliation_calls += 1
+        if reconciliation_calls == 1:
+            assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+                old_processes={
+                    "core": {"pid": 101, "start": 1_700_000_001},
+                    "ui": {"pid": 102, "start": 1_700_000_002},
+                },
+                expected_journal=expected_journal,
+            )
+            return None
+        return original_result(expected_journal)
+
+    monkeypatch.setattr(
+        manager,
+        "_protocol_three_handoff_result",
+        publish_at_abort_boundary,
+    )
+    manager.check()
+    job = manager.apply()
+
+    assert reconciliation_calls == 2
+    assert job["status"] == "restarting"
+    assert json.loads(manager.restart_required_path.read_text())["phase"] == "commit"
+    assert manager.protocol_three_handoff_path.is_file()
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert not manager.restart_required_path.exists()
+    assert not manager.protocol_three_handoff_path.exists()
+
+
+def test_protocol_three_duplicate_callback_waits_for_active_helper_marker(
+    tmp_path: Path, monkeypatch
+):
+    from core import runtime_launcher
+    from core import update_center as update_center_module
+
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        launcher_protocol=3,
+        restart_callable=lambda: False,
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(
+        manager,
+        "_protocol_three_restart_helper_active",
+        lambda: True,
+    )
+    wait_calls = 0
+
+    def publish_during_reconciliation(_delay: float) -> None:
+        nonlocal wait_calls
+        wait_calls += 1
+        if not manager.protocol_three_handoff_path.exists():
+            assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+                old_processes={
+                    "core": {"pid": 101, "start": 1_700_000_001},
+                    "ui": {"pid": 102, "start": 1_700_000_002},
+                }
+            )
+
+    monkeypatch.setattr(
+        update_center_module.time, "sleep", publish_during_reconciliation
+    )
+    manager.check()
+    job = manager.apply()
+
+    assert wait_calls >= 1
+    assert job["status"] == "restarting"
+    assert json.loads(manager.restart_required_path.read_text())["phase"] == "commit"
+    assert manager.protocol_three_handoff_path.is_file()
+    assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+    assert not manager.restart_required_path.exists()
+    assert not manager.protocol_three_handoff_path.exists()
+
+
+def test_protocol_three_inactive_helper_branch_rechecks_consumed_result(
+    tmp_path: Path, monkeypatch
+):
+    from core import runtime_launcher
+
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        launcher_protocol=3,
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+
+    def publish_then_lose_reply() -> bool:
+        assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+            old_processes={
+                "core": {"pid": 101, "start": 1_700_000_001},
+                "ui": {"pid": 102, "start": 1_700_000_002},
+            }
+        )
+        return False
+
+    manager.restart_callable = publish_then_lose_reply
+    original_once = manager._protocol_three_handoff_result_once
+    once_calls = 0
+
+    def miss_before_child_consumption(expected_journal):
+        nonlocal once_calls
+        once_calls += 1
+        if once_calls == 1:
+            return None
+        return original_once(expected_journal)
+
+    def helper_releases_after_child_consumes() -> bool:
+        assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+        return False
+
+    monkeypatch.setattr(
+        manager,
+        "_protocol_three_handoff_result_once",
+        miss_before_child_consumption,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_protocol_three_restart_helper_active",
+        helper_releases_after_child_consumes,
+    )
+    monkeypatch.setattr(
+        update_center,
+        "PROTOCOL_THREE_RECONCILE_GRACE_SECONDS",
+        0.0,
+    )
+    manager.check()
+    job = manager.apply()
+
+    assert once_calls == 2
+    assert job["status"] == "restarting"
+    assert not manager.restart_required_path.exists()
+    assert not manager.protocol_three_handoff_path.exists()
+    assert json.loads(manager.active_path.read_text())["version"] == "0.9.19"
+
+
+@pytest.mark.parametrize("marker_kind", ["symlink", "fifo", "oversized"])
+def test_update_manager_protocol_three_marker_reader_rejects_untrusted_files(
+    tmp_path: Path,
+    marker_kind: str,
+):
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        launcher_protocol=3,
+    )
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    expected = manager._build_restart_journal(
+        reason="runtime_transition",
+        operation="apply",
+        phase="commit",
+        job_id="strict-marker-job",
+        source_active=None,
+        control={name: None for name in update_center.RESTART_CONTROL_FILES},
+    )
+    marker_path = manager.protocol_three_handoff_path
+    external = tmp_path / "external-marker"
+    external.write_text("external marker must not be read or changed", encoding="utf-8")
+    original = external.read_bytes()
+    if marker_kind == "symlink":
+        marker_path.symlink_to(external)
+    elif marker_kind == "fifo":
+        os.mkfifo(marker_path)
+    else:
+        marker_path.write_bytes(b"x" * (256 * 1024 + 1))
+
+    with pytest.raises(UpdateLockedError, match="trusted bounded regular file"):
+        manager._protocol_three_handoff_matches_locked(expected)
+
+    assert external.read_bytes() == original
+
+
+@pytest.mark.parametrize("journal_kind", ["symlink", "fifo", "oversized"])
+def test_update_manager_restart_journal_reader_rejects_untrusted_files(
+    tmp_path: Path,
+    journal_kind: str,
+):
+    manager = UpdateManager(config_dir=tmp_path, current_version="0.9.18")
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    external = tmp_path / "external-journal"
+    external.write_text(
+        "external journal must not be read or changed", encoding="utf-8"
+    )
+    original = external.read_bytes()
+    if journal_kind == "symlink":
+        manager.restart_required_path.symlink_to(external)
+    elif journal_kind == "fifo":
+        os.mkfifo(manager.restart_required_path)
+    else:
+        manager.restart_required_path.write_bytes(b"x" * (256 * 1024 + 1))
+
+    with pytest.raises(UpdateLockedError, match="trusted bounded regular file"):
+        manager._load_restart_journal_strict()
+
+    assert external.read_bytes() == original
+
+
+def test_strict_runtime_reader_rejects_name_replacement_before_open(
+    tmp_path: Path,
+    monkeypatch,
+):
+    target = tmp_path / "runtime-control.json"
+    replacement = tmp_path / "replacement-control.json"
+    target.write_text('{"owner":"original"}', encoding="utf-8")
+    replacement.write_text('{"owner":"replacement"}', encoding="utf-8")
+    real_open = os.open
+    swapped = False
+
+    def swap_before_open(path, flags, *args):
+        nonlocal swapped
+        if Path(path) == target and not swapped:
+            swapped = True
+            target.unlink()
+            replacement.replace(target)
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(update_center.os, "open", swap_before_open)
+
+    with pytest.raises(UpdateLockedError, match="changed before it was opened"):
+        update_center._read_runtime_json_strict(target, label="test control")
+
+    assert swapped is True
+
+
+@pytest.mark.parametrize("callback_outcome", ["false", "raise"])
+def test_protocol_three_apply_returns_terminal_rollback_after_lost_callback_reply(
+    tmp_path: Path, monkeypatch, callback_outcome: str
+):
+    from core import runtime_launcher
+
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        launcher_protocol=3,
+    )
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.18")
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    identities = {
+        "core": {"pid": 101, "start": 1_700_000_001},
+        "ui": {"pid": 102, "start": 1_700_000_002},
+    }
+
+    def consume_fail_and_lose_reply() -> bool:
+        assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+            old_processes=identities
+        )
+        assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+        active = json.loads(manager.active_path.read_text())
+        pending = json.loads(manager.activation_pending_path.read_text())
+        rollback = json.loads(manager.rollback_path.read_text())
+        failed_job = manager._prepare_job(
+            {
+                "job_id": pending["job_id"],
+                "operation": "apply",
+                "status": "failed",
+                "version": active["version"],
+                "bundle_sha256": pending.get("bundle_sha256"),
+                "message": "Update activation failed and was rolled back.",
+                "error": "synthetic activation failure",
+                "rollback_applied": True,
+                "rolled_back_from": active["version"],
+                "rolled_back_to": "image",
+            }
+        )
+        rollback_control = {
+            "active.json": None,
+            "rollback.json": rollback,
+            "activation-pending.json": None,
+            "activation-core-ready.json": None,
+            "activation-ui-ready.json": None,
+            "update-job.json": failed_job,
+        }
+        rollback_journal = manager._build_restart_journal(
+            reason="activation_rollback",
+            operation="activation_rollback",
+            phase="commit",
+            job_id=pending["job_id"],
+            source_active=active,
+            control=rollback_control,
+        )
+        manager._write_restart_journal(rollback_journal)
+        manager.apply_restart_journal(rollback_journal)
+        assert runtime_launcher.accept_protocol_three_restart_handoff_if_present(
+            old_processes={
+                "core": {"pid": 201, "start": 1_700_000_011},
+                "ui": {"pid": 202, "start": 1_700_000_012},
+            }
+        )
+        assert runtime_launcher.consume_protocol_three_restart_journal_before_launch()
+        if callback_outcome == "raise":
+            raise RuntimeError("restart acknowledgement connection closed")
+        return False
+
+    manager.restart_callable = consume_fail_and_lose_reply
+    manager.check()
+    job = manager.apply()
+
+    assert job["status"] == "failed"
+    assert job["rollback_applied"] is True
+    assert job["rolled_back_from"] == "0.9.19"
+    assert not manager.restart_required_path.exists()
+    assert not manager.active_path.exists()
+    assert not manager.activation_pending_path.exists()
+    assert json.loads(manager.job_path.read_text()) == job
+
+
 def test_apply_state_write_failure_does_not_leave_unvalidated_active_selection(
     tmp_path: Path, monkeypatch
 ):
@@ -656,9 +1303,7 @@ def test_rollback_restart_failure_restores_current_runtime_selection(tmp_path: P
     manager.restart_callable = lambda: False
 
     job = manager.rollback()
-    active = json.loads(
-        (tmp_path / "channelwatch-runtime" / "active.json").read_text()
-    )
+    active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
 
     assert job["status"] == "failed"
     assert job["rollback_applied"] is False
@@ -992,9 +1637,7 @@ def test_new_manager_recovers_interrupted_claim_before_recording_readiness(
     (runtime_dir / "activation-pending.json").write_text(json.dumps(pending))
 
     first_process = UpdateManager(config_dir=tmp_path, current_version="0.9.15")
-    claim = first_process._claim_pending_activation(
-        pending, claimant="crashed-process"
-    )
+    claim = first_process._claim_pending_activation(pending, claimant="crashed-process")
     assert claim is not None
     assert not first_process.activation_pending_path.exists()
 
@@ -1127,9 +1770,7 @@ def test_startup_success_marks_restarting_job_success(tmp_path: Path):
     manager.check()
     manager.apply()
     _acknowledge_entrypoint_handoff(manager)
-    active = json.loads(
-        (tmp_path / "channelwatch-runtime" / "active.json").read_text()
-    )
+    active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
 
     manager.record_startup_success(
         component="core",
@@ -1148,7 +1789,9 @@ def test_startup_success_marks_restarting_job_success(tmp_path: Path):
         healthy=True,
     )
 
-    job = json.loads((tmp_path / "channelwatch-runtime" / "update-job.json").read_text())
+    job = json.loads(
+        (tmp_path / "channelwatch-runtime" / "update-job.json").read_text()
+    )
     assert job["status"] == "success"
     assert job["validated_at"]
 
@@ -1199,7 +1842,9 @@ def test_concurrent_component_readiness_completes_one_activation(tmp_path: Path)
 
     assert errors == []
     assert not any(thread.is_alive() for thread in threads)
-    assert json.loads((runtime_dir / "update-job.json").read_text())["status"] == "success"
+    assert (
+        json.loads((runtime_dir / "update-job.json").read_text())["status"] == "success"
+    )
     assert not (runtime_dir / "activation-pending.json").exists()
 
 
@@ -1234,9 +1879,7 @@ def test_deadline_claim_winner_cannot_be_overwritten_by_startup_success(
 
     def deadline_wins_before_completion(phase: str) -> None:
         if phase == "activation:before-success-lock":
-            pending = update_center.load_json(
-                manager.activation_pending_path, None
-            )
+            pending = update_center.load_json(manager.activation_pending_path, None)
             assert isinstance(pending, dict)
             deadline_claim = original_claim(pending, claimant="failed-watchdog")
             assert deadline_claim is not None
@@ -1453,9 +2096,7 @@ def test_health_validation_failure_rolls_back_active_bundle(tmp_path: Path):
     manager.check()
     manager.apply()
     _acknowledge_entrypoint_handoff(manager)
-    active = json.loads(
-        (tmp_path / "channelwatch-runtime" / "active.json").read_text()
-    )
+    active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
 
     manager.record_startup_success(
         component="core",
@@ -1525,9 +2166,7 @@ def test_unhealthy_component_cannot_complete_activation(tmp_path: Path):
     manager.check()
     manager.apply()
     _acknowledge_entrypoint_handoff(manager)
-    active = json.loads(
-        (tmp_path / "channelwatch-runtime" / "active.json").read_text()
-    )
+    active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
 
     manager.record_startup_success(
         component="ui",
@@ -1560,9 +2199,7 @@ def test_activation_rollback_records_and_raises_when_restart_is_rejected(
     manager.check()
     manager.apply()
     _acknowledge_entrypoint_handoff(manager)
-    active = json.loads(
-        (tmp_path / "channelwatch-runtime" / "active.json").read_text()
-    )
+    active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
     manager.restart_callable = lambda: False
 
     with pytest.raises(UpdateRestartError, match="rollback completed"):
@@ -1583,9 +2220,7 @@ def test_activation_rollback_records_and_raises_when_restart_is_rejected(
         "The coordinated restart callback did not accept the request."
     )
     assert not (runtime_dir / "active.json").exists()
-    restart_required = json.loads(
-        (runtime_dir / "restart-required.json").read_text()
-    )
+    restart_required = json.loads((runtime_dir / "restart-required.json").read_text())
     assert restart_required["schema"] == 2
     assert restart_required["reason"] == "activation_rollback"
     assert restart_required["operation"] == "activation_rollback"
@@ -1612,9 +2247,7 @@ def test_activation_rollback_records_and_raises_when_restart_callback_raises(
     manager.check()
     manager.apply()
     _acknowledge_entrypoint_handoff(manager)
-    active = json.loads(
-        (tmp_path / "channelwatch-runtime" / "active.json").read_text()
-    )
+    active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
     restart_failure = "supervisor unavailable: " + ("x" * 2500)
     manager.restart_callable = lambda: (_ for _ in ()).throw(
         RuntimeError(restart_failure)
@@ -1891,16 +2524,17 @@ def test_abort_replacement_never_clobbers_an_interleaved_foreign_owner(
             update_center.atomic_write_json(manager.restart_required_path, foreign)
             foreign_holder.append(foreign)
 
-    monkeypatch.setattr(
-        manager, "_restart_transition_checkpoint", replace_with_foreign
-    )
+    monkeypatch.setattr(manager, "_restart_transition_checkpoint", replace_with_foreign)
     action = manager.apply if writer == "apply" else manager.rollback
 
     with pytest.raises(UpdateLockedError, match="another generation"):
         action()
 
     assert foreign_holder
-    assert update_center.load_json(manager.restart_required_path, None) == foreign_holder[0]
+    assert (
+        update_center.load_json(manager.restart_required_path, None)
+        == foreign_holder[0]
+    )
 
 
 def test_expected_clear_never_deletes_an_interleaved_foreign_journal(
@@ -1931,7 +2565,10 @@ def test_expected_clear_never_deletes_an_interleaved_foreign_journal(
         manager.apply()
 
     assert foreign_holder
-    assert update_center.load_json(manager.restart_required_path, None) == foreign_holder[0]
+    assert (
+        update_center.load_json(manager.restart_required_path, None)
+        == foreign_holder[0]
+    )
 
 
 def test_stale_local_journal_cannot_replay_under_a_foreign_owner(
@@ -1944,9 +2581,7 @@ def test_stale_local_journal_cannot_replay_under_a_foreign_owner(
     update_center.atomic_write_json(manager.active_path, seed_active)
     stale_control = manager._read_control_state()
     stale_control["active.json"] = {"version": "stale", "path": "/stale"}
-    stale = _foreign_restart_journal(
-        manager, job_id="stale", control=stale_control
-    )
+    stale = _foreign_restart_journal(manager, job_id="stale", control=stale_control)
     manager._write_restart_journal(stale)
     foreign = _foreign_restart_journal(manager, job_id="foreign")
     update_center.atomic_write_json(manager.restart_required_path, foreign)
@@ -2015,9 +2650,10 @@ def test_healthcheck_foreign_journal_prevents_stale_success_completion(
     assert update_center.load_json(manager.restart_required_path, None) == foreign
     assert update_center.load_json(manager.active_path, None) is None
     assert update_center.load_json(manager.activation_pending_path, None) is None
-    assert update_center.load_json(manager.job_path, None) == foreign["control"][
-        "update-job.json"
-    ]
+    assert (
+        update_center.load_json(manager.job_path, None)
+        == foreign["control"]["update-job.json"]
+    )
 
 
 def test_activation_restart_failure_never_rewrites_a_foreign_callback_journal(
@@ -2056,7 +2692,10 @@ def test_activation_restart_failure_never_rewrites_a_foreign_callback_journal(
         )
 
     assert foreign_holder
-    assert update_center.load_json(manager.restart_required_path, None) == foreign_holder[0]
+    assert (
+        update_center.load_json(manager.restart_required_path, None)
+        == foreign_holder[0]
+    )
 
 
 def test_manual_rollback_rejects_canonical_pending_activation(tmp_path: Path):
@@ -2113,7 +2752,10 @@ def test_check_cannot_write_controls_after_fetch_publishes_a_journal(
         manager.check()
 
     assert foreign_holder
-    assert update_center.load_json(manager.restart_required_path, None) == foreign_holder[0]
+    assert (
+        update_center.load_json(manager.restart_required_path, None)
+        == foreign_holder[0]
+    )
     assert manager.job_path.read_bytes() == job_before
     assert not manager.latest_path.exists()
 

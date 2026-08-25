@@ -66,6 +66,16 @@ describe("catalogEntry", () => {
     expect(entry.remediation).toBeTruthy()
     expect((entry.remediation ?? "").length).toBeGreaterThan(0)
   })
+
+  it("uses the managed-storage wording for runtime recovery errors", () => {
+    expect(catalogEntry(ErrorCode.RUNTIME_SETUP_REQUIRED)).toEqual(expect.objectContaining({
+      message: "Credential protection is waiting for durable local storage or legacy recovery.",
+      remediation: "Preserve /config, repair its write access, or sign in as an administrator to use the legacy recovery options.",
+    }))
+    expect(catalogEntry(ErrorCode.RUNTIME_KEY_RECOVERY_FAILED).message).toContain("could not unlock")
+    expect(catalogEntry(ErrorCode.RUNTIME_KEY_RECOVERY_RATE_LIMITED).message).toContain("Too many unsuccessful")
+    expect(catalogEntry(ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION).remediation).toContain("exact confirmation")
+  })
 })
 
 describe("isErrorPayload", () => {

@@ -165,6 +165,31 @@ class TestDnsResolution:
         ):
             assert build_safe_url_request("https://example.com/hooks/token") is None
 
+    def test_unicode_hostname_is_rejected_before_stdlib_idna_or_dns(self):
+        with (
+            patch("encodings.idna.ToASCII") as idna_to_ascii,
+            patch("core.helpers.url_validator.socket.getaddrinfo") as resolver,
+        ):
+            assert is_safe_url("https://münich.example/hooks/token") is False
+            assert build_safe_url_request("https://münich.example/hooks/token") is None
+
+        idna_to_ascii.assert_not_called()
+        resolver.assert_not_called()
+
+    def test_explicit_ascii_punycode_is_accepted_and_pinned(self):
+        with patch(
+            "core.helpers.url_validator.socket.getaddrinfo",
+            side_effect=_getaddrinfo_for("93.184.216.34"),
+        ):
+            safe = build_safe_url_request(
+                "https://xn--mnich-kva.example/hooks/token"
+            )
+
+        assert safe is not None
+        assert safe.url == "https://93.184.216.34/hooks/token"
+        assert safe.host_header == "xn--mnich-kva.example"
+        assert safe.sni_hostname == "xn--mnich-kva.example"
+
 
 class TestEdgeCases:
     def test_empty_string(self):

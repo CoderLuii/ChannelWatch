@@ -1,11 +1,13 @@
 # Update model
 
-ChannelWatch v0.9.10 includes the repaired hybrid update model:
+ChannelWatch v0.9.18 makes the repaired hybrid update model the normal upgrade experience:
 
 - use the normal container update path for image and runtime changes;
-- use the in-app Update Center for compatible app-only releases.
+- use the signed in-app Update Center by default for compatible app releases.
 
-This is deliberate. It gives users a simple web UI for routine app updates without pretending that a running container can safely replace its own base image, Python runtime, system packages, or deployment contract.
+The default policy installs verified compatible updates during the local 03:00–05:00 maintenance window. Administrators can choose notify-only, apply immediately, postpone for 24 hours or 7 days, retry a failed attempt, or roll back. This keeps routine updates simple without pretending that a running container can safely replace its own base image, Python runtime, system packages, or launcher contract.
+
+When legacy credential recovery prevents normal administrator navigation, a separate recovery surface can use only the compiled-in official signed stable channel. It is active only during that recovery state and requires normal administrator CSRF or a short-lived same-origin bootstrap CSRF plus exact typed confirmation. It does not accept alternate catalogs, URLs, uploads, signing keys, or downgrades.
 
 ## App bundle updates
 
@@ -19,6 +21,10 @@ Each bundle must match the current:
 - signature key;
 - SHA256 digest.
 
+The status surface reports the application version separately from the container image version, plus the runtime source and launcher protocol. An older compatible image can therefore run a newer verified app bundle without implying that the portal replaced the container image.
+
+For the one-time v0.9.18 bridge, operational v0.9.11–v0.9.17 images have a compatible launcher and can update directly in the portal. This prominently includes v0.9.15, v0.9.16, and v0.9.17. The immutable published v0.9.9 and v0.9.10 entrypoints are exceptions: preserve `/config` and pull/recreate the v0.9.18 image once. After that image refresh, v0.9.18 manages future compatible in-app updates normally.
+
 If those checks pass, the image-stable launcher can run the active bundle instead of the image copy of the app.
 
 Every activation receives a unique generation identifier and a bounded validation deadline. The core and UI must each report a healthy startup for that exact generation before ChannelWatch marks the update successful. A stale readiness marker from an older process cannot validate a newer bundle. If either component fails or the deadline expires, the image-owned launcher restores the prior runtime selection and requests one coordinated container restart.
@@ -27,7 +33,7 @@ Every activation receives a unique generation identifier and a bounded validatio
 
 An update is image-required when it needs something the current container image cannot provide safely. Examples include dependency changes, base image updates, OS package changes, Supervisor changes, persistent schema changes, and deployment chart assumptions.
 
-Image-required releases stay on the normal Docker, Unraid, Compose, or Helm update path.
+Image-required releases stay on the normal Docker, Unraid, Compose, or Helm update path. Deployment documentation or template presentation by itself is not image-required when the signed bundle remains compatible with the installed ABI, schema, dependencies, and image-owned launcher.
 
 This boundary keeps the updater's authority narrow. The in-app path can select application code that the installed image is already capable of running, but it cannot change the interpreter or operating-system layer beneath that code. When a release crosses that boundary, ChannelWatch reports the required container update instead of attempting a partial installation.
 

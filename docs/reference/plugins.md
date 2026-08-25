@@ -37,7 +37,7 @@ They cannot:
 
 For testing, you can override the scan directory:
 
-```bash
+```sh
 CHANNELWATCH_PLUGIN_DIR=/my/test/dir
 ```
 
@@ -62,7 +62,7 @@ Hot reload is not supported. Restart the container after you add or change a plu
 
 Every plugin must subclass `NotificationProvider` and implement all three abstract methods.
 
-```python
+```py
 from typing import Optional
 
 from core.notifications.providers.base import NotificationProvider
@@ -107,7 +107,7 @@ ChannelWatch v0.9 does not load alert-source plugins at runtime.
 
 The `AlertSource` abstract base class in `app/core/notifications/providers/base.py` is a stable interface preview for the planned v1.1 alert-source plugin API. You can prototype against this contract now, but ChannelWatch will not auto-discover or execute alert-source plugins until that future release work lands.
 
-```python
+```py
 from typing import Any
 
 from core.notifications.providers.base import AlertSource
@@ -197,7 +197,7 @@ ChannelWatch ships a working example at `app/core/notifications/providers/exampl
 
 Minimal example:
 
-```python
+```py
 import sys
 from typing import Optional
 
@@ -239,7 +239,7 @@ class ConsoleProvider(NotificationProvider):
 
 You can test a plugin without booting the full app by calling the loader directly.
 
-```python
+```py
 from pathlib import Path
 
 from core.notifications.notification import NotificationManager

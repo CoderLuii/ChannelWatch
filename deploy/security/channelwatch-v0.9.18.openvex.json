@@ -1,0 +1,66 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/CoderLuii/ChannelWatch/security/vex/v0.9.18-cpython-runtime",
+  "author": "ChannelWatch maintainers",
+  "role": "Project Maintainer",
+  "timestamp": "2026-08-24T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://www.cve.org/CVERecord?id=CVE-2026-17084",
+        "name": "CVE-2026-17084"
+      },
+      "products": [
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"},
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"}
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Configurable DVR HTTP traffic uses DNS-pinned numeric-address requests through httpx after the DVR-specific validator accepts an ASCII hostname and the complete address set. General outbound URL and trusted-notification validators reject non-ASCII hostnames before DNS and require explicit ASCII/Punycode identities. The only production urllib.request downloader rejects non-ASCII hosts and accepts a fixed ASCII allowlist before opening a connection; the container health request uses numeric loopback. Untrusted domain names cannot reach the vulnerable standard-library IDNA 2003 stringprep path."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://www.cve.org/CVERecord?id=CVE-2026-15806",
+        "name": "CVE-2026-15806"
+      },
+      "products": [
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"},
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"}
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "ChannelWatch never constructs HTTPPasswordMgr, HTTPPasswordMgrWithDefaultRealm, or HTTPPasswordMgrWithPriorAuth. Its credential-free update downloader enforces HTTPS, an ASCII host allowlist, and every redirect and final URL before reading bytes."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://www.cve.org/CVERecord?id=CVE-2025-15367",
+        "name": "CVE-2025-15367"
+      },
+      "products": [
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"},
+        {"@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"}
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "ChannelWatch and its declared runtime integration do not import or invoke poplib; the vulnerable POP3 command construction is not in the application execution path."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://www.cve.org/CVERecord?id=CVE-2026-19672",
+        "name": "CVE-2026-19672"
+      },
+      "products": [
+        {
+          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=x86_64&distro=wolfi-20230201"
+        },
+        {
+          "@id": "pkg:apk/wolfi/python-3.14@3.14.7-r1?arch=aarch64&distro=wolfi-20230201"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The ChannelWatch production runtime does not import tarfile or extract tar archives. App updates, backups, and support bundles use ZIP-specific readers with independent member validation. The repository-only historical compatibility verifier that imports tarfile is not copied into the runtime image and processes locally generated source archives in isolated release CI."
+    }
+  ]
+}

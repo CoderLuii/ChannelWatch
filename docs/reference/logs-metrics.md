@@ -115,7 +115,7 @@ Supported query parameters are `dvr_id`, `channel`, `status`, `since`, `until`, 
 
 A sanitized debug bundle can be generated in either of these ways:
 
-```bash
+```sh
 channelwatch doctor debug bundle --output channelwatch_debug_bundle.zip
 ```
 

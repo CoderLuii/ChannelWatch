@@ -297,7 +297,7 @@ The chart renders a `networking.k8s.io/v1` Ingress and supports custom annotatio
 
 If the proxy still fails, test ChannelWatch directly from the proxy host first:
 
-```bash
+```sh
 curl -i http://127.0.0.1:8501/healthz/live
 ```
 

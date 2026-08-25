@@ -180,7 +180,7 @@ def client(settings_file):
 class TestMigratedEndpointPayloads:
     def test_settings_save_fails_with_structured_error(self, client, settings_file):
         with patch(
-            "ui.backend.main._save_settings_and_signal_reload",
+            "ui.backend.main._resolve_masked_settings_and_save",
             side_effect=RuntimeError("disk full"),
         ):
             resp = client.post(
@@ -201,7 +201,7 @@ class TestMigratedEndpointPayloads:
         from core.helpers.encryption import EncryptionKeyUnavailableError
 
         with patch(
-            "ui.backend.main._save_settings_and_signal_reload_async",
+            "ui.backend.main._resolve_masked_settings_and_save",
             side_effect=EncryptionKeyUnavailableError("redacted"),
         ):
             resp = client.post(
@@ -213,7 +213,9 @@ class TestMigratedEndpointPayloads:
         assert resp.status_code == 503
         detail = resp.json()["detail"]
         assert detail["code"] == ErrorCode.RUNTIME_SETUP_REQUIRED
-        assert "CHANNELWATCH_SECRET_STORAGE_KEY" in detail["remediation"]
+        assert "/config" in detail["remediation"]
+        assert "legacy recovery" in detail["remediation"]
+        assert "CHANNELWATCH_SECRET_STORAGE_KEY" not in detail["remediation"]
         assert "redacted" not in json.dumps(detail)
 
     def test_dvr_soft_delete_not_found_structured(self, client):

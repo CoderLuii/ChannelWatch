@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, Loader2, LockKeyhole, ShieldAlert, ShieldCheck, ShieldEllipsis } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
@@ -13,9 +13,12 @@ import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
 import { TabsContent } from "@/components/base/tabs"
-import { changeCredentials, completeInitialSetup, fetchSecurityStatus, fetchSetupStatus, fetchWhoAmI } from "@/lib/api"
+import { changeCredentials, completeInitialSetup, fetchKeyRecoveryStatus, fetchSecurityStatus, fetchSetupStatus, fetchWhoAmI, migrateLegacyKey, resetProtectedCredentials, RUNTIME_PREFLIGHT_CHANGED_EVENT } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import type { AppSettings, AuthMode, SecurityMode, SecurityStatus } from "@/lib/types"
+import type { AppSettings, AuthMode, KeyRecoveryStatus, SecurityMode, SecurityStatus } from "@/lib/types"
+import { OfficialRecoveryUpdateActions } from "@/components/recovery-update-actions"
+
+const KEY_RESET_CONFIRMATION = "RESET PROTECTED CREDENTIALS" as const
 
 const modeCopy: Record<SecurityMode, { label: string; summary: string; tone: string }> = {
   NO_AUTH: {
@@ -137,7 +140,7 @@ export function SecuritySectionSummary({ status }: { status: SecurityStatus }) {
 
       <CardContent className="space-y-4 pt-6">
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-blue-400/15 bg-blue-500/5 p-4">
+          <div className="rounded-xl border border-blue-400/15 bg-background p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.currentMode")}</p>
             <p className="mt-2 text-base font-semibold">{runtimeOverrideActive ? t("security.runtimeOverrideLabel") : copy.label}</p>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -147,7 +150,7 @@ export function SecuritySectionSummary({ status }: { status: SecurityStatus }) {
               <p className="mt-3 text-xs text-muted-foreground">{t("security.runtimeOverrideConfiguredMode", { label: copy.label })}</p>
             ) : null}
           </div>
-          <div className="rounded-xl border border-blue-400/15 bg-blue-500/5 p-4">
+          <div className="rounded-xl border border-blue-400/15 bg-background p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.atRestProtection")}</p>
             <p className="mt-2 text-base font-semibold">{t("security.atRestTitle")}</p>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -185,6 +188,205 @@ export function SecuritySectionSummary({ status }: { status: SecurityStatus }) {
             </AlertDescription>
           </Alert>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+export function KeyRecoveryCard() {
+  const [recovery, setRecovery] = useState<KeyRecoveryStatus | null>(null)
+  const [confirmation, setConfirmation] = useState("")
+  const [legacyWrappingKey, setLegacyWrappingKey] = useState("")
+  const [rawKeyFile, setRawKeyFile] = useState<File | null>(null)
+  const [busy, setBusy] = useState<"idle" | "migrating" | "resetting">("idle")
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const wrappingInputRef = useRef<HTMLInputElement | null>(null)
+  const rawKeyInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchKeyRecoveryStatus()
+      .then((next) => {
+        if (!cancelled) setRecovery(next)
+      })
+      .catch(() => {
+        // Recovery is an authenticated admin-only surface. Other roles should
+        // not receive a misleading warning or learn recovery state details.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => () => {
+    if (wrappingInputRef.current) wrappingInputRef.current.value = ""
+    if (rawKeyInputRef.current) rawKeyInputRef.current.value = ""
+  }, [])
+
+  if (!recovery) return null
+
+  if (!recovery.recovery_required) {
+    if (!message) return null
+    return (
+      <Card data-testid="key-recovery-complete" className="border-emerald-500/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-emerald-500" />
+            {t("runtimeRecovery.completeTitle")}
+          </CardTitle>
+          <CardDescription role="status">{message}</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  const affectedCount = recovery.affected_dvr_credentials + recovery.affected_notification_credentials
+  const normalizedWrappingKey = legacyWrappingKey.trim()
+  const wrappingKeyValid = normalizedWrappingKey.length >= 32
+  const rawKeyValid = rawKeyFile?.size === 32
+  const migrationInputsConflict = Boolean(normalizedWrappingKey && rawKeyFile)
+  const migrationInputValid = recovery.legacy_input_detected || wrappingKeyValid || rawKeyValid
+
+  const clearMigrationInputs = () => {
+    setLegacyWrappingKey("")
+    setRawKeyFile(null)
+    if (wrappingInputRef.current) wrappingInputRef.current.value = ""
+    if (rawKeyInputRef.current) rawKeyInputRef.current.value = ""
+  }
+
+  return (
+    <Card data-testid="key-recovery-card" className="border-amber-500/40">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldAlert className="h-5 w-5 text-amber-500" />
+          {t("runtimeRecovery.title")}
+        </CardTitle>
+        <CardDescription>{t("runtimeRecovery.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <Alert className="border-amber-500/40 bg-amber-500/5">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>{t("runtimeRecovery.lockedTitle")}</AlertTitle>
+          <AlertDescription>
+            {t("runtimeRecovery.lockedDescription", { count: affectedCount })}
+          </AlertDescription>
+        </Alert>
+
+        {recovery.can_migrate ? (
+          <div className="space-y-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4">
+            <p className="font-medium">{t("runtimeRecovery.migrateTitle")}</p>
+            <p className="text-sm text-muted-foreground">{t("runtimeRecovery.migrateDescription")}</p>
+            {!recovery.legacy_input_detected ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="legacy-wrapping-key">{t("runtimeRecovery.wrappingKeyLabel")}</Label>
+                  <Input
+                    ref={wrappingInputRef}
+                    id="legacy-wrapping-key"
+                    type="password"
+                    autoComplete="off"
+                    value={legacyWrappingKey}
+                    onChange={(event) => setLegacyWrappingKey(event.target.value)}
+                    aria-describedby="legacy-wrapping-key-help"
+                  />
+                  <p id="legacy-wrapping-key-help" className="text-xs text-muted-foreground">{t("runtimeRecovery.wrappingKeyHelp")}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="legacy-raw-key-file">{t("runtimeRecovery.rawKeyLabel")}</Label>
+                  <Input
+                    ref={rawKeyInputRef}
+                    id="legacy-raw-key-file"
+                    type="file"
+                    accept="application/octet-stream"
+                    onChange={(event) => setRawKeyFile(event.target.files?.[0] ?? null)}
+                    aria-describedby="legacy-raw-key-help"
+                  />
+                  <p id="legacy-raw-key-help" className="text-xs text-muted-foreground">{t("runtimeRecovery.rawKeyHelp")}</p>
+                </div>
+                {migrationInputsConflict ? <p role="alert" className="text-sm text-destructive">{t("runtimeRecovery.inputConflict")}</p> : null}
+                {rawKeyFile && !rawKeyValid ? <p role="alert" className="text-sm text-destructive">{t("runtimeRecovery.rawKeyInvalid")}</p> : null}
+              </div>
+            ) : null}
+            <Button
+              type="button"
+              disabled={busy !== "idle" || !migrationInputValid || migrationInputsConflict}
+              onClick={async () => {
+                setBusy("migrating")
+                setError(null)
+                setMessage(null)
+                try {
+                  const result = await migrateLegacyKey({
+                    legacyWrappingKey: wrappingKeyValid ? normalizedWrappingKey : undefined,
+                    rawKeyFile: rawKeyValid ? rawKeyFile ?? undefined : undefined,
+                  })
+                  setRecovery(result)
+                  setMessage(result.message)
+                  window.dispatchEvent(new CustomEvent(RUNTIME_PREFLIGHT_CHANGED_EVENT))
+                } catch (nextError) {
+                  setError(nextError instanceof Error ? nextError.message : t("runtimeRecovery.error"))
+                } finally {
+                  clearMigrationInputs()
+                  setBusy("idle")
+                }
+              }}
+            >
+              {busy === "migrating" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {t("runtimeRecovery.migrateAction")}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-2 rounded-md border border-border p-4">
+            <p className="font-medium">{t("runtimeRecovery.restoreTitle")}</p>
+            <p className="text-sm text-muted-foreground">{t("runtimeRecovery.restoreDescription")}</p>
+          </div>
+        )}
+
+        {recovery.can_reset ? (
+          <div className="space-y-3 rounded-md border border-destructive/40 bg-background p-4">
+            <p className="font-medium text-foreground">{t("runtimeRecovery.resetTitle")}</p>
+            <p className="text-sm text-muted-foreground">{t("runtimeRecovery.resetDescription")}</p>
+            <div className="space-y-2">
+              <Label htmlFor="key-recovery-confirmation">{t("runtimeRecovery.confirmLabel", { confirmation: KEY_RESET_CONFIRMATION })}</Label>
+              <Input
+                id="key-recovery-confirmation"
+                value={confirmation}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => setConfirmation(event.target.value)}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={busy !== "idle" || confirmation !== KEY_RESET_CONFIRMATION}
+              onClick={async () => {
+                setBusy("resetting")
+                setError(null)
+                setMessage(null)
+                try {
+                  const result = await resetProtectedCredentials(KEY_RESET_CONFIRMATION)
+                  setRecovery(result)
+                  setConfirmation("")
+                  setMessage(result.message)
+                  window.dispatchEvent(new CustomEvent(RUNTIME_PREFLIGHT_CHANGED_EVENT))
+                } catch (nextError) {
+                  setError(nextError instanceof Error ? nextError.message : t("runtimeRecovery.error"))
+                } finally {
+                  setBusy("idle")
+                }
+              }}
+            >
+              {busy === "resetting" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {t("runtimeRecovery.resetAction")}
+            </Button>
+          </div>
+        ) : null}
+
+        <OfficialRecoveryUpdateActions />
+
+        {message ? <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{message}</p> : null}
+        {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       </CardContent>
     </Card>
   )
@@ -273,6 +475,8 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
 
       {status && !viewState.canBootstrapSecureLogin ? <SecuritySectionSummary status={status} /> : null}
 
+      <KeyRecoveryCard />
+
       <Card className="border-blue-400/20 overflow-hidden">
         <CardHeader>
           <CardTitle>{t("security.settingsTitle")}</CardTitle>
@@ -280,13 +484,13 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label>{t("security.modeLabel")}</Label>
+            <Label htmlFor="security-auth-mode-select">{t("security.modeLabel")}</Label>
             <Select value={authMode} onValueChange={(value) => {
               const nextAuthMode = value as AuthMode
               setValue("auth_mode", nextAuthMode, { shouldDirty: true })
               setValue("rbac_enabled", nextAuthMode === "rbac", { shouldDirty: true })
             }}>
-              <SelectTrigger className="max-w-sm" data-testid="security-auth-mode-select"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="security-auth-mode-select" className="max-w-sm" data-testid="security-auth-mode-select"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="rbac">{t("dashboard.setup.secureMode")}</SelectItem>
                 <SelectItem value="none">{t("dashboard.setup.noAuthMode")}</SelectItem>

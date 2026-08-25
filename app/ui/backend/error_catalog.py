@@ -54,6 +54,9 @@ class ErrorCode:
     SETTINGS_VALIDATION_FAILED = "ERR_SETTINGS_VALIDATION_FAILED"
     SETTINGS_SAVE_FAILED = "ERR_SETTINGS_SAVE_FAILED"
     RUNTIME_SETUP_REQUIRED = "ERR_RUNTIME_SETUP_REQUIRED"
+    RUNTIME_KEY_RECOVERY_FAILED = "ERR_RUNTIME_KEY_RECOVERY_FAILED"
+    RUNTIME_KEY_RECOVERY_RATE_LIMITED = "ERR_RUNTIME_KEY_RECOVERY_RATE_LIMITED"
+    RUNTIME_KEY_RESET_CONFIRMATION = "ERR_RUNTIME_KEY_RESET_CONFIRMATION"
 
     # Backup / restore
     BACKUP_CREATE_FAILED = "ERR_BACKUP_CREATE_FAILED"
@@ -71,6 +74,8 @@ class ErrorCode:
     UPDATE_IMAGE_REQUIRED = "ERR_UPDATE_IMAGE_REQUIRED"
     UPDATE_ROLLBACK_FAILED = "ERR_UPDATE_ROLLBACK_FAILED"
     UPDATE_JOB_NOT_FOUND = "ERR_UPDATE_JOB_NOT_FOUND"
+    UPDATE_RECOVERY_INACTIVE = "ERR_UPDATE_RECOVERY_INACTIVE"
+    UPDATE_RECOVERY_CONFIRMATION = "ERR_UPDATE_RECOVERY_CONFIRMATION"
 
     # Support reports
     SUPPORT_REPORT_REQUEST_TOO_LARGE = "ERR_SUPPORT_REPORT_REQUEST_TOO_LARGE"
@@ -245,11 +250,29 @@ _CATALOG: dict[str, CatalogEntry] = {
     ErrorCode.RUNTIME_SETUP_REQUIRED: CatalogEntry(
         code=ErrorCode.RUNTIME_SETUP_REQUIRED,
         http_status=503,
-        message="Runtime setup is required before protected credentials can be saved.",
+        message="Credential protection is waiting for durable local storage or legacy recovery.",
         remediation=(
-            "Set CHANNELWATCH_SECRET_STORAGE_KEY to a stable value containing at "
-            "least 32 characters, then recreate or restart the container."
+            "Preserve /config, repair its write access, or sign in as an administrator "
+            "to use the legacy recovery options."
         ),
+    ),
+    ErrorCode.RUNTIME_KEY_RECOVERY_FAILED: CatalogEntry(
+        code=ErrorCode.RUNTIME_KEY_RECOVERY_FAILED,
+        http_status=422,
+        message="The supplied legacy recovery material could not unlock the protected credentials.",
+        remediation="Verify the original value or raw encryption.key file, then try again. Nothing was changed.",
+    ),
+    ErrorCode.RUNTIME_KEY_RECOVERY_RATE_LIMITED: CatalogEntry(
+        code=ErrorCode.RUNTIME_KEY_RECOVERY_RATE_LIMITED,
+        http_status=429,
+        message="Too many unsuccessful credential-recovery attempts.",
+        remediation="Wait before trying again. Existing settings and key material remain unchanged.",
+    ),
+    ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION: CatalogEntry(
+        code=ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION,
+        http_status=422,
+        message="Protected-credential reset confirmation did not match.",
+        remediation="Type the exact confirmation shown in the recovery screen before resetting credentials.",
     ),
     # Activity / history -------------------------------------------------
     ErrorCode.ACTIVITY_FETCH_FAILED: CatalogEntry(
@@ -418,6 +441,18 @@ _CATALOG: dict[str, CatalogEntry] = {
         http_status=404,
         message="Update job not found.",
         remediation="Run the update operation again to create a new job.",
+    ),
+    ErrorCode.UPDATE_RECOVERY_INACTIVE: CatalogEntry(
+        code=ErrorCode.UPDATE_RECOVERY_INACTIVE,
+        http_status=409,
+        message="The recovery updater is not active.",
+        remediation="Use the authenticated Settings -> Updates page on a healthy installation.",
+    ),
+    ErrorCode.UPDATE_RECOVERY_CONFIRMATION: CatalogEntry(
+        code=ErrorCode.UPDATE_RECOVERY_CONFIRMATION,
+        http_status=422,
+        message="Official recovery update confirmation is required.",
+        remediation="Type INSTALL OFFICIAL UPDATE exactly, then retry.",
     ),
     # Support reports ----------------------------------------------------
     ErrorCode.SUPPORT_REPORT_REQUEST_TOO_LARGE: CatalogEntry(

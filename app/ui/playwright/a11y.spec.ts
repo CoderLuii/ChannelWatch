@@ -6,6 +6,7 @@ import { installApiMocks } from "./support/mock-api"
 const views = [
   { hash: "#overview", readyName: "Dashboard Overview", kind: "heading" as const },
   { hash: "#settings", readyName: "Settings", kind: "heading" as const },
+  { hash: "#settings:updates", readyName: "Update policy", kind: "text" as const },
   { hash: "#diagnostics", readyName: "Diagnostics", kind: "heading" as const },
   { hash: "#watch-history", readyName: "Watch History", kind: "title" as const },
   { hash: "#notification-log", readyName: "Notification Delivery Log", kind: "text" as const },
@@ -43,6 +44,32 @@ test("axe: report problem dialog has no accessibility violations", async ({ page
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
   await expect(page.getByRole("dialog", { name: "Report a Problem" })).toBeVisible()
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze()
+
+  expect(results.violations).toEqual([])
+})
+
+test("axe: authenticated legacy recovery has no accessibility violations", async ({ page }) => {
+  await page.route("**/api/v1/runtime/key-recovery/status", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      state: "legacy_recovery_required",
+      recovery_required: true,
+      can_migrate: true,
+      can_reset: true,
+      blocker_code: "protected_credentials_locked",
+      affected_dvr_credentials: 1,
+      affected_notification_credentials: 1,
+      legacy_input_detected: false,
+      message: null,
+    }),
+  }))
+  await page.goto("/#settings:security")
+  await expect(page.getByTestId("key-recovery-card")).toBeVisible()
 
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

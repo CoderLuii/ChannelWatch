@@ -10,8 +10,9 @@ from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 from ...helpers.url_validator import redact_url, is_safe_url
 from ...helpers.trusted_destinations import (
     HTTP_STYLE_APPRISE_SCHEMES,
+    _classify_ip_address,
     normalize_notification_destination,
-    is_trusted_notification_destination,
+    matches_trusted_notification_destination,
 )
 from .base import NotificationProvider
 from ...helpers.config import CoreSettings
@@ -239,10 +240,17 @@ class AppriseProvider(NotificationProvider):
             trusted_destinations = getattr(
                 self.settings, "trusted_notification_destinations", []
             )
-        if is_trusted_notification_destination(
-            url,
-            "apprise_custom",
-            trusted_destinations,
+        # Apprise cannot be given ChannelWatch's validated numeric connect
+        # address plus the original Host/SNI identity. Until that contract is
+        # available, the trusted-local exception is limited to literal private
+        # addresses so Apprise cannot independently re-resolve a hostname.
+        if (
+            _classify_ip_address(normalized.host) == "private_ip"
+            and matches_trusted_notification_destination(
+                url,
+                "apprise_custom",
+                trusted_destinations,
+            )
         ):
             log(
                 f"SSRF: allowing trusted local Apprise custom destination: {redact_url(url)}",

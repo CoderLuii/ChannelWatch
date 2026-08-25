@@ -65,12 +65,11 @@ This tutorial uses `/opt/channelwatch` as the example install folder. Replace it
          - /opt/channelwatch/config:/config
        environment:
          TZ: "America/New_York"
-         CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
        restart: unless-stopped
    ```
 
    Host networking matches the project Compose example. It also lets ChannelWatch reach a Channels DVR on your LAN without extra port mapping. The app listens on port `8501`, which the image exposes.
-   Set `CHANNELWATCH_SECRET_STORAGE_KEY` in your shell or a local `.env` file before starting the container. Use a unique value of at least 32 characters and keep it with the rest of your deployment secrets.
+   No encryption variable is required. ChannelWatch creates and manages its key inside the persistent `/config` volume. Protect that volume and keep it when recreating the container.
 
 2. Start the container:
 

@@ -326,13 +326,16 @@ class AppSettings(BaseModel):
 
 
 class WebhookSettings(BaseModel):
+    id: str = Field(
+        default="", description="Stable non-secret identity used for safe masked saves"
+    )
     url: str = Field(default="", description="Destination URL for webhook delivery")
     secret: str = Field(
         default="", description="Shared secret used for HMAC-SHA256 signing"
     )
     enabled: bool = Field(default=False, description="Whether this webhook is active")
 
-    @field_validator("url", "secret", mode="before")
+    @field_validator("id", "url", "secret", mode="before")
     @classmethod
     def normalize_strings(cls, value):
         if value is None:

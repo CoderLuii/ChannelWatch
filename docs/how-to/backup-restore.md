@@ -21,13 +21,13 @@ A manual archive of `/config` is the safest rollback backup because it can inclu
 
 For a bind mount, archive the host directory that is mounted as `/config`:
 
-```bash
+```sh
 tar czf channelwatch-config-$(date +%Y%m%d_%H%M%S).tar.gz -C /path/to/channelwatch/config .
 ```
 
 For a Docker named volume, archive the volume from a temporary container:
 
-```bash
+```sh
 docker run --rm \
   -v channelwatch_config:/config:ro \
   -v "$PWD":/backup \
@@ -55,7 +55,7 @@ You can skip runtime noise when you are making a portable backup:
 | Temporary files | Not needed after the container restarts. |
 | Old backup archives | Keep one known good archive elsewhere instead of nesting many old archives. |
 
-Back up `/config/encryption.key` separately as well as inside full archives. ChannelWatch keeps this file with permission mode `0600`, root owned by default. Treat it as a secret. If you set `CHANNELWATCH_SECRET_STORAGE_KEY` or `CHANNELWATCH_SECRET_STORAGE_KEY_FILE`, preserve that wrapping secret too. The key material plus `settings.json` can decrypt encrypted per DVR keys. See [`docs/reference/multi-dvr.md`](../reference/multi-dvr.md) for how encrypted DVR keys depend on this file.
+Back up `/config/encryption.key` separately as well as inside full archives. ChannelWatch creates and manages this file with permission mode `0600`; treat it as a secret. The key material plus `settings.json` can decrypt protected DVR API keys and custom webhook URLs/secrets. No separate deployment key is required for v0.9.18 backups. A legacy envelope created by v0.9.5–v0.9.17 still needs its original environment or key-file input for one-time import. See [`docs/reference/multi-dvr.md`](../reference/multi-dvr.md) for the detailed behavior.
 
 ## App Backup and Restore
 
@@ -88,6 +88,8 @@ The app backup does not include logs by default. It also does not include legacy
 The app backup also does not include downloaded Update Center app bundles under `/config/channelwatch-runtime/releases/`. Before applying an in-app update, ChannelWatch writes a pre-update backup zip under `/config/backups/`; rollback metadata stays under `/config/channelwatch-runtime/`. Use a manual `/config` archive if you want to preserve both app data and downloaded bundle rollback state.
 
 Security implication: the app backup can include both `settings.json` and `sensitive_keys/encryption.key`. Together, those files can decrypt encrypted per DVR API keys. Store the zip like you would store credentials.
+
+Backups created after v0.9.18 migration are self-contained: restore writes the matching managed key with mode `0600`. If an older backup contains an envelope and the old wrapping value is unavailable, restore fails before changing current state. ChannelWatch never substitutes a newly generated key for protected data it cannot decrypt.
 
 ## Restore procedure
 
@@ -124,7 +126,7 @@ Use manual restore when the UI is unavailable or when you need to restore a full
    tar xzf channelwatch-config-backup.tar.gz -C /path/to/channelwatch/config
    ```
 
-4. Set safe permissions on the encryption key if it exists:
+4. Set safe permissions on the managed encryption key if it exists:
 
    ```bash
    chmod 600 /path/to/channelwatch/config/encryption.key

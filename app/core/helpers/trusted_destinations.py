@@ -12,6 +12,7 @@ from .url_validator import (
     BLOCKED_HOSTNAMES,
     SafeUrlRequest,
     _host_header,
+    _is_ascii_hostname,
     _is_blocked_ip,
     _resolve_hostname,
     is_safe_url,
@@ -137,7 +138,7 @@ def normalize_notification_destination(
     else:
         return None
 
-    if not parsed.hostname:
+    if not parsed.hostname or not _is_ascii_hostname(parsed.hostname):
         return None
 
     try:
@@ -213,11 +214,31 @@ def _classify_destination(normalized: NormalizedNotificationDestination) -> str:
         if "metadata" in hard_reasons:
             return "metadata"
         return sorted(hard_reasons)[0]
-    if "private_ip" in reasons:
+    if reasons == {"private_ip"}:
         return "private_dns"
+    if "private_ip" in reasons:
+        return "mixed_address"
     if any(_is_blocked_ip(address) for address in addresses):
         return "reserved"
     return "public"
+
+
+def matches_trusted_notification_destination(
+    url: str,
+    source: NotificationDestinationSource | str,
+    trusted_destinations: Any,
+) -> bool:
+    """Match an exact saved trust tuple without resolving its hostname.
+
+    A trust entry is an operator decision, not proof that the destination is
+    still safe to contact. Callers must resolve and validate the complete
+    address set immediately before every outbound connection.
+    """
+
+    normalized = normalize_notification_destination(source, url)
+    if normalized is None or not isinstance(trusted_destinations, list):
+        return False
+    return any(_entry_matches(entry, normalized) for entry in trusted_destinations)
 
 
 def is_trusted_notification_destination(
@@ -232,10 +253,11 @@ def is_trusted_notification_destination(
     if _classify_destination(normalized) not in TRUSTABLE_BLOCK_REASONS:
         return False
 
-    if not isinstance(trusted_destinations, list):
-        return False
-
-    return any(_entry_matches(entry, normalized) for entry in trusted_destinations)
+    return matches_trusted_notification_destination(
+        url,
+        source,
+        trusted_destinations,
+    )
 
 
 def preview_notification_destination_safety(
@@ -303,14 +325,60 @@ def build_trusted_notification_request(
     normalized = normalize_notification_destination(source, url)
     if normalized is None:
         return None
-    if is_safe_url(normalized.validation_url):
+    if not matches_trusted_notification_destination(
+        url,
+        source,
+        trusted_destinations,
+    ):
         return None
-    if not is_trusted_notification_destination(url, source, trusted_destinations):
+
+    if normalized.host in BLOCKED_HOSTNAMES:
         return None
 
     parsed = urlparse(normalized.validation_url)
+    literal_reason = _classify_ip_address(normalized.host)
+    if literal_reason == "private_ip":
+        connect_host = normalized.host
+        sni_hostname = None
+    elif literal_reason != "hostname":
+        return None
+    else:
+        try:
+            resolved_addresses = _resolve_hostname(normalized.host)
+        except (socket.gaierror, OSError):
+            return None
+        if not resolved_addresses:
+            return None
+        if {
+            _classify_ip_address(address) for address in resolved_addresses
+        } != {"private_ip"}:
+            return None
+        connect_host = sorted(
+            resolved_addresses,
+            key=lambda value: (ipaddress.ip_address(value).version, value),
+        )[0]
+        sni_hostname = normalized.host if normalized.scheme == "https" else None
+
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return None
+    port_text = f":{parsed_port}" if parsed_port else ""
+    formatted_host = (
+        f"[{connect_host}]" if ipaddress.ip_address(connect_host).version == 6 else connect_host
+    )
+    rewritten_url = urlunparse(
+        (
+            parsed.scheme,
+            f"{formatted_host}{port_text}",
+            parsed.path or "",
+            parsed.params or "",
+            parsed.query or "",
+            parsed.fragment or "",
+        )
+    )
     return SafeUrlRequest(
-        url=normalized.validation_url,
+        url=rewritten_url,
         host_header=_host_header(parsed),
-        sni_hostname=None,
+        sni_hostname=sni_hostname,
     )

@@ -79,7 +79,11 @@ class TestEarlySighupHandling:
         )
 
         try:
-            deadline = time.time() + 5.0
+            # Importing the full core under coverage, container builds, or
+            # other release-gate load can legitimately take more than five
+            # seconds.  This test is about SIGHUP safety after the no-DVR
+            # startup boundary, not import speed.
+            deadline = time.time() + 20.0
             startup_line = ""
             while time.time() < deadline:
                 ready, _, _ = select.select([proc.stdout], [], [], 0.1)
@@ -935,6 +939,40 @@ class TestWatchConfigAndReload:
         assert any(
             getattr(func, "__name__", "") == "_read_config_snapshot" for func in calls
         )
+
+    @pytest.mark.parametrize("unsafe_kind", ["symlink", "hardlink", "directory", "fifo"])
+    def test_config_snapshot_rejects_linked_and_special_files(
+        self, tmp_path, unsafe_kind
+    ):
+        import core.main as main_mod
+
+        source = tmp_path / "outside.json"
+        source.write_text(json.dumps(_settings(_dvr("dvr_outside"))))
+        candidate = tmp_path / "settings.json"
+        if unsafe_kind == "symlink":
+            candidate.symlink_to(source)
+        elif unsafe_kind == "hardlink":
+            os.link(source, candidate)
+        elif unsafe_kind == "directory":
+            candidate.mkdir()
+        else:
+            if not hasattr(os, "mkfifo"):
+                pytest.skip("FIFOs are unavailable on this platform")
+            os.mkfifo(candidate)
+
+        with patch("core.main.CONFIG_FILE", candidate):
+            with pytest.raises(PermissionError):
+                main_mod._read_config_snapshot()
+
+    def test_config_snapshot_rejects_oversized_settings(self, tmp_path):
+        import core.main as main_mod
+
+        candidate = tmp_path / "settings.json"
+        candidate.write_bytes(b"x" * (main_mod.MAX_SETTINGS_FILE_BYTES + 1))
+
+        with patch("core.main.CONFIG_FILE", candidate):
+            with pytest.raises(ValueError, match="allowed size"):
+                main_mod._read_config_snapshot()
 
     def test_watchdog_persistence_is_offloaded_to_thread(self):
         calls = []

@@ -9,20 +9,30 @@ Public API:
 - decrypt_webhook_credentials()      batch decrypt webhook URL and secret fields
 """
 
-from pathlib import Path
 import os
 import stat
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from .atomic_io import (
-    SecretStorageKeyUnavailableError,
-    _atomic_read_secret_bytes,
-    _atomic_write_secret_bytes,
-    _is_secret_envelope,
+from cryptography.fernet import InvalidToken
+
+from .key_manager import (
+    ManagedKeyUnavailableError,
+    ensure_managed_key,
+)
+from .protected_credentials import (
+    FERNET_PREFIX,
+    ProtectedValue,
+    disable_failed_protected_credential_owners,
+    encrypted_protected_values,
+    is_protected_ciphertext,
+    publish_protected_credential_failures,
+    transform_protected_values,
 )
 
 ENCRYPTION_KEY_FILE = Path(os.getenv("CONFIG_PATH", "/config")) / "encryption.key"
 _ALLOWED_MODE = 0o600
-FERNET_PREFIX = "fernet:"
 WEBHOOK_CREDENTIAL_FIELDS = ("url", "secret")
 
 
@@ -41,34 +51,26 @@ def _validate_key_permissions(path: Path) -> None:
         )
 
 
-def bootstrap_encryption_key(key_file: Path = ENCRYPTION_KEY_FILE) -> bytes:
-    """Create or load the shared encryption key for `/config/encryption.key`."""
-    if key_file.exists():
-        _validate_key_permissions(key_file)
-        stored = key_file.read_bytes()
-        key = _atomic_read_secret_bytes(key_file)
-        if not _is_secret_envelope(stored):
-            try:
-                _atomic_write_secret_bytes(key_file, key)
-            except SecretStorageKeyUnavailableError:
-                pass
-        return key
+def bootstrap_encryption_key(
+    key_file: Path = ENCRYPTION_KEY_FILE,
+    *,
+    settings_file: Path | None = None,
+) -> bytes:
+    """Load or create the application-managed logical encryption key."""
 
-    key_file.parent.mkdir(parents=True, exist_ok=True)
-    key = os.urandom(32)
-    _atomic_write_secret_bytes(key_file, key)
-    return key
+    return ensure_managed_key(key_file, settings_file=settings_file).key
 
 
 def _make_fernet(raw_key: bytes):
     from base64 import urlsafe_b64encode
+
     from cryptography.fernet import Fernet
 
     return Fernet(urlsafe_b64encode(raw_key))
 
 
 def is_fernet_encrypted(value: str) -> bool:
-    return isinstance(value, str) and value.startswith(FERNET_PREFIX)
+    return is_protected_ciphertext(value)
 
 
 def encrypt_value(plaintext: str, raw_key: bytes) -> str:
@@ -84,7 +86,7 @@ def decrypt_value(ciphertext: str, raw_key: bytes) -> str:
     cryptography.fernet.InvalidToken if decryption fails.
     """
     if not is_fernet_encrypted(ciphertext):
-        raise ValueError(f"Not a fernet-encrypted value: {ciphertext!r}")
+        raise ValueError("Value is not Fernet-encrypted.")
     token = ciphertext[len(FERNET_PREFIX) :]
     return _make_fernet(raw_key).decrypt(token.encode("ascii")).decode("utf-8")
 
@@ -110,7 +112,7 @@ def encrypt_dvr_api_keys(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError, SecretStorageKeyUnavailableError) as exc:
+    except (OSError, PermissionError, ManagedKeyUnavailableError) as exc:
         raise EncryptionKeyUnavailableError(
             f"Unable to access encryption key at {key_file}"
         ) from exc
@@ -129,12 +131,15 @@ def encrypt_dvr_api_keys(
 
 
 def decrypt_dvr_api_keys(
-    dvr_servers: list, key_file: Path = ENCRYPTION_KEY_FILE
+    dvr_servers: list,
+    key_file: Path = ENCRYPTION_KEY_FILE,
+    *,
+    failure_paths: list[str] | None = None,
 ) -> list:
     """Return a new list where any 'fernet:...' api_key is decrypted.
 
-    Silently leaves values unchanged on key-file-missing or decryption error.
-    Never raises.
+    Never returns an unreadable ``fernet:`` token. Affected fields are cleared
+    in the returned copy and optionally reported by non-sensitive JSON paths.
     """
     encrypted = [
         s
@@ -146,17 +151,29 @@ def decrypt_dvr_api_keys(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError, SecretStorageKeyUnavailableError):
-        return list(dvr_servers)
+    except (OSError, PermissionError, ManagedKeyUnavailableError):
+        result = []
+        for index, server in enumerate(dvr_servers):
+            if isinstance(server, dict) and is_fernet_encrypted(
+                server.get("api_key", "")
+            ):
+                server = dict(server)
+                server["api_key"] = ""
+                if failure_paths is not None:
+                    failure_paths.append(f"dvr_servers[{index}].api_key")
+            result.append(server)
+        return result
 
     result = []
-    for server in dvr_servers:
+    for index, server in enumerate(dvr_servers):
         if isinstance(server, dict) and is_fernet_encrypted(server.get("api_key", "")):
+            server = dict(server)
             try:
-                server = dict(server)
                 server["api_key"] = decrypt_value(server["api_key"], raw_key)
-            except Exception:
-                pass  # leave encrypted on failure rather than corrupting
+            except (InvalidToken, TypeError, UnicodeError, ValueError):
+                server["api_key"] = ""
+                if failure_paths is not None:
+                    failure_paths.append(f"dvr_servers[{index}].api_key")
         result.append(server)
     return result
 
@@ -171,8 +188,7 @@ def _encrypt_mapping_fields(
         for item in items
         if isinstance(item, dict)
         and any(
-            item.get(field)
-            and not is_fernet_encrypted(str(item.get(field, "")))
+            item.get(field) and not is_fernet_encrypted(str(item.get(field, "")))
             for field in field_names
         )
     ]
@@ -181,7 +197,7 @@ def _encrypt_mapping_fields(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError, SecretStorageKeyUnavailableError) as exc:
+    except (OSError, PermissionError, ManagedKeyUnavailableError) as exc:
         raise EncryptionKeyUnavailableError(
             f"Unable to access encryption key at {key_file}"
         ) from exc
@@ -202,6 +218,9 @@ def _decrypt_mapping_fields(
     items: list,
     field_names: tuple[str, ...],
     key_file: Path,
+    *,
+    collection_name: str,
+    failure_paths: list[str] | None = None,
 ) -> list:
     encrypted = [
         item
@@ -214,11 +233,21 @@ def _decrypt_mapping_fields(
 
     try:
         raw_key = bootstrap_encryption_key(key_file)
-    except (OSError, PermissionError, SecretStorageKeyUnavailableError):
-        return list(items)
+    except (OSError, PermissionError, ManagedKeyUnavailableError):
+        result = []
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                item = dict(item)
+                for field in field_names:
+                    if is_fernet_encrypted(str(item.get(field, "") or "")):
+                        item[field] = ""
+                        if failure_paths is not None:
+                            failure_paths.append(f"{collection_name}[{index}].{field}")
+            result.append(item)
+        return result
 
     result = []
-    for item in items:
+    for index, item in enumerate(items):
         if isinstance(item, dict):
             item = dict(item)
             for field in field_names:
@@ -226,8 +255,10 @@ def _decrypt_mapping_fields(
                 if is_fernet_encrypted(str(value or "")):
                     try:
                         item[field] = decrypt_value(str(value), raw_key)
-                    except Exception:
-                        pass
+                    except (InvalidToken, TypeError, UnicodeError, ValueError):
+                        item[field] = ""
+                        if failure_paths is not None:
+                            failure_paths.append(f"{collection_name}[{index}].{field}")
         result.append(item)
     return result
 
@@ -240,7 +271,114 @@ def encrypt_webhook_credentials(
 
 
 def decrypt_webhook_credentials(
-    webhooks: list, key_file: Path = ENCRYPTION_KEY_FILE
+    webhooks: list,
+    key_file: Path = ENCRYPTION_KEY_FILE,
+    *,
+    failure_paths: list[str] | None = None,
 ) -> list:
     """Return a new webhook list with encrypted URL and shared-secret fields decrypted."""
-    return _decrypt_mapping_fields(webhooks, WEBHOOK_CREDENTIAL_FIELDS, key_file)
+    return _decrypt_mapping_fields(
+        webhooks,
+        WEBHOOK_CREDENTIAL_FIELDS,
+        key_file,
+        collection_name="webhooks",
+        failure_paths=failure_paths,
+    )
+
+
+@dataclass(frozen=True)
+class CredentialValidationReport:
+    encrypted_count: int
+    decrypted_count: int
+    failures: tuple[str, ...]
+
+    @property
+    def all_valid(self) -> bool:
+        return not self.failures
+
+
+@dataclass(frozen=True)
+class ProtectedCredentialLoadResult:
+    settings: dict[str, Any]
+    failures: tuple[str, ...]
+
+
+def decrypt_registered_credentials_with_diagnostics(
+    settings: dict[str, Any],
+    key_file: Path = ENCRYPTION_KEY_FILE,
+) -> ProtectedCredentialLoadResult:
+    """Decrypt registered fields while isolating unreadable credentials."""
+
+    result = dict(settings)
+    failures: list[str] = []
+    result["dvr_servers"] = decrypt_dvr_api_keys(
+        settings.get("dvr_servers") or [],
+        key_file,
+        failure_paths=failures,
+    )
+    result["webhooks"] = decrypt_webhook_credentials(
+        settings.get("webhooks") or [],
+        key_file,
+        failure_paths=failures,
+    )
+    result = disable_failed_protected_credential_owners(result, failures)
+    publish_protected_credential_failures(failures)
+    return ProtectedCredentialLoadResult(
+        settings=result,
+        failures=tuple(failures),
+    )
+
+
+def validate_protected_credentials(
+    settings: dict[str, Any], raw_key: bytes
+) -> CredentialValidationReport:
+    """Validate registered ciphertext without exposing values or key material."""
+
+    encrypted = encrypted_protected_values(settings)
+    decrypted_count = 0
+    failures: list[str] = []
+    for item in encrypted:
+        try:
+            decrypt_value(item.value, raw_key)
+        except (InvalidToken, TypeError, UnicodeError, ValueError):
+            failures.append(f"{item.collection}[{item.index}].{item.field}")
+        else:
+            decrypted_count += 1
+    return CredentialValidationReport(
+        encrypted_count=len(encrypted),
+        decrypted_count=decrypted_count,
+        failures=tuple(failures),
+    )
+
+
+def encrypt_registered_plaintext_credentials(
+    settings: dict[str, Any], raw_key: bytes
+) -> dict[str, Any]:
+    """Encrypt every non-empty registered plaintext value with ``raw_key``."""
+
+    def _encrypt(item: ProtectedValue) -> str:
+        if is_fernet_encrypted(item.value):
+            return item.value
+        return encrypt_value(item.value, raw_key)
+
+    return transform_protected_values(settings, _encrypt)
+
+
+def reencrypt_registered_credentials(
+    settings: dict[str, Any], old_key: bytes, new_key: bytes
+) -> tuple[dict[str, Any], int]:
+    """Re-encrypt every registered credential, failing before partial output."""
+
+    rotated_count = 0
+
+    def _rotate(item: ProtectedValue) -> str:
+        nonlocal rotated_count
+        plaintext = (
+            decrypt_value(item.value, old_key)
+            if is_fernet_encrypted(item.value)
+            else item.value
+        )
+        rotated_count += 1
+        return encrypt_value(plaintext, new_key)
+
+    return transform_protected_values(settings, _rotate), rotated_count

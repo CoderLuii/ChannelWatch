@@ -7,7 +7,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-VEX_PATH = ROOT / "deploy" / "security" / "channelwatch-v0.9.17.openvex.json"
+VEX_PATH = ROOT / "deploy" / "security" / "channelwatch-v0.9.18.openvex.json"
 SCRIPT_PATH = ROOT / "scripts" / "release" / "verify-vex.py"
 
 
@@ -24,7 +24,7 @@ def _document():
 
 
 def test_release_vex_covers_exact_runtime_findings_and_architectures():
-    _module().validate_vex(_document(), expected_version="0.9.17")
+    _module().validate_vex(_document(), expected_version="0.9.18")
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,7 @@ def test_release_vex_rejects_incomplete_or_stale_dispositions(mutation):
     mutation(document)
     module = _module()
     with pytest.raises(module.VexValidationError):
-        module.validate_vex(document, expected_version="0.9.17")
+        module.validate_vex(document, expected_version="0.9.18")
 
 
 def test_runtime_sources_preserve_vex_execute_path_claims():
@@ -60,6 +60,8 @@ def test_runtime_sources_preserve_vex_execute_path_claims():
     assert "from poplib" not in combined
     assert "import stringprep" not in combined
     assert "from stringprep" not in combined
+    assert "import tarfile" not in combined
+    assert "from tarfile" not in combined
 
     disk_source = (ROOT / "app" / "core" / "alerts" / "disk_space.py").read_text(
         encoding="utf-8"

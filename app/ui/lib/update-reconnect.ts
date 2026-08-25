@@ -10,7 +10,22 @@ type ReconnectOptions<T extends RuntimeStatus> = {
   intervalMs?: number
 }
 
-type RestartJob = { restart_required?: boolean }
+type RestartJob = { restart_required?: boolean; status?: string | null }
+
+const PENDING_UPDATE_JOB_STATUSES = new Set([
+  "backing_up",
+  "verifying",
+  "applying",
+  "restarting",
+  "validating",
+])
+
+export function isPendingUpdateJob(job: { status?: string | null }): boolean {
+  // Historical update responses did not always expose status. Preserve their
+  // restart behavior while requiring current responses to name a pending state.
+  if (job.status == null) return true
+  return PENDING_UPDATE_JOB_STATUSES.has(job.status)
+}
 
 type ApplyAndReconnectOptions<TStatus extends RuntimeStatus, TJob extends RestartJob> = ReconnectOptions<TStatus> & {
   apply: (version: string) => Promise<TJob>
@@ -75,7 +90,7 @@ export async function applyUpdateAndReconnect<
 
   try {
     job = await options.apply(targetVersion)
-    if (!job.restart_required) return job
+    if (!job.restart_required || !isPendingUpdateJob(job)) return job
   } catch (error) {
     if (options.isRejectedUpdate?.(error)) throw error
     const isRestartDisconnect = options.isRestartDisconnect

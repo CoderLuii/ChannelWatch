@@ -1,4 +1,4 @@
-name: ChannelWatch - Build and Push to Docker Hub + GHCR
+name: ChannelWatch - Release
 run-name: ${{ github.ref_name }}
 
 # Required repository secrets:
@@ -10,8 +10,13 @@ run-name: ${{ github.ref_name }}
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 concurrency:
   group: channelwatch-release-publication
@@ -23,22 +28,891 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:11203e84159f6568c517c1765ee9a6de15685972c86bc1d27648ba7061486f65 # v1.22.2
+  RELEASE_TAG: ${{ github.ref_name }}
+  RELEASE_SHA: ${{ github.sha }}
 
 jobs:
+  cleanup-failed-v0918:
+    name: Remove exact failed v0.9.18 registry artifacts
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Authenticate Docker Hub cleanup
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Authenticate GHCR cleanup
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Remove only the exact failed v0.9.18 image digest
+        env:
+          FAILED_DIGEST: sha256:166e713b4e8560e2aed0879fba4fe1942998a24dfe52f434624681eab7bce22c
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RELEASE_TAG}" != "v0.9.18" ]; then
+            echo "No failed v0.9.18 cleanup is needed for ${RELEASE_TAG}."
+            exit 0
+          fi
+          skopeo_cmd() {
+            docker run --rm \
+              --volume "${DOCKER_CONFIG:-${HOME}/.docker}:/auth:ro" \
+              "${SKOPEO_IMAGE}" "$@"
+          }
+          dockerhub_reference="docker://${DOCKERHUB_IMAGE}:0.9.18"
+          if actual_digest="$(skopeo_cmd inspect \
+            --authfile /auth/config.json --format '{{.Digest}}' "${dockerhub_reference}" 2>/dev/null)"; then
+            if [ "${actual_digest}" != "${FAILED_DIGEST}" ]; then
+              echo "::error::Refusing to delete ${dockerhub_reference}; digest ${actual_digest} is not the exact failed release digest."
+              exit 1
+            fi
+            skopeo_cmd delete --authfile /auth/config.json "${dockerhub_reference}"
+            echo "Removed exact failed artifact ${dockerhub_reference}@${actual_digest}."
+          else
+            echo "${dockerhub_reference} is already absent."
+          fi
+
+          ghcr_reference="docker://${GHCR_IMAGE}:0.9.18"
+          if actual_digest="$(skopeo_cmd inspect \
+            --authfile /auth/config.json --format '{{.Digest}}' "${ghcr_reference}" 2>/dev/null)"; then
+            if [ "${actual_digest}" != "${FAILED_DIGEST}" ]; then
+              echo "::error::Refusing to delete ${ghcr_reference}; digest ${actual_digest} is not the exact failed release digest."
+              exit 1
+            fi
+            versions_url="https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/channelwatch/versions?per_page=100"
+            versions="$(curl --fail --silent --show-error \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${versions_url}")"
+            version_id="$(jq --exit-status --raw-output \
+              --arg digest "${FAILED_DIGEST}" \
+              '[.[] | select(.name == $digest and (.metadata.container.tags | index("0.9.18")))] | if length == 1 then .[0].id else error("expected exactly one matching failed GHCR version") end' \
+              <<<"${versions}")"
+            curl --fail --silent --show-error --request DELETE \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/channelwatch/versions/${version_id}"
+            echo "Removed exact failed artifact ${ghcr_reference}@${actual_digest}."
+          else
+            echo "${ghcr_reference} is already absent."
+          fi
+
+  python:
+    name: Python
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            deploy/requirements/runtime.txt
+            deploy/requirements/dev.txt
+            deploy/requirements/dev.constraints.txt
+      - name: Install dependencies
+        run: python -m pip install -c deploy/requirements/dev.constraints.txt -r deploy/requirements/runtime.txt -r deploy/requirements/dev.txt
+      - name: Compile Python
+        run: python -m compileall app/core app/ui/backend
+      - name: Run backend suite
+        env:
+          PYTHONPATH: app
+        run: python -m pytest app/core/tests
+
+  frontend:
+    name: Frontend
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+  browser:
+    name: Browser
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Run Chromium smoke, keyboard, and accessibility checks
+        run: pnpm exec playwright test --project=smoke --project=a11y
+
+  docs-config:
+    name: Docs and config
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+      - run: bash deploy/scripts/doc-qa/diataxis-check.sh
+      - run: bash deploy/scripts/doc-qa/spell-check.sh
+      - name: Validate Compose examples
+        run: |
+          for compose_file in deploy/compose/*.yml; do
+            docker compose -f "${compose_file}" config --quiet
+          done
+
+  helm:
+    name: Helm
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - name: Lint and render managed-local mode
+        run: |
+          helm lint deploy/helm/channelwatch
+          helm template channelwatch deploy/helm/channelwatch >/dev/null
+      - name: Render optional legacy migration Secret
+        run: helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null
+      - name: Render existing Secret mode
+        run: helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.existingSecret=channelwatch-runtime >/dev/null
+      - name: Verify invalid values fail
+        run: |
+          if helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.secretStorageKey=short >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set-string secretConfig.existingSecret=external --set-string secretConfig.secretStorageKey=ci-only-0123456789abcdef0123456789abcdef >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set replicaCount=2 >/dev/null 2>&1; then exit 1; fi
+          if helm template channelwatch deploy/helm/channelwatch --set persistence.enabled=false >/dev/null 2>&1; then exit 1; fi
+
+  container:
+    name: Container build
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+
+  security:
+    name: Security
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: true
+      - name: Scan filesystem, including the rendered Helm chart
+        env:
+          CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
+        run: |
+          trivy fs \
+            --scanners vuln,secret,misconfig \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --ignorefile .trivyignore.yaml \
+            --skip-files deploy/docker/Dockerfile.dockerignore \
+            --format json \
+            --output "${CHANNELWATCH_TRIVY_REPORT}" \
+            .
+      - name: Scan the explicit Helm Secret mode
+        env:
+          CHANNELWATCH_TRIVY_SECRET_REPORT: ${{ runner.temp }}/channelwatch-trivy-secret.json
+        run: |
+          trivy config \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --ignorefile .trivyignore.yaml \
+            --helm-set-string secretConfig.apiKey=ci-only-placeholder-not-a-real-secret \
+            --format json \
+            --output "${CHANNELWATCH_TRIVY_SECRET_REPORT}" \
+            deploy/helm/channelwatch
+      - name: Prove Trivy scanned both Helm Secret modes
+        env:
+          CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
+          CHANNELWATCH_TRIVY_SECRET_REPORT: ${{ runner.temp }}/channelwatch-trivy-secret.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          default_report = json.loads(
+              Path(os.environ["CHANNELWATCH_TRIVY_REPORT"]).read_text(encoding="utf-8")
+          )
+          secret_report = json.loads(
+              Path(os.environ["CHANNELWATCH_TRIVY_SECRET_REPORT"]).read_text(
+                  encoding="utf-8"
+              )
+          )
+          default_targets = {
+              str(result.get("Target") or "")
+              for result in default_report.get("Results", [])
+              if result.get("Type") == "helm"
+          }
+          default_required = {
+              "deploy/helm/channelwatch/templates/configmap.yaml",
+              "deploy/helm/channelwatch/templates/deployment.yaml",
+          }
+          default_missing = sorted(default_required - default_targets)
+          default_secret = "deploy/helm/channelwatch/templates/secret.yaml"
+          if default_missing:
+              raise SystemExit(
+                  "Trivy did not scan required managed-local Helm targets: "
+                  + ", ".join(default_missing)
+              )
+          if default_secret in default_targets:
+              raise SystemExit(
+                  "The managed-local Helm render unexpectedly contains a Secret."
+              )
+
+          secret_targets = {
+              str(result.get("Target") or "")
+              for result in secret_report.get("Results", [])
+              if result.get("Type") == "helm"
+          }
+          secret_required = {
+              "templates/deployment.yaml",
+              "templates/secret.yaml",
+          }
+          secret_missing = sorted(secret_required - secret_targets)
+          if secret_missing:
+              raise SystemExit(
+                  "Trivy did not scan required explicit-Secret Helm targets: "
+                  + ", ".join(secret_missing)
+              )
+          print(
+              "Trivy scanned managed-local and explicit-Secret Helm modes "
+              f"({len(default_targets)} + {len(secret_targets)} resources)."
+          )
+          PY
+  signed-candidate:
+    name: Build and verify private signed candidate
+    needs: cleanup-failed-v0918
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      artifact_id: ${{ steps.candidate_upload.outputs.artifact-id }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_version="$(jq -r '.version' scripts/release/release-config.json)"
+          actual_tag="v${actual_version}"
+          if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The pushed candidate must resolve to a complete commit SHA."
+            exit 1
+          fi
+          if [ "${EXPECTED_TAG}" != "${actual_tag}" ]; then
+            echo "::error::The version branch must match release-config version ${actual_tag}."
+            exit 1
+          fi
+          if [ "${actual_sha}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::Checked-out SHA does not match the requested candidate."
+            exit 1
+          fi
+          if [ "${GITHUB_SHA}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::The workflow must run from the exact pushed candidate commit."
+            exit 1
+          fi
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            deploy/requirements/runtime.txt
+            deploy/requirements/dev.txt
+            deploy/requirements/dev.constraints.txt
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Verify pinned publication helper is available
+        run: |
+          docker pull "${SKOPEO_IMAGE}"
+          docker run --rm "${SKOPEO_IMAGE}" --version
+
+      - name: Install constrained Python dependencies
+        run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/dev.constraints.txt \
+            -r deploy/requirements/runtime.txt \
+            -r deploy/requirements/dev.txt
+
+      - name: Run source gates
+        run: |
+          python -m compileall app/core app/ui/backend
+          PYTHONPATH=app python -m pytest app/core/tests
+
+      - name: Build verified static frontend
+        working-directory: app/ui
+        env:
+          CHANNELWATCH_BUILD_ID: ${{ github.sha }}
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test
+
+      - name: Build deterministic signed candidate twice
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CHANNELWATCH_UPDATE_SIGNING_KEY}" ]; then
+            echo "::error::CHANNELWATCH_UPDATE_SIGNING_KEY is required."
+            exit 1
+          fi
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          publication_time="$(jq -r '.publication_time' scripts/release/release-config.json)"
+          automatic_install_after="$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
+          common_args=(
+            --version "${version}"
+            --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}"
+            --delivery-mode "${delivery_mode}"
+            --minimum-image-version "${minimum_image_version}"
+            --updater-protocol "${updater_protocol}"
+            --recommended-image-version "${recommended_image_version}"
+            --publication-time "${publication_time}"
+            --automatic-install-after "${automatic_install_after}"
+          )
+          python scripts/release/build-update-bundle.py \
+            "${common_args[@]}" --out-dir dist/candidate-one
+          python scripts/release/build-update-bundle.py \
+            "${common_args[@]}" --out-dir dist/candidate-two
+          diff -u \
+            <(cd dist/candidate-one && sha256sum ./*) \
+            <(cd dist/candidate-two && sha256sum ./*)
+
+      - name: Build exact deterministic multi-architecture image twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          source_epoch="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          build_date="$(python -c 'from datetime import datetime, timezone; import sys; print(datetime.fromtimestamp(int(sys.argv[1]), timezone.utc).isoformat().replace("+00:00", "Z"))' "${source_epoch}")"
+          {
+            echo "CANDIDATE_VERSION=${version}"
+            echo "CANDIDATE_SOURCE_EPOCH=${source_epoch}"
+            echo "CANDIDATE_BUILD_DATE=${build_date}"
+          } >> "${GITHUB_ENV}"
+          echo "Building exact candidate image from normalized source timestamp ${build_date}."
+
+      - name: Build first exact multi-architecture image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: false
+          tags: channelwatch:release-candidate
+          outputs: type=oci,dest=${{ runner.temp }}/channelwatch-candidate-one.oci,tar=false,rewrite-timestamp=true
+          provenance: false
+          no-cache: true
+          build-args: |
+            VERSION=${{ env.CANDIDATE_VERSION }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ env.CANDIDATE_BUILD_DATE }}
+            SOURCE_DATE_EPOCH=${{ env.CANDIDATE_SOURCE_EPOCH }}
+
+      - name: Build second exact multi-architecture image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: false
+          tags: channelwatch:release-candidate
+          outputs: type=oci,dest=${{ runner.temp }}/channelwatch-candidate-two.oci,tar=false,rewrite-timestamp=true
+          provenance: false
+          no-cache: true
+          build-args: |
+            VERSION=${{ env.CANDIDATE_VERSION }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ env.CANDIDATE_BUILD_DATE }}
+            SOURCE_DATE_EPOCH=${{ env.CANDIDATE_SOURCE_EPOCH }}
+
+      - name: Verify and retain the exact candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${CANDIDATE_VERSION}"
+          descriptor="dist/candidate-one/channelwatch-image-${tag}.json"
+          digest="dist/candidate-one/channelwatch-image-${tag}.digest"
+          archive="dist/candidate-one/channelwatch-image-${tag}.oci.tar"
+          python scripts/release/describe-oci-image.py \
+            --oci-layout "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+            --output "${descriptor}" \
+            --digest-output "${digest}"
+          python scripts/release/describe-oci-image.py \
+            --oci-layout "${RUNNER_TEMP}/channelwatch-candidate-two.oci" \
+            --output "${RUNNER_TEMP}/channelwatch-image-second.json" \
+            --digest-output "${RUNNER_TEMP}/channelwatch-image-second.digest"
+          cmp --silent "${descriptor}" "${RUNNER_TEMP}/channelwatch-image-second.json"
+          cmp --silent "${digest}" "${RUNNER_TEMP}/channelwatch-image-second.digest"
+          tar --sort=name \
+            --mtime="@${CANDIDATE_SOURCE_EPOCH}" \
+            --owner=0 --group=0 --numeric-owner \
+            --format=posix \
+            --pax-option=delete=atime,delete=ctime \
+            -C "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+            -cf "${archive}" .
+          second_archive="${RUNNER_TEMP}/channelwatch-image-second.oci.tar"
+          tar --sort=name \
+            --mtime="@${CANDIDATE_SOURCE_EPOCH}" \
+            --owner=0 --group=0 --numeric-owner \
+            --format=posix \
+            --pax-option=delete=atime,delete=ctime \
+            -C "${RUNNER_TEMP}/channelwatch-candidate-two.oci" \
+            -cf "${second_archive}" .
+          cmp --silent "${archive}" "${second_archive}"
+
+      - name: Load exact-source AMD64 image for historical recovery canaries
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: channelwatch:v0.9.18-historical-recovery
+          provenance: false
+          build-args: |
+            VERSION=${{ env.CANDIDATE_VERSION }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ env.CANDIDATE_BUILD_DATE }}
+            SOURCE_DATE_EPOCH=${{ env.CANDIDATE_SOURCE_EPOCH }}
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: true
+
+      - name: Scan exact nonpublishing candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            trivy image \
+              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+              --platform "${platform}" \
+              --scanners vuln,secret,misconfig \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1
+          done
+
+      - name: Verify pinned bridge or run v0.9.18 historical canaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          if [ "${version}" != "0.9.18" ]; then
+            python scripts/release/verify-pinned-v1-bridge.py
+            exit 0
+          fi
+          python scripts/release/verify-historical-image-canaries.py \
+            --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
+            --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+            --version "${version}" \
+            --recovery-image "channelwatch:v0.9.18-historical-recovery" \
+            --evidence-json "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json"
+          python - "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json" "${version}" <<'PY'
+          import json
+          import re
+          import sys
+
+          evidence_path, expected_version = sys.argv[1:]
+          with open(evidence_path, encoding="utf-8") as handle:
+              evidence = json.load(handle)
+
+          expected_keys = {
+              *(f'activation_success:0.9.{patch}' for patch in range(11, 18)),
+              'activation_failure:0.9.15:ui',
+              'activation_failure:0.9.17:core',
+              'tamper_rejection:0.9.15:manifest',
+              'tamper_rejection:0.9.15:bundle',
+              'tamper_rejection:0.9.17:manifest',
+              'tamper_rejection:0.9.17:bundle',
+              'image_refresh_recovery:0.9.9',
+              'image_refresh_recovery:0.9.10',
+          }
+
+          def fail(message):
+              raise SystemExit(f"historical canary evidence is invalid: {message}")
+
+          def row_key(row):
+              scenario = row.get("scenario")
+              source_version = row.get("source_version")
+              scenario_id = row.get("scenario_key")
+              if not all(isinstance(value, str) and value for value in (
+                  scenario, source_version, scenario_id
+              )):
+                  fail("every result row must have scenario, scenario_key, and source_version")
+              variant = (
+                  row.get("failed_component") if scenario == "activation_failure"
+                  else row.get("tamper_case") if scenario == "tamper_rejection"
+                  else None
+              )
+              expected_id = ":".join(
+                  str(value) for value in (scenario, source_version, variant) if value
+              )
+              if scenario_id != expected_id:
+                  fail(f"scenario key {scenario_id!r} does not match {expected_id!r}")
+              return scenario_id
+
+          def require_fields(row, fields, key):
+              missing = sorted(fields - row.keys())
+              if missing:
+                  fail(f"{key} is missing fields: {missing}")
+
+          def require_exact(row, expected, key):
+              for field, value in expected.items():
+                  if row.get(field) != value:
+                      fail(f"{key} has {field}={row.get(field)!r}, expected {value!r}")
+
+          if evidence.get("schema") != 2:
+              fail("schema must be exactly 2")
+          if evidence.get("target_version") != expected_version:
+              fail("target_version does not match the candidate")
+          if evidence.get("platform") != "linux/amd64":
+              fail("platform must be linux/amd64")
+          if evidence.get("passed") is not True:
+              fail("top-level passed must be true")
+          results = evidence.get("results")
+          if not isinstance(results, list):
+              fail("results must be a list")
+
+          keyed = {}
+          for raw_row in results:
+              if not isinstance(raw_row, dict):
+                  fail("every result must be an object")
+              row = dict(raw_row)
+              key = row_key(row)
+              if key in keyed:
+                  fail(f"duplicate scenario row {key}")
+              keyed[key] = row
+
+          actual_keys = set(keyed)
+          if actual_keys != expected_keys:
+              fail(
+                  f"scenario rows differ; missing={sorted(expected_keys - actual_keys)}, "
+                  f"unexpected={sorted(actual_keys - expected_keys)}"
+              )
+
+          sha40 = re.compile(r"[0-9a-f]{40}\Z")
+          sha64 = re.compile(r"[0-9a-f]{64}\Z")
+          digest64 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+          bundle_digests = set()
+          for key, row in keyed.items():
+              scenario = row["scenario"]
+              source_version = row["source_version"]
+              failed_component = row.get("failed_component")
+              tamper_case = row.get("tamper_case")
+              expected_protocol = 0 if source_version == "0.9.9" else 1 if source_version <= "0.9.15" else 2
+              if row.get("launcher_protocol") != expected_protocol:
+                  fail(f"{key} has an incorrect launcher protocol")
+
+              if scenario == "activation_success":
+                  require_fields(row, {
+                      "source_sha", "image_index_digest", "amd64_digest", "bundle_sha256",
+                      "check_status", "apply_status", "final_job_status", "core_bundle",
+                      "ui_bundle", "portal_api_verified", "restart_count_delta",
+                      "supervisor_stable", "rollback_target_verified",
+                      "active_identity_verified", "managed_key_verified",
+                      "stale_control_file_count", "result",
+                  }, key)
+                  require_exact(row, {
+                      "check_status": "available", "final_job_status": "success",
+                      "core_bundle": True, "ui_bundle": True, "portal_api_verified": True,
+                      "supervisor_stable": True, "rollback_target_verified": True,
+                      "active_identity_verified": True, "managed_key_verified": True,
+                      "stale_control_file_count": 0, "result": "passed",
+                  }, key)
+                  if not isinstance(row.get("apply_status"), str) or not row["apply_status"]:
+                      fail(f"{key} has no apply status")
+                  if type(row.get("restart_count_delta")) is not int or row["restart_count_delta"] < 1:
+                      fail(f"{key} has an invalid restart delta")
+              elif scenario == "activation_failure":
+                  require_fields(row, {
+                      "failed_component", "bundle_sha256", "portal_api_verified",
+                      "restart_count_delta", "final_job_status", "rollback_applied",
+                      "failed_identity_quarantined", "image_runtime_restored",
+                      "supervisor_stable", "stale_control_file_count", "result",
+                  }, key)
+                  require_exact(row, {
+                      "failed_component": failed_component, "portal_api_verified": True,
+                      "final_job_status": "failed", "rollback_applied": True,
+                      "failed_identity_quarantined": True, "image_runtime_restored": True,
+                      "supervisor_stable": True, "stale_control_file_count": 0,
+                      "result": "passed",
+                  }, key)
+                  if type(row.get("restart_count_delta")) is not int or row["restart_count_delta"] < 1:
+                      fail(f"{key} has an invalid restart delta")
+              elif scenario == "tamper_rejection":
+                  require_fields(row, {
+                      "tamper_case", "rejected_before_selection", "active_unchanged",
+                      "restart_count_delta", "result",
+                  }, key)
+                  require_exact(row, {
+                      "tamper_case": tamper_case, "rejected_before_selection": True,
+                      "active_unchanged": True, "restart_count_delta": 0,
+                      "result": "passed",
+                  }, key)
+              elif scenario == "image_refresh_recovery":
+                  require_fields(row, {
+                      "source_sha", "image_index_digest", "amd64_digest", "bundle_sha256",
+                      "check_status", "apply_status", "image_refresh_required",
+                      "recovery_job_status", "recovery_quorum_verified",
+                      "recovery_image_runtime_verified", "managed_key_verified",
+                      "supervisor_stable", "stale_control_file_count", "result",
+                  }, key)
+                  require_exact(row, {
+                      "check_status": "available",
+                      "image_refresh_required": True,
+                      "recovery_job_status": "success", "recovery_quorum_verified": True,
+                      "recovery_image_runtime_verified": True, "managed_key_verified": True,
+                      "supervisor_stable": True, "stale_control_file_count": 0,
+                      "result": "passed_with_documented_image_only_limitation",
+                  }, key)
+                  if not isinstance(row.get("apply_status"), str) or not row["apply_status"]:
+                      fail(f"{key} has no apply status")
+                  if source_version == "0.9.9":
+                      require_exact(row, {
+                          "immutable_false_success_observed": True,
+                          "legacy_core_launcher_failure_observed": True,
+                          "legacy_ui_image_runtime_verified": True,
+                          "recovery_image_cleared_false_success": True,
+                      }, key)
+                  else:
+                      require_exact(row, {
+                          "portal_api_verified": True,
+                          "immutable_entrypoint_failure_observed": True,
+                          "legacy_restart_loop_observed": True,
+                          "legacy_restart_count_at_least": 2,
+                          "legacy_staged_identity_preserved": True,
+                          "recovery_image_cleared_failed_activation": True,
+                      }, key)
+              else:
+                  fail(f"{key} has an unsupported scenario {scenario!r}")
+
+              if scenario in {"activation_success", "image_refresh_recovery"}:
+                  if not sha40.fullmatch(str(row.get("source_sha", ""))):
+                      fail(f"{key} has an invalid source SHA")
+                  if not digest64.fullmatch(str(row.get("image_index_digest", ""))):
+                      fail(f"{key} has an invalid image index digest")
+                  if not digest64.fullmatch(str(row.get("amd64_digest", ""))):
+                      fail(f"{key} has an invalid amd64 digest")
+              if "bundle_sha256" in row:
+                  if not sha64.fullmatch(str(row["bundle_sha256"])):
+                      fail(f"{key} has an invalid bundle digest")
+                  bundle_digests.add(row["bundle_sha256"])
+
+          if len(bundle_digests) != 1:
+              fail("all applicable rows must attest the same bundle digest")
+          PY
+
+      - name: Verify signed v1 bridge, v2 catalog, and exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
+          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          python scripts/release/verify-update-assets.py \
+            --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
+            --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
+            --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+            --expected-version "${version}" \
+            --expected-channel stable \
+            --expected-runtime-abi channelwatch-runtime-v1 \
+            --expected-settings-schema-version 7 \
+            --expected-image-required "${image_required}" \
+            --expected-delivery-mode "${delivery_mode}" \
+            --expected-recommended-image-version "${recommended_image_version}" \
+            --expected-git-sha "${GITHUB_SHA}" \
+            --expected-release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}" \
+            --expected-bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip" \
+            --source-root "${GITHUB_WORKSPACE}"
+          compatibility_args=()
+          if [ "${version}" = "0.9.18" ]; then
+            python scripts/release/verify-legacy-update-bridge.py \
+              --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
+              --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+              --version "${version}"
+            compatibility_args=(
+              --compatibility-manifest "dist/candidate-one/channelwatch-update-${tag}.json"
+              --compatibility-bundle "dist/candidate-one/channelwatch-app-${tag}.zip"
+              --historical-image-evidence "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json"
+            )
+          fi
+          base_ref="$(git tag --sort=-version:refname --merged "${GITHUB_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          if [ -z "${base_ref}" ]; then
+            echo "::error::A previous semantic-version release tag is required for impact classification."
+            exit 1
+          fi
+          python scripts/release/classify-release-impact.py \
+            --base-ref "${base_ref}" \
+            --target-ref "${GITHUB_SHA}" \
+            "${compatibility_args[@]}"
+          python scripts/release/verify-publication-window.py \
+            --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
+            --version "${version}" \
+            --prospective-publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
+          checksum_tmp="${RUNNER_TEMP}/channelwatch-candidate-SHA256SUMS.txt"
+          (
+            cd dist/candidate-one
+            find . -maxdepth 1 -type f -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > "${checksum_tmp}"
+            sha256sum --check "${checksum_tmp}"
+          )
+          mv "${checksum_tmp}" dist/candidate-one/SHA256SUMS.txt
+
+      - name: Seal production-signed candidate for private retention
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sealed_dir="dist/candidate-sealed"
+          archive="${RUNNER_TEMP}/channelwatch-release-candidate-${GITHUB_SHA}.tar"
+          sealed="${sealed_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
+          mkdir -p "${sealed_dir}"
+          tar -C dist/candidate-one -cf "${archive}" .
+          python scripts/release/seal-candidate-artifact.py seal \
+            --input "${archive}" \
+            --output "${sealed}"
+          rm -f "${archive}"
+          if [ ! -s "${sealed}" ]; then
+            echo "::error::Sealed candidate artifact was not created."
+            exit 1
+          fi
+
+      - name: Retain sealed nonpublishing candidate evidence
+        id: candidate_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: channelwatch-release-candidate-${{ github.sha }}
+          path: dist/candidate-sealed/*.sealed
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
   build-update-bundle-and-release:
     name: Build signed update bundle and release
+    needs: signed-candidate
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write # Create the exact-SHA draft and upload signed update assets.
+      actions: read # Reproduce and compare the approved nonpublishing candidate.
     outputs:
       bundle_url: ${{ steps.assets.outputs.bundle_url }}
       manifest_url: ${{ steps.assets.outputs.manifest_url }}
+      catalog_url: ${{ steps.assets.outputs.catalog_url }}
+      catalog_sha256: ${{ steps.assets.outputs.catalog_sha256 }}
       bundle_sha256: ${{ steps.assets.outputs.bundle_sha256 }}
+      approved_candidate_artifact_id: ${{ steps.approved_candidate.outputs.artifact_id }}
+      approved_image_index_digest: ${{ steps.approved_candidate.outputs.image_index_digest }}
+      approved_image_descriptor_sha256: ${{ steps.approved_candidate.outputs.image_descriptor_sha256 }}
+      approved_image_archive_sha256: ${{ steps.approved_candidate.outputs.image_archive_sha256 }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -54,17 +928,18 @@ jobs:
           package-manager-cache: false
 
       - name: Reject stale release tag
+        if: github.event_name == 'push'
         run: >-
           python scripts/release/verify-release-candidate.py
-          --tag "${GITHUB_REF_NAME}"
-          --sha "${GITHUB_SHA}"
+          --tag "${RELEASE_TAG}"
+          --sha "${RELEASE_SHA}"
           --main-ref origin/main
 
       - name: Parse version
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
@@ -74,7 +949,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
-          raw_ref="${GITHUB_REF_NAME}"
+          raw_ref="${RELEASE_TAG}"
           if [[ ! "${raw_ref}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must use vX.Y.Z format, got ${raw_ref}."
             exit 1
@@ -93,12 +968,16 @@ jobs:
             -r deploy/requirements/dev.txt
 
       - name: Run Python release gates
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pytest app/core/tests
           python -m compileall app/core app/ui/backend
 
       - name: Build frontend for app bundle
         working-directory: app/ui
+        env:
+          CHANNELWATCH_BUILD_ID: ${{ github.sha }}
         run: |
           corepack enable
           pnpm install --frozen-lockfile
@@ -110,7 +989,7 @@ jobs:
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           if [ -z "${CHANNELWATCH_UPDATE_SIGNING_KEY}" ]; then
@@ -120,16 +999,27 @@ jobs:
 
           config_version="$(jq -r '.version' scripts/release/release-config.json)"
           image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          publication_time="$(jq -r '.publication_time' scripts/release/release-config.json)"
+          automatic_install_after="$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
           if [ "${config_version}" != "${VERSION}" ]; then
             echo "::error::release-config.json targets ${config_version}, expected ${VERSION}."
             exit 1
           fi
-          image_required_args=()
           if [ "${image_required}" = "true" ]; then
-            image_required_args+=(--image-required)
+            if [ "${delivery_mode}" != "image_required" ]; then
+              echo "::error::image_required=true conflicts with delivery_mode=${delivery_mode}."
+              exit 1
+            fi
             echo "Release ${TAG} will be marked as container image update required."
           elif [ "${image_required}" != "false" ]; then
             echo "::error::release-config.json image_required must be true or false."
+            exit 1
+          elif [ "${delivery_mode}" = "image_required" ]; then
+            echo "::error::image_required=false conflicts with delivery_mode=image_required."
             exit 1
           fi
 
@@ -137,40 +1027,153 @@ jobs:
             --version "${VERSION}" \
             --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
-            "${image_required_args[@]}"
+            --delivery-mode "${delivery_mode}" \
+            --minimum-image-version "${minimum_image_version}" \
+            --updater-protocol "${updater_protocol}" \
+            --recommended-image-version "${recommended_image_version}" \
+            --publication-time "${publication_time}" \
+            --automatic-install-after "${automatic_install_after}"
+
+      - name: Require byte-identical approved candidate assets
+        id: approved_candidate
+        env:
+          APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_id="${APPROVED_ARTIFACT_ID}"
+          approved_run_id="${GITHUB_RUN_ID}"
+          if [ -z "${artifact_id}" ]; then
+            echo "::error::The verification job did not produce an approved candidate artifact for exact SHA ${RELEASE_SHA}."
+            exit 1
+          fi
+
+          approved_dir="${RUNNER_TEMP}/approved-candidate"
+          mkdir -p "${approved_dir}"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+            > "${RUNNER_TEMP}/approved-candidate.zip"
+          unzip -q "${RUNNER_TEMP}/approved-candidate.zip" -d "${approved_dir}"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
+          opened="${RUNNER_TEMP}/approved-candidate.tar"
+          python scripts/release/seal-candidate-artifact.py open \
+            --input "${sealed}" \
+            --output "${opened}"
+          tar -xf "${opened}" -C "${approved_dir}"
+          rm -f "${opened}" "${sealed}"
+
+          for asset in \
+            "channelwatch-app-${TAG}.zip" \
+            "channelwatch-update-${TAG}.json" \
+            "channelwatch-catalog-${TAG}.json"; do
+            if [ ! -s "${approved_dir}/${asset}" ]; then
+              echo "::error::Approved candidate run ${approved_run_id} is missing ${asset}."
+              exit 1
+            fi
+            cmp --silent "${approved_dir}/${asset}" "dist/update/${asset}" || {
+              echo "::error::Tag workflow did not reproduce approved candidate asset ${asset} byte-for-byte."
+              exit 1
+            }
+          done
+          (
+            cd "${approved_dir}"
+            sha256sum --check SHA256SUMS.txt
+          )
+          image_descriptor="channelwatch-image-${TAG}.json"
+          image_digest="channelwatch-image-${TAG}.digest"
+          image_archive="channelwatch-image-${TAG}.oci.tar"
+          for asset in "${image_descriptor}" "${image_digest}" "${image_archive}"; do
+            if [ ! -s "${approved_dir}/${asset}" ]; then
+              echo "::error::Approved candidate run ${approved_run_id} is missing ${asset}."
+              exit 1
+            fi
+          done
+          image_index_digest="$(tr -d '\r\n' < "${approved_dir}/${image_digest}")"
+          if [[ ! "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Approved candidate image index digest is invalid."
+            exit 1
+          fi
+          image_descriptor_sha256="$(sha256sum "${approved_dir}/${image_descriptor}" | awk '{print $1}')"
+          image_archive_sha256="$(sha256sum "${approved_dir}/${image_archive}" | awk '{print $1}')"
+          {
+            echo "artifact_id=${artifact_id}"
+            echo "image_index_digest=${image_index_digest}"
+            echo "image_descriptor_sha256=${image_descriptor_sha256}"
+            echo "image_archive_sha256=${image_archive_sha256}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Reproduced approved candidate run ${approved_run_id} for ${RELEASE_SHA}."
 
       - name: Verify generated update assets
         env:
           EXPECTED_CHANNEL: stable
-          EXPECTED_GIT_SHA: ${{ github.sha }}
+          EXPECTED_GIT_SHA: ${{ env.RELEASE_SHA }}
           EXPECTED_RUNTIME_ABI: channelwatch-runtime-v1
           EXPECTED_SETTINGS_SCHEMA_VERSION: "7"
           RELEASE_SOURCE_ROOT: ${{ github.workspace }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           expected_image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
+          expected_delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          expected_recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
           if [ "${expected_image_required}" != "true" ] && [ "${expected_image_required}" != "false" ]; then
             echo "::error::release-config.json image_required must be true or false."
             exit 1
           fi
           python scripts/release/verify-update-assets.py \
             --manifest "dist/update/channelwatch-update-${TAG}.json" \
+            --catalog "dist/update/channelwatch-catalog-${TAG}.json" \
             --bundle "dist/update/channelwatch-app-${TAG}.zip" \
             --expected-version "${VERSION}" \
             --expected-channel "${EXPECTED_CHANNEL}" \
             --expected-runtime-abi "${EXPECTED_RUNTIME_ABI}" \
             --expected-settings-schema-version "${EXPECTED_SETTINGS_SCHEMA_VERSION}" \
             --expected-image-required "${expected_image_required}" \
+            --expected-delivery-mode "${expected_delivery_mode}" \
+            --expected-recommended-image-version "${expected_recommended_image_version}" \
             --expected-git-sha "${EXPECTED_GIT_SHA}" \
             --expected-release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --expected-bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
             --source-root "${RELEASE_SOURCE_ROOT}"
 
+          compatibility_args=()
+          if [ "${VERSION}" = "0.9.18" ]; then
+            python scripts/release/verify-legacy-update-bridge.py \
+              --manifest "dist/update/channelwatch-update-${TAG}.json" \
+              --bundle "dist/update/channelwatch-app-${TAG}.zip" \
+              --version "${VERSION}"
+            compatibility_args=(
+              --compatibility-manifest "dist/update/channelwatch-update-${TAG}.json"
+              --compatibility-bundle "dist/update/channelwatch-app-${TAG}.zip"
+              --historical-image-evidence "${RUNNER_TEMP}/approved-candidate/channelwatch-historical-image-canaries-${TAG}.json"
+            )
+          else
+            python scripts/release/verify-pinned-v1-bridge.py
+          fi
+
+          base_ref="$(git tag --sort=-version:refname --merged "${RELEASE_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          if [ -z "${base_ref}" ]; then
+            echo "::error::A previous semantic-version release tag is required for impact classification."
+            exit 1
+          fi
+          python scripts/release/classify-release-impact.py \
+            --base-ref "${base_ref}" \
+            --target-ref "${RELEASE_SHA}" \
+            "${compatibility_args[@]}"
+          # This tag workflow uses the real runner clock. A future signed
+          # publication time must stop the job before even a draft release,
+          # immutable image, public release, registry alias, or feed changes.
+          python scripts/release/verify-publication-window.py \
+            --catalog "dist/update/channelwatch-catalog-${TAG}.json" \
+            --version "${VERSION}"
+
       - name: Verify release VEX
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: >-
           python scripts/release/verify-vex.py
           --document "deploy/security/channelwatch-${TAG}.openvex.json"
@@ -179,7 +1182,7 @@ jobs:
       - name: Render and validate release body
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           python scripts/release/render-release-body.py \
@@ -200,7 +1203,7 @@ jobs:
       - name: Create or update draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           release_json=""
@@ -220,7 +1223,7 @@ jobs:
           if [ -n "${release_id}" ]; then
             jq -n \
               --arg tag_name "${TAG}" \
-              --arg target_commitish "${GITHUB_SHA}" \
+              --arg target_commitish "${RELEASE_SHA}" \
               --arg name "${TAG}" \
               --rawfile body release-body.md \
               '{tag_name: $tag_name, target_commitish: $target_commitish, name: $name, body: $body, prerelease: false}' > release-draft.json
@@ -231,7 +1234,7 @@ jobs:
           else
             gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --target "${GITHUB_SHA}" \
+              --target "${RELEASE_SHA}" \
               --title "${TAG}" \
               --notes-file release-body.md \
               --draft
@@ -242,30 +1245,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           bundle="dist/update/channelwatch-app-${TAG}.zip"
           manifest="dist/update/channelwatch-update-${TAG}.json"
+          catalog="dist/update/channelwatch-catalog-${TAG}.json"
           vex="deploy/security/channelwatch-${TAG}.openvex.json"
-          if [ ! -f "${bundle}" ] || [ ! -f "${manifest}" ] || [ ! -f "${vex}" ]; then
+          if [ ! -f "${bundle}" ] || [ ! -f "${manifest}" ] || [ ! -f "${catalog}" ] || [ ! -f "${vex}" ]; then
             echo "::error::Expected update assets were not created."
             exit 1
           fi
-          gh release upload "${TAG}" "${bundle}" "${manifest}" "${vex}" --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" "${bundle}" "${manifest}" "${catalog}" "${vex}" --repo "${GITHUB_REPOSITORY}" --clobber
           bundle_sha="$(sha256sum "${bundle}" | awk '{print $1}')"
+          catalog_sha="$(sha256sum "${catalog}" | awk '{print $1}')"
           {
             echo "bundle_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip"
             echo "manifest_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-update-${TAG}.json"
+            echo "catalog_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-catalog-${TAG}.json"
             echo "bundle_sha256=${bundle_sha}"
+            echo "catalog_sha256=${catalog_sha}"
           } >> "${GITHUB_OUTPUT}"
 
   build-and-push:
     name: Build and push Docker image
     runs-on: ubuntu-latest
     needs: build-update-bundle-and-release
+    outputs:
+      dockerhub_digest: ${{ steps.publish.outputs.dockerhub_digest }}
+      ghcr_digest: ${{ steps.publish.outputs.ghcr_digest }}
     permissions:
       contents: write # Read and add verified assets to the exact-SHA draft.
+      actions: read # Download the immutable exact-SHA candidate image artifact.
       packages: write # Publish the verified multi-architecture image to GHCR.
       attestations: write # Record provenance for the published image.
       id-token: write # Exchange the workflow identity for the attestation.
@@ -274,6 +1285,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -281,7 +1293,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
@@ -289,24 +1301,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          raw_ref="${GITHUB_REF_NAME}"
+          raw_ref="${RELEASE_TAG}"
           if [[ ! "${raw_ref}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must use vX.Y.Z format, got ${raw_ref}."
             exit 1
           fi
 
-      - name: Verify release impact classification
+      - name: Verify CHANGELOG entry
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          base_ref="$(git tag --sort=-version:refname --merged "${GITHUB_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
-          if [ -z "${base_ref}" ]; then
-            echo "::error::A previous semantic-version release tag is required for impact classification."
-            exit 1
-          fi
-          python scripts/release/classify-release-impact.py \
-            --base-ref "${base_ref}" \
-            --target-ref "${GITHUB_SHA}"
+          version="${RELEASE_TAG#v}"
           version_re="${version//./\\.}"
           if ! grep -Eq "^## \\[${version_re}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" docs/releases/CHANGELOG.md; then
             echo "::error::docs/releases/CHANGELOG.md has no release heading for ${version}. Add '## [${version}] - YYYY-MM-DD' before tagging."
@@ -320,38 +1324,59 @@ jobs:
           docker system prune -af
           df -h
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: |
-            ${{ env.DOCKERHUB_IMAGE }}
-            ${{ env.GHCR_IMAGE }}
-          tags: |
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{version}}
-
-      - name: Build exact multi-architecture archive for release scan
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: deploy/docker/Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: false
-          tags: channelwatch:release-scan
-          outputs: type=oci,dest=${{ runner.temp }}/channelwatch-release.oci,tar=false
-          provenance: false
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            GIT_SHA=${{ github.sha }}
-            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-          cache-from: type=gha
+      - name: Download exact approved candidate image
+        env:
+          APPROVED_ARCHIVE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_archive_sha256 }}
+          APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
+          APPROVED_DESCRIPTOR_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_descriptor_sha256 }}
+          APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${APPROVED_ARTIFACT_ID}" =~ ^[0-9]+$ ]] || \
+             [[ ! "${APPROVED_IMAGE_INDEX_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+             [[ ! "${APPROVED_DESCRIPTOR_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+             [[ ! "${APPROVED_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Approved candidate image outputs are missing or invalid."
+            exit 1
+          fi
+          approved_dir="${RUNNER_TEMP}/approved-candidate"
+          mkdir -p "${approved_dir}" "${RUNNER_TEMP}/channelwatch-release.oci"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${APPROVED_ARTIFACT_ID}/zip" \
+            > "${RUNNER_TEMP}/approved-candidate.zip"
+          unzip -q "${RUNNER_TEMP}/approved-candidate.zip" -d "${approved_dir}"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
+          opened="${RUNNER_TEMP}/approved-candidate.tar"
+          python scripts/release/seal-candidate-artifact.py open \
+            --input "${sealed}" \
+            --output "${opened}"
+          tar -xf "${opened}" -C "${approved_dir}"
+          rm -f "${opened}" "${sealed}"
+          (
+            cd "${approved_dir}"
+            sha256sum --check SHA256SUMS.txt
+          )
+          descriptor="${approved_dir}/channelwatch-image-${TAG}.json"
+          digest="${approved_dir}/channelwatch-image-${TAG}.digest"
+          archive="${approved_dir}/channelwatch-image-${TAG}.oci.tar"
+          if [ "$(tr -d '\r\n' < "${digest}")" != "${APPROVED_IMAGE_INDEX_DIGEST}" ] || \
+             [ "$(sha256sum "${descriptor}" | awk '{print $1}')" != "${APPROVED_DESCRIPTOR_SHA256}" ] || \
+             [ "$(sha256sum "${archive}" | awk '{print $1}')" != "${APPROVED_ARCHIVE_SHA256}" ]; then
+            echo "::error::Downloaded candidate image does not match the approved exact-SHA outputs."
+            exit 1
+          fi
+          tar -xf "${archive}" -C "${RUNNER_TEMP}/channelwatch-release.oci"
+          python scripts/release/describe-oci-image.py \
+            --oci-layout "${RUNNER_TEMP}/channelwatch-release.oci" \
+            --output "${RUNNER_TEMP}/release-image.json" \
+            --digest-output "${RUNNER_TEMP}/release-image.digest"
+          cmp --silent "${descriptor}" "${RUNNER_TEMP}/release-image.json"
+          cmp --silent "${digest}" "${RUNNER_TEMP}/release-image.digest"
+          echo "The exact private candidate image is ready for repeat scanning and publication."
 
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
@@ -382,7 +1407,7 @@ jobs:
       - name: Download and verify existing draft release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -400,13 +1425,14 @@ jobs:
           fi
           release_json="$(jq -c '.[0]' <<<"${release_json}")"
           if [ "$(jq -r '.draft' <<<"${release_json}")" != "true" ] || \
-             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
+             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ]; then
             echo "::error::Signed assets must come from the matching exact-SHA draft release."
             exit 1
           fi
           for asset in \
             "channelwatch-app-${TAG}.zip" \
             "channelwatch-update-${TAG}.json" \
+            "channelwatch-catalog-${TAG}.json" \
             "channelwatch-${TAG}.openvex.json"; do
             gh release download "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -422,7 +1448,7 @@ jobs:
         env:
           OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
           SYFT_CMD: ${{ steps.syft.outputs.cmd }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
@@ -465,6 +1491,7 @@ jobs:
           for required_asset in \
             "channelwatch-app-${TAG}.zip" \
             "channelwatch-update-${TAG}.json" \
+            "channelwatch-catalog-${TAG}.json" \
             "channelwatch-${TAG}.openvex.json" \
             "channelwatch-${TAG}-amd64.spdx.json" \
             "channelwatch-${TAG}-amd64.cyclonedx.json" \
@@ -490,15 +1517,15 @@ jobs:
             sha256sum --check "${checksum_tmp}"
           )
           mv "${checksum_tmp}" "${checksum_file}"
-          if [ "$(wc -l < "${checksum_file}" | tr -d ' ')" != "12" ]; then
-            echo "::error::Release checksum manifest must cover all 12 non-checksum assets."
+          if [ "$(wc -l < "${checksum_file}" | tr -d ' ')" != "13" ]; then
+            echo "::error::Release checksum manifest must cover all 13 non-checksum assets."
             exit 1
           fi
 
       - name: Attach verified license and SBOM assets to draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -515,8 +1542,8 @@ jobs:
             echo "::error::License assets may only be attached to the matching draft release."
             exit 1
           fi
-          if [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
-            echo "::error::Draft release target does not match ${GITHUB_SHA}."
+          if [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ]; then
+            echo "::error::Draft release target does not match ${RELEASE_SHA}."
             exit 1
           fi
           gh release upload "${TAG}" dist/release/* \
@@ -554,9 +1581,9 @@ jobs:
       - name: Publish the scanned images and assemble exact manifests
         id: publish
         env:
+          APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
           DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
           OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
-          SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:64ac45c5a1c01230896fbae960b2213e32a5040e4009b83b5f5cbf31a35f61c3 # v1.22.2
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
@@ -579,6 +1606,10 @@ jobs:
             else error("OCI layout does not reference exactly one nested image index")
             end
           ' <<<"${root_index}")"
+          if [ "${image_index_digest}" != "${APPROVED_IMAGE_INDEX_DIGEST}" ]; then
+            echo "::error::Exact candidate image index changed before publication."
+            exit 1
+          fi
           image_index_blob="${OCI_LAYOUT}/blobs/sha256/${image_index_digest#sha256:}"
           if [ ! -f "${image_index_blob}" ]; then
             echo "::error::Scanned OCI layout is missing its nested image-index blob."
@@ -596,20 +1627,16 @@ jobs:
             exit 1
           fi
 
-          publish_registry() {
+          verify_remote_manifest() {
             repository="$1"
-            compatible_tag="${VERSION%.*}"
-            skopeo_cmd copy \
-              --all \
-              --preserve-digests \
-              --authfile /auth/config.json \
-              oci:/work/channelwatch.oci:release-scan \
-              "docker://${repository}:${VERSION}" >&2
-
             version_digest="$(skopeo_cmd inspect \
               --authfile /auth/config.json \
               --format '{{.Digest}}' \
               "docker://${repository}:${VERSION}")"
+            if [ "${version_digest}" != "${image_index_digest}" ]; then
+              echo "::error::${repository}:${VERSION} does not match the immutable approved digest." >&2
+              return 1
+            fi
             version_raw="$(skopeo_cmd inspect \
               --authfile /auth/config.json \
               --raw \
@@ -619,35 +1646,52 @@ jobs:
               '(.manifests | sort_by(.digest)) == ($archive.manifests | sort_by(.digest))' \
               <<<"${version_raw}" >/dev/null; then
               echo "::error::Published manifest does not contain the exact scanned platform descriptors."
-              exit 1
+              return 1
             fi
+            printf '%s\n' "${version_digest}"
+          }
 
-            publish_alias() {
-              alias_tag="$1"
+          preflight_registry() {
+            repository="$1"
+            tags="$(skopeo_cmd list-tags \
+              --authfile /auth/config.json \
+              "docker://${repository}")"
+            if jq -e --arg version "${VERSION}" '(.Tags // []) | index($version) != null' \
+              <<<"${tags}" >/dev/null; then
+              verify_remote_manifest "${repository}" >/dev/null || {
+                echo "::error::Refusing to overwrite existing immutable tag ${repository}:${VERSION}." >&2
+                return 1
+              }
+              printf 'existing\n'
+            else
+              printf 'absent\n'
+            fi
+          }
+
+          publish_registry() {
+            repository="$1"
+            preflight_state="$2"
+            if [ "${preflight_state}" = "absent" ]; then
               skopeo_cmd copy \
                 --all \
                 --preserve-digests \
                 --authfile /auth/config.json \
-                "docker://${repository}@${version_digest}" \
-                "docker://${repository}:${alias_tag}" >&2
-              alias_digest="$(skopeo_cmd inspect \
-                --authfile /auth/config.json \
-                --format '{{.Digest}}' \
-                "docker://${repository}:${alias_tag}")"
-              if [ "${alias_digest}" != "${version_digest}" ]; then
-                echo "::error::${alias_tag} does not reference the exact version manifest."
-                exit 1
-              fi
-            }
-
-            publish_alias "${compatible_tag}"
-            publish_alias latest
-
-            printf '%s\n' "${version_digest}"
+                oci:/work/channelwatch.oci:release-candidate \
+                "docker://${repository}:${VERSION}" >&2
+            elif [ "${preflight_state}" != "existing" ]; then
+              echo "::error::Invalid immutable-tag preflight state for ${repository}." >&2
+              return 1
+            fi
+            verify_remote_manifest "${repository}"
           }
 
-          dockerhub_digest="$(publish_registry "${DOCKERHUB_IMAGE}")"
-          ghcr_digest="$(publish_registry "${GHCR_IMAGE}")"
+          # Resolve both immutable version tags before mutating either registry.
+          # An existing identical digest is an idempotent retry; any mismatch
+          # fails the entire publication before the first copy occurs.
+          dockerhub_state="$(preflight_registry "${DOCKERHUB_IMAGE}")"
+          ghcr_state="$(preflight_registry "${GHCR_IMAGE}")"
+          dockerhub_digest="$(publish_registry "${DOCKERHUB_IMAGE}" "${dockerhub_state}")"
+          ghcr_digest="$(publish_registry "${GHCR_IMAGE}" "${ghcr_state}")"
           {
             echo "dockerhub_digest=${dockerhub_digest}"
             echo "ghcr_digest=${ghcr_digest}"
@@ -667,7 +1711,7 @@ jobs:
   update-dockerhub-description:
     name: Update Docker Hub description
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: advance-compatible-aliases
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
@@ -676,6 +1720,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Update Docker Hub description
@@ -692,7 +1738,6 @@ jobs:
     needs:
       - build-update-bundle-and-release
       - build-and-push
-      - update-dockerhub-description
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write # Promote the exact-SHA draft to the public GitHub release.
@@ -701,20 +1746,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Parse version
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Render release body
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           python scripts/release/render-release-body.py \
@@ -722,12 +1769,276 @@ jobs:
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --output release-body.md
 
-      - name: Publish release after image verification gates
+      - name: Verify pinned bridge or rerun v0.9.18 historical canaries
         env:
+          APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
+          APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
+          VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
+          set -euo pipefail
+          if [ "${VERSION}" != "0.9.18" ]; then
+            python scripts/release/verify-pinned-v1-bridge.py
+            exit 0
+          fi
+          approved_dir="${RUNNER_TEMP}/approved-candidate-canary"
+          mkdir -p "${approved_dir}"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${APPROVED_ARTIFACT_ID}/zip" \
+            > "${RUNNER_TEMP}/approved-candidate-canary.zip"
+          unzip -q "${RUNNER_TEMP}/approved-candidate-canary.zip" -d "${approved_dir}"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
+          opened="${RUNNER_TEMP}/approved-candidate-canary.tar"
+          python scripts/release/seal-candidate-artifact.py open \
+            --input "${sealed}" \
+            --output "${opened}"
+          tar -xf "${opened}" -C "${approved_dir}"
+          rm -f "${opened}" "${sealed}"
+          (
+            cd "${approved_dir}"
+            sha256sum --check SHA256SUMS.txt
+          )
+          python scripts/release/verify-historical-image-canaries.py \
+            --manifest "${approved_dir}/channelwatch-update-${TAG}.json" \
+            --bundle "${approved_dir}/channelwatch-app-${TAG}.zip" \
+            --version "${VERSION}" \
+            --recovery-image "${DOCKERHUB_IMAGE}@${APPROVED_IMAGE_INDEX_DIGEST}" \
+            --evidence-json "${RUNNER_TEMP}/tag-historical-image-canaries.json"
+          python - "${approved_dir}/channelwatch-historical-image-canaries-${TAG}.json" "${RUNNER_TEMP}/tag-historical-image-canaries.json" "${VERSION}" <<'PY'
+          import json
+          import re
+          import sys
+
+          approved_path, repeated_path, expected_version = sys.argv[1:]
+          with open(approved_path, encoding="utf-8") as handle:
+              approved = json.load(handle)
+          with open(repeated_path, encoding="utf-8") as handle:
+              repeated = json.load(handle)
+
+          expected_keys = {
+              *(f'activation_success:0.9.{patch}' for patch in range(11, 18)),
+              'activation_failure:0.9.15:ui',
+              'activation_failure:0.9.17:core',
+              'tamper_rejection:0.9.15:manifest',
+              'tamper_rejection:0.9.15:bundle',
+              'tamper_rejection:0.9.17:manifest',
+              'tamper_rejection:0.9.17:bundle',
+              'image_refresh_recovery:0.9.9',
+              'image_refresh_recovery:0.9.10',
+          }
+
+          def fail(label, message):
+              raise SystemExit(f"{label} historical canary evidence is invalid: {message}")
+
+          def row_key(row, label):
+              scenario = row.get("scenario")
+              source_version = row.get("source_version")
+              scenario_id = row.get("scenario_key")
+              if not all(isinstance(value, str) and value for value in (
+                  scenario, source_version, scenario_id
+              )):
+                  fail(label, "every result row must have scenario, scenario_key, and source_version")
+              variant = (
+                  row.get("failed_component") if scenario == "activation_failure"
+                  else row.get("tamper_case") if scenario == "tamper_rejection"
+                  else None
+              )
+              expected_id = ":".join(
+                  str(value) for value in (scenario, source_version, variant) if value
+              )
+              if scenario_id != expected_id:
+                  fail(label, f"scenario key {scenario_id!r} does not match {expected_id!r}")
+              return scenario_id
+
+          def require_fields(row, fields, key, label):
+              missing = sorted(fields - row.keys())
+              if missing:
+                  fail(label, f"{key} is missing fields: {missing}")
+
+          def require_exact(row, expected, key, label):
+              for field, value in expected.items():
+                  if row.get(field) != value:
+                      fail(label, f"{key} has {field}={row.get(field)!r}, expected {value!r}")
+
+          def normalized(document, label):
+              if document.get("schema") != 2:
+                  fail(label, "schema must be exactly 2")
+              if document.get("target_version") != expected_version:
+                  fail(label, "target_version does not match the tag")
+              if document.get("platform") != "linux/amd64":
+                  fail(label, "platform must be linux/amd64")
+              if document.get("passed") is not True:
+                  fail(label, "top-level passed must be true")
+              results = document.get("results")
+              if not isinstance(results, list):
+                  fail(label, "results must be a list")
+
+              keyed = {}
+              for raw_row in results:
+                  if not isinstance(raw_row, dict):
+                      fail(label, "every result must be an object")
+                  row = dict(raw_row)
+                  key = row_key(row, label)
+                  if key in keyed:
+                      fail(label, f"duplicate scenario row {key}")
+                  keyed[key] = row
+
+              actual_keys = set(keyed)
+              if actual_keys != expected_keys:
+                  fail(
+                      label,
+                      f"scenario rows differ; missing={sorted(expected_keys - actual_keys)}, "
+                      f"unexpected={sorted(actual_keys - expected_keys)}",
+                  )
+
+              sha40 = re.compile(r"[0-9a-f]{40}\Z")
+              sha64 = re.compile(r"[0-9a-f]{64}\Z")
+              digest64 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+              bundle_digests = set()
+              for key, row in keyed.items():
+                  scenario = row["scenario"]
+                  source_version = row["source_version"]
+                  failed_component = row.get("failed_component")
+                  tamper_case = row.get("tamper_case")
+                  expected_protocol = 0 if source_version == "0.9.9" else 1 if source_version <= "0.9.15" else 2
+                  if row.get("launcher_protocol") != expected_protocol:
+                      fail(label, f"{key} has an incorrect launcher protocol")
+
+                  if scenario == "activation_success":
+                      require_fields(row, {
+                          "source_sha", "image_index_digest", "amd64_digest", "bundle_sha256",
+                          "check_status", "apply_status", "final_job_status", "core_bundle",
+                          "ui_bundle", "portal_api_verified", "restart_count_delta",
+                          "supervisor_stable", "rollback_target_verified",
+                          "active_identity_verified", "managed_key_verified",
+                          "stale_control_file_count", "result",
+                      }, key, label)
+                      require_exact(row, {
+                          "check_status": "available", "final_job_status": "success",
+                          "core_bundle": True, "ui_bundle": True, "portal_api_verified": True,
+                          "supervisor_stable": True, "rollback_target_verified": True,
+                          "active_identity_verified": True, "managed_key_verified": True,
+                          "stale_control_file_count": 0, "result": "passed",
+                      }, key, label)
+                      if not isinstance(row.get("apply_status"), str) or not row["apply_status"]:
+                          fail(label, f"{key} has no apply status")
+                      if type(row.get("restart_count_delta")) is not int or row["restart_count_delta"] < 1:
+                          fail(label, f"{key} has an invalid restart delta")
+                  elif scenario == "activation_failure":
+                      require_fields(row, {
+                          "failed_component", "bundle_sha256", "portal_api_verified",
+                          "restart_count_delta", "final_job_status", "rollback_applied",
+                          "failed_identity_quarantined", "image_runtime_restored",
+                          "supervisor_stable", "stale_control_file_count", "result",
+                      }, key, label)
+                      require_exact(row, {
+                          "failed_component": failed_component, "portal_api_verified": True,
+                          "final_job_status": "failed", "rollback_applied": True,
+                          "failed_identity_quarantined": True, "image_runtime_restored": True,
+                          "supervisor_stable": True, "stale_control_file_count": 0,
+                          "result": "passed",
+                      }, key, label)
+                      if type(row.get("restart_count_delta")) is not int or row["restart_count_delta"] < 1:
+                          fail(label, f"{key} has an invalid restart delta")
+                  elif scenario == "tamper_rejection":
+                      require_fields(row, {
+                          "tamper_case", "rejected_before_selection", "active_unchanged",
+                          "restart_count_delta", "result",
+                      }, key, label)
+                      require_exact(row, {
+                          "tamper_case": tamper_case, "rejected_before_selection": True,
+                          "active_unchanged": True, "restart_count_delta": 0,
+                          "result": "passed",
+                      }, key, label)
+                  elif scenario == "image_refresh_recovery":
+                      require_fields(row, {
+                          "source_sha", "image_index_digest", "amd64_digest", "bundle_sha256",
+                          "check_status", "apply_status", "image_refresh_required",
+                          "recovery_job_status", "recovery_quorum_verified",
+                          "recovery_image_runtime_verified", "managed_key_verified",
+                          "supervisor_stable", "stale_control_file_count", "result",
+                      }, key, label)
+                      require_exact(row, {
+                          "check_status": "available",
+                          "image_refresh_required": True,
+                          "recovery_job_status": "success", "recovery_quorum_verified": True,
+                          "recovery_image_runtime_verified": True, "managed_key_verified": True,
+                          "supervisor_stable": True, "stale_control_file_count": 0,
+                          "result": "passed_with_documented_image_only_limitation",
+                      }, key, label)
+                      if not isinstance(row.get("apply_status"), str) or not row["apply_status"]:
+                          fail(label, f"{key} has no apply status")
+                      if source_version == "0.9.9":
+                          require_exact(row, {
+                              "immutable_false_success_observed": True,
+                              "legacy_core_launcher_failure_observed": True,
+                              "legacy_ui_image_runtime_verified": True,
+                              "recovery_image_cleared_false_success": True,
+                          }, key, label)
+                      else:
+                          require_exact(row, {
+                              "portal_api_verified": True,
+                              "immutable_entrypoint_failure_observed": True,
+                              "legacy_restart_loop_observed": True,
+                              "legacy_restart_count_at_least": 2,
+                              "legacy_staged_identity_preserved": True,
+                              "recovery_image_cleared_failed_activation": True,
+                          }, key, label)
+                  else:
+                      fail(label, f"{key} has an unsupported scenario {scenario!r}")
+
+                  if scenario in {"activation_success", "image_refresh_recovery"}:
+                      if not sha40.fullmatch(str(row.get("source_sha", ""))):
+                          fail(label, f"{key} has an invalid source SHA")
+                      if not digest64.fullmatch(str(row.get("image_index_digest", ""))):
+                          fail(label, f"{key} has an invalid image index digest")
+                      if not digest64.fullmatch(str(row.get("amd64_digest", ""))):
+                          fail(label, f"{key} has an invalid amd64 digest")
+                  if "bundle_sha256" in row:
+                      if not sha64.fullmatch(str(row["bundle_sha256"])):
+                          fail(label, f"{key} has an invalid bundle digest")
+                      bundle_digests.add(row["bundle_sha256"])
+
+              if len(bundle_digests) != 1:
+                  fail(label, "all applicable rows must attest the same bundle digest")
+
+              normalized_rows = []
+              for key in sorted(keyed):
+                  # Docker's absolute RestartCount depends on the runner. The
+                  # per-scenario restart_count_delta remains release evidence.
+                  normalized_rows.append({
+                      field: value
+                      for field, value in sorted(keyed[key].items())
+                      if field != "restart_count"
+                  })
+              normalized_document = {
+                  field: value
+                  for field, value in sorted(document.items())
+                  if field != "results"
+              }
+              normalized_document["results"] = normalized_rows
+              return normalized_document
+
+          approved_normalized = normalized(approved, "approved candidate")
+          repeated_normalized = normalized(repeated, "tag rerun")
+          if approved_normalized != repeated_normalized:
+              raise SystemExit(
+                  "tag historical canary does not semantically reproduce approved evidence"
+              )
+          PY
+
+      - name: Publish release after image verification gates
+        env:
+          EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
           releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
           release_json="$(jq -c --arg tag "${TAG}" \
             '[.[] | select(.draft == true and .tag_name == $tag)]' \
@@ -737,8 +2048,8 @@ jobs:
             exit 1
           fi
           release_json="$(jq -c '.[0]' <<<"${release_json}")"
-          if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
-            echo "::error::Draft release identity does not match ${TAG} at ${GITHUB_SHA}."
+          if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ]; then
+            echo "::error::Draft release identity does not match ${TAG} at ${RELEASE_SHA}."
             exit 1
           fi
           release_id="$(jq -r '.id // empty' <<<"${release_json}")"
@@ -746,6 +2057,25 @@ jobs:
             echo "::error::Draft release for ${TAG} was not found."
             exit 1
           fi
+          catalog_name="channelwatch-catalog-${TAG}.json"
+          catalog_asset_ids="$(jq -r --arg name "${catalog_name}" \
+            '.assets[] | select(.name == $name) | .id' <<<"${release_json}")"
+          if [ "$(wc -w <<<"${catalog_asset_ids}" | tr -d ' ')" != "1" ]; then
+            echo "::error::Draft release must contain exactly one approved update catalog."
+            exit 1
+          fi
+          catalog_path="${RUNNER_TEMP}/${catalog_name}"
+          gh api \
+            -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${catalog_asset_ids}" \
+            > "${catalog_path}"
+          if [ "$(sha256sum "${catalog_path}" | awk '{print $1}')" != "${EXPECTED_CATALOG_SHA256}" ]; then
+            echo "::error::Draft catalog does not match the exact approved candidate."
+            exit 1
+          fi
+          python scripts/release/verify-publication-window.py \
+            --catalog "${catalog_path}" \
+            --version "${VERSION}"
           jq -n \
             --arg name "${TAG}" \
             --rawfile body release-body.md \
@@ -755,42 +2085,262 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             --input publish-release.json
 
-  sync-site:
-    name: Sync website release metadata
+  verify-public-release-assets:
+    name: Verify public release assets before stable feeds
     runs-on: ubuntu-latest
     needs:
       - build-update-bundle-and-release
       - build-and-push
-      - update-dockerhub-description
       - publish-github-release
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 
     steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install update verifier dependencies
+        run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/runtime.constraints.txt \
+            -r deploy/requirements/runtime.txt
+
+      - name: Verify public release identity and asset inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || \
+             [ "$(jq -r '.name' <<<"${release_json}")" != "${TAG}" ] || \
+             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ] || \
+             [ "$(jq -r '.draft' <<<"${release_json}")" != "false" ] || \
+             [ "$(jq -r '.prerelease' <<<"${release_json}")" != "false" ]; then
+            echo "::error::Public GitHub release identity does not match the exact reviewed tag and SHA."
+            exit 1
+          fi
+          expected_heading="$(jq -r '.release_heading' scripts/release/release-config.json)"
+          actual_heading="$(jq -r '.body' <<<"${release_json}" | sed -n '1p')"
+          if [ "${actual_heading}" != "${expected_heading}" ]; then
+            echo "::error::Public release body heading does not match release configuration."
+            exit 1
+          fi
+
+          tag="${TAG}"
+          expected_assets="${RUNNER_TEMP}/expected-public-assets.txt"
+          actual_assets="${RUNNER_TEMP}/actual-public-assets.txt"
+          printf '%s\n' \
+            "channelwatch-app-${tag}.zip" \
+            "channelwatch-catalog-${tag}.json" \
+            "channelwatch-update-${tag}.json" \
+            "channelwatch-${tag}.openvex.json" \
+            "channelwatch-${tag}-amd64.spdx.json" \
+            "channelwatch-${tag}-amd64.cyclonedx.json" \
+            "channelwatch-${tag}-arm64.spdx.json" \
+            "channelwatch-${tag}-arm64.cyclonedx.json" \
+            "channelwatch-${tag}-LICENSE.txt" \
+            "channelwatch-${tag}-NOTICE.txt" \
+            "channelwatch-${tag}-THIRD-PARTY-LICENSES.md" \
+            "channelwatch-${tag}-CORRESPONDING-SOURCE.md" \
+            "channelwatch-${tag}-COPYLEFT-LICENSES.zip" \
+            "channelwatch-${tag}-SHA256SUMS.txt" \
+            | sort > "${expected_assets}"
+          jq -r '.assets[].name' <<<"${release_json}" | sort > "${actual_assets}"
+          if ! diff -u "${expected_assets}" "${actual_assets}"; then
+            echo "::error::Public release has an unexpected or missing asset."
+            exit 1
+          fi
+
+      - name: Download and verify public release assets
+        env:
+          DOCKERHUB_DIGEST: ${{ needs.build-and-push.outputs.dockerhub_digest }}
+          EXPECTED_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
+          EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          public_dir="dist/public-release"
+          mkdir -p "${public_dir}"
+
+          download_public_asset() {
+            asset="$1"
+            curl --fail --silent --show-error --location \
+              --proto '=https' --tlsv1.2 \
+              --connect-timeout 20 --max-time 180 \
+              --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 360 \
+              --output "${public_dir}/${asset}" \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${asset}"
+            test -s "${public_dir}/${asset}"
+          }
+
+          while IFS= read -r asset; do
+            download_public_asset "${asset}"
+          done < "${RUNNER_TEMP}/expected-public-assets.txt"
+
+          checksum_file="channelwatch-${TAG}-SHA256SUMS.txt"
+          if [ "$(wc -l < "${public_dir}/${checksum_file}" | tr -d ' ')" != "13" ]; then
+            echo "::error::Public checksum manifest must cover all 13 non-checksum assets."
+            exit 1
+          fi
+          (
+            cd "${public_dir}"
+            sha256sum --check "${checksum_file}"
+          )
+
+          bundle="${public_dir}/channelwatch-app-${TAG}.zip"
+          manifest="${public_dir}/channelwatch-update-${TAG}.json"
+          catalog="${public_dir}/channelwatch-catalog-${TAG}.json"
+          if [ "$(sha256sum "${bundle}" | awk '{print $1}')" != "${EXPECTED_BUNDLE_SHA256}" ] || \
+             [ "$(sha256sum "${catalog}" | awk '{print $1}')" != "${EXPECTED_CATALOG_SHA256}" ]; then
+            echo "::error::Public update assets do not match the approved exact-SHA build outputs."
+            exit 1
+          fi
+
+          image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          recommended_image="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          python scripts/release/verify-update-assets.py \
+            --manifest "${manifest}" \
+            --catalog "${catalog}" \
+            --bundle "${bundle}" \
+            --expected-version "${version}" \
+            --expected-channel stable \
+            --expected-runtime-abi channelwatch-runtime-v1 \
+            --expected-settings-schema-version 7 \
+            --expected-image-required "${image_required}" \
+            --expected-delivery-mode "${delivery_mode}" \
+            --expected-recommended-image-version "${recommended_image}" \
+            --expected-git-sha "${RELEASE_SHA}" \
+            --expected-release-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            --expected-bundle-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
+            --source-root "${GITHUB_WORKSPACE}"
+          if [ "${version}" = "0.9.18" ]; then
+            python scripts/release/verify-legacy-update-bridge.py \
+              --manifest "${manifest}" \
+              --bundle "${bundle}" \
+              --version "${version}"
+            python scripts/release/verify-historical-image-canaries.py \
+              --manifest "${manifest}" \
+              --bundle "${bundle}" \
+              --version "${version}" \
+              --version-source 0.9.10 \
+              --version-source 0.9.15 \
+              --version-source 0.9.16 \
+              --version-source 0.9.17 \
+              --recovery-image "${DOCKERHUB_IMAGE}@${DOCKERHUB_DIGEST}" \
+              --evidence-json "${RUNNER_TEMP}/public-historical-image-canaries.json"
+          else
+            python scripts/release/verify-pinned-v1-bridge.py
+          fi
+          python scripts/release/verify-publication-window.py \
+            --catalog "${catalog}" \
+            --version "${version}"
+          python scripts/release/verify-vex.py \
+            --document "${public_dir}/channelwatch-${TAG}.openvex.json" \
+            --expected-version "${version}"
+
+          for arch in amd64 arm64; do
+            jq -e '.spdxVersion == "SPDX-2.3" and (.packages | length > 0)' \
+              "${public_dir}/channelwatch-${TAG}-${arch}.spdx.json" >/dev/null
+            jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' \
+              "${public_dir}/channelwatch-${TAG}-${arch}.cyclonedx.json" >/dev/null
+          done
+          unzip -t "${public_dir}/channelwatch-${TAG}-COPYLEFT-LICENSES.zip" >/dev/null
+          for asset in \
+            "channelwatch-${TAG}-LICENSE.txt" \
+            "channelwatch-${TAG}-NOTICE.txt" \
+            "channelwatch-${TAG}-THIRD-PARTY-LICENSES.md" \
+            "channelwatch-${TAG}-CORRESPONDING-SOURCE.md"; do
+            test -s "${public_dir}/${asset}"
+          done
+
+  sync-site:
+    name: Sync website release metadata
+    runs-on: ubuntu-latest
+    needs:
+      - build-update-bundle-and-release
+      - build-and-push
+      - publish-github-release
+      - verify-public-release-assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+
       - name: Parse version
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify publication window before stable-feed dispatch
+        env:
+          EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
+          UPDATE_CATALOG_URL: ${{ needs.build-update-bundle-and-release.outputs.catalog_url }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          catalog_path="${RUNNER_TEMP}/channelwatch-publication-catalog.json"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            --max-time 120 \
+            --output "${catalog_path}" \
+            "${UPDATE_CATALOG_URL}"
+          if [ "$(sha256sum "${catalog_path}" | awk '{print $1}')" != "${EXPECTED_CATALOG_SHA256}" ]; then
+            echo "::error::Public release catalog does not match the exact approved candidate."
+            exit 1
+          fi
+          python scripts/release/verify-publication-window.py \
+            --catalog "${catalog_path}" \
+            --version "${VERSION}"
 
       - name: Dispatch website sync
         env:
           GH_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
-          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ env.RELEASE_TAG }}
+          SOURCE_SHA: ${{ env.RELEASE_SHA }}
           SOURCE_REPO: ${{ github.repository }}
           UPDATE_BUNDLE_URL: ${{ needs.build-update-bundle-and-release.outputs.bundle_url }}
           UPDATE_MANIFEST_URL: ${{ needs.build-update-bundle-and-release.outputs.manifest_url }}
+          UPDATE_CATALOG_URL: ${{ needs.build-update-bundle-and-release.outputs.catalog_url }}
           UPDATE_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
         shell: bash
         run: |
           if [ -z "${GH_TOKEN}" ]; then
             echo "::error::SITE_SYNC_TOKEN is required to dispatch the website sync workflow."
             exit 1
+          fi
+
+          # The schema-1 stable feed is a permanent v0.9.18 bridge. Future
+          # releases advance only the schema-2 catalog and must not offer a new
+          # manifest for the site to copy over the bridge.
+          stable_manifest_url=""
+          if [ "${VERSION}" = "0.9.18" ]; then
+            stable_manifest_url="${UPDATE_MANIFEST_URL}"
           fi
 
           jq -n \
@@ -800,7 +2350,8 @@ jobs:
             --arg release_url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --arg source_repo "${SOURCE_REPO}" \
             --arg update_bundle_url "${UPDATE_BUNDLE_URL}" \
-            --arg update_manifest_url "${UPDATE_MANIFEST_URL}" \
+            --arg update_manifest_url "${stable_manifest_url}" \
+            --arg update_catalog_url "${UPDATE_CATALOG_URL}" \
             --arg update_bundle_sha256 "${UPDATE_BUNDLE_SHA256}" \
             '{
               event_type: "channelwatch-release",
@@ -812,6 +2363,7 @@ jobs:
                 source_repo: $source_repo,
                 update_bundle_url: $update_bundle_url,
                 update_manifest_url: $update_manifest_url,
+                update_catalog_url: $update_catalog_url,
                 update_bundle_sha256: $update_bundle_sha256
               }
             }' > site-sync-dispatch.json
@@ -833,14 +2385,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       - name: Parse release configuration
         id: release
         shell: bash
         run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "${GITHUB_OUTPUT}"
-          echo "image_required=$(jq -r '.image_required' scripts/release/release-config.json)" >> "${GITHUB_OUTPUT}"
+          {
+            echo "version=${RELEASE_TAG#v}"
+            echo "image_required=$(jq -r '.image_required' scripts/release/release-config.json)"
+            echo "delivery_mode=$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+            echo "recommended_image_version=$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Install update verifier dependencies
         run: |
@@ -853,11 +2410,86 @@ jobs:
           RAW_RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RAW_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
           RAW_IMAGE_REQUIRED: ${{ steps.release.outputs.image_required }}
+          RAW_DELIVERY_MODE: ${{ steps.release.outputs.delivery_mode }}
+          RAW_RECOMMENDED_IMAGE_VERSION: ${{ steps.release.outputs.recommended_image_version }}
         run: |
           python scripts/release/verify-live-update-manifest.py \
             --version "${RAW_RELEASE_VERSION}" \
-            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${GITHUB_REF_NAME}" \
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${RELEASE_TAG}" \
             --bundle-sha256 "${RAW_BUNDLE_SHA256}" \
             --image-required "${RAW_IMAGE_REQUIRED}" \
+            --delivery-mode "${RAW_DELIVERY_MODE}" \
+            --recommended-image-version "${RAW_RECOMMENDED_IMAGE_VERSION}" \
+            --catalog-url "https://channelwatch.coderluii.dev/updates/v2/stable.json" \
             --attempts "90" \
             --interval "10"
+
+      - name: Verify pinned public v1 bridge
+        run: |
+          python scripts/release/verify-pinned-v1-bridge.py
+
+  advance-compatible-aliases:
+    name: Advance verified compatible image aliases
+    runs-on: ubuntu-latest
+    needs:
+      - build-and-push
+      - verify-live-update-manifest
+    permissions:
+      contents: read
+      packages: write # Advance the verified GHCR 0.9 and latest aliases.
+
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Advance aliases only after public update canaries
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          skopeo_cmd() {
+            docker run --rm \
+              --volume "${DOCKER_CONFIG}:/auth:ro" \
+              "${SKOPEO_IMAGE}" "$@"
+          }
+
+          version="${RELEASE_TAG#v}"
+          compatible_tag="${version%.*}"
+          for repository in "${DOCKERHUB_IMAGE}" "${GHCR_IMAGE}"; do
+            version_digest="$(skopeo_cmd inspect \
+              --authfile /auth/config.json \
+              --format '{{.Digest}}' \
+              "docker://${repository}:${version}")"
+            for alias_tag in "${compatible_tag}" latest; do
+              skopeo_cmd copy \
+                --all \
+                --preserve-digests \
+                --authfile /auth/config.json \
+                "docker://${repository}@${version_digest}" \
+                "docker://${repository}:${alias_tag}"
+              alias_digest="$(skopeo_cmd inspect \
+                --authfile /auth/config.json \
+                --format '{{.Digest}}' \
+                "docker://${repository}:${alias_tag}")"
+              if [ "${alias_digest}" != "${version_digest}" ]; then
+                echo "::error::${repository}:${alias_tag} does not reference the verified version manifest."
+                exit 1
+              fi
+            done
+          done

@@ -1,0 +1,17 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deterministic placeholder API keys used only by authentication tests"
+paths = [
+  '''^app/core/tests/test_api_auth\.py$''',
+  '''^app/core/tests/test_bootstrap_settings\.py$''',
+  '''^app/core/tests/test_hot_reload\.py$''',
+  '''^app/core/tests/test_v0916_deployment_contracts\.py$''',
+]
+
+[[allowlists]]
+description = "Ignored Next.js build output scanned only by an unfiltered local tree scan"
+paths = [
+  '''^app/ui/\.next/''',
+]

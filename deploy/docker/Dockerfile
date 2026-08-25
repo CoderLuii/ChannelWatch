@@ -3,6 +3,9 @@
 #-----------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS ui-builder
 
+ARG GIT_SHA=unknown
+ENV CHANNELWATCH_BUILD_ID="${GIT_SHA}"
+
 WORKDIR /src
 
 COPY app/ui/package.json app/ui/pnpm-lock.yaml* app/ui/pnpm-workspace.yaml* ./
@@ -18,9 +21,11 @@ RUN pnpm build
 FROM cgr.dev/chainguard/python:latest-dev@sha256:4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef AS python-deps
 
 # This build-only stage installs dependencies and is not the shipped runtime.
-# nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 # hadolint ignore=DL3002,DL3066
+# nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"
 WORKDIR /deps
 
 COPY deploy/requirements/runtime.txt ./requirements.txt
@@ -41,12 +46,12 @@ FROM cgr.dev/chainguard/python:latest@sha256:1f6779775c9f466890da563e411cb677045
 
 # The entrypoint needs root only to repair /config ownership for configurable
 # PUID/PGID, then verifies a fail-closed UID/GID and group drop before exec.
-# nosemgrep
 # trivy:ignore:DS-0002
 # hadolint ignore=DL3002,DL3066
+# nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=0.9.17
+ARG VERSION=0.9.18
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1
@@ -67,6 +72,7 @@ ENV CONFIG_PATH="/config"
 ENV CHANNELWATCH_IMAGE_APP_DIR="/app"
 ENV CHANNELWATCH_RUNTIME_ABI="${RUNTIME_ABI}"
 ENV CHANNELWATCH_IMAGE_VERSION="${VERSION}"
+ENV CHANNELWATCH_LAUNCHER_PROTOCOL="3"
 ENV CHANNELWATCH_REPORT_MODE="live"
 ENV CHANNELWATCH_REPORT_ENDPOINT="https://channelwatch.coderluii.dev/api/reports"
 ENV CHANNELWATCH_REPORT_PORTAL_URL="https://channelwatch.coderluii.dev/report"

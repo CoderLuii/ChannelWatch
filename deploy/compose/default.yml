@@ -20,7 +20,10 @@ services:
 
       # ── Timezone ─────────────────────────────────────────────────
       TZ: "America/New_York"
-      CHANNELWATCH_SECRET_STORAGE_KEY: "${CHANNELWATCH_SECRET_STORAGE_KEY:?set a unique value of at least 32 characters}"
+
+      # ChannelWatch creates and protects its own encryption key in /config.
+      # Existing v0.9.5-v0.9.17 legacy-envelope installs may keep their old
+      # CHANNELWATCH_SECRET_STORAGE_KEY for one migration restart, then remove it.
 
       # ── User/Group IDs (match your host user) ───────────────────
       # PUID: "1000"

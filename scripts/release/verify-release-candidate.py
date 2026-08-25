@@ -47,6 +47,31 @@ def validate_candidate(
     return latest
 
 
+def validate_single_commit_release(
+    candidate_tag: str,
+    previous_tag: str,
+    *,
+    commit_count: int,
+    commit_message: str,
+    tag_object_type: str,
+) -> None:
+    """Enforce the repository's one-commit, lightweight release contract."""
+
+    _version(candidate_tag)
+    _version(previous_tag)
+    if commit_count != 1:
+        raise ValueError(
+            f"Release {candidate_tag} must contain exactly one commit after "
+            f"{previous_tag}; found {commit_count}."
+        )
+    if commit_message.strip() != candidate_tag or "\n" in commit_message.strip():
+        raise ValueError(
+            f"Release commit message must be exactly {candidate_tag} with no body."
+        )
+    if tag_object_type.strip() != "commit":
+        raise ValueError(f"Release tag {candidate_tag} must be lightweight.")
+
+
 def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args],
@@ -82,6 +107,25 @@ def main() -> int:
             tags,
             candidate_sha=candidate_commit,
             main_sha=main_commit,
+        )
+        previous_tags = [
+            tag
+            for tag in tags
+            if SEMVER_TAG.fullmatch(tag.strip()) and _version(tag) < _version(args.tag)
+        ]
+        if not previous_tags:
+            raise ValueError(
+                f"Release {args.tag} requires a previous semantic-version tag."
+            )
+        previous_tag = max(previous_tags, key=_version)
+        validate_single_commit_release(
+            args.tag,
+            previous_tag,
+            commit_count=int(
+                _git("rev-list", "--count", f"{previous_tag}..{candidate_commit}")
+            ),
+            commit_message=_git("log", "-1", "--format=%B", candidate_commit),
+            tag_object_type=_git("cat-file", "-t", args.tag),
         )
     except (ValueError, subprocess.CalledProcessError, OSError) as exc:
         print(f"release candidate verification failed: {exc}", file=sys.stderr)

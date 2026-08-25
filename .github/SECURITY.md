@@ -198,7 +198,7 @@ The preferred recovery path is the doctor CLI, not manual inspection of files in
 
 Current recovery command:
 
-```bash
+```sh
 docker exec -it channelwatch channelwatch doctor reset-admin-password --username <admin>
 ```
 

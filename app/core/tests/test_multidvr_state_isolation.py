@@ -20,6 +20,7 @@ These tests block and confidence checks as described in the plan.
 """
 
 import json
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,6 +119,16 @@ def _run_disk_check(
 
 
 class TestSessionStateFilesPerDvr:
+    def test_read_only_config_keeps_session_state_in_memory(self, tmp_path):
+        dvr = _make_dvr("dvr_read_only")
+        manager = _make_alert_manager(dvr, tmp_path)
+        _inject_session_state(manager, "session", channel="5")
+
+        with patch.dict(os.environ, {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}):
+            asyncio.run(manager.save_all_state())
+
+        assert not (tmp_path / "session_state_dvr_read_only.json").exists()
+
     def test_session_state_files_per_dvr(self, mock_dvr_cluster, tmp_path):
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -157,6 +168,18 @@ class TestSessionStateFilesPerDvr:
 
 
 class TestStreamCountFilesPerDvr:
+    def test_read_only_config_keeps_stream_count_in_memory(self, tmp_path):
+        dvr = _make_dvr("dvr_read_only")
+        with (
+            patch("core.alerts.common.stream_tracker.CONFIG_PATH", str(tmp_path)),
+            patch.dict(os.environ, {"CHANNELWATCH_CONFIG_READ_ONLY": "1"}),
+        ):
+            tracker = StreamTracker(dvr=dvr)
+            tracker._write_stream_count(7)
+
+        assert tracker.last_count == 0
+        assert not (tmp_path / "stream_count_dvr_read_only.txt").exists()
+
     def test_stream_count_files_per_dvr(self, mock_dvr_cluster, tmp_path):
         config_dir = tmp_path / "config"
         config_dir.mkdir()

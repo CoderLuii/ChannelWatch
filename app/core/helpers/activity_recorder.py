@@ -67,6 +67,8 @@ def load_history():
 
 def save_history(history):
     """Save the activity history to file."""
+    if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        return False
     try:
         atomic_write_json(Path(_history_file_path()), history, indent=2)
         return True
@@ -77,6 +79,8 @@ def save_history(history):
 
 def quarantine_malformed_history_file() -> Optional[str]:
     """Move a malformed legacy activity history file aside without deleting it."""
+    if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        return None
     try:
         path = Path(_history_file_path())
         if not path.exists():

@@ -3,13 +3,14 @@ import http.client
 import inspect
 import os
 import signal
+import stat
 import ipaddress
 import socket
 from collections import deque
 from contextlib import asynccontextmanager
 from email.utils import format_datetime
 from fastapi import APIRouter as _APIRouter
-from fastapi import FastAPI, HTTPException, Response, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, Response, Request, Depends, Query, Form
 from fastapi import UploadFile, File as FastAPIFile
 from .error_catalog import ErrorCode, catalog_entry, structured_error
 from fastapi.staticfiles import StaticFiles
@@ -84,6 +85,7 @@ import secrets
 import uuid
 import json
 from datetime import datetime, timedelta, timezone as _tz
+
 # Supervisor XML-RPC is available only through a mode-0600 local Unix socket;
 # no untrusted network XML reaches this parser.
 import xmlrpc.client  # nosec B411
@@ -98,6 +100,9 @@ from xml.sax.saxutils import escape as xml_escape
 
 # LOGGING SETUP
 log = logging.getLogger(__name__)
+
+_UPDATE_AUTOMATION_SERVICE: Any = None
+_UPDATE_AUTOMATION_SERVICE_LOCK = threading.Lock()
 
 
 def _sqlite_url_for_path(path: Path) -> str:
@@ -148,7 +153,11 @@ except ImportError:
 try:
     log.debug("Attempting imports from webui/main.py (PYTHONPATH=/app)")
     from core import __version__, __app_name__
-    from core.helpers.config import get_settings as _get_core_settings_sync
+    from core.helpers.config import get_settings as _get_core_settings_for_config
+
+    def _get_core_settings_sync():
+        return _get_core_settings_for_config(config_dir=backend_config.CONFIG_DIR)
+
     from core.update_center import UpdateRestartError as _UpdateRestartError
 
     async def get_core_settings() -> Optional[Any]:
@@ -290,7 +299,12 @@ _dvr_http_client = httpx.AsyncClient(timeout=30.0, trust_env=False)
 async def _safe_dvr_get_url(url: str, *, timeout: float) -> httpx.Response:
     """Resolve, validate, and pin a configured DVR URL for one GET request."""
     parsed = urlsplit(url)
-    if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise httpx.ConnectError("DVR target did not pass safety validation")
     try:
         port = parsed.port or 8089
@@ -318,8 +332,31 @@ async def _safe_dvr_get_url(url: str, *, timeout: float) -> httpx.Response:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     run_startup_initialization()
-    yield
-    await _dvr_http_client.aclose()
+    automation = None
+    try:
+        if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+            log.warning(
+                "Automatic Update Center scheduler is paused while /config is "
+                "read-only. Repair persistent storage before applying updates."
+            )
+        else:
+            try:
+                automation = await asyncio.to_thread(_get_update_automation_service)
+                await asyncio.to_thread(automation.start)
+            except Exception as exc:
+                # Update policy/storage failures must remain visible but must not
+                # take down the monitoring UI or weaken the current runtime.
+                log.warning("Automatic Update Center scheduler did not start: %s", exc)
+        yield
+    finally:
+        if automation is not None:
+            try:
+                await asyncio.to_thread(automation.stop, 5.0)
+            except Exception as exc:
+                log.warning(
+                    "Automatic Update Center scheduler did not stop cleanly: %s", exc
+                )
+        await _dvr_http_client.aclose()
 
 
 app = FastAPI(title="ChannelWatch UI Backend", lifespan=lifespan)
@@ -398,7 +435,9 @@ def _direct_peer_address(
 
 def _request_uses_trusted_proxy(request: Request) -> bool:
     peer = _direct_peer_address(request)
-    return peer is not None and any(peer in network for network in _TRUSTED_PROXY_NETWORKS)
+    return peer is not None and any(
+        peer in network for network in _TRUSTED_PROXY_NETWORKS
+    )
 
 
 def _forwarded_parameters(request: Request) -> dict[str, str]:
@@ -641,6 +680,9 @@ AUTH_EXEMPT_PATHS = {
 }
 AUTH_EXEMPT_ROUTES = {
     ("GET", "/api/v1/runtime/preflight"),
+    ("GET", "/api/v1/update/recovery/status"),
+    ("POST", "/api/v1/update/recovery/check"),
+    ("POST", "/api/v1/update/recovery/apply"),
     ("GET", "/api/v1/security/status"),
     ("GET", "/api/v1/feeds/calendar.ics"),
     ("GET", "/api/v1/calendar.ics"),
@@ -672,6 +714,7 @@ def _middleware_auth_exempt(method: str, path: str) -> bool:
         or any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES)
         or (method.upper(), path) in AUTH_EXEMPT_ROUTES
     )
+
 
 # CSP: API routes stay strict because inline scripts are irrelevant there. The
 # packaged static Next.js UI needs inline script bootstrap chunks emitted by
@@ -734,6 +777,7 @@ def _ui_csp_policy() -> str:
         ]
     )
 
+
 # CSRF: X-API-Key custom header is the primary CSRF defence for authenticated routes
 # (OWASP "Custom Request Headers" pattern: browsers cannot add custom headers to
 # cross-origin fetch without CORS preflight; allow_origins=[] rejects all preflights).
@@ -741,6 +785,47 @@ def _ui_csp_policy() -> str:
 # persisted setup/no-auth state, an explicit Origin check is applied to
 # state-changing methods to block naive cross-site form/fetch submissions.
 CSRF_PROTECTED_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+
+# A read-only /config is a supported degraded runtime for mature installs. Keep
+# operational controls that do not persist ChannelWatch state available, but
+# fail closed for every other unsafe API method. This allowlist is intentionally
+# exhaustive: adding a new POST/PUT/PATCH/DELETE route makes the route-contract
+# test fail until its read-only behavior is reviewed explicitly.
+READ_ONLY_SAFE_API_MUTATIONS = frozenset(
+    {
+        "/api/v1/dvrs/test-connection",
+        "/api/v1/notifications/destination-safety/preview",
+        "/api/v1/support/report-dry-run",
+        "/api/v1/support/offline-package",
+        "/api/restart_container",
+        "/api/restart_core",
+        "/api/v1/discovery/scan",
+    }
+)
+READ_ONLY_SAFE_API_MUTATION_PATTERNS = (re.compile(r"^/api/run_test/[^/]+$"),)
+
+
+def _config_is_read_only() -> bool:
+    return os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1"
+
+
+def _read_only_api_mutation_allowed(method: str, path: str) -> bool:
+    if method.upper() not in CSRF_PROTECTED_METHODS:
+        return True
+    return path in READ_ONLY_SAFE_API_MUTATIONS or any(
+        pattern.fullmatch(path) for pattern in READ_ONLY_SAFE_API_MUTATION_PATTERNS
+    )
+
+
+def _require_persistent_config_writable() -> None:
+    if _config_is_read_only():
+        raise structured_error(
+            ErrorCode.RUNTIME_SETUP_REQUIRED,
+            message=(
+                "This change cannot be saved while /config is read-only. "
+                "Monitoring continues where safe; repair persistent storage and retry."
+            ),
+        )
 
 
 class InMemoryRateLimiter:
@@ -1057,12 +1142,25 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         # ``rbac``, so protect the setup entrypoint independently of the mode
         # snapshot instead of treating that recovery request as authenticated.
         unauthenticated_setup = path == "/api/v1/auth/setup"
-        if (authentication_bypassed or unauthenticated_setup) and _is_state_changing_api:
+        if (
+            authentication_bypassed or unauthenticated_setup
+        ) and _is_state_changing_api:
             origin = request.headers.get("Origin", "")
             if origin and not _request_origin_matches(request, origin):
-                return _structured_error_response(
-                    ErrorCode.AUTH_CROSS_SITE_REJECTED
-                )
+                return _structured_error_response(ErrorCode.AUTH_CROSS_SITE_REJECTED)
+
+        if (
+            _config_is_read_only()
+            and _is_state_changing_api
+            and not _read_only_api_mutation_allowed(method, path)
+        ):
+            return _structured_error_response(
+                ErrorCode.RUNTIME_SETUP_REQUIRED,
+                message=(
+                    "This change cannot be saved while /config is read-only. "
+                    "Monitoring continues where safe; repair persistent storage and retry."
+                ),
+            )
 
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -1132,13 +1230,19 @@ async def ping():
 @app.get("/api/health")
 async def health():
     summary = await asyncio.to_thread(_get_monitoring_health_summary)
-    runtime_preflight = await asyncio.to_thread(inspect_runtime_preflight)
+    runtime_preflight = await asyncio.to_thread(
+        inspect_runtime_preflight,
+        CONFIG_DIR / "encryption.key",
+        settings_file=backend_config.CONFIG_FILE,
+    )
+    credential_protection = await asyncio.to_thread(_key_recovery_status_payload)
     settings = await _load_settings_async()
     ready = bool(summary["ready"] and not runtime_preflight.setup_required)
     payload = {
         "status": "ok" if ready else "degraded",
         "ready": ready,
         "runtime": runtime_preflight.public_payload(),
+        "credential_protection": credential_protection,
         "dvrs": [
             {
                 "id": entry["id"],
@@ -1165,7 +1269,11 @@ async def healthz_live():
 
 @app.get("/healthz/ready", include_in_schema=False)
 async def healthz_ready():
-    runtime_preflight = await asyncio.to_thread(inspect_runtime_preflight)
+    runtime_preflight = await asyncio.to_thread(
+        inspect_runtime_preflight,
+        CONFIG_DIR / "encryption.key",
+        settings_file=backend_config.CONFIG_FILE,
+    )
     summary = await asyncio.to_thread(_get_monitoring_health_summary)
     ready = bool(summary["ready"] and not runtime_preflight.setup_required)
     payload = {
@@ -1206,8 +1314,266 @@ class RuntimePreflightResponse(BaseModel):
 async def runtime_preflight():
     """Return the minimal non-sensitive setup state needed by the UI shell."""
 
-    result = await asyncio.to_thread(inspect_runtime_preflight)
+    result = await asyncio.to_thread(
+        inspect_runtime_preflight,
+        CONFIG_DIR / "encryption.key",
+        settings_file=backend_config.CONFIG_FILE,
+    )
     return result.public_payload()
+
+
+_KEY_RECOVERY_ATTEMPT_WINDOW_SECONDS = 5 * 60
+_KEY_RECOVERY_MAX_FAILURES = 5
+_KEY_RECOVERY_ATTEMPTS: dict[str, deque[float]] = {}
+_KEY_RECOVERY_ATTEMPTS_LOCK = threading.Lock()
+_KEY_RESET_CONFIRMATION = "RESET PROTECTED CREDENTIALS"
+
+
+def _key_recovery_client(request: Request) -> str:
+    return _effective_client_host(request) or "unknown"
+
+
+def _key_recovery_is_limited(client: str, *, now: float | None = None) -> bool:
+    current = time.monotonic() if now is None else now
+    cutoff = current - _KEY_RECOVERY_ATTEMPT_WINDOW_SECONDS
+    with _KEY_RECOVERY_ATTEMPTS_LOCK:
+        attempts = _KEY_RECOVERY_ATTEMPTS.setdefault(client, deque())
+        while attempts and attempts[0] < cutoff:
+            attempts.popleft()
+        return len(attempts) >= _KEY_RECOVERY_MAX_FAILURES
+
+
+def _record_key_recovery_failure(client: str) -> None:
+    with _KEY_RECOVERY_ATTEMPTS_LOCK:
+        _KEY_RECOVERY_ATTEMPTS.setdefault(client, deque()).append(time.monotonic())
+
+
+def _clear_key_recovery_failures(client: str) -> None:
+    with _KEY_RECOVERY_ATTEMPTS_LOCK:
+        _KEY_RECOVERY_ATTEMPTS.pop(client, None)
+
+
+def _protected_credential_counts() -> tuple[int, int]:
+    from core.helpers.atomic_io import read_regular_file_bytes
+    from core.helpers.config import MAX_SETTINGS_FILE_BYTES
+    from core.helpers.protected_credentials import iter_protected_values
+
+    try:
+        raw = json.loads(
+            read_regular_file_bytes(
+                backend_config.CONFIG_FILE,
+                max_bytes=MAX_SETTINGS_FILE_BYTES,
+            ).decode("utf-8-sig")
+        )
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+        return 0, 0
+    if not isinstance(raw, dict):
+        return 0, 0
+    dvr_count = 0
+    notification_count = 0
+    for item in iter_protected_values(raw):
+        if item.collection == "dvr_servers":
+            dvr_count += 1
+        elif item.collection == "webhooks":
+            notification_count += 1
+    return dvr_count, notification_count
+
+
+def _key_recovery_status_payload() -> dict[str, object]:
+    from core.helpers.atomic_io import legacy_secret_storage_key_candidates
+    from core.helpers.key_manager import inspect_key_recovery_status
+
+    status = inspect_key_recovery_status(
+        CONFIG_DIR / "encryption.key",
+        settings_file=backend_config.CONFIG_FILE,
+    )
+    dvr_count, notification_count = _protected_credential_counts()
+    state = "managed_local" if status.state == "ready" else status.state
+    recovery_required = state in {
+        "legacy_recovery_required",
+        "protected_credentials_need_attention",
+    }
+    legacy_detected = any(
+        candidate.available for candidate in legacy_secret_storage_key_candidates()
+    )
+    return {
+        "state": state,
+        "recovery_required": recovery_required,
+        "can_migrate": status.key_mode in {"legacy_envelope", "missing"},
+        "can_reset": recovery_required,
+        "blocker_code": status.blocker,
+        "affected_dvr_credentials": dvr_count,
+        "affected_notification_credentials": notification_count,
+        "legacy_input_detected": legacy_detected,
+        "unreadable_fields": list(status.unreadable_credentials),
+        "message": None,
+    }
+
+
+@app.get(
+    "/api/v1/runtime/key-recovery/status",
+    tags=["Runtime"],
+    dependencies=[require_role("admin")],
+)
+async def key_recovery_status():
+    """Return authenticated recovery detail without any key material."""
+
+    return await asyncio.to_thread(_key_recovery_status_payload)
+
+
+async def _read_key_recovery_submission(
+    request: Request,
+) -> tuple[str | None, bytes | None]:
+    """Read one-time recovery material without persisting or logging it."""
+
+    content_type = request.headers.get("Content-Type", "").lower()
+    legacy_value: str | None = None
+    raw_key: bytes | None = None
+    if content_type.startswith("multipart/form-data") or content_type.startswith(
+        "application/x-www-form-urlencoded"
+    ):
+        form = await request.form()
+        submitted = form.get("legacy_storage_key")
+        if isinstance(submitted, str) and submitted:
+            legacy_value = submitted
+        uploaded = form.get("raw_key_file")
+        if isinstance(uploaded, StarletteUploadFile):
+            raw_key = await uploaded.read(33)
+            await uploaded.close()
+            if len(raw_key) != 32:
+                raw_key = None
+                raise structured_error(ErrorCode.RUNTIME_KEY_RECOVERY_FAILED)
+    elif content_type.startswith("application/json"):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            submitted = body.get("legacy_storage_key")
+            if isinstance(submitted, str) and submitted:
+                legacy_value = submitted
+    return legacy_value, raw_key
+
+
+@app.post(
+    "/api/v1/runtime/key-recovery/migrate",
+    tags=["Runtime"],
+    dependencies=[require_role("admin")],
+)
+async def migrate_legacy_runtime_key(request: Request):
+    """Convert a verified legacy key to managed local storage exactly once."""
+
+    _require_persistent_config_writable()
+
+    from core.helpers.key_manager import (
+        ManagedKeyUnavailableError,
+        ensure_managed_key,
+        install_recovered_raw_key,
+        recover_legacy_envelope,
+    )
+
+    client = _key_recovery_client(request)
+    if _key_recovery_is_limited(client):
+        raise structured_error(ErrorCode.RUNTIME_KEY_RECOVERY_RATE_LIMITED)
+    legacy_value: str | None = None
+    raw_key: bytes | None = None
+    try:
+        legacy_value, raw_key = await _read_key_recovery_submission(request)
+        key_path = CONFIG_DIR / "encryption.key"
+        if legacy_value is not None and raw_key is not None:
+            raise ManagedKeyUnavailableError(
+                "Only one recovery method may be submitted at a time.",
+                code="secret_storage_key_mismatch",
+            )
+        if raw_key is not None:
+            await asyncio.to_thread(
+                install_recovered_raw_key,
+                key_path,
+                raw_key,
+                settings_file=backend_config.CONFIG_FILE,
+            )
+        elif legacy_value is not None:
+            await asyncio.to_thread(
+                recover_legacy_envelope,
+                key_path,
+                legacy_value,
+            )
+        else:
+            # Supports an already configured legacy environment/file input
+            # without making either input part of the continuing deployment
+            # contract.
+            await asyncio.to_thread(
+                ensure_managed_key,
+                key_path,
+                settings_file=backend_config.CONFIG_FILE,
+            )
+    except (ManagedKeyUnavailableError, OSError, PermissionError, ValueError):
+        _record_key_recovery_failure(client)
+        raise structured_error(ErrorCode.RUNTIME_KEY_RECOVERY_FAILED)
+    finally:
+        # Drop references as soon as the operation finishes. Submitted
+        # material is never written to settings, logs, evidence, or responses.
+        legacy_value = None
+        raw_key = None
+
+    _clear_key_recovery_failures(client)
+    await asyncio.to_thread(_signal_core_hot_reload)
+    payload = await asyncio.to_thread(_key_recovery_status_payload)
+    payload.update(
+        {
+            "message": "Credential protection recovered. Monitoring is resuming.",
+            "backup_created": False,
+            "restart_required": False,
+        }
+    )
+    return payload
+
+
+class ProtectedCredentialResetRequest(BaseModel):
+    confirmation: str
+
+
+@app.post(
+    "/api/v1/runtime/key-recovery/reset",
+    tags=["Runtime"],
+    dependencies=[require_role("admin")],
+)
+async def reset_runtime_protected_credentials(body: ProtectedCredentialResetRequest):
+    """Reset only protected fields after exact, authenticated confirmation."""
+
+    _require_persistent_config_writable()
+
+    from core.helpers.credential_maintenance import reset_protected_credentials
+
+    if not secrets.compare_digest(body.confirmation, _KEY_RESET_CONFIRMATION):
+        raise structured_error(ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION)
+    before_dvr, before_notifications = await asyncio.to_thread(
+        _protected_credential_counts
+    )
+    try:
+        result = await asyncio.to_thread(
+            reset_protected_credentials,
+            CONFIG_DIR,
+            settings_file=backend_config.CONFIG_FILE,
+            key_file=CONFIG_DIR / "encryption.key",
+        )
+    except (OSError, PermissionError, RuntimeError, ValueError):
+        raise structured_error(ErrorCode.RUNTIME_KEY_RECOVERY_FAILED)
+    await asyncio.to_thread(_signal_core_hot_reload)
+    payload = await asyncio.to_thread(_key_recovery_status_payload)
+    payload.update(
+        {
+            "message": (
+                "Protected DVR API keys and custom webhook credentials were "
+                "cleared. Re-enter those values to resume them."
+            ),
+            "backup_created": bool(result.recovery_snapshot),
+            "restart_required": False,
+            "cleared_dvr_credentials": before_dvr,
+            "cleared_notification_credentials": before_notifications,
+        }
+    )
+    return payload
 
 
 @app.get("/api/discover-servers", tags=["Information"])
@@ -1370,13 +1736,16 @@ async def get_settings_endpoint(request: Request):
 
     if getattr(settings, "webhooks", None):
         masked_webhooks = []
-        for webhook in settings.webhooks:
+        for index, webhook in enumerate(settings.webhooks):
             if isinstance(webhook, BaseModel):
                 webhook_data = webhook.model_dump()
             elif isinstance(webhook, dict):
                 webhook_data = dict(webhook)
             else:
                 continue
+
+            if not str(webhook_data.get("id", "") or "").strip():
+                webhook_data["id"] = f"legacy-webhook-{index}"
 
             if webhook_data.get("secret"):
                 webhook_data["secret"] = MASKED_SENTINEL
@@ -1436,57 +1805,155 @@ def _validate_persisted_dvr_servers(settings: AppSettings) -> None:
         server["name"] = dvr_display_name(server.get("name"), host)
 
 
-@app.post("/api/settings", dependencies=[require_role("operator")])
-async def update_settings_endpoint(settings: AppSettings):
-    try:
-        existing = await _load_settings_async()
+def _webhook_model_identity(webhook: BaseModel | dict, index: int) -> str:
+    if isinstance(webhook, BaseModel):
+        identity = str(getattr(webhook, "id", "") or "").strip()
+    else:
+        identity = str(webhook.get("id", "") or "").strip()
+    return identity or f"legacy-webhook-{index}"
+
+
+def _resolve_masked_settings_and_save(settings: AppSettings) -> None:
+    """Resolve masks against and save one locked settings generation."""
+
+    _require_persistent_config_writable()
+
+    from core.helpers.encryption import ENCRYPTION_KEY_FILE, bootstrap_encryption_key
+    from core.helpers.maintenance_transaction import configuration_maintenance_lock
+
+    key_file = backend_config.CONFIG_DIR / ENCRYPTION_KEY_FILE.name
+    if not key_file.exists() and not key_file.is_symlink():
+        bootstrap_encryption_key(
+            key_file,
+            settings_file=backend_config.CONFIG_FILE,
+        )
+
+    with configuration_maintenance_lock(backend_config.CONFIG_DIR):
+        existing = backend_config._load_settings_locked()
         for field_name in SENSITIVE_FIELDS:
             if "." in field_name:
                 continue
             incoming = getattr(settings, field_name, "")
             if incoming in ("", None, MASKED_SENTINEL):
                 setattr(settings, field_name, getattr(existing, field_name, ""))
+
         existing_dvr_map = {}
-        for s in getattr(existing, "dvr_servers", None) or []:
-            if isinstance(s, dict):
-                existing_dvr_map[s.get("id", "")] = s
+        for server in getattr(existing, "dvr_servers", None) or []:
+            if isinstance(server, dict):
+                existing_dvr_map[str(server.get("id", "") or "")] = server
+
         existing_webhooks = list(getattr(existing, "webhooks", None) or [])
-        for index, webhook in enumerate(getattr(settings, "webhooks", None) or []):
+        existing_webhook_map: dict[str, BaseModel | dict] = {}
+        for index, webhook in enumerate(existing_webhooks):
+            if not isinstance(webhook, (BaseModel, dict)):
+                continue
+            identity = _webhook_model_identity(webhook, index)
+            if identity in existing_webhook_map:
+                raise structured_error(
+                    ErrorCode.SETTINGS_VALIDATION_FAILED,
+                    message="Persisted webhook identities must be unique.",
+                )
+            existing_webhook_map[identity] = webhook
+
+        incoming_webhook_ids: set[str] = set()
+        for webhook in getattr(settings, "webhooks", None) or []:
             if not isinstance(webhook, BaseModel):
                 continue
+            identity = str(getattr(webhook, "id", "") or "").strip()
             incoming_url = str(getattr(webhook, "url", "") or "")
-            if MASKED_SENTINEL in incoming_url and index < len(existing_webhooks):
-                existing_webhook = existing_webhooks[index]
-                if isinstance(existing_webhook, BaseModel):
-                    webhook.url = str(getattr(existing_webhook, "url", "") or "")
-                elif isinstance(existing_webhook, dict):
-                    webhook.url = str(existing_webhook.get("url", "") or "")
+            incoming_secret = getattr(webhook, "secret", "")
+            url_masked = MASKED_SENTINEL in incoming_url
+            secret_masked = incoming_secret in (None, MASKED_SENTINEL)
+            if not identity:
+                if url_masked or secret_masked:
+                    raise structured_error(
+                        ErrorCode.SETTINGS_VALIDATION_FAILED,
+                        message=(
+                            "A masked webhook is missing its stable identity; "
+                            "reload settings and retry."
+                        ),
+                    )
+                identity = f"webhook_{secrets.token_urlsafe(18)}"
+                webhook.id = identity
+            if identity in incoming_webhook_ids:
+                raise structured_error(
+                    ErrorCode.SETTINGS_VALIDATION_FAILED,
+                    message="Incoming webhook identities must be unique.",
+                )
+            incoming_webhook_ids.add(identity)
+            matched = existing_webhook_map.get(identity)
+            if (url_masked or secret_masked) and matched is None:
+                raise structured_error(
+                    ErrorCode.SETTINGS_VALIDATION_FAILED,
+                    message=(
+                        "A masked webhook no longer matches persisted settings; "
+                        "reload and retry."
+                    ),
+                )
+            if matched is not None:
+                if isinstance(matched, BaseModel):
+                    existing_url = str(getattr(matched, "url", "") or "")
+                    existing_secret = str(getattr(matched, "secret", "") or "")
+                else:
+                    existing_url = str(matched.get("url", "") or "")
+                    existing_secret = str(matched.get("secret", "") or "")
+                if url_masked:
+                    if not existing_url:
+                        raise structured_error(
+                            ErrorCode.SETTINGS_VALIDATION_FAILED,
+                            message=(
+                                "A masked webhook credential was cleared by newer "
+                                "settings; reload and retry."
+                            ),
+                        )
+                    webhook.url = existing_url
+                if secret_masked:
+                    if not existing_secret:
+                        raise structured_error(
+                            ErrorCode.SETTINGS_VALIDATION_FAILED,
+                            message=(
+                                "A masked webhook credential was cleared by newer "
+                                "settings; reload and retry."
+                            ),
+                        )
+                    webhook.secret = existing_secret
+
         for server in getattr(settings, "dvr_servers", None) or []:
             if not isinstance(server, dict):
                 continue
-            existing_server = existing_dvr_map.get(server.get("id", ""), {})
+            existing_server = existing_dvr_map.get(str(server.get("id", "") or ""), {})
             incoming_key = server.get("api_key", "")
-            if incoming_key in ("", None, MASKED_SENTINEL):
+            if incoming_key == MASKED_SENTINEL:
+                existing_key = existing_server.get("api_key", "")
+                if not existing_key:
+                    raise structured_error(
+                        ErrorCode.SETTINGS_VALIDATION_FAILED,
+                        message=(
+                            "A masked DVR credential was cleared by newer settings; "
+                            "reload and retry."
+                        ),
+                    )
+                server["api_key"] = existing_key
+            elif incoming_key in ("", None):
                 existing_key = existing_server.get("api_key", "")
                 if existing_key:
                     server["api_key"] = existing_key
             if server.get("overrides"):
                 for field_name in SENSITIVE_FIELDS:
-                    if field_name in server["overrides"]:
-                        if server["overrides"][field_name] is None:
-                            del server["overrides"][field_name]
+                    if (
+                        field_name in server["overrides"]
+                        and server["overrides"][field_name] is None
+                    ):
+                        del server["overrides"][field_name]
+
         if settings.ics_feed_enabled:
             settings.ics_feed_token = str(
                 getattr(settings, "ics_feed_token", "") or ""
-            ).strip()
-            if not settings.ics_feed_token:
-                settings.ics_feed_token = secrets.token_urlsafe(32)
+            ).strip() or secrets.token_urlsafe(32)
         if settings.rss_feed_enabled:
             settings.rss_feed_token = str(
                 getattr(settings, "rss_feed_token", "") or ""
-            ).strip()
-            if not settings.rss_feed_token:
-                settings.rss_feed_token = secrets.token_urlsafe(32)
+            ).strip() or secrets.token_urlsafe(32)
         if (
             not settings.api_key
             and existing.api_key
@@ -1494,18 +1961,27 @@ async def update_settings_endpoint(settings: AppSettings):
             not in {"rbac", "none"}
         ):
             settings.api_key = existing.api_key
+
+        settings.notification_routing = normalize_notification_routing(
+            settings.notification_routing,
+            settings.dvr_servers,
+        )
+        _validate_persisted_dvr_servers(settings)
+        backend_config.save_settings(settings, lock_already_held=True)
+
+
+@app.post("/api/settings", dependencies=[require_role("operator")])
+async def update_settings_endpoint(settings: AppSettings):
+    _require_persistent_config_writable()
+    try:
         try:
-            settings.notification_routing = normalize_notification_routing(
-                settings.notification_routing,
-                settings.dvr_servers,
-            )
+            await asyncio.to_thread(_resolve_masked_settings_and_save, settings)
         except ValueError as exc:
             raise structured_error(
                 ErrorCode.SETTINGS_VALIDATION_FAILED,
                 message=str(exc),
             ) from exc
-        _validate_persisted_dvr_servers(settings)
-        await _save_settings_and_signal_reload_async(settings)
+        await asyncio.to_thread(_signal_core_hot_reload)
         _refresh_runtime_auth_state(settings)
         return {"message": "Settings saved successfully"}
     except HTTPException:
@@ -1546,11 +2022,15 @@ async def preview_notification_destination_safety_endpoint(
 
 @app.post("/api/regenerate-api-key", dependencies=[require_role("admin")])
 async def regenerate_api_key():
-    settings = await _load_settings_async()
-    settings.api_key = secrets.token_urlsafe(32)
-    if not getattr(settings, "auth_mode", ""):
-        settings.auth_mode = "api_key"
-    await _save_settings_and_signal_reload_async(settings)
+    _require_persistent_config_writable()
+
+    def _regenerate(settings: AppSettings) -> None:
+        settings.api_key = secrets.token_urlsafe(32)
+        if not getattr(settings, "auth_mode", ""):
+            settings.auth_mode = "api_key"
+
+    settings, _ = await asyncio.to_thread(_mutate_current_settings_locked, _regenerate)
+    await asyncio.to_thread(_signal_core_hot_reload)
     _refresh_runtime_auth_state(settings)
     return {"api_key": settings.api_key}
 
@@ -1573,23 +2053,46 @@ async def download_backup():
     return Response(
         content=zip_bytes,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+        },
     )
 
 
 @app.post(
     "/api/v1/backup/restore", tags=["Backup"], dependencies=[require_role("admin")]
 )
-async def restore_backup(file: UploadFile = FastAPIFile(...)):
+async def restore_backup(
+    file: UploadFile = FastAPIFile(...),
+    legacy_storage_key: str | None = Form(default=None),
+    reset_protected_credentials: bool = Form(default=False),
+    reset_confirmation: str | None = Form(default=None),
+):
+    _require_persistent_config_writable()
+
     from .backup_restore import (
         MAX_RESTORE_ARCHIVE_BYTES,
         restore_from_zip,
         RestoreValidationError,
     )
 
+    if reset_protected_credentials and not secrets.compare_digest(
+        str(reset_confirmation or ""),
+        _KEY_RESET_CONFIRMATION,
+    ):
+        raise structured_error(ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION)
+
     try:
         zip_bytes = await _read_upload_with_limit(file, MAX_RESTORE_ARCHIVE_BYTES)
-        manifest = await asyncio.to_thread(restore_from_zip, zip_bytes, CONFIG_DIR)
+        manifest = await asyncio.to_thread(
+            restore_from_zip,
+            zip_bytes,
+            CONFIG_DIR,
+            legacy_storage_key=legacy_storage_key,
+            reset_protected_credentials=reset_protected_credentials,
+        )
     except RestoreValidationError as exc:
         msg = str(exc)
         if "ahead of this installation" in msg:
@@ -1598,6 +2101,8 @@ async def restore_backup(file: UploadFile = FastAPIFile(...)):
     except Exception as exc:
         log.exception("Restore failed: %s", exc)
         raise structured_error(ErrorCode.RESTORE_FAILED)
+    finally:
+        legacy_storage_key = None
 
     await asyncio.to_thread(_signal_core_hot_reload)
     return {
@@ -1669,7 +2174,9 @@ def _configured_report_portal_url() -> str:
     parts = urlsplit(raw_value)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         return DEFAULT_REPORT_PORTAL_URL
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") or "", "", ""))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path.rstrip("/") or "", "", "")
+    )
 
 
 _REPORT_REQUEST_TOO_LARGE_MESSAGE = "Report request exceeds the configured size limit."
@@ -1720,7 +2227,9 @@ async def _parse_support_report_request(
     request: Request,
     *,
     accept_support_code: bool = False,
-) -> tuple[ReportProblemPayload, list[tuple[ReportAttachmentSummary, bytes]], str | None]:
+) -> tuple[
+    ReportProblemPayload, list[tuple[ReportAttachmentSummary, bytes]], str | None
+]:
     max_bytes = _configured_report_max_bytes()
     max_attachment_bytes = _configured_report_max_attachment_bytes()
     max_total_attachment_bytes = _configured_report_max_total_attachment_bytes()
@@ -1747,7 +2256,9 @@ async def _parse_support_report_request(
         try:
             if accept_support_code:
                 decoded = json.loads(raw_body.decode("utf-8"))
-                if isinstance(decoded, dict) and isinstance(decoded.get("support_code"), str):
+                if isinstance(decoded, dict) and isinstance(
+                    decoded.get("support_code"), str
+                ):
                     support_code = decoded["support_code"]
                     payload, _envelope = parse_schema2_support_code(support_code)
                     return payload, [], support_code
@@ -1782,7 +2293,9 @@ async def _parse_support_report_request(
         if isinstance(support_code, str):
             payload, _envelope = parse_schema2_support_code(support_code)
             if isinstance(raw_payload, str):
-                supplied_payload = parse_report_payload(raw_payload.encode("utf-8"), max_bytes)
+                supplied_payload = parse_report_payload(
+                    raw_payload.encode("utf-8"), max_bytes
+                )
                 require_support_code_matches_payload(support_code, supplied_payload)
         else:
             payload = parse_report_payload(raw_payload.encode("utf-8"), max_bytes)
@@ -1794,7 +2307,9 @@ async def _parse_support_report_request(
     attachments: list[tuple[ReportAttachmentSummary, bytes]] = []
     total_read: dict[str, int] = {"bytes": 0}
     screenshot_files = [
-        item for item in form.getlist("screenshots") if isinstance(item, StarletteUploadFile)
+        item
+        for item in form.getlist("screenshots")
+        if isinstance(item, StarletteUploadFile)
     ]
     if len(screenshot_files) > DEFAULT_REPORT_MAX_SCREENSHOTS:
         raise _report_error(
@@ -1881,7 +2396,9 @@ async def get_support_report_config():
     dependencies=[require_role("operator")],
 )
 async def submit_support_report_dry_run(request: Request):
-    payload, attachment_files, _support_code = await _parse_support_report_request(request)
+    payload, attachment_files, _support_code = await _parse_support_report_request(
+        request
+    )
     return render_report_preview(
         payload,
         mode="dry-run",
@@ -1929,49 +2446,61 @@ async def list_archived_dvrs():
 
 @app.post("/api/dvrs/{dvr_id}/soft-delete", dependencies=[require_role("admin")])
 async def soft_delete_dvr_endpoint(dvr_id: str):
-    settings = await _load_settings_async()
-    servers = list(getattr(settings, "dvr_servers", None) or [])
-    try:
-        found = _soft_delete_dvr(servers, dvr_id)
-    except ValueError as exc:
-        raise structured_error(ErrorCode.DVR_ALREADY_DELETED, message=str(exc))
-    if not found:
-        raise structured_error(
-            ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
-        )
-    settings.dvr_servers = servers
-    await _save_settings_and_signal_reload_async(settings)
+    _require_persistent_config_writable()
+
+    def _soft_delete(settings: AppSettings) -> None:
+        servers = list(getattr(settings, "dvr_servers", None) or [])
+        try:
+            found = _soft_delete_dvr(servers, dvr_id)
+        except ValueError as exc:
+            raise structured_error(ErrorCode.DVR_ALREADY_DELETED, message=str(exc))
+        if not found:
+            raise structured_error(
+                ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
+            )
+        settings.dvr_servers = servers
+
+    await asyncio.to_thread(_mutate_current_settings_locked, _soft_delete)
+    await asyncio.to_thread(_signal_core_hot_reload)
     return {"message": f"DVR {dvr_id!r} soft-deleted"}
 
 
 @app.post("/api/dvrs/{dvr_id}/restore", dependencies=[require_role("admin")])
 async def restore_dvr_endpoint(dvr_id: str):
-    settings = await _load_settings_async()
-    servers = list(getattr(settings, "dvr_servers", None) or [])
-    try:
-        found = _restore_dvr(servers, dvr_id)
-    except ValueError as exc:
-        raise structured_error(ErrorCode.DVR_NOT_DELETED, message=str(exc))
-    if not found:
-        raise structured_error(
-            ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
-        )
-    settings.dvr_servers = servers
-    await _save_settings_and_signal_reload_async(settings)
+    _require_persistent_config_writable()
+
+    def _restore(settings: AppSettings) -> None:
+        servers = list(getattr(settings, "dvr_servers", None) or [])
+        try:
+            found = _restore_dvr(servers, dvr_id)
+        except ValueError as exc:
+            raise structured_error(ErrorCode.DVR_NOT_DELETED, message=str(exc))
+        if not found:
+            raise structured_error(
+                ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
+            )
+        settings.dvr_servers = servers
+
+    await asyncio.to_thread(_mutate_current_settings_locked, _restore)
+    await asyncio.to_thread(_signal_core_hot_reload)
     return {"message": f"DVR {dvr_id!r} restored"}
 
 
 @app.delete("/api/dvrs/{dvr_id}", dependencies=[require_role("admin")])
 async def hard_delete_dvr_endpoint(dvr_id: str):
-    settings = await _load_settings_async()
-    servers = list(getattr(settings, "dvr_servers", None) or [])
-    found = _hard_delete_dvr(_CORE_CONFIG_DIR, servers, dvr_id)
-    if not found:
-        raise structured_error(
-            ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
-        )
-    settings.dvr_servers = servers
-    await _save_settings_and_signal_reload_async(settings)
+    _require_persistent_config_writable()
+
+    def _hard_delete(settings: AppSettings) -> None:
+        servers = list(getattr(settings, "dvr_servers", None) or [])
+        found = _hard_delete_dvr(_CORE_CONFIG_DIR, servers, dvr_id)
+        if not found:
+            raise structured_error(
+                ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
+            )
+        settings.dvr_servers = servers
+
+    await asyncio.to_thread(_mutate_current_settings_locked, _hard_delete)
+    await asyncio.to_thread(_signal_core_hot_reload)
     return {"message": f"DVR {dvr_id!r} permanently deleted"}
 
 
@@ -2046,6 +2575,13 @@ _ACTIVITY_DB_URL = _sqlite_url_for_path(_ACTIVITY_DB_FILE)
 _activity_db_engine = None
 _activity_db_warned = False
 
+
+def _read_only_sqlite_url(path: Path) -> str:
+    # Docker Desktop read-only bind mounts cannot create SQLite's ordinary
+    # lock sidecars. Immutable mode is safe only after the entrypoint rejects
+    # hot WAL/rollback journals, and lets both auth and activity reads continue.
+    return f"sqlite:///file:{path.resolve()}?mode=ro&immutable=1&uri=true"
+
 try:
     from core.storage import create_db_engine as _create_activity_db_engine
     from core.storage.models import ActivityEvent as _ActivityEvent
@@ -2084,8 +2620,13 @@ def _get_activity_db_engine():
     if _activity_db_engine is not None:
         return _activity_db_engine
     if _ACTIVITY_DB_FILE.exists():
-        _activity_db_engine = _create_activity_db_engine(_ACTIVITY_DB_URL)
-        if _configure_journal_mode is not None:
+        database_url = (
+            _read_only_sqlite_url(_ACTIVITY_DB_FILE)
+            if _config_is_read_only()
+            else _ACTIVITY_DB_URL
+        )
+        _activity_db_engine = _create_activity_db_engine(database_url)
+        if _configure_journal_mode is not None and not _config_is_read_only():
             try:
                 _configure_journal_mode(_activity_db_engine, str(_ACTIVITY_DB_FILE))
             except Exception as _jm_exc:
@@ -2112,9 +2653,22 @@ def _ensure_auth_tables():
         from sqlmodel import SQLModel as _SQLModel
         from core.storage.models import User as _User, UserSession as _UserSession  # noqa: F401
 
-        engine = _create_activity_db_engine(_ACTIVITY_DB_URL)
-        _SQLModel.metadata.create_all(engine)
-        if _configure_journal_mode is not None:
+        if _config_is_read_only():
+            if not _ACTIVITY_DB_FILE.exists():
+                return None
+            engine = _create_activity_db_engine(
+                _read_only_sqlite_url(_ACTIVITY_DB_FILE)
+            )
+            from sqlalchemy import inspect as _sql_inspect
+
+            inspector = _sql_inspect(engine)
+            if not all(inspector.has_table(name) for name in ("user", "user_session")):
+                engine.dispose()
+                return None
+        else:
+            engine = _create_activity_db_engine(_ACTIVITY_DB_URL)
+            _SQLModel.metadata.create_all(engine)
+        if _configure_journal_mode is not None and not _config_is_read_only():
             try:
                 _configure_journal_mode(engine, str(_ACTIVITY_DB_FILE))
             except Exception:
@@ -2578,6 +3132,20 @@ def _activity_matches_search(
     )
 
 
+def _remember_read_only_history_generation() -> None:
+    """Avoid retrying one immutable malformed history generation forever."""
+
+    global LAST_MODIFIED_TIME
+    if not _config_is_read_only():
+        return
+    try:
+        observed_mtime = os.path.getmtime(HISTORY_FILE)
+    except OSError:
+        return
+    with _activity_lock:
+        LAST_MODIFIED_TIME = max(LAST_MODIFIED_TIME, observed_mtime)
+
+
 def load_alert_history():
     global ACTIVITY_HISTORY, LAST_MODIFIED_TIME
 
@@ -2604,13 +3172,24 @@ def load_alert_history():
             return True
 
         except json.JSONDecodeError as e:
-            quarantined_path = _quarantine_malformed_history_file(HISTORY_FILE)
+            quarantined_path = (
+                None
+                if _config_is_read_only()
+                else _quarantine_malformed_history_file(HISTORY_FILE)
+            )
+            _remember_read_only_history_generation()
             detail = f"; quarantined at {quarantined_path}" if quarantined_path else ""
             print(f"[WebUI] Error parsing history file: {e}{detail}")
             return False
         except Exception as e:
+            _remember_read_only_history_generation()
             print(f"[WebUI] Error loading history file: {e}")
     else:
+        if _config_is_read_only():
+            with _activity_lock:
+                ACTIVITY_HISTORY = []
+                LAST_MODIFIED_TIME = 0.0
+            return True
         try:
             atomic_write_json(HISTORY_FILE, [], indent=2)
 
@@ -2696,15 +3275,20 @@ def ensure_history_file_watcher_started():
 def _dvr_purge_loop():
     import time as _time
 
+    if _config_is_read_only():
+        return
     while True:
         _time.sleep(86400)
         try:
-            _settings = load_settings()
-            servers = list(getattr(_settings, "dvr_servers", None) or [])
-            purged = _purge_expired_dvrs(_CORE_CONFIG_DIR, servers)
-            if purged:
+            def _purge(_settings: AppSettings):
+                servers = list(getattr(_settings, "dvr_servers", None) or [])
+                purged_ids = _purge_expired_dvrs(_CORE_CONFIG_DIR, servers)
                 _settings.dvr_servers = servers
-                _save_settings_and_signal_reload(_settings)
+                return purged_ids
+
+            _, purged = _mutate_current_settings_locked(_purge)
+            if purged:
+                _signal_core_hot_reload()
                 print(
                     f"[WebUI API] Auto-purged {len(purged)} expired archived DVR(s): {purged}"
                 )
@@ -2713,6 +3297,37 @@ def _dvr_purge_loop():
 
 
 def run_startup_initialization():
+    from core.update_center import guard_legacy_launcher_before_start
+
+    launcher_guard = (
+        {"allowed": True}
+        if _config_is_read_only()
+        else guard_legacy_launcher_before_start(
+            config_dir=backend_config.CONFIG_DIR,
+            running_version=__version__,
+            restart_callable=_schedule_container_restart_for_update,
+        )
+    )
+    if not launcher_guard.get("allowed", True):
+        raise RuntimeError(
+            "ChannelWatch v0.9.18 requires container image v0.9.11 or newer; "
+            "the previous runtime was restored."
+        )
+
+    from core.helpers.maintenance_transaction import recover_maintenance_transactions
+
+    # Supervisor starts core and UI independently. Recover the coupled
+    # key/settings generation before this process performs preflight,
+    # authentication, settings loading, or any credential-consuming work.
+    if not _config_is_read_only():
+        recover_maintenance_transactions(backend_config.CONFIG_DIR)
+    else:
+        transaction_root = Path(backend_config.CONFIG_DIR) / ".channelwatch-transactions"
+        if transaction_root.exists() and any(transaction_root.iterdir()):
+            raise RuntimeError(
+                "An interrupted configuration transaction requires writable /config."
+            )
+
     if CORE_APP_AVAILABLE:
         try:
             _get_core_settings_sync()
@@ -2723,13 +3338,25 @@ def run_startup_initialization():
     settings = load_settings()
     explicit_mode = _explicit_auth_mode(settings)
     if explicit_mode == "api_key" and not settings.api_key:
-        settings.api_key = secrets.token_urlsafe(32)
-        save_settings(settings)
-        print("[WebUI API] Generated new API key on first run")
+        def _generate_api_key(current: AppSettings) -> bool:
+            if _explicit_auth_mode(current) != "api_key" or current.api_key:
+                return False
+            current.api_key = secrets.token_urlsafe(32)
+            return True
+
+        if _config_is_read_only():
+            log.warning(
+                "API-key authentication is not initialized and /config is read-only; "
+                "protected API access remains blocked."
+            )
+        else:
+            settings, generated = _mutate_current_settings_locked(_generate_api_key)
+            if generated:
+                print("[WebUI API] Generated new API key on first run")
 
     _refresh_runtime_auth_state(settings)
 
-    if RBAC_ENABLED:
+    if RBAC_ENABLED and not _config_is_read_only():
         _bootstrap_admin_from_env()
 
     if CORE_APP_AVAILABLE:
@@ -2749,18 +3376,27 @@ def run_startup_initialization():
 
     ensure_history_file_watcher_started()
 
-    _purge_thread = threading.Thread(
-        target=_dvr_purge_loop, daemon=True, name="dvr-purge"
-    )
-    _purge_thread.start()
+    if not _config_is_read_only():
+        _purge_thread = threading.Thread(
+            target=_dvr_purge_loop, daemon=True, name="dvr-purge"
+        )
+        _purge_thread.start()
 
-    if _STORAGE_AVAILABLE and _start_maintenance_thread is not None:
+    if (
+        not _config_is_read_only()
+        and _STORAGE_AVAILABLE
+        and _start_maintenance_thread is not None
+    ):
         _history_retention = getattr(settings, "history_retention_days", 90) or 90
         _start_maintenance_thread(
             _get_activity_db_engine, retention_days=_history_retention
         )
 
-    if _STORAGE_AVAILABLE and _migrate_delivery_schema is not None:
+    if (
+        not _config_is_read_only()
+        and _STORAGE_AVAILABLE
+        and _migrate_delivery_schema is not None
+    ):
         _engine = _get_activity_db_engine()
         if _engine is not None:
             try:
@@ -2771,21 +3407,22 @@ def run_startup_initialization():
     global _STARTUP_COMPLETE
     _STARTUP_COMPLETE = False
 
-    try:
-        _build_update_manager().record_startup_success(
-            component="ui",
-            running_version=__version__,
-            activation_id=os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
-            healthy=_update_center_healthcheck(),
-        )
-    except _UpdateRestartError as exc:
-        # The selected runtime has already rolled back. Do not publish UI
-        # startup for a generation that is no longer selected; propagating
-        # lets Supervisor restart this process from the restored runtime.
-        log.critical("Terminal Update Center UI restart failure: %s", exc)
-        raise
-    except Exception as exc:
-        log.warning("Could not record Update Center startup success: %s", exc)
+    if not _config_is_read_only():
+        try:
+            _build_update_manager().record_startup_success(
+                component="ui",
+                running_version=__version__,
+                activation_id=os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
+                healthy=_update_center_healthcheck(),
+            )
+        except _UpdateRestartError as exc:
+            # The selected runtime has already rolled back. Do not publish UI
+            # startup for a generation that is no longer selected; propagating
+            # lets Supervisor restart this process from the restored runtime.
+            log.critical("Terminal Update Center UI restart failure: %s", exc)
+            raise
+        except Exception as exc:
+            log.warning("Could not record Update Center startup success: %s", exc)
     _STARTUP_COMPLETE = True
 
 
@@ -3019,9 +3656,7 @@ async def get_system_info(
     DEFAULT_CRITICAL_THRESHOLD_GB = 25.0
 
     if CORE_APP_AVAILABLE:
-        from core.helpers.config import get_settings as _get_core_settings
-
-        settings = await asyncio.to_thread(_get_core_settings)
+        settings = await asyncio.to_thread(_get_core_settings_sync)
     else:
         settings = await _load_settings_async()
 
@@ -3559,9 +4194,7 @@ def _channel_logo_candidate(channel: dict[str, Any]) -> str:
 async def _collect_upcoming_recordings(limit: int = 250) -> list[RecordingInfo]:
     upcoming_recordings: list[RecordingInfo] = []
     if CORE_APP_AVAILABLE:
-        from core.helpers.config import get_settings as _get_core_settings
-
-        settings = await asyncio.to_thread(_get_core_settings)
+        settings = await asyncio.to_thread(_get_core_settings_sync)
     else:
         settings = await _load_settings_async()
 
@@ -3608,9 +4241,7 @@ async def _collect_upcoming_recordings(limit: int = 250) -> list[RecordingInfo]:
             except Exception:
                 pass
 
-            jobs_response = await _safe_dvr_get_url(
-                f"{dvr_url}/dvr/jobs", timeout=5
-            )
+            jobs_response = await _safe_dvr_get_url(f"{dvr_url}/dvr/jobs", timeout=5)
             if jobs_response.status_code != 200:
                 return []
 
@@ -3823,7 +4454,9 @@ async def _render_activity_rss_feed(request: Request) -> str:
         "    <title>ChannelWatch Recent Activity</title>",
         "    <description>Recent ChannelWatch activity from the last 24 hours.</description>",
         f"    <link>{_xml_text(feed_link)}</link>",
-        f'    <atom:link xmlns:atom="http://www.w3.org/2005/Atom" href="{_xml_attr(self_link)}" rel="self" type="application/rss+xml" />',
+        # Request-derived values are escaped for an XML attribute immediately
+        # before interpolation; this response is XML, not browser-rendered HTML.
+        f'    <atom:link xmlns:atom="http://www.w3.org/2005/Atom" href="{_xml_attr(self_link)}" rel="self" type="application/rss+xml" />',  # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format
         f"    <lastBuildDate>{_xml_text(format_datetime(latest))}</lastBuildDate>",
     ]
     lines.extend(rendered_items)
@@ -3867,7 +4500,7 @@ async def _render_activity_atom_feed(request: Request) -> str:
         "  <id>tag:channelwatch:recent-activity</id>",
         "  <title>ChannelWatch Recent Activity</title>",
         f"  <updated>{_xml_text(latest.isoformat())}</updated>",
-        f'  <link rel="self" href="{_xml_attr(self_link)}" />',
+        f'  <link rel="self" href="{_xml_attr(self_link)}" />',  # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format
         f'  <link rel="alternate" href="{_xml_attr(history_link)}" />',
         "  <author><name>ChannelWatch</name></author>",
         "  <subtitle>Recent ChannelWatch activity from the last 24 hours.</subtitle>",
@@ -4057,9 +4690,7 @@ async def get_active_recordings_count():
     async def _count_for_dvr(entry):
         _dvr_id, _dvr_name, dvr_url = entry
         try:
-            response = await _safe_dvr_get_url(
-                f"{dvr_url}/dvr/jobs", timeout=5
-            )
+            response = await _safe_dvr_get_url(f"{dvr_url}/dvr/jobs", timeout=5)
             if response.status_code == 200:
                 active_count = 0
                 for recording in response.json():
@@ -4552,6 +5183,7 @@ async def get_activity_history(
 )
 async def clear_activity_history():
     global ACTIVITY_HISTORY
+    _require_persistent_config_writable()
     try:
         with _activity_lock:
             ACTIVITY_HISTORY = []
@@ -4958,13 +5590,31 @@ def _signal_core_hot_reload() -> bool:
         return False
 
 
-def _save_settings_and_signal_reload(settings: AppSettings) -> bool:
-    save_settings(settings)
-    return _signal_core_hot_reload()
+def _mutate_current_settings_locked(mutate):
+    """Apply an internal mutation to the latest locked settings generation.
 
+    Loading settings and then saving after releasing the maintenance lock can
+    resurrect credentials cleared by a concurrent reset, restore, or rotation.
+    Keep read, mutation, and persistence inside one lock generation instead.
+    """
 
-async def _save_settings_and_signal_reload_async(settings: AppSettings) -> bool:
-    return await asyncio.to_thread(_save_settings_and_signal_reload, settings)
+    _require_persistent_config_writable()
+
+    from core.helpers.encryption import ENCRYPTION_KEY_FILE, bootstrap_encryption_key
+    from core.helpers.maintenance_transaction import configuration_maintenance_lock
+
+    key_file = backend_config.CONFIG_DIR / ENCRYPTION_KEY_FILE.name
+    if not key_file.exists() and not key_file.is_symlink():
+        bootstrap_encryption_key(
+            key_file,
+            settings_file=backend_config.CONFIG_FILE,
+        )
+
+    with configuration_maintenance_lock(backend_config.CONFIG_DIR):
+        settings = backend_config._load_settings_locked()
+        result = mutate(settings)
+        backend_config.save_settings(settings, lock_already_held=True)
+        return settings, result
 
 
 def _schedule_container_restart_for_update() -> bool:
@@ -4994,6 +5644,43 @@ class UpdateApplyRequest(BaseModel):
     version: Optional[str] = None
 
 
+class UpdatePolicyRequest(BaseModel):
+    mode: Literal["automatic", "notify_only"]
+    maintenance_window_start: str
+    maintenance_window_minutes: int
+
+    model_config = {"extra": "forbid"}
+
+
+class UpdatePostponeRequest(BaseModel):
+    hours: Literal[24, 168]
+    reason: Optional[Literal["administrator", "dirty_report_draft"]] = "administrator"
+
+    model_config = {"extra": "forbid"}
+
+
+class RecoveryUpdateRequest(BaseModel):
+    version: Optional[str] = None
+    confirmation: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
+_RECOVERY_UPDATE_CONFIRMATION = "INSTALL OFFICIAL UPDATE"
+_RECOVERY_CSRF_COOKIE = "channelwatch_recovery_csrf"
+_RECOVERY_CSRF_HEADER = "X-CSRF-Token"
+_RECOVERY_CSRF_TTL_SECONDS = 10 * 60
+_RECOVERY_CSRF_MAX_TOKENS = 256
+# Tokens are the lookup key so a second tab or another installation behind the
+# same NAT cannot invalidate an already-issued bootstrap authorization.
+_RECOVERY_CSRF_TOKENS: Dict[str, tuple[str, float]] = {}
+_RECOVERY_CSRF_LOCK = threading.Lock()
+_RECOVERY_WRITE_ATTEMPTS: Dict[str, deque[float]] = {}
+_RECOVERY_WRITE_ATTEMPTS_LOCK = threading.Lock()
+_RECOVERY_WRITE_WINDOW_SECONDS = 15 * 60
+_RECOVERY_WRITE_LIMIT = 5
+
+
 def _update_center_healthcheck() -> bool:
     static_ui_dir = os.environ.get("CW_STATIC_UI_DIR", "").strip()
     if static_ui_dir and not Path(static_ui_dir).is_dir():
@@ -5001,19 +5688,323 @@ def _update_center_healthcheck() -> bool:
     return bool(CORE_APP_AVAILABLE)
 
 
-def _build_update_manager():
-    from core.helpers.migration import CURRENT_SCHEMA_VERSION as _SETTINGS_SCHEMA_VERSION
-    from core.update_center import UpdateManager
+def _configuration_maintenance_context():
+    from core.helpers.maintenance_transaction import configuration_maintenance_lock
+
+    return configuration_maintenance_lock(CONFIG_DIR)
+
+
+def _create_update_backup_locked(config_dir: Path) -> bytes:
+    """Build a consistent backup while UpdateManager owns the shared lock."""
+
     from .backup_restore import create_backup_zip
+
+    return create_backup_zip(config_dir, lock_already_held=True)
+
+
+def _update_install_preflight(payload: Dict[str, Any]) -> Dict[str, bool]:
+    """Fail closed unless `/config` can durably stage backup and update data."""
+
+    try:
+        config_meta = CONFIG_DIR.lstat()
+        if stat.S_ISLNK(config_meta.st_mode) or not stat.S_ISDIR(config_meta.st_mode):
+            return {
+                "free_space_ok": False,
+                "private_backup_ok": False,
+                "maintenance_transactions_ok": False,
+            }
+
+        transaction_root = CONFIG_DIR / ".channelwatch-transactions"
+        maintenance_transactions_ok = True
+        if transaction_root.exists() or transaction_root.is_symlink():
+            transaction_meta = transaction_root.lstat()
+            maintenance_transactions_ok = bool(
+                not stat.S_ISLNK(transaction_meta.st_mode)
+                and stat.S_ISDIR(transaction_meta.st_mode)
+                and not any(transaction_root.iterdir())
+            )
+
+        backup_dir = CONFIG_DIR / "backups"
+        if backup_dir.exists() or backup_dir.is_symlink():
+            backup_meta = backup_dir.lstat()
+            if stat.S_ISLNK(backup_meta.st_mode) or not stat.S_ISDIR(
+                backup_meta.st_mode
+            ):
+                return {
+                    "free_space_ok": False,
+                    "private_backup_ok": False,
+                    "maintenance_transactions_ok": maintenance_transactions_ok,
+                }
+        else:
+            backup_dir.mkdir(mode=0o700)
+        if os.name != "nt":
+            backup_dir.chmod(0o700)
+            if stat.S_IMODE(backup_dir.stat().st_mode) != 0o700:
+                return {
+                    "free_space_ok": False,
+                    "private_backup_ok": False,
+                    "maintenance_transactions_ok": maintenance_transactions_ok,
+                }
+
+        # Reserve room for the bounded download, expanded archive, a complete
+        # credential-bearing backup, and transaction/rollback overhead.
+        from core.update_center import (
+            MAX_BUNDLE_BYTES,
+            MAX_BUNDLE_TOTAL_UNCOMPRESSED_BYTES,
+        )
+
+        config_bytes = 0
+        for child in CONFIG_DIR.rglob("*"):
+            try:
+                child_meta = child.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(child_meta.st_mode):
+                config_bytes += max(0, int(child_meta.st_size))
+        required_bytes = (
+            MAX_BUNDLE_BYTES
+            + MAX_BUNDLE_TOTAL_UNCOMPRESSED_BYTES
+            + (2 * config_bytes)
+            + (32 * 1024 * 1024)
+        )
+        filesystem = os.statvfs(CONFIG_DIR)
+        free_bytes = int(filesystem.f_bavail) * int(filesystem.f_frsize)
+        return {
+            "free_space_ok": free_bytes >= required_bytes,
+            "private_backup_ok": True,
+            "maintenance_transactions_ok": maintenance_transactions_ok,
+        }
+    except (OSError, PermissionError, ValueError):
+        return {
+            "free_space_ok": False,
+            "private_backup_ok": False,
+            "maintenance_transactions_ok": False,
+        }
+
+
+def _request_update_notification_drain(timeout: float) -> bool:
+    """Ask the separate core process to drain and hold delivery queues."""
+
+    from core.notification_drain import request_core_notification_drain
+
+    return request_core_notification_drain(CONFIG_DIR, timeout)
+
+
+def _release_update_notification_drain() -> bool:
+    """Release the exact queue-drain request owned by this UI process."""
+
+    from core.notification_drain import release_core_notification_drain
+
+    return release_core_notification_drain(CONFIG_DIR)
+
+
+def _build_update_manager():
+    from core.helpers.migration import (
+        CURRENT_SCHEMA_VERSION as _SETTINGS_SCHEMA_VERSION,
+    )
+    from core.update_center import UpdateManager
 
     return UpdateManager(
         config_dir=CONFIG_DIR,
         current_version=__version__,
         settings_schema_version=_SETTINGS_SCHEMA_VERSION,
-        backup_callable=create_backup_zip,
+        backup_callable=_create_update_backup_locked,
         restart_callable=_schedule_container_restart_for_update,
         healthcheck_callable=_update_center_healthcheck,
+        maintenance_lock=_configuration_maintenance_context,
     )
+
+
+def _get_update_automation_service():
+    global _UPDATE_AUTOMATION_SERVICE
+    with _UPDATE_AUTOMATION_SERVICE_LOCK:
+        if _UPDATE_AUTOMATION_SERVICE is None:
+            from core.update_policy import UpdateAutomationService
+
+            _UPDATE_AUTOMATION_SERVICE = UpdateAutomationService(
+                config_dir=CONFIG_DIR,
+                manager_factory=_build_update_manager,
+                maintenance_lock=_configuration_maintenance_context,
+                install_preflight=_update_install_preflight,
+                drain_notification_queue=_request_update_notification_drain,
+                resume_notification_queue=_release_update_notification_drain,
+                recovery_state_provider=_update_automation_recovery_state,
+            )
+        return _UPDATE_AUTOMATION_SERVICE
+
+
+def _update_automation_recovery_state() -> bool:
+    """Use recovery-compatible catalog entries only while runtime setup is blocked."""
+
+    if os.environ.get("CHANNELWATCH_OFFICIAL_RECOVERY_MODE") == "1":
+        return True
+    preflight = inspect_runtime_preflight(
+        CONFIG_DIR / "encryption.key",
+        settings_file=backend_config.CONFIG_FILE,
+    )
+    return bool(preflight.setup_required)
+
+
+def _build_official_recovery_service():
+    from core.helpers.migration import (
+        CURRENT_SCHEMA_VERSION as _SETTINGS_SCHEMA_VERSION,
+    )
+    from core.update_policy import OfficialRecoveryUpdateService
+
+    return OfficialRecoveryUpdateService(
+        config_dir=CONFIG_DIR,
+        current_version=__version__,
+        runtime_abi=os.environ.get(
+            "CHANNELWATCH_RUNTIME_ABI", "channelwatch-runtime-v1"
+        ),
+        settings_schema_version=_SETTINGS_SCHEMA_VERSION,
+        backup_callable=_create_update_backup_locked,
+        restart_callable=_schedule_container_restart_for_update,
+        healthcheck_callable=_update_center_healthcheck,
+        maintenance_lock=_configuration_maintenance_context,
+    )
+
+
+def _active_administrator_auth_required() -> bool:
+    if CW_DISABLE_AUTH:
+        return False
+    try:
+        settings = load_settings()
+    except Exception:
+        # If the persisted security posture cannot be established, never
+        # silently downgrade a possibly configured installation to public
+        # recovery authorization.
+        return True
+    mode = _effective_auth_mode(settings)
+    if mode == "api_key":
+        return bool(str(getattr(settings, "api_key", "") or "").strip())
+    if mode != "rbac":
+        return False
+    engine = _ensure_auth_tables()
+    if engine is None:
+        return True
+    from core.storage.auth import get_user_count
+
+    return get_user_count(engine) > 0
+
+
+def _official_recovery_active(*, administrator_required: bool) -> bool:
+    if os.environ.get("CHANNELWATCH_OFFICIAL_RECOVERY_MODE") == "1":
+        return True
+    preflight = inspect_runtime_preflight(
+        CONFIG_DIR / "encryption.key",
+        settings_file=backend_config.CONFIG_FILE,
+    )
+    return bool(preflight.setup_required or not administrator_required)
+
+
+def _issue_recovery_csrf(client: str) -> str:
+    token = secrets.token_urlsafe(32)
+    now = time.monotonic()
+    with _RECOVERY_CSRF_LOCK:
+        for stale_token, (_stale_client, expires_at) in list(
+            _RECOVERY_CSRF_TOKENS.items()
+        ):
+            if expires_at <= now:
+                _RECOVERY_CSRF_TOKENS.pop(stale_token, None)
+        while len(_RECOVERY_CSRF_TOKENS) >= _RECOVERY_CSRF_MAX_TOKENS:
+            oldest_token = min(
+                _RECOVERY_CSRF_TOKENS,
+                key=lambda candidate: _RECOVERY_CSRF_TOKENS[candidate][1],
+            )
+            _RECOVERY_CSRF_TOKENS.pop(oldest_token, None)
+        _RECOVERY_CSRF_TOKENS[token] = (
+            client,
+            now + _RECOVERY_CSRF_TTL_SECONDS,
+        )
+    return token
+
+
+def _consume_recovery_rate_limit(client: str) -> bool:
+    now = time.monotonic()
+    cutoff = now - _RECOVERY_WRITE_WINDOW_SECONDS
+    with _RECOVERY_WRITE_ATTEMPTS_LOCK:
+        for stale_client, stale_attempts in list(_RECOVERY_WRITE_ATTEMPTS.items()):
+            while stale_attempts and stale_attempts[0] < cutoff:
+                stale_attempts.popleft()
+            if not stale_attempts:
+                _RECOVERY_WRITE_ATTEMPTS.pop(stale_client, None)
+        attempts = _RECOVERY_WRITE_ATTEMPTS.setdefault(client, deque())
+        if len(attempts) >= _RECOVERY_WRITE_LIMIT:
+            return False
+        attempts.append(now)
+        return True
+
+
+async def _authorize_recovery_update(
+    request: Request,
+    *,
+    confirmation: Optional[str] = None,
+    require_confirmation: bool,
+) -> None:
+    """Authorize an exempt recovery route without expanding its trust surface."""
+
+    if await asyncio.to_thread(_active_administrator_auth_required):
+        settings = await _load_settings_async()
+        mode = _effective_auth_mode(settings)
+        configured_key = str(getattr(settings, "api_key", "") or "").strip()
+        supplied_key = request.headers.get("X-API-Key", "")
+        if (
+            configured_key
+            and (mode == "api_key" or _legacy_api_key_fallback_allowed(settings))
+            and secrets.compare_digest(supplied_key, configured_key)
+        ):
+            return
+        if not await _request_has_valid_session_async(request):
+            raise structured_error(ErrorCode.AUTH_UNAUTHENTICATED)
+        csrf_header = request.headers.get("X-CSRF-Token", "")
+        csrf_expected = str(getattr(request.state, "auth_session_csrf", "") or "")
+        if not csrf_header or not secrets.compare_digest(csrf_header, csrf_expected):
+            raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
+        user_id = getattr(request.state, "auth_user_id", None)
+        available, role = await asyncio.to_thread(
+            _get_user_role_for_auth_check,
+            int(user_id),
+        )
+        if not available:
+            raise structured_error(ErrorCode.AUTH_DB_UNAVAILABLE)
+        if role != "admin":
+            raise structured_error(ErrorCode.AUTH_FORBIDDEN)
+        return
+
+    origin = request.headers.get("Origin", "")
+    if origin and not _request_origin_matches(request, origin):
+        raise structured_error(ErrorCode.AUTH_CROSS_SITE_REJECTED)
+    client = _effective_client_host(request) or "unknown"
+    supplied = request.headers.get(_RECOVERY_CSRF_HEADER, "")
+    cookie = request.cookies.get(_RECOVERY_CSRF_COOKIE, "")
+    with _RECOVERY_CSRF_LOCK:
+        expected = _RECOVERY_CSRF_TOKENS.get(supplied)
+    if (
+        expected is None
+        or time.monotonic() > expected[1]
+        or not supplied
+        or not cookie
+        or not secrets.compare_digest(client, expected[0])
+        or not secrets.compare_digest(cookie, supplied)
+    ):
+        raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
+    if require_confirmation and not (
+        confirmation
+        and secrets.compare_digest(confirmation, _RECOVERY_UPDATE_CONFIRMATION)
+    ):
+        raise structured_error(
+            ErrorCode.UPDATE_RECOVERY_CONFIRMATION,
+            message="Type INSTALL OFFICIAL UPDATE to confirm the recovery update.",
+        )
+
+    if not _consume_recovery_rate_limit(client):
+        raise structured_error(ErrorCode.RATE_LIMIT_EXCEEDED)
+    if require_confirmation:
+        # Destructive bootstrap authorization is single-use. A retry obtains a
+        # fresh same-origin cookie/token pair from the status endpoint.
+        with _RECOVERY_CSRF_LOCK:
+            _RECOVERY_CSRF_TOKENS.pop(supplied, None)
 
 
 def _raise_update_error(exc: Exception, *, apply: bool = False, rollback: bool = False):
@@ -5023,6 +6014,15 @@ def _raise_update_error(exc: Exception, *, apply: bool = False, rollback: bool =
         UpdateLockedError,
         UpdateManifestError,
     )
+
+    if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        raise structured_error(
+            ErrorCode.RUNTIME_SETUP_REQUIRED,
+            message=(
+                "Update Center cannot change state while /config is read-only. "
+                "Repair persistent storage and retry."
+            ),
+        )
 
     if isinstance(exc, UpdateLockedError):
         raise structured_error(ErrorCode.UPDATE_LOCKED)
@@ -5035,13 +6035,19 @@ def _raise_update_error(exc: Exception, *, apply: bool = False, rollback: bool =
         raise structured_error(
             ErrorCode.UPDATE_ROLLBACK_FAILED
             if rollback
-            else (ErrorCode.UPDATE_APPLY_FAILED if apply else ErrorCode.UPDATE_CHECK_FAILED),
+            else (
+                ErrorCode.UPDATE_APPLY_FAILED
+                if apply
+                else ErrorCode.UPDATE_CHECK_FAILED
+            ),
             message=str(exc),
         )
     raise structured_error(
         ErrorCode.UPDATE_ROLLBACK_FAILED
         if rollback
-        else (ErrorCode.UPDATE_APPLY_FAILED if apply else ErrorCode.UPDATE_CHECK_FAILED),
+        else (
+            ErrorCode.UPDATE_APPLY_FAILED if apply else ErrorCode.UPDATE_CHECK_FAILED
+        ),
         message="Unexpected Update Center failure.",
     )
 
@@ -5059,12 +6065,73 @@ async def update_status():
         _raise_update_error(exc)
 
 
+@app.get(
+    "/api/v1/update/policy",
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_policy_get():
+    try:
+        return await asyncio.to_thread(_get_update_automation_service().get_policy_view)
+    except Exception as exc:
+        log.warning("Update policy read failed: %s", exc)
+        _raise_update_error(exc)
+
+
+@app.put(
+    "/api/v1/update/policy",
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_policy_put(body: UpdatePolicyRequest):
+    _require_persistent_config_writable()
+    try:
+        service = _get_update_automation_service()
+        await asyncio.to_thread(
+            service.put_policy,
+            body.model_dump(),
+        )
+        return await asyncio.to_thread(service.get_policy_view)
+    except Exception as exc:
+        log.warning("Update policy save failed: %s", exc)
+        _raise_update_error(exc)
+
+
+@app.post(
+    "/api/v1/update/postpone",
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_postpone(body: UpdatePostponeRequest):
+    _require_persistent_config_writable()
+    try:
+        service = _get_update_automation_service()
+        if body.reason == "dirty_report_draft":
+            if body.hours != 24:
+                raise ValueError("Draft protection supports one 24-hour postponement.")
+            await asyncio.to_thread(
+                service.postpone,
+                reason="dirty_report_draft",
+            )
+        else:
+            await asyncio.to_thread(
+                service.postpone,
+                minutes=body.hours * 60,
+                reason="administrator",
+            )
+        return await asyncio.to_thread(service.get_policy_view)
+    except Exception as exc:
+        log.warning("Update postponement failed: %s", exc)
+        _raise_update_error(exc)
+
+
 @app.post(
     "/api/v1/update/check",
     tags=["Updates"],
     dependencies=[require_role("admin")],
 )
 async def update_check():
+    _require_persistent_config_writable()
     try:
         return await asyncio.to_thread(_build_update_manager().check)
     except Exception as exc:
@@ -5079,15 +6146,49 @@ async def update_check():
     dependencies=[require_role("admin")],
 )
 async def update_apply(body: UpdateApplyRequest):
+    _require_persistent_config_writable()
     try:
-        result = await asyncio.to_thread(_build_update_manager().apply, body.version)
+        result = await asyncio.to_thread(
+            _get_update_automation_service().apply_release,
+            version=body.version,
+        )
     except Exception as exc:
         log.exception("Update apply failed: %s", exc)
         _raise_update_error(exc, apply=True)
 
     if result.get("status") == "image_required":
-        raise structured_error(ErrorCode.UPDATE_IMAGE_REQUIRED, message=result.get("message"))
+        raise structured_error(
+            ErrorCode.UPDATE_IMAGE_REQUIRED, message=result.get("message")
+        )
     return result
+
+
+@app.post(
+    "/api/v1/update/retry",
+    status_code=202,
+    tags=["Updates"],
+    dependencies=[require_role("admin")],
+)
+async def update_retry():
+    _require_persistent_config_writable()
+    try:
+        manager_status = await asyncio.to_thread(_build_update_manager().status)
+        latest = manager_status.get("latest")
+        if not isinstance(latest, dict):
+            checked = await asyncio.to_thread(_build_update_manager().check)
+            latest = checked.get("latest")
+        if not isinstance(latest, dict):
+            raise ValueError("No signed release is available to retry.")
+        version = str(latest.get("version") or "")
+        digest = str(latest.get("bundle_sha256") or "")
+        return await asyncio.to_thread(
+            _get_update_automation_service().retry_release,
+            version=version,
+            bundle_sha256=digest,
+        )
+    except Exception as exc:
+        log.warning("Update retry failed: %s", exc)
+        _raise_update_error(exc, apply=True)
 
 
 @app.get(
@@ -5110,11 +6211,146 @@ async def update_job(job_id: str):
     dependencies=[require_role("admin")],
 )
 async def update_rollback():
+    _require_persistent_config_writable()
     try:
-        return await asyncio.to_thread(_build_update_manager().rollback)
+        return await asyncio.to_thread(
+            _get_update_automation_service().rollback_release
+        )
     except Exception as exc:
         log.exception("Update rollback failed: %s", exc)
         _raise_update_error(exc, rollback=True)
+
+
+@app.get(
+    "/api/v1/update/recovery/status",
+    tags=["Updates"],
+)
+async def recovery_update_status(request: Request, response: Response):
+    """Return only public-safe official recovery state and bootstrap CSRF."""
+
+    try:
+        requires_auth = await asyncio.to_thread(_active_administrator_auth_required)
+        recovery_active = await asyncio.to_thread(
+            _official_recovery_active,
+            administrator_required=requires_auth,
+        )
+        payload = (
+            await asyncio.to_thread(_build_official_recovery_service().status)
+            if recovery_active
+            else {
+                "current_version": "",
+                "latest": None,
+                "update_available": False,
+                "image_required": False,
+                "recovery_waiting_for_newer_release": False,
+                "mode": "official-signed-recovery",
+            }
+        )
+        bootstrap_csrf = None
+        if recovery_active and not requires_auth:
+            client = _effective_client_host(request) or "unknown"
+            bootstrap_csrf = _issue_recovery_csrf(client)
+            response.set_cookie(
+                key=_RECOVERY_CSRF_COOKIE,
+                value=bootstrap_csrf,
+                httponly=True,
+                secure=_should_use_secure_cookies(request),
+                samesite="strict",
+                max_age=_RECOVERY_CSRF_TTL_SECONDS,
+            )
+        return {
+            **payload,
+            "status": "active" if recovery_active else "inactive",
+            "reason_code": (
+                "official_recovery_active"
+                if recovery_active
+                else "official_recovery_inactive"
+            ),
+            "recovery_active": recovery_active,
+            "bootstrap_csrf": bootstrap_csrf,
+            "confirmation_required": not requires_auth,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("Official recovery update status failed: %s", exc)
+        _raise_update_error(exc)
+
+
+@app.post(
+    "/api/v1/update/recovery/check",
+    tags=["Updates"],
+)
+async def recovery_update_check(
+    request: Request,
+    body: Optional[RecoveryUpdateRequest] = None,
+):
+    _require_persistent_config_writable()
+    try:
+        body = body or RecoveryUpdateRequest()
+        requires_auth = await asyncio.to_thread(_active_administrator_auth_required)
+        if not await asyncio.to_thread(
+            _official_recovery_active,
+            administrator_required=requires_auth,
+        ):
+            raise structured_error(
+                ErrorCode.UPDATE_RECOVERY_INACTIVE,
+                message="Use the authenticated Update Center for this healthy installation.",
+            )
+        await _authorize_recovery_update(
+            request,
+            confirmation=body.confirmation,
+            require_confirmation=False,
+        )
+        payload = await asyncio.to_thread(_build_official_recovery_service().check)
+        return {
+            **payload,
+            "status": "active",
+            "reason_code": "official_recovery_active",
+            "recovery_active": True,
+            "bootstrap_csrf": None,
+            "confirmation_required": await asyncio.to_thread(
+                lambda: not _active_administrator_auth_required()
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("Official recovery update check failed: %s", exc)
+        _raise_update_error(exc)
+
+
+@app.post(
+    "/api/v1/update/recovery/apply",
+    status_code=202,
+    tags=["Updates"],
+)
+async def recovery_update_apply(request: Request, body: RecoveryUpdateRequest):
+    _require_persistent_config_writable()
+    try:
+        requires_auth = await asyncio.to_thread(_active_administrator_auth_required)
+        if not await asyncio.to_thread(
+            _official_recovery_active,
+            administrator_required=requires_auth,
+        ):
+            raise structured_error(
+                ErrorCode.UPDATE_RECOVERY_INACTIVE,
+                message="Use the authenticated Update Center for this healthy installation.",
+            )
+        await _authorize_recovery_update(
+            request,
+            confirmation=body.confirmation,
+            require_confirmation=True,
+        )
+        return await asyncio.to_thread(
+            _build_official_recovery_service().apply,
+            body.version,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("Official recovery update apply failed: %s", exc)
+        _raise_update_error(exc, apply=True)
 
 
 # CONTROL ENDPOINTS
@@ -5126,9 +6362,7 @@ async def update_rollback():
 )
 async def restart_container():
     """Restart ChannelWatch"""
-    restart_started = await asyncio.to_thread(
-        _schedule_container_restart_for_update
-    )
+    restart_started = await asyncio.to_thread(_schedule_container_restart_for_update)
     if not restart_started:
         raise structured_error(ErrorCode.SUPERVISOR_NOT_AVAILABLE)
     return {
@@ -5343,9 +6577,7 @@ async def get_dvr_streams_v1(dvr_id: str):
         channel_images: Dict[str, str] = {}
         channel_logos: Dict[str, str] = {}
         try:
-            ch_resp = await _safe_dvr_get_url(
-                f"{surl}/api/v1/channels", timeout=3
-            )
+            ch_resp = await _safe_dvr_get_url(f"{surl}/api/v1/channels", timeout=3)
             if ch_resp.status_code == 200:
                 for ch in ch_resp.json():
                     num = str(ch.get("number", ""))
@@ -5457,9 +6689,7 @@ async def get_dvr_system_info_v1(dvr_id: str):
     port = int(surl.rsplit(":", 1)[1])
 
     if CORE_APP_AVAILABLE:
-        from core.helpers.config import get_settings as _get_core_settings
-
-        _cfg = await asyncio.to_thread(_get_core_settings)
+        _cfg = await asyncio.to_thread(_get_core_settings_sync)
     else:
         _cfg = await _load_settings_async()
 
@@ -5605,9 +6835,7 @@ async def get_dvr_upcoming_recordings_v1(dvr_id: str, limit: int = 250):
     sid, sname, surl = server
 
     if CORE_APP_AVAILABLE:
-        from core.helpers.config import get_settings as _get_core_settings
-
-        settings = await asyncio.to_thread(_get_core_settings)
+        settings = await asyncio.to_thread(_get_core_settings_sync)
     else:
         settings = await _load_settings_async()
 
@@ -5954,6 +7182,7 @@ async def security_status():
 
 @_auth_router.post("/login")
 async def auth_login(body: _LoginRequest, response: Response, request: Request):
+    _require_persistent_config_writable()
     username, role, token, csrf_token = await asyncio.to_thread(
         _auth_login_sync, body.username, body.password
     )
@@ -5974,6 +7203,7 @@ async def auth_login(body: _LoginRequest, response: Response, request: Request):
 
 @_auth_router.post("/logout")
 async def auth_logout(request: Request, response: Response):
+    _require_persistent_config_writable()
     if RBAC_ENABLED and not CW_DISABLE_AUTH:
         if not await _request_has_valid_session_async(request):
             raise structured_error(ErrorCode.AUTH_UNAUTHENTICATED)
@@ -5999,6 +7229,7 @@ async def auth_whoami(request: Request):
 
 @_auth_router.post("/change-credentials")
 async def auth_change_credentials(body: _ChangeCredentialsRequest, request: Request):
+    _require_persistent_config_writable()
     if not await _request_has_valid_session_async(request):
         raise structured_error(ErrorCode.AUTH_UNAUTHENTICATED)
     csrf_header = request.headers.get("X-CSRF-Token", "")
@@ -6045,6 +7276,17 @@ def _auth_setup_sync(body: _SetupRequest) -> _AuthSetupResult:
 
 
 def _auth_setup_locked(body: _SetupRequest) -> _AuthSetupResult:
+    from core.helpers.maintenance_transaction import configuration_maintenance_lock
+
+    # Authentication setup owns a database transaction and settings update.
+    # Hold the credential-maintenance lock across the complete decision so a
+    # concurrent restore/reset/rotation cannot be overwritten by a stale
+    # settings model after the administrator row is created.
+    with configuration_maintenance_lock(backend_config.CONFIG_DIR):
+        return _auth_setup_generation_locked(body)
+
+
+def _auth_setup_generation_locked(body: _SetupRequest) -> _AuthSetupResult:
     settings = load_settings()
     current_mode = _effective_auth_mode(settings)
     if current_mode == "api_key":
@@ -6112,6 +7354,7 @@ async def auth_setup_status():
 
 @_auth_router.post("/setup", status_code=201)
 async def auth_setup(body: _SetupRequest, response: Response, request: Request):
+    _require_persistent_config_writable()
     setup_result = await asyncio.to_thread(_auth_setup_sync, body)
     settings = setup_result.settings
     _refresh_runtime_auth_state(settings)

@@ -25,7 +25,7 @@ Fresh installs are setup-first, with secure login recommended. No-auth is an adv
 
 Use the in-container recovery command for RBAC-enabled installs instead of looking through files inside the container for shared browser credentials:
 
-```bash
+```sh
 docker exec -it channelwatch channelwatch doctor reset-admin-password --username <admin>
 ```
 

@@ -186,4 +186,16 @@ describe("Dashboard auth bootstrap", () => {
     expect(api).toContain("headers: authHeaders()")
     expect(api).toContain("clearCachedAuthState()")
   })
+
+  it("never lets legacy key recovery replace authentication bootstrap", () => {
+    const dashboard = srcFile("../components/dashboard.tsx")
+
+    expect(dashboard).not.toContain('data-testid="runtime-setup-required-shell"')
+    expect(dashboard).toContain('data-testid="runtime-recovery-warning"')
+    expect(dashboard).not.toContain("openssl rand -base64 48")
+    expect(dashboard.indexOf("fetchRuntimePreflight()")).toBeLessThan(
+      dashboard.indexOf("fetchSetupStatus()"),
+    )
+    expect(dashboard).not.toContain('setAuthShell("runtime")')
+  })
 })

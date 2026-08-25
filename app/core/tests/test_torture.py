@@ -71,6 +71,7 @@ class TestMigrationIdempotency:
             result = migrate_settings(tmp_path, settings)
         assert result.get("_version") == CURRENT_SCHEMA_VERSION
         assert isinstance(result.get("dvr_servers"), list)
+        assert not (tmp_path / "backups").exists()
 
     def test_defaults_merge_preserves_schema_version_metadata(self):
         merged = defaults_merge(

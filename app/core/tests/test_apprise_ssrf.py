@@ -304,6 +304,51 @@ class TestAppriseSSRFRegression:
         other_apprise.add.assert_called_once_with(destination)
         other_apprise.notify.assert_called_once()
 
+    def test_trusted_private_hostname_rejected_before_apprise_add(self) -> None:
+        destination = "json://notify.lan:8065/hooks/channelwatch"
+        provider = _make_provider([("custom", destination)])
+        provider.settings = cast(
+            Any,
+            type(
+                "Settings",
+                (),
+                {
+                    "trusted_notification_destinations": [
+                        {
+                            "source": "apprise_custom",
+                            "scheme": "http",
+                            "host": "notify.lan",
+                            "port": 8065,
+                        }
+                    ]
+                },
+            )(),
+        )
+        apprise_mod = MagicMock()
+        other_apprise = MagicMock()
+        apprise_mod.Apprise.return_value = other_apprise
+
+        with (
+            patch("importlib.import_module", return_value=apprise_mod),
+            patch(
+                "core.helpers.url_validator.socket.getaddrinfo",
+                return_value=[
+                    (
+                        __import__("socket").AF_INET,
+                        __import__("socket").SOCK_STREAM,
+                        6,
+                        "",
+                        ("192.168.1.20", 0),
+                    )
+                ],
+            ),
+        ):
+            result = provider.send_notification("Recording started", "Show failed.")
+
+        assert result is False
+        other_apprise.add.assert_not_called()
+        other_apprise.notify.assert_not_called()
+
     def test_metadata_custom_destination_not_allowed_even_when_trusted(self) -> None:
         destination = "json://169.254.169.254/latest/meta-data"
         provider = _make_provider([("custom", destination)])

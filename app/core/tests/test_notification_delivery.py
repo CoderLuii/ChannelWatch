@@ -659,6 +659,15 @@ class TestDeliveryPersistence:
 
 
 class TestNotificationManagerIntegration:
+    @pytest.fixture(autouse=True)
+    def _legacy_unconfigured_notification_routing(self):
+        """These integration cases model an install with no explicit routing."""
+
+        with patch(
+            "core.notifications.notification._load_routing_config", return_value={}
+        ):
+            yield
+
     def test_circuit_breakers_are_isolated_by_provider_and_destination(self):
         cb = CircuitBreaker()
         for _ in range(CircuitBreaker.FAILURE_THRESHOLD):
@@ -851,7 +860,10 @@ class TestNotificationManagerIntegration:
         nm.register_provider(mock_provider)
 
         async def run():
-            with patch("core.notifications.delivery.time.sleep"):
+            # Keep the production retry count while removing delays without
+            # replacing the process-wide time.sleep function used by the queue
+            # waiter in the other worker thread.
+            with patch("core.notifications.delivery.RETRY_DELAYS", [0, 0, 0, 0, 0]):
                 accepted = await nm.send_notification_async(
                     "Failing", "msg", dvr_id="dvr1", event_type="disk_alert"
                 )

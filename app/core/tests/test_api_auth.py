@@ -531,13 +531,18 @@ class TestSensitiveFieldMasking:
         assert "user:pass" not in webhook["url"]
         assert "sig=secret" not in webhook["url"]
 
-    def test_post_settings_preserves_masked_webhook_url_by_position(
+    def test_post_settings_preserves_masked_webhook_url_by_stable_identity(
         self, client, test_settings_file
     ):
         settings = json.loads(test_settings_file.read_text())
         real_url = "https://hooks.example.test/api/webhooks/abc123/token456?sig=secret"
         settings["webhooks"] = [
-            {"url": real_url, "secret": "hmac-secret", "enabled": True}
+            {
+                "id": "webhook-primary",
+                "url": real_url,
+                "secret": "hmac-secret",
+                "enabled": True,
+            }
         ]
         test_settings_file.write_text(json.dumps(settings))
 
@@ -567,6 +572,126 @@ class TestSensitiveFieldMasking:
         )
         assert decrypted[0]["url"] == real_url
         assert decrypted[0]["secret"] == "hmac-secret"
+
+    def test_deleting_first_legacy_webhook_preserves_only_survivor_credentials(
+        self, client, test_settings_file
+    ):
+        first_url = "https://hooks.example.test/first/private-token"
+        second_url = "https://hooks.example.test/second/private-token"
+        settings = json.loads(test_settings_file.read_text())
+        settings["webhooks"] = [
+            {"url": first_url, "secret": "first-secret", "enabled": True},
+            {"url": second_url, "secret": "second-secret", "enabled": True},
+        ]
+        test_settings_file.write_text(json.dumps(settings))
+
+        masked = client.get(
+            "/api/settings", headers={"X-API-Key": "test-api-key-12345"}
+        ).json()
+        assert [item["id"] for item in masked["webhooks"]] == [
+            "legacy-webhook-0",
+            "legacy-webhook-1",
+        ]
+        masked["webhooks"] = [masked["webhooks"][1]]
+        response = client.post(
+            "/api/settings",
+            json=masked,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert response.status_code == 200
+        from core.helpers.encryption import (
+            ENCRYPTION_KEY_FILE,
+            decrypt_webhook_credentials,
+        )
+
+        saved = json.loads(test_settings_file.read_text())
+        decrypted = decrypt_webhook_credentials(
+            saved["webhooks"], test_settings_file.parent / ENCRYPTION_KEY_FILE.name
+        )
+        assert len(decrypted) == 1
+        assert decrypted[0]["id"] == "legacy-webhook-1"
+        assert decrypted[0]["url"] == second_url
+        assert decrypted[0]["secret"] == "second-secret"
+        assert first_url not in json.dumps(decrypted)
+        assert "first-secret" not in json.dumps(decrypted)
+
+    def test_stale_masked_save_cannot_reverse_completed_credential_reset(
+        self, client, test_settings_file
+    ):
+        from core.helpers.credential_maintenance import reset_protected_credentials
+        from core.helpers.encryption import ensure_managed_key
+        from ui.backend.config import load_settings
+
+        settings = json.loads(test_settings_file.read_text())
+        settings["dvr_servers"][0]["api_key"] = "dvr-secret"
+        test_settings_file.write_text(json.dumps(settings))
+        key_file = test_settings_file.parent / "encryption.key"
+        ensure_managed_key(key_file, settings_file=test_settings_file)
+
+        stale_payload = client.get(
+            "/api/settings", headers={"X-API-Key": "test-api-key-12345"}
+        ).json()
+        assert stale_payload["dvr_servers"][0]["api_key"] == "****"
+        reset_protected_credentials(
+            test_settings_file.parent,
+            settings_file=test_settings_file,
+            key_file=key_file,
+        )
+
+        response = client.post(
+            "/api/settings",
+            json=stale_payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "ERR_SETTINGS_VALIDATION_FAILED"
+        current = load_settings()
+        assert current.dvr_servers[0]["api_key"] == ""
+        assert current.dvr_servers[0]["enabled"] is False
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("post", "/api/regenerate-api-key"),
+            ("post", "/api/dvrs/dvr_test/soft-delete"),
+        ],
+    )
+    def test_internal_settings_mutations_cannot_resurrect_reset_credentials(
+        self, client, test_settings_file, method, path
+    ):
+        from core.helpers.credential_maintenance import reset_protected_credentials
+        from core.helpers.encryption import ensure_managed_key
+        from ui.backend.config import load_settings
+
+        settings = json.loads(test_settings_file.read_text())
+        settings["dvr_servers"][0]["api_key"] = "stale-secret"
+        settings["dvr_servers"][0]["enabled"] = True
+        test_settings_file.write_text(json.dumps(settings))
+        key_file = test_settings_file.parent / "encryption.key"
+        ensure_managed_key(key_file, settings_file=test_settings_file)
+
+        reset_protected_credentials(
+            test_settings_file.parent,
+            settings_file=test_settings_file,
+            key_file=key_file,
+        )
+
+        # These routes previously loaded a model before taking the save lock.
+        # Prove they no longer use that stale-read path at all.
+        with patch(
+            "ui.backend.main._load_settings_async",
+            side_effect=AssertionError("stale settings loader used"),
+        ):
+            response = getattr(client, method)(
+                path,
+                headers={"X-API-Key": "test-api-key-12345"},
+            )
+
+        assert response.status_code == 200
+        current = load_settings()
+        assert current.dvr_servers[0]["api_key"] == ""
+        assert current.dvr_servers[0]["enabled"] is False
 
 
 class TestSensitiveFieldPOSTSentinel:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import errno
 import fcntl
 import hashlib
 import json
@@ -10,15 +10,20 @@ import os
 import re
 import stat as stat_module
 import sys
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 
 CONFIG_DIR = Path(os.environ.get("CONFIG_PATH", "/config"))
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 APP_DEFAULT_TZ = "America/Los_Angeles"
+DEFAULT_RUNTIME_UID = 501
+DEFAULT_RUNTIME_GID = 20
 CURRENT_SCHEMA_VERSION = 7
+MAX_SETTINGS_FILE_BYTES = 8 * 1024 * 1024
+MAX_RUNTIME_CONTROL_FILE_BYTES = 256 * 1024
 SUPERVISOR_TEMPLATE = Path("/etc/supervisor/conf.d/supervisord.conf.template")
 SUPERVISOR_CONF = Path("/tmp/supervisord.conf")
 SUPERVISOR_RUNTIME_DIR = Path(
@@ -30,11 +35,14 @@ RUNTIME_ABI = "channelwatch-runtime-v1"
 CHANNELWATCH_RUNTIME_DIR = CONFIG_DIR / "channelwatch-runtime"
 RUNTIME_PROCESS_UMASK = 0o027
 VIRTUALIZED_OWNERSHIP_FILESYSTEMS = {"virtiofs"}
+VIRTUALIZED_IDENTITY_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.0)
 RESTART_REQUIRED_FILE = "restart-required.json"
 RESTART_REQUIRED_PATH = CHANNELWATCH_RUNTIME_DIR / RESTART_REQUIRED_FILE
 RESTART_JOURNAL_LOCK_FILE = "restart-required.lock"
 RESTART_JOURNAL_LOCK_PATH = CHANNELWATCH_RUNTIME_DIR / RESTART_JOURNAL_LOCK_FILE
 ACTIVATION_OUTCOME_LOCK_FILE = "activation-outcome.lock"
+CONTAINER_INSTANCE_LOCK_FILE = ".channelwatch-instance.lock"
+CONTAINER_INSTANCE_LOCK_MODE = 0o600
 RESTART_JOURNAL_SCHEMA = 2
 RESTART_JOURNAL_KEYS = {
     "schema",
@@ -361,6 +369,66 @@ def _open_real_directory(path: Path, *, purpose: str) -> int:
     return directory_fd
 
 
+def _read_bounded_regular_file(path: Path, *, max_bytes: int, purpose: str) -> bytes:
+    """Read one stable single-link regular file without following links."""
+
+    try:
+        listed = path.lstat()
+    except OSError as exc:
+        raise RuntimeError(f"Could not inspect {purpose}: {exc}") from exc
+    if (
+        not stat_module.S_ISREG(listed.st_mode)
+        or listed.st_nlink != 1
+        or listed.st_size > max_bytes
+    ):
+        raise RuntimeError(f"Unsafe or oversized {purpose}: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        expected = (listed.st_dev, listed.st_ino, listed.st_size)
+        if (
+            not stat_module.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino, opened.st_size) != expected
+        ):
+            raise RuntimeError(f"{purpose.capitalize()} changed while opening.")
+        payload = bytearray()
+        while len(payload) <= max_bytes:
+            chunk = os.read(descriptor, min(64 * 1024, max_bytes + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after = os.fstat(descriptor)
+        named = path.lstat()
+        if len(payload) > max_bytes or any(
+            (item.st_dev, item.st_ino, item.st_size) != expected
+            for item in (after, named)
+        ):
+            raise RuntimeError(f"{purpose.capitalize()} changed while reading.")
+        return bytes(payload)
+    finally:
+        os.close(descriptor)
+
+
+def _verify_readable_regular_file(path: Path, *, purpose: str) -> None:
+    """Open a required runtime file without following links or reading content."""
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"Could not open {purpose} safely: {exc}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat_module.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise RuntimeError(f"{purpose.capitalize()} is not a single-link regular file.")
+    finally:
+        os.close(descriptor)
+
+
 def _ensure_real_directory(path: Path, *, mode: int, purpose: str) -> None:
     try:
         os.mkdir(path, mode)
@@ -372,9 +440,242 @@ def _ensure_real_directory(path: Path, *, mode: int, purpose: str) -> None:
     os.close(directory_fd)
 
 
+def config_filesystem_is_read_only(path: Path = CONFIG_DIR) -> bool:
+    """Return whether the mounted configuration filesystem is read-only."""
+
+    try:
+        flags = os.statvfs(path).f_flag
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not inspect configuration filesystem capabilities: {exc}"
+        ) from exc
+    return bool(flags & getattr(os, "ST_RDONLY", 1))
+
+
+def _require_safe_container_instance_lock(
+    metadata: os.stat_result,
+    *,
+    expected: os.stat_result | None = None,
+) -> None:
+    """Validate the stable inode used to own one mounted configuration root."""
+
+    if not stat_module.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise RuntimeError(
+            "Container instance lock must be a single-link regular file."
+        )
+    if expected is not None and (metadata.st_dev, metadata.st_ino) != (
+        expected.st_dev,
+        expected.st_ino,
+    ):
+        raise RuntimeError("Container instance lock changed while it was opened.")
+
+
+def acquire_container_instance_lock(config_dir: Path = CONFIG_DIR) -> int:
+    """Exclusively own one `/config` mount for this container's lifetime.
+
+    The returned descriptor is deliberately inheritable.  The foreground
+    Supervisor parent retains that descriptor across exec and throughout the
+    container lifetime; its core and UI children may close their copies without
+    releasing the parent's lock.  No guardian process is created.
+
+    A mature configuration remounted read-only may reuse an existing safe
+    mode-0600 lock file through an O_RDONLY descriptor.  Creating or repairing
+    the lock still requires writable storage.
+    """
+
+    parent_fd = _open_real_directory(config_dir, purpose="configuration")
+    lock_fd: int | None = None
+    listed: os.stat_result | None = None
+    writable = True
+    created = False
+    try:
+        try:
+            listed = os.stat(
+                CONTAINER_INSTANCE_LOCK_FILE,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            listed = None
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not inspect the container instance lock safely: {exc}"
+            ) from exc
+        if listed is not None:
+            _require_safe_container_instance_lock(listed)
+
+        flags = os.O_RDWR
+        if listed is None:
+            flags |= os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        try:
+            lock_fd = os.open(
+                CONTAINER_INSTANCE_LOCK_FILE,
+                flags,
+                CONTAINER_INSTANCE_LOCK_MODE,
+                dir_fd=parent_fd,
+            )
+            created = listed is None
+        except FileExistsError:
+            # Another entrypoint won the initial creation race.  A retry must
+            # inspect and open the resulting stable inode, never replace it.
+            try:
+                listed = os.stat(
+                    CONTAINER_INSTANCE_LOCK_FILE,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                _require_safe_container_instance_lock(listed)
+                lock_fd = os.open(
+                    CONTAINER_INSTANCE_LOCK_FILE,
+                    os.O_RDWR
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=parent_fd,
+                )
+            except OSError as retry_exc:
+                raise RuntimeError(
+                    "Could not open the concurrently created container "
+                    f"instance lock safely: {retry_exc}"
+                ) from retry_exc
+        except OSError as exc:
+            if (
+                listed is None
+                or exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}
+                or stat_module.S_IMODE(listed.st_mode)
+                != CONTAINER_INSTANCE_LOCK_MODE
+            ):
+                raise RuntimeError(
+                    f"Could not open the container instance lock safely: {exc}"
+                ) from exc
+            writable = False
+            try:
+                lock_fd = os.open(
+                    CONTAINER_INSTANCE_LOCK_FILE,
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=parent_fd,
+                )
+            except OSError as read_exc:
+                raise RuntimeError(
+                    "The existing read-only container instance lock is "
+                    f"inaccessible: {read_exc}"
+                ) from read_exc
+
+        opened = os.fstat(lock_fd)
+        _require_safe_container_instance_lock(opened, expected=listed)
+        if writable:
+            os.fchmod(lock_fd, CONTAINER_INSTANCE_LOCK_MODE)
+            opened = os.fstat(lock_fd)
+            if stat_module.S_IMODE(opened.st_mode) != CONTAINER_INSTANCE_LOCK_MODE:
+                raise RuntimeError(
+                    "Container instance lock mode could not be verified as 0600."
+                )
+            if created:
+                os.fsync(lock_fd)
+                os.fsync(parent_fd)
+        elif stat_module.S_IMODE(opened.st_mode) != CONTAINER_INSTANCE_LOCK_MODE:
+            raise RuntimeError(
+                "A read-only container instance lock must already use mode 0600."
+            )
+
+        named = os.stat(
+            CONTAINER_INSTANCE_LOCK_FILE,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        _require_safe_container_instance_lock(named, expected=opened)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                "Another ChannelWatch container already owns this /config. "
+                "Stop the other container before starting this one."
+            ) from exc
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                raise RuntimeError(
+                    "Another ChannelWatch container already owns this /config. "
+                    "Stop the other container before starting this one."
+                ) from exc
+            raise RuntimeError(
+                f"Could not lock this ChannelWatch /config safely: {exc}"
+            ) from exc
+
+        # Prefer fd 3/4 when one was reserved by this function. Supervisor's
+        # foreground parent keeps any inherited descriptor, while those low
+        # descriptors also survive its defensive reload cleanup boundary.
+        if lock_fd not in {3, 4}:
+            if parent_fd in {3, 4}:
+                target_fd = parent_fd
+                os.close(parent_fd)
+                parent_fd = -1
+                os.dup2(lock_fd, target_fd, inheritable=True)
+                os.close(lock_fd)
+                lock_fd = target_fd
+        os.set_inheritable(lock_fd, True)
+        if not os.get_inheritable(lock_fd):
+            raise RuntimeError(
+                "Container instance lock descriptor did not remain inheritable."
+            )
+        return_fd = lock_fd
+        lock_fd = None
+        return return_fd
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
+
+
+def verify_container_instance_lock(
+    lock_fd: int,
+    config_dir: Path = CONFIG_DIR,
+) -> None:
+    """Revalidate the held lock inode immediately before the container exec."""
+
+    opened = os.fstat(lock_fd)
+    _require_safe_container_instance_lock(opened)
+    if stat_module.S_IMODE(opened.st_mode) != CONTAINER_INSTANCE_LOCK_MODE:
+        raise RuntimeError("Container instance lock no longer uses mode 0600.")
+    if not os.get_inheritable(lock_fd):
+        raise RuntimeError("Container instance lock is not inheritable across exec.")
+    parent_fd = _open_real_directory(config_dir, purpose="configuration")
+    try:
+        named = os.stat(
+            CONTAINER_INSTANCE_LOCK_FILE,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        _require_safe_container_instance_lock(named, expected=opened)
+    finally:
+        os.close(parent_fd)
+
+
+def release_container_instance_lock(lock_fd: int) -> None:
+    """Release startup ownership after an error before a successful exec."""
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
 @contextmanager
 def restart_transition_lock():
-    """Serialize journal writers/replayers on one stable, never-unlinked inode."""
+    """Serialize journal writers/replayers on one stable, never-unlinked inode.
+
+    A mature configuration that is later remounted read-only may continue to
+    use an already-created, mode-0600 lock inode.  Creating or repairing this
+    lock still requires writable storage; the read-only fallback never creates,
+    replaces, chmods, or follows a path.
+    """
 
     _ensure_real_directory(
         CHANNELWATCH_RUNTIME_DIR,
@@ -385,9 +686,35 @@ def restart_transition_lock():
         CHANNELWATCH_RUNTIME_DIR,
         purpose="runtime transition",
     )
-    flags = os.O_RDWR | os.O_CREAT
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    common_flags = getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    lock_fd: int | None = None
+    listed: os.stat_result | None = None
+    opened_read_only = False
     try:
+        try:
+            listed = os.stat(
+                RESTART_JOURNAL_LOCK_FILE,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            listed = None
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not inspect runtime transition lock safely: {exc}"
+            ) from exc
+
+        if listed is not None and (
+            not stat_module.S_ISREG(listed.st_mode) or listed.st_nlink != 1
+        ):
+            raise RuntimeError(
+                "Could not open runtime transition lock safely: the path is "
+                "not a single-link regular file."
+            )
+
+        flags = os.O_RDWR | common_flags
+        if listed is None:
+            flags |= os.O_CREAT | os.O_EXCL
         try:
             lock_fd = os.open(
                 RESTART_JOURNAL_LOCK_FILE,
@@ -395,16 +722,63 @@ def restart_transition_lock():
                 0o600,
                 dir_fd=parent_fd,
             )
+        except FileExistsError:
+            # A concurrent creator won. Re-enter through this function so the
+            # resulting inode is freshly inspected under the normal contract.
+            os.close(parent_fd)
+            parent_fd = -1
+            with restart_transition_lock():
+                yield
+            return
         except OSError as exc:
-            raise RuntimeError(
-                f"Could not open runtime transition lock safely: {exc}"
-            ) from exc
+            if (
+                listed is None
+                or exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}
+                or stat_module.S_IMODE(listed.st_mode) != 0o600
+            ):
+                raise RuntimeError(
+                    f"Could not open runtime transition lock safely: {exc}"
+                ) from exc
+            try:
+                lock_fd = os.open(
+                    RESTART_JOURNAL_LOCK_FILE,
+                    os.O_RDONLY | common_flags,
+                    dir_fd=parent_fd,
+                )
+                opened_read_only = True
+            except OSError as read_exc:
+                raise RuntimeError(
+                    "The existing read-only runtime transition lock is "
+                    f"inaccessible: {read_exc}"
+                ) from read_exc
+
         metadata = os.fstat(lock_fd)
-        if not stat_module.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            os.close(lock_fd)
-            raise RuntimeError(
-                "Runtime transition lock is not a single-link regular file."
+        if (
+            not stat_module.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (
+                listed is not None
+                and (metadata.st_dev, metadata.st_ino)
+                != (listed.st_dev, listed.st_ino)
             )
+        ):
+            raise RuntimeError(
+                "Runtime transition lock changed while it was opened."
+            )
+        if opened_read_only:
+            if stat_module.S_IMODE(metadata.st_mode) != 0o600:
+                raise RuntimeError(
+                    "A read-only runtime transition lock must already use mode 0600."
+                )
+        else:
+            os.fchmod(lock_fd, 0o600)
+            if stat_module.S_IMODE(os.fstat(lock_fd).st_mode) != 0o600:
+                raise RuntimeError(
+                    "Runtime transition lock mode could not be verified as 0600."
+                )
+            if listed is None:
+                os.fsync(lock_fd)
+                os.fsync(parent_fd)
         lock_acquired = False
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
@@ -413,9 +787,14 @@ def restart_transition_lock():
         finally:
             if lock_acquired:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+            if lock_fd is not None:
+                os.close(lock_fd)
+                lock_fd = None
     finally:
-        os.close(parent_fd)
+        if lock_fd is not None:
+            os.close(lock_fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def atomic_write_json(path: Path, payload: object, *, indent: int | None = 2) -> None:
@@ -722,6 +1101,202 @@ def cleanup_restart_journal_candidates_before_validation() -> None:
         os.close(runtime_fd)
 
 
+def validate_read_only_runtime_state() -> None:
+    """Reject runtime transitions that cannot be completed without writes."""
+
+    settings, settings_valid = load_settings()
+    if not settings_valid:
+        raise RuntimeError("A read-only /config requires valid existing settings.")
+    try:
+        settings_metadata = SETTINGS_FILE.lstat()
+    except OSError as exc:
+        raise RuntimeError("The settings file cannot be inspected safely.") from exc
+    if stat_module.S_IMODE(settings_metadata.st_mode) != 0o600:
+        raise RuntimeError(
+            "settings.json must be owner-only before /config is mounted read-only."
+        )
+    try:
+        settings_version = int(settings.get("_version") or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("The settings schema version is invalid.") from exc
+    if settings_version != CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(
+            "The settings schema must be reconciled on writable /config before "
+            "read-only startup."
+        )
+
+    migration_journal = CONFIG_DIR / "migration.journal"
+    if migration_journal.exists():
+        try:
+            migration_state = json.loads(
+                _read_bounded_regular_file(
+                    migration_journal,
+                    max_bytes=MAX_RUNTIME_CONTROL_FILE_BYTES,
+                    purpose="migration journal",
+                ).decode("utf-8")
+            )
+        except (RuntimeError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("The migration journal is invalid.") from exc
+        if (
+            not isinstance(migration_state, dict)
+            or migration_state.get("status") != "completed"
+        ):
+            raise RuntimeError(
+                "An interrupted settings migration requires writable /config."
+            )
+
+    key_path = CONFIG_DIR / "encryption.key"
+    key_lock_path = CONFIG_DIR / ".encryption-key.lock"
+    for path, label in ((key_path, "managed key"), (key_lock_path, "managed-key lock")):
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"The {label} must already exist before /config is mounted read-only."
+            ) from exc
+        if (
+            not stat_module.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat_module.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise RuntimeError(f"The {label} is not a private single-link regular file.")
+    try:
+        key_bytes = _read_bounded_regular_file(
+            key_path,
+            max_bytes=32,
+            purpose="managed key",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError("The managed key cannot be read safely.") from exc
+    if len(key_bytes) != 32:
+        raise RuntimeError(
+            "The managed key requires migration or recovery on writable /config."
+        )
+    _verify_readable_regular_file(
+        key_lock_path,
+        purpose="managed-key lock",
+    )
+
+    database_path = CONFIG_DIR / "channelwatch.db"
+    if database_path.exists():
+        _verify_readable_regular_file(
+            database_path,
+            purpose="ChannelWatch database",
+        )
+
+    # The UI opens the database using SQLite immutable read-only mode because
+    # Docker Desktop read-only bind mounts cannot create locking sidecars. A
+    # nonempty WAL or rollback journal may contain committed state absent from
+    # the main file, so it must be checkpointed on a writable mount first.
+    for suffix, label in (("-wal", "WAL"), ("-journal", "rollback journal")):
+        sidecar = CONFIG_DIR / f"channelwatch.db{suffix}"
+        try:
+            metadata = sidecar.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            not stat_module.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > 0
+        ):
+            raise RuntimeError(
+                f"The SQLite {label} requires writable /config recovery."
+            )
+
+    for collection, fields in (
+        ("dvr_servers", ("api_key",)),
+        ("webhooks", ("url", "secret")),
+    ):
+        entries = settings.get(collection)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for field in fields:
+                value = entry.get(field)
+                if value is None or value == "":
+                    continue
+                if not isinstance(value, str) or not value.startswith("fernet:"):
+                    raise RuntimeError(
+                        "Protected plaintext credentials require writable /config migration."
+                    )
+
+    transaction_root = CONFIG_DIR / ".channelwatch-transactions"
+    if transaction_root.exists() and any(transaction_root.iterdir()):
+        raise RuntimeError(
+            "An interrupted configuration transaction requires writable /config."
+        )
+
+    try:
+        CHANNELWATCH_RUNTIME_DIR.lstat()
+    except FileNotFoundError:
+        return
+
+    if RESTART_REQUIRED_PATH.exists():
+        raise RuntimeError(
+            "A runtime transition journal requires writable /config for recovery."
+        )
+
+    active_path = CHANNELWATCH_RUNTIME_DIR / "active.json"
+    active = _load_runtime_control_json("active.json") if active_path.exists() else None
+    if active_path.exists() and active is None:
+        raise RuntimeError("The active runtime selection is invalid.")
+    job_path = CHANNELWATCH_RUNTIME_DIR / "update-job.json"
+    job = _load_runtime_control_json("update-job.json") if job_path.exists() else None
+    if job_path.exists() and job is None:
+        raise RuntimeError("The update job is invalid and requires writable recovery.")
+    transition_job = bool(
+        isinstance(job, dict)
+        and (
+            job.get("startup_validation_pending") is True
+            or str(job.get("status") or "")
+            not in {"success", "failed", "current", "image_required"}
+        )
+    )
+    if transition_job:
+        raise RuntimeError(
+            "An update validation is incomplete and requires writable /config."
+        )
+
+    activation_records = list(CHANNELWATCH_RUNTIME_DIR.glob("activation-*.json"))
+    if activation_records:
+        raise RuntimeError(
+            "An update activation record requires writable /config for recovery."
+        )
+    if isinstance(active, dict) and not str(active.get("activation_id") or ""):
+        raise RuntimeError(
+            "A legacy active runtime must be adopted while /config is writable."
+        )
+
+    recovery_path = CHANNELWATCH_RUNTIME_DIR / "official-recovery-mode.json"
+    if recovery_path.exists():
+        recovery = _load_runtime_control_json("official-recovery-mode.json")
+        if not isinstance(recovery, dict) or not isinstance(active, dict):
+            raise RuntimeError(
+                "The official recovery marker requires writable reconciliation."
+            )
+        active_manifest = active.get("manifest")
+        active_digest = (
+            str(active_manifest.get("bundle_sha256") or "").strip().lower()
+            if isinstance(active_manifest, dict)
+            else ""
+        )
+        failed_version = str(recovery.get("failed_version") or "").strip().lstrip("v")
+        failed_digest = str(
+            recovery.get("failed_bundle_sha256") or ""
+        ).strip().lower()
+        if (
+            not failed_version
+            or str(active.get("version") or "").strip().lstrip("v")
+            != failed_version
+            or (failed_digest and active_digest != failed_digest)
+        ):
+            raise RuntimeError(
+                "The official recovery marker requires writable reconciliation."
+            )
+
+
 def replay_restart_required_journal() -> dict | None:
     """Idempotently finish a write-ahead runtime transition before selection."""
 
@@ -768,7 +1343,104 @@ def replay_restart_required_journal() -> dict | None:
 
 def load_settings() -> tuple[dict, bool]:
     try:
-        loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))
+        directory_fd = _open_real_directory(
+            CONFIG_DIR,
+            purpose="settings read",
+        )
+        try:
+            metadata = os.stat(
+                SETTINGS_FILE.name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat_module.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+            ):
+                raise RuntimeError("settings.json is not a single-link regular file")
+            if metadata.st_size > MAX_SETTINGS_FILE_BYTES:
+                raise RuntimeError("settings.json exceeds the maximum supported size")
+
+            flags = os.O_RDONLY
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            settings_fd = os.open(
+                SETTINGS_FILE.name,
+                flags,
+                dir_fd=directory_fd,
+            )
+            try:
+                opened = os.fstat(settings_fd)
+                if (
+                    not stat_module.S_ISREG(opened.st_mode)
+                    or opened.st_nlink != 1
+                    or (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_size,
+                        opened.st_mtime_ns,
+                        opened.st_ctime_ns,
+                    )
+                    != (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        metadata.st_size,
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                    )
+                ):
+                    raise RuntimeError("settings.json changed while it was opened")
+                chunks: list[bytes] = []
+                total = 0
+                while True:
+                    chunk = os.read(settings_fd, 64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_SETTINGS_FILE_BYTES:
+                        raise RuntimeError(
+                            "settings.json exceeds the maximum supported size"
+                        )
+                    chunks.append(chunk)
+                finished = os.fstat(settings_fd)
+                current = os.stat(
+                    SETTINGS_FILE.name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                expected_identity = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mtime_ns,
+                    opened.st_ctime_ns,
+                )
+                if (
+                    (
+                        finished.st_dev,
+                        finished.st_ino,
+                        finished.st_size,
+                        finished.st_mtime_ns,
+                        finished.st_ctime_ns,
+                    )
+                    != expected_identity
+                    or (
+                        current.st_dev,
+                        current.st_ino,
+                        current.st_size,
+                        current.st_mtime_ns,
+                        current.st_ctime_ns,
+                    )
+                    != expected_identity
+                ):
+                    raise RuntimeError("settings.json changed while it was read")
+            finally:
+                os.close(settings_fd)
+        finally:
+            os.close(directory_fd)
+        loaded = json.loads(b"".join(chunks).decode("utf-8-sig"))
         if isinstance(loaded, dict):
             return loaded, True
         warning(f"{SETTINGS_FILE} is not a JSON object; using defaults.")
@@ -778,7 +1450,7 @@ def load_settings() -> tuple[dict, bool]:
     return dict(DEFAULT_SETTINGS), False
 
 
-def ensure_settings(uid: int, gid: int) -> bool:
+def ensure_settings(uid: int, gid: int, *, read_only: bool = False) -> bool:
     _ensure_real_directory(CONFIG_DIR, mode=0o755, purpose="configuration")
     try:
         settings_metadata = SETTINGS_FILE.lstat()
@@ -795,6 +1467,12 @@ def ensure_settings(uid: int, gid: int) -> bool:
                 f"Refusing unsafe non-regular or hard-linked settings file: {SETTINGS_FILE}"
             )
         return False
+
+    if read_only:
+        raise RuntimeError(
+            "A read-only /config must already contain a safe settings.json file. "
+            "Remount /config writable once so ChannelWatch can initialize it."
+        )
 
     info("Settings file not found. Creating default settings.json")
     atomic_write_json(SETTINGS_FILE, DEFAULT_SETTINGS, indent=4)
@@ -954,7 +1632,7 @@ def merge_dvr_env(settings: dict) -> list[str]:
     return changed_keys
 
 
-def merge_bootstrap_env(settings_created: bool) -> None:
+def merge_bootstrap_env(settings_created: bool, *, read_only: bool = False) -> None:
     settings, can_write = load_settings()
     changed_keys: list[str] = []
 
@@ -989,7 +1667,7 @@ def merge_bootstrap_env(settings_created: bool) -> None:
             )
 
     selected_tz = configure_timezone_value(settings, changed_keys)
-    if changed_keys and can_write:
+    if changed_keys and can_write and not read_only:
         settings["_version"] = max(int(settings.get("_version") or 0), CURRENT_SCHEMA_VERSION)
         atomic_write_json(SETTINGS_FILE, settings, indent=2)
         info(
@@ -997,6 +1675,11 @@ def merge_bootstrap_env(settings_created: bool) -> None:
             + ", ".join(dict.fromkeys(changed_keys))
         )
         atomic_write_json(CONFIG_DIR / "env_overrides.json", list(dict.fromkeys(changed_keys)), indent=None)
+    elif changed_keys and read_only:
+        info(
+            "[Entrypoint] Applied environment-derived runtime values in memory; "
+            "/config is read-only, so no bootstrap files were changed."
+        )
 
     os.environ["TZ"] = selected_tz
     info(f"Setting timezone to: {selected_tz}")
@@ -1030,10 +1713,14 @@ def configure_timezone_value(settings: dict, changed_keys: list[str]) -> str:
     return selected_tz
 
 
-def _walk_config_tree_no_follow(
+class _VirtualizedConfigIdentityMismatch(RuntimeError):
+    """VirtioFS returned inconsistent identity metadata for an otherwise safe fd."""
+
+
+def _walk_config_tree_no_follow_once(
     path: Path, visitor, *, writable_regular_files: bool = False
 ) -> None:
-    """Visit only real directories and regular files beneath one opened root."""
+    """Perform one no-follow walk of real directories and regular files."""
 
     root_fd = _open_real_directory(path, purpose="configuration")
 
@@ -1089,13 +1776,29 @@ def _walk_config_tree_no_follow(
                 ) from exc
             try:
                 opened_metadata = os.fstat(child_fd)
+                opened_is_directory = stat_module.S_ISDIR(opened_metadata.st_mode)
+                opened_is_regular = stat_module.S_ISREG(opened_metadata.st_mode)
                 if (
-                    (opened_metadata.st_dev, opened_metadata.st_ino)
-                    != (listed_metadata.st_dev, listed_metadata.st_ino)
-                    or is_directory != stat_module.S_ISDIR(opened_metadata.st_mode)
-                    or is_regular != stat_module.S_ISREG(opened_metadata.st_mode)
+                    is_directory != opened_is_directory
+                    or is_regular != opened_is_regular
                     or (is_regular and opened_metadata.st_nlink != 1)
                 ):
+                    raise RuntimeError(
+                        f"Configuration path changed while it was inspected: {child_path}"
+                    )
+                if (opened_metadata.st_dev, opened_metadata.st_ino) != (
+                    listed_metadata.st_dev,
+                    listed_metadata.st_ino,
+                ):
+                    if ownership_metadata_is_virtualized(child_path):
+                        # Docker Desktop VirtioFS can briefly return the inode
+                        # from before an atomic settings replacement through
+                        # DirEntry.stat while open/fstat already sees the new
+                        # file.  Never waive the identity check: abandon this
+                        # entire pass and retry after bounded metadata-cache
+                        # convergence.  Type and link checks above remain
+                        # mandatory before a retry is allowed.
+                        raise _VirtualizedConfigIdentityMismatch(str(child_path))
                     raise RuntimeError(
                         f"Configuration path changed while it was inspected: {child_path}"
                     )
@@ -1118,6 +1821,38 @@ def _walk_config_tree_no_follow(
         os.close(root_fd)
 
 
+def _walk_config_tree_no_follow(
+    path: Path, visitor, *, writable_regular_files: bool = False
+) -> None:
+    """Visit a safe config tree, retrying transient VirtioFS identities only."""
+
+    last_mismatch: _VirtualizedConfigIdentityMismatch | None = None
+    for attempt in range(len(VIRTUALIZED_IDENTITY_RETRY_DELAYS_SECONDS) + 1):
+        if attempt:
+            time.sleep(VIRTUALIZED_IDENTITY_RETRY_DELAYS_SECONDS[attempt - 1])
+        try:
+            _walk_config_tree_no_follow_once(
+                path,
+                visitor,
+                writable_regular_files=writable_regular_files,
+            )
+        except _VirtualizedConfigIdentityMismatch as exc:
+            last_mismatch = exc
+            continue
+        if attempt:
+            retry_word = "retry" if attempt == 1 else "retries"
+            warning(
+                "VirtioFS configuration identity metadata converged after "
+                f"{attempt} bounded {retry_word}."
+            )
+        return
+
+    raise RuntimeError(
+        "VirtioFS configuration identity metadata remained inconsistent after "
+        "bounded retries. Refusing to change configuration permissions."
+    ) from last_mismatch
+
+
 def validate_config_tree(path: Path) -> None:
     _walk_config_tree_no_follow(path, lambda *_args: None)
 
@@ -1138,13 +1873,27 @@ def chmod_config_tree(path: Path) -> None:
         # owned by this process are still normalized and verified.
         if not started_as_root and metadata.st_uid != effective_uid:
             return
+        try:
+            relative_parts = display_path.relative_to(path).parts
+        except ValueError:
+            relative_parts = ()
+        private_tree = bool(
+            relative_parts
+            and relative_parts[0] in {"backups", ".channelwatch-transactions"}
+        )
         mode = (
-            0o750
+            0o700
+            if is_directory and private_tree
+            else 0o750
             if is_directory
+            else 0o600
+            if private_tree
             else 0o600
             if name
             in {
                 "encryption.key",
+                "settings.json",
+                CONTAINER_INSTANCE_LOCK_FILE,
                 RESTART_JOURNAL_LOCK_FILE,
                 ACTIVATION_OUTCOME_LOCK_FILE,
             }
@@ -1274,7 +2023,230 @@ def read_image_version() -> str:
     return match.group(1) if match else "0.0.0"
 
 
-def select_app_runtime_dir() -> Path:
+def _load_runtime_control_json(name: str) -> dict | None:
+    """Read one bounded runtime control record without following links."""
+
+    if not name or Path(name).name != name:
+        raise RuntimeError("Runtime control filename is invalid.")
+    try:
+        runtime_metadata = CHANNELWATCH_RUNTIME_DIR.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not inspect runtime control directory: {exc}"
+        ) from exc
+    if (
+        stat_module.S_ISLNK(runtime_metadata.st_mode)
+        or not stat_module.S_ISDIR(runtime_metadata.st_mode)
+    ):
+        raise RuntimeError("Runtime control directory is not a real directory.")
+
+    runtime_fd = _open_real_directory(
+        CHANNELWATCH_RUNTIME_DIR,
+        purpose="runtime control",
+    )
+    control_fd: int | None = None
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        try:
+            listed = os.stat(name, dir_fd=runtime_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if not stat_module.S_ISREG(listed.st_mode) or listed.st_nlink != 1:
+            raise RuntimeError(f"Runtime control file {name} is unsafe.")
+        if listed.st_size > MAX_RUNTIME_CONTROL_FILE_BYTES:
+            raise RuntimeError(f"Runtime control file {name} is too large.")
+        control_fd = os.open(name, flags, dir_fd=runtime_fd)
+        opened = os.fstat(control_fd)
+        if (
+            not stat_module.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino, opened.st_size)
+            != (listed.st_dev, listed.st_ino, listed.st_size)
+        ):
+            raise RuntimeError(f"Runtime control file {name} changed while opening.")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                control_fd,
+                min(64 * 1024, MAX_RUNTIME_CONTROL_FILE_BYTES + 1 - total),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_RUNTIME_CONTROL_FILE_BYTES:
+                raise RuntimeError(f"Runtime control file {name} is too large.")
+        after = os.fstat(control_fd)
+        named = os.stat(name, dir_fd=runtime_fd, follow_symlinks=False)
+        expected_identity = (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+            opened.st_nlink,
+        )
+        if (
+            (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+                after.st_nlink,
+            )
+            != expected_identity
+            or (
+                named.st_dev,
+                named.st_ino,
+                named.st_size,
+                named.st_mtime_ns,
+                named.st_ctime_ns,
+                named.st_nlink,
+            )
+            != expected_identity
+        ):
+            raise RuntimeError(f"Runtime control file {name} changed while reading.")
+    finally:
+        if control_fd is not None:
+            os.close(control_fd)
+        os.close(runtime_fd)
+
+    try:
+        loaded = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def recover_v099_update_marker_after_image_pull(
+    *, image_version: str | None = None, read_only: bool = False
+) -> bool:
+    """Begin the explicit v0.9.9 image-pull recovery without touching app data.
+
+    The published v0.9.9 image can write the v0.9.18 active pointer and job but
+    cannot run the bundle. On the first v0.9.18 image start, recognize only an
+    unadopted legacy marker for this same release, select the now-current image
+    by removing the stale pointer, and replace the misleading old job with a
+    pending image-start validation. Core and UI publish success only after both
+    initialize. This also safely covers an interrupted protocol-1 adoption
+    without claiming which old image wrote an otherwise indistinguishable
+    marker. The in-bundle launcher guard remains defense-in-depth and is not
+    relied on for recovery.
+    """
+
+    current_image = str(image_version or read_image_version()).strip().lstrip("v")
+    if current_image != "0.9.18":
+        return False
+    try:
+        CHANNELWATCH_RUNTIME_DIR.lstat()
+    except FileNotFoundError:
+        return False
+    try:
+        RESTART_REQUIRED_PATH.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        # The existing durable transition is authoritative. The normal
+        # Supervisor-render path replays it before selecting child runtimes.
+        return False
+
+    with restart_transition_lock():
+        try:
+            RESTART_REQUIRED_PATH.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            return False
+        active = _load_runtime_control_json("active.json")
+        job = _load_runtime_control_json("update-job.json")
+        if not isinstance(job, dict):
+            return False
+        job_version = str(job.get("version") or "").strip().lstrip("v")
+        pending_retry = (
+            active is None
+            and job.get("operation") == "image_refresh_recovery"
+            and job.get("status") in {"validating", "failed"}
+            and job_version == current_image
+            and job.get("legacy_pointer_deactivated") is True
+        )
+        stale_legacy_marker = (
+            isinstance(active, dict)
+            and str(active.get("version") or "").strip().lstrip("v")
+            == current_image
+            and not active.get("activation_id")
+            and active.get("activation_protocol") is None
+            and job.get("operation") == "apply"
+            and job.get("status")
+            in {"applying", "restarting", "validating", "success", "failed"}
+            and job_version == current_image
+        )
+        if not pending_retry and not stale_legacy_marker:
+            return False
+        if read_only:
+            raise RuntimeError(
+                "A legacy update recovery is pending, but /config is read-only. "
+                "Remount it writable so ChannelWatch can complete recovery safely."
+            )
+
+        recovered_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        recovery_job_id = f"image-refresh-recovery-{uuid.uuid4().hex}"
+        recovery_job = {
+            "job_id": recovery_job_id,
+            "operation": "image_refresh_recovery",
+            "status": "validating",
+            "version": current_image,
+            "message": (
+                "The v0.9.18 image selected the image runtime and preserved "
+                "/config; waiting for core and UI startup validation."
+            ),
+            "image_pull_completed": False,
+            "legacy_pointer_deactivated": True,
+            "startup_validation_id": uuid.uuid4().hex,
+            "startup_validation_pending": True,
+            "startup_components": {},
+            "restart_required": False,
+            "updated_at": recovered_at,
+        }
+        # Publish one replayable write-ahead transition. A crash before this
+        # write leaves the old pointer/job authoritative; a crash afterward is
+        # completed idempotently by replay_restart_required_journal().
+        atomic_write_json(
+            RESTART_REQUIRED_PATH,
+            {
+                "schema": RESTART_JOURNAL_SCHEMA,
+                "reason": "runtime_transition",
+                "operation": "apply",
+                "phase": "commit",
+                "job_id": recovery_job_id,
+                "source_active": active if isinstance(active, dict) else None,
+                "replace_activation_state": True,
+                "created_at": recovered_at,
+                "control": {
+                    "active.json": None,
+                    "rollback.json": _load_runtime_control_json("rollback.json"),
+                    "activation-pending.json": None,
+                    "activation-core-ready.json": None,
+                    "activation-ui-ready.json": None,
+                    "update-job.json": recovery_job,
+                },
+            },
+        )
+        fsync_directory(CHANNELWATCH_RUNTIME_DIR)
+    info(
+        "[Entrypoint] Recovered a stale legacy update marker; "
+        "the v0.9.18 image runtime was selected and startup validation is pending."
+    )
+    return True
+
+
+def select_app_runtime_dir(*, config_read_only: bool = False) -> Path:
     try:
         sys.path.insert(0, str(IMAGE_APP_DIR))
         from core.update_center import resolve_active_app_dir
@@ -1285,6 +2257,7 @@ def select_app_runtime_dir() -> Path:
             image_version=read_image_version(),
             runtime_abi=RUNTIME_ABI,
             settings_schema_version=CURRENT_SCHEMA_VERSION,
+            read_only=config_read_only,
         )
         info(
             "[Entrypoint] Selected ChannelWatch app runtime: "
@@ -1292,6 +2265,11 @@ def select_app_runtime_dir() -> Path:
         )
         return selection.app_dir
     except Exception as exc:
+        if config_read_only:
+            raise RuntimeError(
+                "Read-only /config contains a runtime selection that needs "
+                "writable reconciliation."
+            ) from exc
         warning(f"Failed to resolve active app bundle; using image app: {exc}")
         return IMAGE_APP_DIR
 
@@ -1397,8 +2375,10 @@ def _set_required_runtime_permissions(
         )
 
 
-def render_supervisor_config(app_uid: int, app_gid: int) -> None:
-    restart_journal = replay_restart_required_journal()
+def render_supervisor_config(
+    app_uid: int, app_gid: int, *, config_read_only: bool = False
+) -> None:
+    restart_journal = None if config_read_only else replay_restart_required_journal()
     if restart_journal is not None:
         # Replay writes occur after main's initial ownership pass. Normalize the
         # newly published control records before the journal can be cleared.
@@ -1410,7 +2390,7 @@ def render_supervisor_config(app_uid: int, app_gid: int) -> None:
 
     _prepare_supervisor_runtime_dir()
 
-    selected_app_dir = select_app_runtime_dir()
+    selected_app_dir = select_app_runtime_dir(config_read_only=config_read_only)
     static_ui_dir = selected_app_dir / "ui" / "backend" / "static_ui"
     template = SUPERVISOR_TEMPLATE.read_text(encoding="utf-8")
     rendered = (
@@ -1493,7 +2473,9 @@ def prepare_standard_streams() -> None:
             # These are already-open container log descriptors, not filesystem
             # data. The mode adjustment keeps stdout/stderr writable after the
             # configurable UID/GID drop.
-            os.chmod(f"/proc/self/fd/{fd}", 0o666)  # nosec B103
+            os.chmod(  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+                f"/proc/self/fd/{fd}", 0o666
+            )  # nosec B103
         except OSError as exc:
             warning(f"Failed to chmod fd {fd}: {exc}")
 
@@ -1511,34 +2493,69 @@ def set_runtime_umask() -> None:
 
 
 def main() -> None:
-    uid = parse_id("PUID", 1000)
-    gid = parse_id("PGID", 1000)
+    uid = parse_id("PUID", DEFAULT_RUNTIME_UID)
+    gid = parse_id("PGID", DEFAULT_RUNTIME_GID)
     validate_runtime_identity(uid, gid)
 
     _ensure_real_directory(CONFIG_DIR, mode=0o755, purpose="configuration")
-    cleanup_restart_journal_candidates_before_validation()
-    # Reject links, FIFOs, devices, sockets, and traversal races before any
-    # settings/bootstrap/runtime file is read or replaced as root.
-    validate_config_tree(CONFIG_DIR)
-    settings_created = ensure_settings(uid, gid)
-    merge_bootstrap_env(settings_created)
-    if not running_as_root():
-        info("[Entrypoint] Running without root privileges; ownership repair is skipped.")
-    chown_tree(CONFIG_DIR, uid, gid)
-    chmod_config_tree(CONFIG_DIR)
-    render_supervisor_config(uid, gid)
-    prepare_standard_streams()
+    config_read_only = config_filesystem_is_read_only(CONFIG_DIR)
+    if config_read_only:
+        os.environ["CHANNELWATCH_CONFIG_READ_ONLY"] = "1"
+        info(
+            "[Entrypoint] Mature /config is mounted read-only; preserving "
+            "monitoring where safe and disabling persistent writes."
+        )
+    else:
+        # Never trust a caller-supplied internal capability flag on a writable
+        # mount. The entrypoint derives it from the actual filesystem.
+        os.environ.pop("CHANNELWATCH_CONFIG_READ_ONLY", None)
+    instance_lock_fd = acquire_container_instance_lock(CONFIG_DIR)
+    try:
+        if not config_read_only:
+            cleanup_restart_journal_candidates_before_validation()
+        # Reject links, FIFOs, devices, sockets, and traversal races before any
+        # settings/bootstrap/runtime file is read or replaced as root.
+        validate_config_tree(CONFIG_DIR)
+        if config_read_only:
+            validate_read_only_runtime_state()
+        settings_created = ensure_settings(uid, gid, read_only=config_read_only)
+        merge_bootstrap_env(settings_created, read_only=config_read_only)
+        if not config_read_only:
+            recover_v099_update_marker_after_image_pull()
+        if not config_read_only:
+            if not running_as_root():
+                info(
+                    "[Entrypoint] Running without root privileges; "
+                    "ownership repair is skipped."
+                )
+        if not config_read_only:
+            chown_tree(CONFIG_DIR, uid, gid)
+            chmod_config_tree(CONFIG_DIR)
+        render_supervisor_config(uid, gid, config_read_only=config_read_only)
+        prepare_standard_streams()
 
-    if len(sys.argv) < 2:
-        warning("No command provided for ChannelWatch startup.")
-        sys.exit(1)
+        if len(sys.argv) < 2:
+            warning("No command provided for ChannelWatch startup.")
+            sys.exit(1)
 
-    drop_privileges(uid, gid)
-    verify_config_tree_writable(CONFIG_DIR)
-    set_runtime_umask()
-    # Container argv is operator-controlled, is executed without a shell, and
-    # is reached only after the verified privilege drop.
-    os.execvp(sys.argv[1], sys.argv[1:])  # nosemgrep
+        drop_privileges(uid, gid)
+        if config_read_only:
+            # Root may be able to inspect a mature mount whose files are not
+            # readable by the requested PUID/PGID. Revalidate after dropping
+            # privileges so child launch fails once instead of restart-looping.
+            validate_read_only_runtime_state()
+        else:
+            verify_config_tree_writable(CONFIG_DIR)
+        set_runtime_umask()
+        verify_container_instance_lock(instance_lock_fd, CONFIG_DIR)
+        # Container argv is operator-controlled, is executed without a shell,
+        # and is reached only after the verified privilege drop.  The
+        # inheritable instance-lock descriptor remains owned by the foreground
+        # Supervisor parent for the lifetime of this container.
+        os.execvp(sys.argv[1], sys.argv[1:])  # nosemgrep
+    except BaseException:
+        release_container_instance_lock(instance_lock_fd)
+        raise
 
 
 if __name__ == "__main__":

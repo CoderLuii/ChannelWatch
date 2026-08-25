@@ -167,7 +167,7 @@ def test_drop_privileges_accepts_supported_non_root_identity(
 @pytest.mark.parametrize(
     "environment,expected",
     [
-        ({}, (1000, 1000)),
+        ({}, (501, 20)),
         ({"PUID": "501", "PGID": "20"}, (501, 20)),
         ({"PUID": "1000", "PGID": "1000"}, (1000, 1000)),
     ],
@@ -181,8 +181,8 @@ def test_runtime_identity_accepts_defaults_and_non_root_ids(
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    uid = entrypoint.parse_id("PUID", 1000)
-    gid = entrypoint.parse_id("PGID", 1000)
+    uid = entrypoint.parse_id("PUID", entrypoint.DEFAULT_RUNTIME_UID)
+    gid = entrypoint.parse_id("PGID", entrypoint.DEFAULT_RUNTIME_GID)
 
     assert (uid, gid) == expected
     entrypoint.validate_runtime_identity(uid, gid)
@@ -216,6 +216,7 @@ def test_main_rejects_root_identity_before_mutating_runtime(
         "prepare_standard_streams",
         "drop_privileges",
         "verify_config_tree_writable",
+        "acquire_container_instance_lock",
     ):
         monkeypatch.setattr(entrypoint, name, unexpected(name))
     monkeypatch.setattr(entrypoint.os, "execvp", unexpected("execvp"))
@@ -331,10 +332,45 @@ def test_entrypoint_file_permissions_keep_secret_settings_restricted(tmp_path):
         assert encryption_key.exists()
         return
 
-    assert stat.S_IMODE(settings_file.stat().st_mode) == 0o640
+    assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     assert stat.S_IMODE(public_state_file.stat().st_mode) == 0o640
     assert stat.S_IMODE(encryption_key.stat().st_mode) == 0o600
     assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o750
+
+
+def test_entrypoint_keeps_credential_backup_and_transaction_trees_private(tmp_path):
+    backups = tmp_path / "backups"
+    recovery = backups / "key-recovery"
+    transactions = tmp_path / ".channelwatch-transactions" / "transaction" / "new"
+    recovery.mkdir(parents=True)
+    transactions.mkdir(parents=True)
+    pre_restore = backups / "pre-restore.20260824T120000Z.deadbeef.zip"
+    pre_update = backups / "pre-update.v0.9.18.1.deadbeef.zip"
+    recovery_settings = recovery / "reset-20260824T120000Z-deadbeef" / "settings.json"
+    recovery_settings.parent.mkdir()
+    journal = transactions.parent / "journal.json"
+    for path in (pre_restore, pre_update, recovery_settings, journal):
+        path.write_bytes(b"credential-bearing")
+        path.chmod(0o666)
+    for path in (backups, recovery, recovery_settings.parent, transactions):
+        path.chmod(0o777)
+
+    entrypoint = _load_entrypoint()
+    entrypoint.chmod_config_tree(tmp_path)
+
+    if os.name == "nt":
+        return
+    for path in (pre_restore, pre_update, recovery_settings, journal):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    for path in (
+        backups,
+        recovery,
+        recovery_settings.parent,
+        tmp_path / ".channelwatch-transactions",
+        transactions.parent,
+        transactions,
+    ):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o700
 
 
 def test_entrypoint_chown_noops_when_started_non_root(tmp_path, monkeypatch):

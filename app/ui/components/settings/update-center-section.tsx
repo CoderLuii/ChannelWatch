@@ -7,12 +7,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
 import { Badge } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
+import { Input } from "@/components/base/input"
+import { Label } from "@/components/base/label"
 import { TabsContent } from "@/components/base/tabs"
-import { ApiError, applyUpdate, checkForUpdate, fetchUpdateJob, fetchUpdateStatus, rollbackUpdate, type UpdateJob, type UpdateStatus } from "@/lib/api"
+import { ApiError, applyUpdate, checkForUpdate, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { applyUpdateAndReconnect } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, isPendingUpdateJob } from "@/lib/update-reconnect"
 
-type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling"
+type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling" | "saving-policy" | "postponing" | "retrying"
 
 function statusTone(status?: string | null): "default" | "secondary" | "destructive" | "outline" {
   if (!status) return "outline"
@@ -37,9 +39,19 @@ function versionLabel(status: UpdateStatus | null): string {
   return active ? `${status.current_version} (${t("updates.activeBundle", { version: String(active) })})` : status.current_version
 }
 
+function maintenanceWindowEnd(start: string, minutes: number): string {
+  const match = /^(\d{2}):(\d{2})$/.exec(start)
+  if (!match) return t("common.unknown")
+  const total = ((Number(match[1]) * 60 + Number(match[2]) + minutes) % 1440 + 1440) % 1440
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
+}
+
 export function UpdateCenterSection() {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [job, setJob] = useState<UpdateJob | null>(null)
+  const [policy, setPolicy] = useState<UpdatePolicy | null>(null)
+  const [maintenanceStart, setMaintenanceStart] = useState("03:00")
+  const [maintenanceMinutes, setMaintenanceMinutes] = useState("120")
   const [busy, setBusy] = useState<BusyState>("idle")
   const [error, setError] = useState<string | null>(null)
   const [remediation, setRemediation] = useState<string | null>(null)
@@ -57,9 +69,12 @@ export function UpdateCenterSection() {
   }, [latestVersion, status])
 
   const loadStatus = async () => {
-    const next = await fetchUpdateStatus()
+    const [next, nextPolicy] = await Promise.all([fetchUpdateStatus(), fetchUpdatePolicy()])
     setStatus(next)
     setJob(next.last_job ?? null)
+    setPolicy(nextPolicy)
+    setMaintenanceStart(nextPolicy.maintenance_window_start)
+    setMaintenanceMinutes(String(nextPolicy.maintenance_window_minutes))
   }
 
   useEffect(() => {
@@ -69,14 +84,16 @@ export function UpdateCenterSection() {
     })
   }, [])
 
+  const activeJobId = job?.job_id
+  const activeJobStatus = job?.status
   useEffect(() => {
-    if (!job?.job_id || !["restarting", "validating", "applying", "backing_up", "verifying"].includes(job.status)) return
+    if (!activeJobId || !isPendingUpdateJob({ status: activeJobStatus })) return
     setBusy("polling")
     const timer = window.setInterval(async () => {
       try {
-        const nextJob = await fetchUpdateJob(job.job_id)
+        const nextJob = await fetchUpdateJob(activeJobId)
         setJob(nextJob)
-        if (!["restarting", "validating", "applying", "backing_up", "verifying"].includes(nextJob.status)) {
+        if (!isPendingUpdateJob(nextJob)) {
           setBusy("idle")
           await loadStatus()
         }
@@ -87,7 +104,7 @@ export function UpdateCenterSection() {
       }
     }, 3000)
     return () => window.clearInterval(timer)
-  }, [job?.job_id, job?.status])
+  }, [activeJobId, activeJobStatus])
 
   const handleCheck = async () => {
     setBusy("checking")
@@ -115,7 +132,7 @@ export function UpdateCenterSection() {
       const nextJob = await applyUpdateAndReconnect(targetVersion, {
         apply: async (version) => {
           const startedJob = await applyUpdate(version)
-          if (startedJob.restart_required) {
+          if (startedJob.restart_required && isPendingUpdateJob(startedJob)) {
             setBusy("polling")
           } else {
             setJob(startedJob)
@@ -126,7 +143,10 @@ export function UpdateCenterSection() {
         reload: () => window.location.reload(),
         isRejectedUpdate: (err) => err instanceof ApiError,
       })
-      if (nextJob && !nextJob.restart_required) setBusy("idle")
+      if (nextJob && (!nextJob.restart_required || !isPendingUpdateJob(nextJob))) {
+        setJob(nextJob)
+        setBusy("idle")
+      }
     } catch (err) {
       setError(updateErrorMessage(err))
       setRemediation(updateErrorRemediation(err))
@@ -141,12 +161,75 @@ export function UpdateCenterSection() {
     try {
       const nextJob = await rollbackUpdate()
       setJob(nextJob)
-      if (!nextJob.restart_required) setBusy("idle")
+      setBusy(isPendingUpdateJob(nextJob) ? "polling" : "idle")
     } catch (err) {
       setError(updateErrorMessage(err))
       setRemediation(updateErrorRemediation(err))
       setBusy("idle")
     }
+  }
+
+  const handlePolicyMode = async (mode: UpdatePolicyMode) => {
+    if (!policyFieldsValid) return
+    setBusy("saving-policy")
+    setError(null)
+    setRemediation(null)
+    try {
+      const next = await saveUpdatePolicy({
+        mode,
+        maintenance_window_start: maintenanceStart,
+        maintenance_window_minutes: Number(maintenanceMinutes),
+      })
+      setPolicy(next)
+      setMaintenanceStart(next.maintenance_window_start)
+      setMaintenanceMinutes(String(next.maintenance_window_minutes))
+    } catch (err) {
+      setError(updateErrorMessage(err))
+      setRemediation(updateErrorRemediation(err))
+    } finally {
+      setBusy("idle")
+    }
+  }
+
+  const handlePostpone = async (hours: 24 | 168) => {
+    setBusy("postponing")
+    setError(null)
+    try {
+      setPolicy(await postponeUpdate(hours))
+    } catch (err) {
+      setError(updateErrorMessage(err))
+      setRemediation(updateErrorRemediation(err))
+    } finally {
+      setBusy("idle")
+    }
+  }
+
+  const handleRetry = async () => {
+    setBusy("retrying")
+    setError(null)
+    try {
+      const nextJob = await retryUpdate()
+      setJob(nextJob)
+      setBusy(isPendingUpdateJob(nextJob) ? "polling" : "idle")
+    } catch (err) {
+      setError(updateErrorMessage(err))
+      setRemediation(updateErrorRemediation(err))
+      setBusy("idle")
+    }
+  }
+
+  const windowStartMatch = /^(\d{2}):(\d{2})$/.exec(maintenanceStart)
+  const windowStartValid = Boolean(
+    windowStartMatch
+    && Number(windowStartMatch[1]) <= 23
+    && Number(windowStartMatch[2]) <= 59,
+  )
+  const parsedWindowMinutes = Number(maintenanceMinutes)
+  const windowMinutesValid = Number.isInteger(parsedWindowMinutes) && parsedWindowMinutes >= 15 && parsedWindowMinutes <= 720
+  const policyFieldsValid = windowStartValid && windowMinutesValid
+
+  const handlePolicySchedule = async () => {
+    await handlePolicyMode(policy?.mode ?? "automatic")
   }
 
   return (
@@ -168,22 +251,30 @@ export function UpdateCenterSection() {
         </div>
 
         <CardContent className="space-y-6 pt-6">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.currentVersion")}</p>
+              <p className="text-xs uppercase text-muted-foreground">{t("updates.appVersion")}</p>
               <p className="mt-1 text-lg font-semibold">{versionLabel(status)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t(`updates.runtimeSource.${status?.runtime_source ?? "unknown"}`)}</p>
+            </div>
+            <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
+              <p className="text-xs uppercase text-muted-foreground">{t("updates.imageVersion")}</p>
+              <p className="mt-1 text-lg font-semibold">{status?.image_version ? `v${status.image_version.replace(/^v/, "")}` : t("common.unknown")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{status?.image_refresh_recommended ? t("updates.imageRefreshRecommended") : t("updates.imageCompatible")}</p>
             </div>
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
               <p className="text-xs uppercase text-muted-foreground">{t("updates.latestVersion")}</p>
               <p className="mt-1 text-lg font-semibold">{latestVersion ?? t("updates.notChecked")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t(`updates.delivery.${status?.delivery_mode ?? "app_update"}`)}</p>
             </div>
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.runtime")}</p>
+              <p className="text-xs uppercase text-muted-foreground">{t("updates.protocol")}</p>
               <p className="mt-1 text-sm font-mono">{status?.runtime_abi ?? t("common.unknown")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("updates.launcherProtocol", { protocol: status?.launcher_protocol ?? t("common.unknown") })}</p>
             </div>
           </div>
 
-          <Alert className="border-sky-400/30 bg-sky-500/10 text-sky-900 dark:text-sky-100 [&>svg]:text-sky-500">
+          <Alert aria-live="polite" className="border-sky-400/30 bg-sky-500/10 text-sky-900 dark:text-sky-100 [&>svg]:text-sky-500">
             <PackageCheck className="h-4 w-4" />
             <AlertTitle>{primaryMessage}</AlertTitle>
             <AlertDescription>{t("updates.bootstrapNote")}</AlertDescription>
@@ -210,6 +301,73 @@ export function UpdateCenterSection() {
               </ul>
             </div>
           )}
+
+          <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-4">
+            <div>
+              <p className="text-sm font-semibold">{t("updates.policy.title")}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{t("updates.policy.description")}</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Button
+                type="button"
+                variant={(policy?.mode ?? "automatic") === "automatic" ? "default" : "outline"}
+                disabled={busy !== "idle" || !policyFieldsValid}
+                aria-pressed={(policy?.mode ?? "automatic") === "automatic"}
+                onClick={() => handlePolicyMode("automatic")}
+              >
+                {t("updates.policy.automatic")}
+              </Button>
+              <Button
+                type="button"
+                variant={policy?.mode === "notify_only" ? "default" : "outline"}
+                disabled={busy !== "idle" || !policyFieldsValid}
+                aria-pressed={policy?.mode === "notify_only"}
+                onClick={() => handlePolicyMode("notify_only")}
+              >
+                {t("updates.policy.notifyOnly")}
+              </Button>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="update-maintenance-start">{t("updates.policy.startLabel")}</Label>
+                <Input
+                  id="update-maintenance-start"
+                  type="time"
+                  step={60}
+                  value={maintenanceStart}
+                  onChange={(event) => setMaintenanceStart(event.target.value)}
+                  aria-invalid={!windowStartValid}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="update-maintenance-minutes">{t("updates.policy.durationLabel")}</Label>
+                <Input
+                  id="update-maintenance-minutes"
+                  type="number"
+                  min={15}
+                  max={720}
+                  step={15}
+                  value={maintenanceMinutes}
+                  onChange={(event) => setMaintenanceMinutes(event.target.value)}
+                  aria-invalid={!windowMinutesValid}
+                />
+              </div>
+            </div>
+            {!policyFieldsValid ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.windowInvalid")}</p> : null}
+            <Button type="button" variant="outline" disabled={busy !== "idle" || !policyFieldsValid} onClick={handlePolicySchedule}>
+              {busy === "saving-policy" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {t("updates.policy.saveWindow")}
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              {t("updates.policy.window", {
+                start: maintenanceStart,
+                end: maintenanceWindowEnd(maintenanceStart, Number(maintenanceMinutes)),
+              })}
+            </p>
+            {policy?.postponed_until ? <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("updates.policy.postponedUntil", { time: policy.postponed_until })}</p> : null}
+            {policy?.next_attempt_at ? <p className="text-xs text-muted-foreground">{t("updates.policy.nextAttempt", { time: policy.next_attempt_at })}</p> : null}
+            {policy?.last_error ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.lastError", { error: policy.last_error })}</p> : null}
+          </div>
 
           {job && (
             <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-3">
@@ -246,6 +404,22 @@ export function UpdateCenterSection() {
               {busy === "rolling-back" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
               {busy === "rolling-back" ? t("updates.rollingBack") : t("updates.rollback")}
             </Button>
+            {status?.update_available ? (
+              <>
+                <Button type="button" variant="ghost" onClick={() => handlePostpone(24)} disabled={busy !== "idle"}>
+                  {t("updates.postponeDay")}
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => handlePostpone(168)} disabled={busy !== "idle"}>
+                  {t("updates.postponeWeek")}
+                </Button>
+              </>
+            ) : null}
+            {(policy?.last_error || job?.status === "failed") ? (
+              <Button type="button" variant="outline" onClick={handleRetry} disabled={busy !== "idle"} className="gap-2">
+                {busy === "retrying" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {t("updates.retry")}
+              </Button>
+            ) : null}
             {latest?.release_url && (
               <Button type="button" variant="ghost" asChild className="gap-2">
                 <a href={latest.release_url} target="_blank" rel="noreferrer">

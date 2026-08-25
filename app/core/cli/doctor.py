@@ -7,24 +7,16 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from ui.backend import config as ui_config
 
 from core.dvr_client import check_version_compatibility
 from core.helpers import config as core_config
-from core.helpers.atomic_io import (
-    _atomic_read_secret_bytes,
-    _atomic_write_secret_bytes,
-    atomic_write_json,
-)
 from core.helpers.config import ConfigLoadError, CoreSettings
+from core.helpers.credential_maintenance import rotate_managed_encryption_key
 from core.helpers.dvr_connection import build_dvr_base_url
 from core.helpers.dvr_target import build_safe_dvr_request
-from core.helpers.encryption import (
-    ENCRYPTION_KEY_FILE,
-    encrypt_value,
-    is_fernet_encrypted,
-)
+from core.helpers.encryption import ENCRYPTION_KEY_FILE
 from core.helpers.initialize import check_server_connectivity
-from ui.backend import config as ui_config
 
 
 def _config_dir() -> Path:
@@ -73,10 +65,17 @@ def _server_label(server: dict[str, Any]) -> str:
 
 
 def _read_settings_json() -> dict[str, Any]:
+    from core.helpers.atomic_io import read_regular_file_bytes
+    from core.helpers.config import MAX_SETTINGS_FILE_BYTES
+
     settings_file = _settings_file()
     if not settings_file.is_file():
         return {}
-    data = json.loads(settings_file.read_text(encoding="utf-8"))
+    data = json.loads(
+        read_regular_file_bytes(
+            settings_file, max_bytes=MAX_SETTINGS_FILE_BYTES
+        ).decode("utf-8")
+    )
     if not isinstance(data, dict):
         raise ConfigLoadError(
             core_config._build_recovery_message(
@@ -251,53 +250,23 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
 def _cmd_rotate_encryption_key(args: argparse.Namespace) -> int:
     del args
     try:
-        settings = _load_core_settings()
-        persisted = _read_settings_json()
+        _load_core_settings()
     except ConfigLoadError as exc:
         print(f"Encryption key rotation failed: {exc}")
         print("Hint: repair /config/settings.json first, then rerun this command.")
         return 1
 
-    key_file = _key_file()
-    key_file.parent.mkdir(parents=True, exist_ok=True)
-
-    new_key = os.urandom(32)
-    updated_servers = []
-    rotated_count = 0
-    for server in settings.dvr_servers or []:
-        if not isinstance(server, dict):
-            updated_servers.append(server)
-            continue
-
-        server_copy = dict(server)
-        api_key = server_copy.get("api_key") or ""
-        if api_key:
-            server_copy["api_key"] = encrypt_value(str(api_key), new_key)
-            rotated_count += 1
-        elif is_fernet_encrypted(str(server_copy.get("api_key", ""))):
-            server_copy["api_key"] = encrypt_value(str(server_copy["api_key"]), new_key)
-            rotated_count += 1
-        updated_servers.append(server_copy)
-
-    persisted["dvr_servers"] = updated_servers
-
-    backup_file = key_file.with_suffix(f"{key_file.suffix}.bak")
-    if key_file.exists():
-        _atomic_write_secret_bytes(backup_file, _atomic_read_secret_bytes(key_file))
-
-    try:
-        _atomic_write_secret_bytes(key_file, new_key)
-        atomic_write_json(_settings_file(), persisted)
-    except Exception:
-        if backup_file.exists():
-            _atomic_write_secret_bytes(key_file, _atomic_read_secret_bytes(backup_file))
-        raise
+    result = rotate_managed_encryption_key(
+        core_config.CONFIG_DIR,
+        settings_file=_settings_file(),
+        key_file=_key_file(),
+    )
 
     print(
-        f"Encryption key rotated successfully. Re-encrypted {rotated_count} DVR API key(s)."
+        "Encryption key rotated successfully. "
+        f"Re-encrypted {result.rotated_credentials} protected credential(s)."
     )
-    if backup_file.exists():
-        print(f"Recovery backup kept at {backup_file}")
+    print(f"Private recovery snapshot kept at {result.recovery_snapshot}")
     return 0
 
 
@@ -379,7 +348,8 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser.set_defaults(handler=_cmd_config_check)
 
     rotate_parser = sub.add_parser(
-        "rotate-encryption-key", help="Generate a new key and re-encrypt DVR API keys"
+        "rotate-encryption-key",
+        help="Generate a new key and re-encrypt DVR API keys and protected webhook fields",
     )
     rotate_parser.set_defaults(handler=_cmd_rotate_encryption_key)
 

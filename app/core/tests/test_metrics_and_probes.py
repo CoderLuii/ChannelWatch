@@ -29,8 +29,13 @@ TWO_DVR_SETTINGS = {
 
 @pytest.fixture()
 def settings_file(tmp_path):
+    from core.helpers.encryption import bootstrap_encryption_key
+
     f = tmp_path / "settings.json"
     f.write_text(json.dumps(TWO_DVR_SETTINGS))
+    # Model the post-startup v0.9.18 state: first boot creates the managed key
+    # before readiness is allowed to reflect monitor freshness.
+    bootstrap_encryption_key(tmp_path / "encryption.key", settings_file=f)
     return f
 
 
@@ -41,6 +46,7 @@ def client(settings_file, tmp_path):
     with (
         patch("ui.backend.config.CONFIG_FILE", settings_file),
         patch("ui.backend.config.CONFIG_DIR", settings_file.parent),
+        patch("ui.backend.main.CONFIG_DIR", settings_file.parent),
         patch("ui.backend.main.CW_DISABLE_AUTH", True),
         patch("ui.backend.main.HISTORY_FILE", history_file),
         patch("ui.backend.main._get_activity_db_engine", return_value=None),
@@ -851,10 +857,11 @@ class TestActiveRecordingsCount:
         assert ready_resp.status_code == 200
         assert calls[0] is mock_summary
         assert calls[1].__name__ == "inspect_runtime_preflight"
-        assert calls[2].__name__ == "load_settings"
-        assert calls[3].__name__ == "inspect_runtime_preflight"
-        assert calls[4] is mock_summary
-        assert len(calls) == 5
+        assert calls[2].__name__ == "_key_recovery_status_payload"
+        assert calls[3].__name__ == "load_settings"
+        assert calls[4].__name__ == "inspect_runtime_preflight"
+        assert calls[5] is mock_summary
+        assert len(calls) == 6
 
 
 class TestDvrHealthEnhancedFields:

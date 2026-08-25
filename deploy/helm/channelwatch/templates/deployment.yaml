@@ -6,6 +6,11 @@ metadata:
     {{- include "channelwatch.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # ChannelWatch owns one persistent /config writer for the lifetime of the
+  # container. A rolling Deployment can deadlock by starting the replacement
+  # before terminating the pod that still owns that writer lock.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "channelwatch.selectorLabels" . | nindent 6 }}
@@ -16,10 +21,16 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
+        checksum/channelwatch-config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and
+              (not (.Values.secretConfig.existingSecret | trim))
+              (eq (include "channelwatch.hasSecretConfig" .) "true") }}
+        checksum/channelwatch-managed-secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -40,15 +51,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "channelwatch.configMapName" . }}
+            {{- if eq (include "channelwatch.hasSecretConfig" .) "true" }}
             - secretRef:
                 name: {{ include "channelwatch.secretName" . }}
-          env:
-            - name: CHANNELWATCH_SECRET_STORAGE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "channelwatch.secretName" . }}
-                  key: CHANNELWATCH_SECRET_STORAGE_KEY
-                  optional: false
+            {{- end }}
           ports:
             - name: http
               containerPort: 8501

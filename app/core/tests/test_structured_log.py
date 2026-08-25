@@ -197,6 +197,21 @@ class TestContextHelpers:
 
 
 class TestSetupLoggingJsonMode:
+    def test_read_only_config_uses_container_output_without_file_handler(
+        self, tmp_path, capsys
+    ):
+        import core.helpers.logging as log_module
+
+        with patch.dict(
+            os.environ,
+            {"LOG_FORMAT": "text", "CHANNELWATCH_CONFIG_READ_ONLY": "1"},
+        ):
+            log_module.setup_logging(str(tmp_path), retention_days=1)
+
+        assert log_module.log_handler is None
+        assert not (tmp_path / "channelwatch.log").exists()
+        assert "persistent file logging is disabled" in capsys.readouterr().err
+
     def test_json_mode_attaches_json_formatter_to_file_handler(self):
         from core.helpers.logging import setup_logging
         from core.helpers.structured_log import JsonFormatter

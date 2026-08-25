@@ -31,10 +31,12 @@ PVC details:
 
 Secret-backed values:
 
-  - Set either secretConfig.existingSecret or the chart-managed secretConfig fields. The selected Secret must contain CHANNELWATCH_SECRET_STORAGE_KEY (at least 32 characters); the Pod fails closed when that key is absent.
+  - ChannelWatch creates and manages its encryption key under the persistent /config volume. No storage-key Secret is required for a new installation.
+  - Set either secretConfig.existingSecret or the chart-managed secretConfig fields for optional bootstrap/provider credentials.
+  - secretConfig.secretStorageKey is deprecated and exists only to migrate a v0.9.5-v0.9.17 legacy envelope once. Remove it after ChannelWatch reports successful migration.
   - secretConfig.apiKey is exposed to the container as CW_API_KEY; the entrypoint seeds it during the first /config/settings.json bootstrap.
   - secretConfig.adminUser/adminPass are exposed as CW_ADMIN_USER/CW_ADMIN_PASS; the UI backend bootstraps the first RBAC admin when RBAC is enabled and no users exist yet.
 
 Upgrade note:
 
-  ChannelWatch stores persistent settings, logs, backups, and runtime state in /config. Keep the PVC when upgrading or reinstalling if you want to preserve state.
+  ChannelWatch stores persistent settings, its managed encryption key, logs, backups, and runtime state in /config. Keep and protect the PVC when upgrading or reinstalling.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,9 @@ from .helpers.config import CONFIG_DIR
 from .helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 
 WATCHDOG_STATUS_FILE = CONFIG_DIR / "watchdog_status.json"
+EPHEMERAL_WATCHDOG_STATUS_FILE = Path(
+    os.environ.get("CHANNELWATCH_RUNTIME_DIR", "/tmp/channelwatch")
+) / "watchdog_status.json"
 WATCHDOG_CHECK_INTERVAL_SECONDS = 30
 DEFAULT_MONITOR_STALE_SECONDS = 300
 
@@ -72,13 +76,22 @@ def _snapshot_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def load_watchdog_snapshot(status_file: Path = WATCHDOG_STATUS_FILE) -> dict[str, Any]:
+def _active_watchdog_status_file() -> Path:
+    """Return the cross-process snapshot path without writing to read-only config."""
+
+    if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        return EPHEMERAL_WATCHDOG_STATUS_FILE
+    return WATCHDOG_STATUS_FILE
+
+
+def load_watchdog_snapshot(status_file: Path | None = None) -> dict[str, Any]:
+    resolved_status_file = status_file or _active_watchdog_status_file()
     try:
-        if not status_file.is_file():
+        if not resolved_status_file.is_file():
             return {}
         import json
 
-        payload = json.loads(status_file.read_text())
+        payload = json.loads(resolved_status_file.read_text())
         return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
@@ -185,12 +198,12 @@ class Watchdog:
         self,
         *,
         stale_threshold_seconds: int = DEFAULT_MONITOR_STALE_SECONDS,
-        status_file: Path = WATCHDOG_STATUS_FILE,
+        status_file: Path | None = None,
     ) -> None:
         self.stale_threshold_seconds = max(
             1, int(stale_threshold_seconds or DEFAULT_MONITOR_STALE_SECONDS)
         )
-        self.status_file = status_file
+        self.status_file = status_file or _active_watchdog_status_file()
         self._lock = threading.Lock()
         self._entries: dict[str, dict[str, Any]] = {}
 

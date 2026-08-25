@@ -10,6 +10,7 @@ export interface DVRServer {
 }
 
 export interface WebhookEntry {
+  id?: string
   url: string
   secret: string
   enabled: boolean
@@ -315,14 +316,48 @@ export type RuntimePreflightBlocker =
   | "secret_storage_key_too_short"
   | "secret_storage_key_mismatch"
   | "secret_storage_key_file_unreadable"
+  | "managed_key_unavailable"
+  | "protected_credentials_locked"
+  | "legacy_key_conflict"
+  | "encryption_key_corrupt"
 
-export type RuntimePreflightWarning = "legacy_plaintext_key_migration_recommended"
+export type RuntimePreflightWarning =
+  | "legacy_plaintext_key_migration_recommended"
+  | "legacy_envelope_migration_available"
+  | "protected_credentials_recovery_required"
 
 export interface RuntimePreflightStatus {
-  status: "ready" | "setup_required" | "migration_recommended"
+  status: "ready" | "setup_required" | "migration_recommended" | "recovery_required" | "storage_unavailable"
   setup_required: boolean
   blockers: RuntimePreflightBlocker[]
   warnings: RuntimePreflightWarning[]
+}
+
+export type KeyRecoveryState =
+  | "managed_local"
+  | "legacy_recovery_required"
+  | "protected_credentials_need_attention"
+  | "ready"
+  | "storage_unavailable"
+
+export interface KeyRecoveryStatus {
+  state: KeyRecoveryState
+  recovery_required: boolean
+  can_migrate: boolean
+  can_reset: boolean
+  blocker_code?: string | null
+  affected_dvr_credentials: number
+  affected_notification_credentials: number
+  legacy_input_detected: boolean
+  message?: string | null
+}
+
+export interface KeyRecoveryResult extends KeyRecoveryStatus {
+  message: string
+  backup_created: boolean
+  restart_required: boolean
+  cleared_dvr_credentials?: number
+  cleared_notification_credentials?: number
 }
 
 export interface SecurityFeedsStatus {

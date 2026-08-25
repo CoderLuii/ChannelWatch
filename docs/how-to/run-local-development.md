@@ -6,7 +6,7 @@ Use the source backend and Next development server together when changing the br
 
 Install the Python and frontend dependencies, then create a disposable local configuration directory. Do not point `CONFIG_PATH` at a production `/config` directory or the Windows snapshots.
 
-```bash
+```sh
 cd /path/to/ChannelWatch
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -22,7 +22,7 @@ mkdir -p .dev-config
 
 Run this sequence from the repository root. It starts the FastAPI backend on `127.0.0.1:8501`, starts Next on `127.0.0.1:3000`, and stops the background backend when the Next process exits.
 
-```bash
+```sh
 source .venv/bin/activate
 CONFIG_PATH="$PWD/.dev-config" CW_DISABLE_AUTH=true \
   CHANNELWATCH_IMAGE_APP_DIR="$PWD/app" PYTHONPATH=app \
@@ -38,7 +38,7 @@ Open `http://127.0.0.1:3000`. `CW_DISABLE_AUTH=true` is suitable only for this l
 
 To confirm that production export behavior remains intact, run:
 
-```bash
+```sh
 cd app/ui
 pnpm typecheck
 pnpm test

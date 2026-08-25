@@ -91,13 +91,13 @@ class NotificationManager:
             maxsize=max(1, int(delivery_queue_size))
         )
         self.diagnostic_mode = bool(diagnostic_mode)
-        self.diagnostic_deadline_seconds = max(
-            0.01, float(diagnostic_deadline_seconds)
-        )
+        self.diagnostic_deadline_seconds = max(0.01, float(diagnostic_deadline_seconds))
         self._queue_state_lock = threading.Lock()
         self._queued_dedupe_keys: set[str] = set()
         self._delivery_worker: Optional[threading.Thread] = None
         self._queue_accepting = True
+        self._queue_shutdown = False
+        self._queue_pause_count = 0
         self._queue_sentinel = object()
         self._queue_dropped = 0
 
@@ -405,9 +405,7 @@ class NotificationManager:
                 self._queued_dedupe_keys.add(dedupe_key)
         return True
 
-    def enqueue_terminal_notification(
-        self, title: str, message: str, **kwargs
-    ) -> bool:
+    def enqueue_terminal_notification(self, title: str, message: str, **kwargs) -> bool:
         """Atomically accept one final notice and close this manager's queue.
 
         Once accepted, ordinary queued work is discarded and the owned worker
@@ -462,6 +460,7 @@ class NotificationManager:
                 self._queued_dedupe_keys.add(dedupe_key)
             # Publish the terminal state only after the final item is queued.
             # Repeated shutdown then observes instead of draining this request.
+            self._queue_shutdown = True
             self._queue_accepting = False
         return True
 
@@ -501,6 +500,32 @@ class NotificationManager:
         with self._delivery_queue.mutex:
             return self._delivery_queue.unfinished_tasks == 0
 
+    def pause_delivery_queue(self) -> bool:
+        """Temporarily reject new work while preserving queued deliveries.
+
+        The pause is reversible and independent from permanent monitor
+        shutdown. Nested maintenance users are reference counted so one caller
+        cannot resume a queue still held by another caller.
+        """
+
+        with self._queue_state_lock:
+            if self._queue_shutdown:
+                return False
+            self._queue_pause_count += 1
+            self._queue_accepting = False
+            return True
+
+    def resume_delivery_queue(self) -> bool:
+        """Release one maintenance pause without reopening a stopped queue."""
+
+        with self._queue_state_lock:
+            if self._queue_pause_count > 0:
+                self._queue_pause_count -= 1
+            self._queue_accepting = (
+                not self._queue_shutdown and self._queue_pause_count == 0
+            )
+            return self._queue_accepting
+
     def shutdown_delivery_queue(
         self, *, drain: bool = False, timeout: float = 1.0
     ) -> bool:
@@ -511,7 +536,8 @@ class NotificationManager:
         but they never hold up process or monitor shutdown.
         """
         with self._queue_state_lock:
-            first_shutdown = self._queue_accepting
+            first_shutdown = not self._queue_shutdown
+            self._queue_shutdown = True
             if not first_shutdown and self._delivery_worker is None:
                 return True
             self._queue_accepting = False

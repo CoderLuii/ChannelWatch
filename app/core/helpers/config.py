@@ -1,20 +1,21 @@
 # Configuration management for ChannelWatch application settings.
 import json
 import os
+from copy import deepcopy
+from dataclasses import InitVar, dataclass, field, fields
 from pathlib import Path
-from dataclasses import dataclass, fields, field
-from typing import Optional, Any
 from threading import Lock
+from typing import Any, Optional
 
-# Import custom logger
-from .logging import log, LOG_VERBOSE
-from .atomic_io import atomic_write_json
-from .dvr_id import dvr_display_name
 from ..notifications.template_engine import TEMPLATE_SETTINGS_DEFAULTS
+from .atomic_io import atomic_write_private_json, read_regular_file_bytes
+from .dvr_id import dvr_display_name
+from .logging import LOG_VERBOSE, log
 
 # PATHS
 CONFIG_DIR = Path(os.getenv("CONFIG_PATH", "/config"))
 CONFIG_FILE = CONFIG_DIR / "settings.json"
+MAX_SETTINGS_FILE_BYTES = 8 * 1024 * 1024
 
 
 class ConfigLoadError(RuntimeError):
@@ -195,30 +196,46 @@ class CoreSettings:
 
     notification_routing: dict[str, Any] = field(default_factory=dict)
 
+    # Non-persisted dependency injection for callers that intentionally use a
+    # configuration root other than the process-wide CONFIG_PATH.  The UI
+    # backend uses this to keep its settings view and the core settings loader
+    # on the same directory; tests use it for disposable configuration roots.
+    _config_root: InitVar[Optional[Path]] = None
+
     # Singleton
     _instance = None
 
-    def __post_init__(self):
+    def __post_init__(self, _config_root: Optional[Path]):
+        runtime_config_dir = (
+            Path(_config_root) if _config_root is not None else CONFIG_DIR
+        )
+        self._runtime_config_dir = runtime_config_dir
+        self._runtime_config_file = runtime_config_dir / CONFIG_FILE.name
         self._load_and_override()
 
     def _load_from_file(self) -> dict[str, Any]:
         """Load settings from JSON file or return empty dict if file is missing."""
-        if CONFIG_FILE.is_file():
+        config_file = self._runtime_config_file
+        if config_file.is_file():
             try:
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+                data = json.loads(
+                    read_regular_file_bytes(
+                        config_file, max_bytes=MAX_SETTINGS_FILE_BYTES
+                    ).decode("utf-8-sig")
+                )
             except json.JSONDecodeError as e:
                 raise ConfigLoadError(
-                    _build_recovery_message(CONFIG_FILE, f"invalid JSON ({e})")
+                    _build_recovery_message(config_file, f"invalid JSON ({e})")
                 ) from e
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 raise ConfigLoadError(
-                    _build_recovery_message(CONFIG_FILE, f"read error ({e})")
+                    _build_recovery_message(config_file, f"read error ({e})")
                 ) from e
 
             if not isinstance(data, dict):
                 raise ConfigLoadError(
                     _build_recovery_message(
-                        CONFIG_FILE,
+                        config_file,
                         f"expected a JSON object but found {type(data).__name__}",
                     )
                 )
@@ -363,6 +380,16 @@ class CoreSettings:
 
     def _load_and_override(self):
         """Process configuration from file then apply environment variable overrides."""
+        from .maintenance_transaction import configuration_maintenance_lock
+
+        # Settings, their encryption key, restore, rotation, and updater
+        # backups form one consistency unit. Readers take the same lock so no
+        # monitor can observe a mixed key/settings pair mid-transaction.
+        with configuration_maintenance_lock(self._runtime_config_dir):
+            self._load_and_override_locked()
+
+    def _load_and_override_locked(self):
+        """Load configuration while the shared `/config` lock is held."""
         from .migration import (
             defaults_merge,
             get_dataclass_defaults,
@@ -371,10 +398,11 @@ class CoreSettings:
         )
 
         file_settings = self._load_from_file()
+        original_file_settings = deepcopy(file_settings)
         old_version = file_settings.get("_version", 0)
 
         # Run full migration pipeline (backup, recovery, versioned migrations)
-        file_settings = migrate_settings(CONFIG_DIR, file_settings)
+        file_settings = migrate_settings(self._runtime_config_dir, file_settings)
 
         # Merge with dataclass defaults (catches any new fields not in migrations)
         defaults = get_dataclass_defaults(type(self))
@@ -386,13 +414,31 @@ class CoreSettings:
 
         from .encryption import (
             ENCRYPTION_KEY_FILE,
-            decrypt_dvr_api_keys,
-            decrypt_webhook_credentials,
+            decrypt_registered_credentials_with_diagnostics,
             encrypt_dvr_api_keys,
             encrypt_webhook_credentials,
         )
+        from .protected_credentials import (
+            is_protected_ciphertext,
+            iter_protected_values,
+            preserve_failed_ciphertexts,
+            publish_protected_credential_failures,
+        )
 
-        key_file = CONFIG_DIR / ENCRYPTION_KEY_FILE.name
+        key_file = self._runtime_config_dir / ENCRYPTION_KEY_FILE.name
+        diagnostic = decrypt_registered_credentials_with_diagnostics(
+            persisted_merged,
+            key_file,
+        )
+        persisted_merged = preserve_failed_ciphertexts(
+            persisted_merged,
+            original_file_settings,
+            diagnostic.failures,
+        )
+        protected_field_migration_required = any(
+            not is_protected_ciphertext(item.value)
+            for item in iter_protected_values(persisted_merged)
+        )
         persisted_merged["dvr_servers"] = encrypt_dvr_api_keys(
             persisted_merged.get("dvr_servers") or [],
             key_file,
@@ -404,20 +450,34 @@ class CoreSettings:
 
         # Persist merged defaults after successful migration using atomic replacement.
         new_version = persisted_merged.get("_version", 0)
-        if CONFIG_FILE.is_file() and (
+        if self._runtime_config_file.is_file() and (
             new_version > old_version or persisted_merged != file_settings
         ):
-            atomic_write_json(CONFIG_FILE, persisted_merged)
+            try:
+                atomic_write_private_json(
+                    self._runtime_config_file,
+                    persisted_merged,
+                )
+            except OSError as exc:
+                if new_version > old_version or protected_field_migration_required:
+                    raise ConfigLoadError(
+                        "A required settings or protected-credential migration "
+                        "could not be persisted safely. Startup is blocked; repair "
+                        "/config write access and restart."
+                    ) from exc
+                log(
+                    "Settings defaults could not be persisted; continuing with the "
+                    "readable current-schema configuration in memory."
+                )
 
-        persisted_merged["dvr_servers"] = _coerce_dvr_servers(
-            decrypt_dvr_api_keys(
-                persisted_merged.get("dvr_servers") or [],
-                key_file,
-            )
-        )
-        persisted_merged["webhooks"] = decrypt_webhook_credentials(
-            persisted_merged.get("webhooks") or [],
+        protected = decrypt_registered_credentials_with_diagnostics(
+            persisted_merged,
             key_file,
+        )
+        publish_protected_credential_failures(protected.failures)
+        persisted_merged = protected.settings
+        persisted_merged["dvr_servers"] = _coerce_dvr_servers(
+            persisted_merged.get("dvr_servers") or []
         )
 
         cls_fields = {f.name: f for f in fields(self)}
@@ -457,8 +517,16 @@ _lock = Lock()
 
 
 # ACCESS
-def get_settings() -> CoreSettings:
-    return CoreSettings.get()
+def get_settings(*, config_dir: Optional[Path] = None) -> CoreSettings:
+    """Return settings for the process root or an explicitly supplied root.
+
+    The process-wide configuration keeps the historical singleton behavior.
+    An explicit root is intentionally uncached so a caller cannot poison the
+    production singleton with a disposable or alternate configuration path.
+    """
+    if config_dir is None or Path(config_dir) == CONFIG_DIR:
+        return CoreSettings.get()
+    return CoreSettings(_config_root=Path(config_dir))
 
 
 log("Settings module loaded", level=LOG_VERBOSE)

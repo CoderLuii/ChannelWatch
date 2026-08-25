@@ -73,7 +73,7 @@ def main() -> int:
             heading = f"# ChannelWatch {version_tag} - {title}"
         body = [heading]
         sections = metadata.get("changelogSections") or {"Changed": highlights}
-        for heading in ("Added", "Changed", "Fixed", "Security"):
+        for heading in ("Important", "Added", "Changed", "Fixed", "Security"):
             items = sections.get(heading) or []
             if not items:
                 continue
@@ -86,7 +86,7 @@ def main() -> int:
         ).strftime("%m/%d/%Y")
         body = [f"## {release_date}"]
         sections = metadata.get("changelogSections") or {"Fixed": highlights}
-        for heading in ("Added", "Changed", "Fixed", "Security"):
+        for heading in ("Important", "Added", "Changed", "Fixed", "Security"):
             items = sections.get(heading) or []
             if not items:
                 continue

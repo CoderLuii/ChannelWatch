@@ -1,5 +1,5 @@
 name: ChannelWatch - Build and Push to Docker Hub + GHCR
-run-name: ${{ github.ref_name }}
+run-name: ${{ inputs.release_tag || github.ref_name }}
 
 # Required repository secrets:
 # - CHANNELWATCH_UPDATE_SIGNING_KEY: Ed25519 private key used only for app-bundle signing.
@@ -12,6 +12,24 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable vX.Y.Z tag to publish
+        required: true
+        type: string
+      release_sha:
+        description: Exact reviewed commit referenced by the immutable tag
+        required: true
+        type: string
+      expected_commit_count:
+        description: Reviewed commit count since the previous release tag
+        required: true
+        type: number
+      recovery_confirmation:
+        description: Type publish-TAG-at-SHA using the exact values above
+        required: true
+        type: string
 
 concurrency:
   group: channelwatch-release-publication
@@ -23,6 +41,8 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  RELEASE_SHA: ${{ inputs.release_sha || github.sha }}
 
 jobs:
   build-update-bundle-and-release:
@@ -46,6 +66,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -61,27 +82,104 @@ jobs:
           package-manager-cache: false
 
       - name: Reject stale release tag
+        if: github.event_name == 'push'
         run: >-
           python scripts/release/verify-release-candidate.py
-          --tag "${GITHUB_REF_NAME}"
-          --sha "${GITHUB_SHA}"
+          --tag "${RELEASE_TAG}"
+          --sha "${RELEASE_SHA}"
           --main-ref origin/main
+
+      - name: Verify immutable recovery publication target
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_COMMIT_COUNT: ${{ inputs.expected_commit_count }}
+          RECOVERY_CONFIRMATION: ${{ inputs.recovery_confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+             [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Recovery requires an exact semantic-version tag and full lowercase commit SHA."
+            exit 1
+          fi
+          expected_confirmation="publish-${RELEASE_TAG}-at-${RELEASE_SHA}"
+          if [ "${RECOVERY_CONFIRMATION}" != "${expected_confirmation}" ]; then
+            echo "::error::Recovery confirmation does not name the exact immutable release target."
+            exit 1
+          fi
+          if [[ ! "${EXPECTED_COMMIT_COUNT}" =~ ^[1-9][0-9]*$ ]] || \
+             [ "${EXPECTED_COMMIT_COUNT}" -gt 20 ]; then
+            echo "::error::Recovery commit count must be an integer from 1 through 20."
+            exit 1
+          fi
+
+          git fetch --force origin main --tags
+          tag_commit="$(git rev-parse --verify "${RELEASE_TAG}^{commit}")"
+          main_commit="$(git rev-parse --verify 'origin/main^{commit}')"
+          if [ "${tag_commit}" != "${RELEASE_SHA}" ]; then
+            echo "::error::Immutable tag ${RELEASE_TAG} does not reference ${RELEASE_SHA}."
+            exit 1
+          fi
+          if [ "$(git cat-file -t "refs/tags/${RELEASE_TAG}")" != "commit" ]; then
+            echo "::error::Recovery release tag must remain lightweight."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${RELEASE_SHA}" "${main_commit}"; then
+            echo "::error::Immutable release target is not contained in current main."
+            exit 1
+          fi
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
+          if [ "${latest_tag}" != "${RELEASE_TAG}" ]; then
+            echo "::error::Refusing recovery for stale tag ${RELEASE_TAG}; latest is ${latest_tag}."
+            exit 1
+          fi
+          previous_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | grep -Fxv "${RELEASE_TAG}" | head -n 1)"
+          if [ -z "${previous_tag}" ]; then
+            echo "::error::Recovery requires a previous semantic-version release tag."
+            exit 1
+          fi
+          mapfile -t release_commits < <(
+            git rev-list --reverse "${previous_tag}..${RELEASE_SHA}"
+          )
+          if [ "${#release_commits[@]}" -ne "${EXPECTED_COMMIT_COUNT}" ]; then
+            echo "::error::Reviewed recovery history count does not match the immutable tag."
+            exit 1
+          fi
+          for index in "${!release_commits[@]}"; do
+            commit="${release_commits[$index]}"
+            subject="$(git show -s --format=%s "${commit}")"
+            body="$(git show -s --format=%b "${commit}")"
+            if [ -n "${body}" ]; then
+              echo "::error::Recovery history commit ${commit} has an unexpected body."
+              exit 1
+            fi
+            if [ "${index}" -eq 0 ]; then
+              if [ "${subject}" != "${RELEASE_TAG}" ]; then
+                echo "::error::First release commit subject must be exactly ${RELEASE_TAG}."
+                exit 1
+              fi
+            elif [[ ! "${subject}" =~ ^Fix\ ${RELEASE_TAG}\  ]]; then
+              echo "::error::Follow-up recovery commit ${commit} is not scoped to ${RELEASE_TAG}."
+              exit 1
+            fi
+          done
+          echo "Verified immutable recovery target ${RELEASE_TAG} at ${RELEASE_SHA}."
 
       - name: Parse version
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify CHANGELOG entry
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
         env:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
-          raw_ref="${GITHUB_REF_NAME}"
+          raw_ref="${RELEASE_TAG}"
           if [[ ! "${raw_ref}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must use vX.Y.Z format, got ${raw_ref}."
             exit 1
@@ -117,7 +215,7 @@ jobs:
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           if [ -z "${CHANNELWATCH_UPDATE_SIGNING_KEY}" ]; then
@@ -167,13 +265,13 @@ jobs:
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
-          artifact_name="channelwatch-release-candidate-${GITHUB_SHA}"
+          artifact_name="channelwatch-release-candidate-${RELEASE_SHA}"
           runs_json="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/release-candidate.yml/runs?event=workflow_dispatch&status=success&head_sha=${GITHUB_SHA}&per_page=100")"
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/release-candidate.yml/runs?event=workflow_dispatch&status=success&head_sha=${RELEASE_SHA}&per_page=100")"
           run_ids="$(jq -r '.workflow_runs | sort_by(.created_at) | reverse | .[].id' <<<"${runs_json}")"
           artifact_id=""
           approved_run_id=""
@@ -190,7 +288,7 @@ jobs:
             fi
           done <<<"${run_ids}"
           if [ -z "${artifact_id}" ]; then
-            echo "::error::No successful, unexpired signed candidate artifact exists for exact SHA ${GITHUB_SHA}."
+            echo "::error::No successful, unexpired signed candidate artifact exists for exact SHA ${RELEASE_SHA}."
             exit 1
           fi
 
@@ -200,7 +298,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
             > "${RUNNER_TEMP}/approved-candidate.zip"
           unzip -q "${RUNNER_TEMP}/approved-candidate.zip" -d "${approved_dir}"
-          sealed="${approved_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
           opened="${RUNNER_TEMP}/approved-candidate.tar"
           python scripts/release/seal-candidate-artifact.py open \
             --input "${sealed}" \
@@ -247,17 +345,17 @@ jobs:
             echo "image_descriptor_sha256=${image_descriptor_sha256}"
             echo "image_archive_sha256=${image_archive_sha256}"
           } >> "${GITHUB_OUTPUT}"
-          echo "Reproduced approved candidate run ${approved_run_id} for ${GITHUB_SHA}."
+          echo "Reproduced approved candidate run ${approved_run_id} for ${RELEASE_SHA}."
 
       - name: Verify generated update assets
         env:
           EXPECTED_CHANNEL: stable
-          EXPECTED_GIT_SHA: ${{ github.sha }}
+          EXPECTED_GIT_SHA: ${{ env.RELEASE_SHA }}
           EXPECTED_RUNTIME_ABI: channelwatch-runtime-v1
           EXPECTED_SETTINGS_SCHEMA_VERSION: "7"
           RELEASE_SOURCE_ROOT: ${{ github.workspace }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           expected_image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
           expected_delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
@@ -297,14 +395,14 @@ jobs:
             python scripts/release/verify-pinned-v1-bridge.py
           fi
 
-          base_ref="$(git tag --sort=-version:refname --merged "${GITHUB_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          base_ref="$(git tag --sort=-version:refname --merged "${RELEASE_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
           if [ -z "${base_ref}" ]; then
             echo "::error::A previous semantic-version release tag is required for impact classification."
             exit 1
           fi
           python scripts/release/classify-release-impact.py \
             --base-ref "${base_ref}" \
-            --target-ref "${GITHUB_SHA}" \
+            --target-ref "${RELEASE_SHA}" \
             "${compatibility_args[@]}"
           # This tag workflow uses the real runner clock. A future signed
           # publication time must stop the job before even a draft release,
@@ -316,7 +414,7 @@ jobs:
       - name: Verify release VEX
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: >-
           python scripts/release/verify-vex.py
           --document "deploy/security/channelwatch-${TAG}.openvex.json"
@@ -325,7 +423,7 @@ jobs:
       - name: Render and validate release body
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           python scripts/release/render-release-body.py \
@@ -346,7 +444,7 @@ jobs:
       - name: Create or update draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           release_json=""
@@ -366,7 +464,7 @@ jobs:
           if [ -n "${release_id}" ]; then
             jq -n \
               --arg tag_name "${TAG}" \
-              --arg target_commitish "${GITHUB_SHA}" \
+              --arg target_commitish "${RELEASE_SHA}" \
               --arg name "${TAG}" \
               --rawfile body release-body.md \
               '{tag_name: $tag_name, target_commitish: $target_commitish, name: $name, body: $body, prerelease: false}' > release-draft.json
@@ -377,7 +475,7 @@ jobs:
           else
             gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --target "${GITHUB_SHA}" \
+              --target "${RELEASE_SHA}" \
               --title "${TAG}" \
               --notes-file release-body.md \
               --draft
@@ -388,7 +486,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           bundle="dist/update/channelwatch-app-${TAG}.zip"
@@ -428,6 +526,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -435,15 +534,15 @@ jobs:
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify CHANGELOG entry
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
         shell: bash
         run: |
-          raw_ref="${GITHUB_REF_NAME}"
+          raw_ref="${RELEASE_TAG}"
           if [[ ! "${raw_ref}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tags must use vX.Y.Z format, got ${raw_ref}."
             exit 1
@@ -452,7 +551,7 @@ jobs:
       - name: Verify CHANGELOG entry
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           version_re="${version//./\\.}"
           if ! grep -Eq "^## \\[${version_re}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" docs/releases/CHANGELOG.md; then
             echo "::error::docs/releases/CHANGELOG.md has no release heading for ${version}. Add '## [${version}] - YYYY-MM-DD' before tagging."
@@ -474,7 +573,7 @@ jobs:
           APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -491,7 +590,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/artifacts/${APPROVED_ARTIFACT_ID}/zip" \
             > "${RUNNER_TEMP}/approved-candidate.zip"
           unzip -q "${RUNNER_TEMP}/approved-candidate.zip" -d "${approved_dir}"
-          sealed="${approved_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
           opened="${RUNNER_TEMP}/approved-candidate.tar"
           python scripts/release/seal-candidate-artifact.py open \
             --input "${sealed}" \
@@ -549,7 +648,7 @@ jobs:
       - name: Download and verify existing draft release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -567,7 +666,7 @@ jobs:
           fi
           release_json="$(jq -c '.[0]' <<<"${release_json}")"
           if [ "$(jq -r '.draft' <<<"${release_json}")" != "true" ] || \
-             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
+             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ]; then
             echo "::error::Signed assets must come from the matching exact-SHA draft release."
             exit 1
           fi
@@ -590,7 +689,7 @@ jobs:
         env:
           OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
           SYFT_CMD: ${{ steps.syft.outputs.cmd }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
@@ -667,7 +766,7 @@ jobs:
       - name: Attach verified license and SBOM assets to draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -684,8 +783,8 @@ jobs:
             echo "::error::License assets may only be attached to the matching draft release."
             exit 1
           fi
-          if [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
-            echo "::error::Draft release target does not match ${GITHUB_SHA}."
+          if [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ]; then
+            echo "::error::Draft release target does not match ${RELEASE_SHA}."
             exit 1
           fi
           gh release upload "${TAG}" dist/release/* \
@@ -841,7 +940,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
           HOME: ${{ runner.temp }}/docker-auth
@@ -855,7 +954,7 @@ jobs:
     name: Update Docker Hub description
     runs-on: ubuntu-latest
     needs: advance-compatible-aliases
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
 
@@ -863,6 +962,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       - name: Update Docker Hub description
@@ -879,7 +979,7 @@ jobs:
     needs:
       - build-update-bundle-and-release
       - build-and-push
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: write # Promote the exact-SHA draft to the public GitHub release.
 
@@ -887,20 +987,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       - name: Parse version
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Render release body
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           python scripts/release/render-release-body.py \
@@ -914,7 +1015,7 @@ jobs:
           APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
@@ -929,7 +1030,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/artifacts/${APPROVED_ARTIFACT_ID}/zip" \
             > "${RUNNER_TEMP}/approved-candidate-canary.zip"
           unzip -q "${RUNNER_TEMP}/approved-candidate-canary.zip" -d "${approved_dir}"
-          sealed="${approved_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
           opened="${RUNNER_TEMP}/approved-candidate-canary.tar"
           python scripts/release/seal-candidate-artifact.py open \
             --input "${sealed}" \
@@ -1173,7 +1274,7 @@ jobs:
         env:
           EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
@@ -1187,8 +1288,8 @@ jobs:
             exit 1
           fi
           release_json="$(jq -c '.[0]' <<<"${release_json}")"
-          if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ]; then
-            echo "::error::Draft release identity does not match ${TAG} at ${GITHUB_SHA}."
+          if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ]; then
+            echo "::error::Draft release identity does not match ${TAG} at ${RELEASE_SHA}."
             exit 1
           fi
           release_id="$(jq -r '.id // empty' <<<"${release_json}")"
@@ -1231,7 +1332,7 @@ jobs:
       - build-update-bundle-and-release
       - build-and-push
       - publish-github-release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
 
@@ -1239,6 +1340,7 @@ jobs:
       - name: Checkout exact release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -1256,14 +1358,14 @@ jobs:
       - name: Verify public release identity and asset inventory
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
           release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
           if [ "$(jq -r '.tag_name' <<<"${release_json}")" != "${TAG}" ] || \
              [ "$(jq -r '.name' <<<"${release_json}")" != "${TAG}" ] || \
-             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${GITHUB_SHA}" ] || \
+             [ "$(jq -r '.target_commitish' <<<"${release_json}")" != "${RELEASE_SHA}" ] || \
              [ "$(jq -r '.draft' <<<"${release_json}")" != "false" ] || \
              [ "$(jq -r '.prerelease' <<<"${release_json}")" != "false" ]; then
             echo "::error::Public GitHub release identity does not match the exact reviewed tag and SHA."
@@ -1306,7 +1408,7 @@ jobs:
           DOCKERHUB_DIGEST: ${{ needs.build-and-push.outputs.dockerhub_digest }}
           EXPECTED_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
           EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1362,7 +1464,7 @@ jobs:
             --expected-image-required "${image_required}" \
             --expected-delivery-mode "${delivery_mode}" \
             --expected-recommended-image-version "${recommended_image}" \
-            --expected-git-sha "${GITHUB_SHA}" \
+            --expected-git-sha "${RELEASE_SHA}" \
             --expected-release-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
             --expected-bundle-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
             --source-root "${GITHUB_WORKSPACE}"
@@ -1414,7 +1516,7 @@ jobs:
       - build-and-push
       - publish-github-release
       - verify-public-release-assets
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
 
@@ -1422,13 +1524,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       - name: Parse version
         id: version
         shell: bash
         run: |
-          raw="${GITHUB_REF_NAME}"
+          raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
@@ -1458,8 +1561,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
-          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ env.RELEASE_TAG }}
+          SOURCE_SHA: ${{ env.RELEASE_SHA }}
           SOURCE_REPO: ${{ github.repository }}
           UPDATE_BUNDLE_URL: ${{ needs.build-update-bundle-and-release.outputs.bundle_url }}
           UPDATE_MANIFEST_URL: ${{ needs.build-update-bundle-and-release.outputs.manifest_url }}
@@ -1522,6 +1625,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
       - name: Parse release configuration
@@ -1529,7 +1633,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo "version=${GITHUB_REF_NAME#v}"
+            echo "version=${RELEASE_TAG#v}"
             echo "image_required=$(jq -r '.image_required' scripts/release/release-config.json)"
             echo "delivery_mode=$(jq -r '.delivery_mode' scripts/release/release-config.json)"
             echo "recommended_image_version=$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
@@ -1551,7 +1655,7 @@ jobs:
         run: |
           python scripts/release/verify-live-update-manifest.py \
             --version "${RAW_RELEASE_VERSION}" \
-            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${GITHUB_REF_NAME}" \
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${RELEASE_TAG}" \
             --bundle-sha256 "${RAW_BUNDLE_SHA256}" \
             --image-required "${RAW_IMAGE_REQUIRED}" \
             --delivery-mode "${RAW_DELIVERY_MODE}" \
@@ -1606,7 +1710,7 @@ jobs:
               "${SKOPEO_IMAGE}" "$@"
           }
 
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           compatible_tag="${version%.*}"
           for repository in "${DOCKERHUB_IMAGE}" "${GHCR_IMAGE}"; do
             version_digest="$(skopeo_cmd inspect \

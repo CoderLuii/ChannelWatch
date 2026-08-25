@@ -812,7 +812,7 @@ def test_release_workflow_uses_explicit_config_and_python_gate():
     assert "JSON 404 body" in create_draft_step
     assert "2>/dev/null || true" not in create_draft_step
     assert "--arg tag_name \"${TAG}\"" in release_job
-    assert "--arg target_commitish \"${GITHUB_SHA}\"" in release_job
+    assert "--arg target_commitish \"${RELEASE_SHA}\"" in release_job
 
 
 @pytest.mark.parametrize(
@@ -852,7 +852,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
     output_path = tmp_path / "github-output"
     parse_env = {
         **os.environ,
-        "GITHUB_REF_NAME": "v0.9.17",
+        "RELEASE_TAG": "v0.9.17",
         "GITHUB_OUTPUT": str(output_path),
     }
 
@@ -880,7 +880,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         cwd=ROOT,
         env={
             **os.environ,
-            "GITHUB_REF_NAME": "v0.9.17",
+            "RELEASE_TAG": "v0.9.17",
             "VERSION": output_values["version"],
         },
         capture_output=True,
@@ -1872,7 +1872,7 @@ def test_release_workflow_gates_declared_impact_and_live_manifest():
     )
 
     assert "classify-release-impact.py" in workflow
-    assert 'version="${GITHUB_REF_NAME#v}"' in workflow
+    assert 'version="${RELEASE_TAG#v}"' in workflow
     release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
         "\n  build-and-push:", 1
     )[0]
@@ -1972,12 +1972,12 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert "cancel-in-progress: false" in workflow
     assert "\npermissions: {}\n" in workflow
     assert "verify-release-candidate.py" in workflow
-    assert '--sha "${GITHUB_SHA}"' in workflow
+    assert '--sha "${RELEASE_SHA}"' in workflow
     assert "--main-ref origin/main" in workflow
     assert "is already published and is immutable" in workflow
     assert '.draft and .tag_name == \\"${TAG}\\"' in workflow
     assert '.tag_name == \\"${TAG}\\" or' not in workflow
-    assert '--target "${GITHUB_SHA}"' in workflow
+    assert '--target "${RELEASE_SHA}"' in workflow
     assert "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c" in workflow
     assert "python-version: '3.12'" in workflow
     assert "actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f" in workflow
@@ -1990,6 +1990,37 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert "missing or already published; published releases are immutable" in publish_job
     assert ".draft == true" in publish_job
     assert "'.target_commitish'" in publish_job
+
+
+def test_release_workflow_recovery_is_bound_to_one_immutable_reviewed_target():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
+        "\n  build-and-push:",
+        1,
+    )[0]
+
+    assert "workflow_dispatch:" in workflow
+    assert "release_tag:" in workflow
+    assert "release_sha:" in workflow
+    assert "expected_commit_count:" in workflow
+    assert "recovery_confirmation:" in workflow
+    assert "RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}" in workflow
+    assert "RELEASE_SHA: ${{ inputs.release_sha || github.sha }}" in workflow
+    assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 7
+    assert "if: github.event_name == 'push'" in release_job
+    assert "Verify immutable recovery publication target" in release_job
+    assert 'expected_confirmation="publish-${RELEASE_TAG}-at-${RELEASE_SHA}"' in release_job
+    assert 'tag_commit="$(git rev-parse --verify "${RELEASE_TAG}^{commit}")"' in release_job
+    assert 'git merge-base --is-ancestor "${RELEASE_SHA}" "${main_commit}"' in release_job
+    assert 'latest_tag="$(git tag --list' in release_job
+    assert 'git rev-list --reverse "${previous_tag}..${RELEASE_SHA}"' in release_job
+    assert 'if [ "${#release_commits[@]}" -ne "${EXPECTED_COMMIT_COUNT}" ]' in release_job
+    assert 'if [ "${subject}" != "${RELEASE_TAG}" ]' in release_job
+    assert 'elif [[ ! "${subject}" =~ ^Fix\\ ${RELEASE_TAG}\\  ]]' in release_job
+    assert "No successful, unexpired signed candidate artifact exists" in release_job
+    assert "head_sha=${RELEASE_SHA}" in release_job
 
 
 def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
@@ -2112,7 +2143,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "find dist/release -maxdepth 1 -type f -exec basename" in image_job
     assert "--jq '.assets[].name'" in image_job
     assert "License assets may only be attached to the matching draft release" in image_job
-    assert "Draft release target does not match ${GITHUB_SHA}" in image_job
+    assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
     assert "quay.io/skopeo/stable@sha256:64ac45c5a1c01230896fbae960b2213e32a5040e4009b83b5f5cbf31a35f61c3" in publish_job
@@ -2180,7 +2211,7 @@ def test_release_workflow_verifies_generated_and_live_update_assets():
     assert '--expected-release-url "https://github.com/' in release_job
     assert '--expected-bundle-url "https://github.com/' in release_job
     assert '--source-root "${RELEASE_SOURCE_ROOT}"' in release_job
-    assert "EXPECTED_GIT_SHA: ${{ github.sha }}" in release_job
+    assert "EXPECTED_GIT_SHA: ${{ env.RELEASE_SHA }}" in release_job
     assert "EXPECTED_CHANNEL: stable" in release_job
     assert "EXPECTED_RUNTIME_ABI: channelwatch-runtime-v1" in release_job
     assert 'EXPECTED_SETTINGS_SCHEMA_VERSION: "7"' in release_job
@@ -2206,8 +2237,8 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
 
     assert "actions: read" in release_job
     assert "Require byte-identical approved candidate assets" in release_job
-    assert "head_sha=${GITHUB_SHA}" in release_job
-    assert 'artifact_name="channelwatch-release-candidate-${GITHUB_SHA}"' in release_job
+    assert "head_sha=${RELEASE_SHA}" in release_job
+    assert 'artifact_name="channelwatch-release-candidate-${RELEASE_SHA}"' in release_job
     assert "No successful, unexpired signed candidate artifact exists" in release_job
     assert release_job.count("cmp --silent") == 1
     assert "seal-candidate-artifact.py open" in release_job

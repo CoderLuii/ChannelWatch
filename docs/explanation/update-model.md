@@ -1,6 +1,6 @@
 # Update model
 
-ChannelWatch v0.9.18 makes the repaired hybrid update model the normal upgrade experience:
+ChannelWatch v0.9.18 introduced the repaired hybrid update model, and v0.9.19 uses it as the normal upgrade experience:
 
 - use the normal container update path for image and runtime changes;
 - use the signed in-app Update Center by default for compatible app releases.

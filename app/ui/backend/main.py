@@ -1243,6 +1243,15 @@ async def health():
         "ready": ready,
         "runtime": runtime_preflight.public_payload(),
         "credential_protection": credential_protection,
+        "activity_storage": (
+            _activity_storage_status()
+            if _activity_storage_status is not None
+            else {
+                "status": "recovery_required",
+                "pending_recovery_events": 0,
+                "last_reconciled_at": None,
+            }
+        ),
         "dvrs": [
             {
                 "id": entry["id"],
@@ -2596,6 +2605,11 @@ try:
         migrate_delivery_schema as _migrate_delivery_schema,
         query_delivery_log as _query_delivery_log,
     )
+    from core.storage.activity_store import (
+        activity_storage_status as _activity_storage_status,
+        clear_activity_storage as _clear_activity_storage,
+        reconcile_activity_history as _reconcile_activity_history,
+    )
     from sqlmodel import select as _sql_select
     from sqlalchemy import (
         func as _sql_func,
@@ -2610,6 +2624,8 @@ except ImportError:
     _create_activity_db_engine = _ActivityEvent = _activity_db_get_session = None  # type: ignore[assignment]
     _configure_journal_mode = _start_maintenance_thread = None  # type: ignore[assignment]
     _migrate_delivery_schema = _query_delivery_log = None  # type: ignore[assignment]
+    _activity_storage_status = _clear_activity_storage = None  # type: ignore[assignment]
+    _reconcile_activity_history = None  # type: ignore[assignment]
     _sql_select = _sql_func = _sql_or = _sql_and = _sql_delete = None  # type: ignore[assignment]
 
 
@@ -3132,6 +3148,33 @@ def _activity_matches_search(
     )
 
 
+def _load_merged_activity_items_sync() -> list[AlertHistoryItem]:
+    """Return one de-duplicated view of SQLite and the recovery journal."""
+
+    with _activity_lock:
+        journal_items = list(ACTIVITY_HISTORY)
+    merged: dict[str, AlertHistoryItem] = {
+        item.id: item for item in journal_items if item.id
+    }
+
+    engine = _get_activity_db_engine()
+    if engine is not None:
+        with _activity_db_get_session(engine) as session:
+            rows = list(session.exec(_sql_select(_ActivityEvent)).all())
+        # SQLite is authoritative when the same id exists in both stores.
+        for row in rows:
+            item = _activity_event_to_item(row)
+            merged[item.id] = item
+
+    items = list(merged.values())
+    items.sort(key=_history_sort_key, reverse=True)
+    return items
+
+
+async def _load_merged_activity_items() -> list[AlertHistoryItem]:
+    return await asyncio.to_thread(_load_merged_activity_items_sync)
+
+
 def _remember_read_only_history_generation() -> None:
     """Avoid retrying one immutable malformed history generation forever."""
 
@@ -3231,6 +3274,8 @@ def check_history_file_changes():
             current_mtime = os.path.getmtime(HISTORY_FILE)
 
             if current_mtime > LAST_MODIFIED_TIME:
+                if _reconcile_activity_history is not None:
+                    _reconcile_activity_history(HISTORY_FILE.parent)
                 load_alert_history()
                 return True
     except Exception as e:
@@ -3238,6 +3283,12 @@ def check_history_file_changes():
 
     return False
 
+
+if _reconcile_activity_history is not None:
+    try:
+        _reconcile_activity_history(CONFIG_DIR)
+    except Exception as exc:
+        log.warning("Activity history reconciliation needs attention: %s", exc.__class__.__name__)
 
 load_alert_history()
 
@@ -4333,21 +4384,7 @@ async def _collect_upcoming_recordings(limit: int = 250) -> list[RecordingInfo]:
 async def _load_recent_activity_items(
     *, hours: int = 24, limit: int = 250
 ) -> list[AlertHistoryItem]:
-    engine = _get_activity_db_engine()
-    if engine is not None:
-        since = datetime.now(_tz.utc) - timedelta(hours=hours) if hours > 0 else None
-        rows, _ = await asyncio.to_thread(
-            _query_activity_db,
-            engine,
-            offset=0,
-            limit=limit,
-            sort_desc=True,
-            since=since,
-        )
-        return [_activity_event_to_item(r) for r in rows]
-
-    with _activity_lock:
-        history_snapshot = list(ACTIVITY_HISTORY)
+    history_snapshot = await _load_merged_activity_items()
     if hours <= 0:
         return history_snapshot[:limit]
     cutoff_time = datetime.now(_tz.utc) - timedelta(hours=hours)
@@ -5134,26 +5171,7 @@ async def get_activity_history(
         if normalized_sort not in {"asc", "desc"}:
             raise structured_error(ErrorCode.ACTIVITY_SORT_INVALID)
 
-        engine = _get_activity_db_engine()
-        if engine is not None:
-            rows, total = await asyncio.to_thread(
-                _query_activity_db,
-                engine,
-                offset=offset,
-                limit=limit,
-                activity_type=activity_type,
-                search=search,
-                sort_desc=(normalized_sort == "desc"),
-            )
-            return ActivityHistoryResponse(
-                items=[_activity_event_to_item(r) for r in rows],
-                total=total,
-                offset=offset,
-                limit=limit,
-            )
-
-        with _activity_lock:
-            history_snapshot = list(ACTIVITY_HISTORY)
+        history_snapshot = await _load_merged_activity_items()
 
         filtered_history = [
             item
@@ -5188,19 +5206,17 @@ async def clear_activity_history():
         with _activity_lock:
             ACTIVITY_HISTORY = []
 
-        def _clear_legacy_history_file():
-            atomic_write_json(HISTORY_FILE, [], indent=2)
-
-        await asyncio.to_thread(_clear_legacy_history_file)
+        if _clear_activity_storage is None:
+            raise RuntimeError("Activity storage is unavailable.")
         engine = _get_activity_db_engine()
         if engine is not None:
-
-            def _clear_db():
+            def _clear_loaded_engine() -> None:
                 with _activity_db_get_session(engine) as session:
-                    session.execute(_sql_delete(_ActivityEvent))
+                    session.exec(_sql_delete(_ActivityEvent))
                     session.commit()
 
-            await asyncio.to_thread(_clear_db)
+            await asyncio.to_thread(_clear_loaded_engine)
+        await asyncio.to_thread(_clear_activity_storage, HISTORY_FILE.parent)
         return {"message": "Activity history cleared successfully"}
     except Exception as e:
         print(f"[WebUI API] ERROR: Failed to clear activity history: {e}")
@@ -5233,73 +5249,31 @@ def _csv_escape(value: object) -> str:
     return s
 
 
-def _iter_csv(engine, dvr_id: Optional[str]):
+def _iter_csv(dvr_id: Optional[str]):
     yield ",".join(_CSV_COLUMNS) + "\r\n"
-    activity_event = _ActivityEvent
-    get_session = _activity_db_get_session
-    sql_select = _sql_select
-    sql_or = _sql_or
-    sql_and = _sql_and
-    if (
-        activity_event is None
-        or get_session is None
-        or sql_select is None
-        or sql_or is None
-        or sql_and is None
-    ):
-        return
-
-    batch_size = 500
-    last_timestamp = None
-    last_id = None
-    while True:
-        with get_session(engine) as session:
-            stmt = sql_select(activity_event)
-            if dvr_id:
-                stmt = stmt.where(activity_event.dvr_id == dvr_id)
-            if last_timestamp is not None and last_id is not None:
-                stmt = stmt.where(
-                    sql_or(
-                        activity_event.timestamp > last_timestamp,
-                        sql_and(
-                            activity_event.timestamp == last_timestamp,
-                            activity_event.id > last_id,
-                        ),
-                    )
-                )
-            stmt = stmt.order_by(
-                activity_event.timestamp.asc(), activity_event.id.asc()
-            ).limit(batch_size)
-            rows = list(session.exec(stmt).all())
-        if not rows:
-            break
-        for evt in rows:
-            ts = evt.timestamp
-            if isinstance(ts, datetime) and ts.tzinfo is None:
-                ts = ts.replace(tzinfo=_tz.utc)
-            row = [
-                evt.id,
-                evt.dvr_id,
-                evt.dvr_name,
-                evt.event_type,
-                evt.title,
-                evt.message,
-                ts.isoformat() if isinstance(ts, datetime) else str(ts),
-                evt.channel_name,
-                evt.channel_number,
-                evt.device_name,
-                evt.device_ip,
-                evt.program_title,
-                evt.image_url,
-                evt.stream_source,
-                "true" if evt.is_test else "false",
-            ]
-            yield ",".join(_csv_escape(v) for v in row) + "\r\n"
-        last = rows[-1]
-        last_timestamp = last.timestamp
-        last_id = last.id
-        if len(rows) < batch_size:
-            break
+    items = _load_merged_activity_items_sync()
+    items.sort(key=lambda item: (_history_sort_key(item), item.id))
+    for item in items:
+        if dvr_id and item.dvr_id != dvr_id:
+            continue
+        row = [
+            item.id,
+            item.dvr_id,
+            item.dvr_name,
+            item.type,
+            item.title,
+            item.message,
+            item.timestamp,
+            item.channel_name,
+            item.channel_number,
+            item.device_name,
+            item.device_ip,
+            item.program_title,
+            item.image_url,
+            item.stream_source,
+            "true" if item.is_test else "false",
+        ]
+        yield ",".join(_csv_escape(value) for value in row) + "\r\n"
 
 
 @app.get("/api/v1/history/export", tags=["Activity"])
@@ -5310,16 +5284,12 @@ async def export_history_csv(
     if format.lower() != "csv":
         raise structured_error(ErrorCode.ACTIVITY_FORMAT_UNSUPPORTED)
 
-    engine = _get_activity_db_engine()
-    if engine is None:
-        raise structured_error(ErrorCode.ACTIVITY_DB_UNAVAILABLE)
-
     filename = _content_disposition_filename(
         f"channelwatch-history-{dvr_id or 'all'}.csv"
     )
 
     def _sync_gen():
-        yield from _iter_csv(engine, dvr_id)
+        yield from _iter_csv(dvr_id)
 
     return StreamingResponse(
         _sync_gen(),
@@ -6779,27 +6749,7 @@ async def get_dvr_activity_history_v1(
         raise structured_error(ErrorCode.ACTIVITY_SORT_INVALID)
 
     try:
-        engine = _get_activity_db_engine()
-        if engine is not None:
-            rows, total = await asyncio.to_thread(
-                _query_activity_db,
-                engine,
-                offset=offset,
-                limit=limit,
-                activity_type=activity_type,
-                search=search,
-                sort_desc=(normalized_sort == "desc"),
-                dvr_id=dvr_id,
-            )
-            return ActivityHistoryResponse(
-                items=[_activity_event_to_item(r) for r in rows],
-                total=total,
-                offset=offset,
-                limit=limit,
-            )
-
-        with _activity_lock:
-            history_snapshot = list(ACTIVITY_HISTORY)
+        history_snapshot = await _load_merged_activity_items()
         filtered = [
             item
             for item in history_snapshot

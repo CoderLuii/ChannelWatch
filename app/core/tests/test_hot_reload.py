@@ -64,6 +64,11 @@ class TestEarlySighupHandling:
 
         env = os.environ.copy()
         env["CONFIG_PATH"] = str(config_dir)
+        # The readiness line is the synchronization primitive for this test.
+        # Force the child to flush it even when CI captures stdout through a
+        # pipe; otherwise Python's block buffering can make a healthy child
+        # look as though startup never completed.
+        env["PYTHONUNBUFFERED"] = "1"
         env.pop("CHANNELS_DVR_HOST", None)
         env.pop("CHANNELS_DVR_PORT", None)
         env.pop("CHANNELS_DVR_SERVERS", None)

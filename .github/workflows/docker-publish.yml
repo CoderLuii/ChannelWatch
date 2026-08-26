@@ -1,5 +1,5 @@
 name: ChannelWatch - Release
-run-name: ${{ github.ref_name }}
+run-name: ${{ github.event.head_commit.message }}
 
 # Required repository secrets:
 # - CHANNELWATCH_UPDATE_SIGNING_KEY: Ed25519 private key used only for app-bundle signing.
@@ -12,14 +12,12 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   pull_request:
     branches:
       - main
 
 concurrency:
-  group: channelwatch-release-publication
+  group: channelwatch-release-publication-v2
   cancel-in-progress: false
 
 permissions: {}
@@ -28,91 +26,14 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:11203e84159f6568c517c1765ee9a6de15685972c86bc1d27648ba7061486f65 # v1.22.2
-  RELEASE_TAG: ${{ github.ref_name }}
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:be235f63f7bb2d41b07d1b56bd0ea62b3a8c4d3f43f5f176d4ec832ef02d95a1 # v1.22.2
+  RELEASE_TAG: ${{ github.event.head_commit.message }}
   RELEASE_SHA: ${{ github.sha }}
 
 jobs:
-  cleanup-failed-v0918:
-    name: Remove exact failed v0.9.18 registry artifacts
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Authenticate Docker Hub cleanup
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Authenticate GHCR cleanup
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Remove only the exact failed v0.9.18 image digest
-        env:
-          FAILED_DIGEST: sha256:166e713b4e8560e2aed0879fba4fe1942998a24dfe52f434624681eab7bce22c
-          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${RELEASE_TAG}" != "v0.9.18" ]; then
-            echo "No failed v0.9.18 cleanup is needed for ${RELEASE_TAG}."
-            exit 0
-          fi
-          skopeo_cmd() {
-            docker run --rm \
-              --volume "${DOCKER_CONFIG:-${HOME}/.docker}:/auth:ro" \
-              "${SKOPEO_IMAGE}" "$@"
-          }
-          dockerhub_reference="docker://${DOCKERHUB_IMAGE}:0.9.18"
-          if actual_digest="$(skopeo_cmd inspect \
-            --authfile /auth/config.json --format '{{.Digest}}' "${dockerhub_reference}" 2>/dev/null)"; then
-            if [ "${actual_digest}" != "${FAILED_DIGEST}" ]; then
-              echo "::error::Refusing to delete ${dockerhub_reference}; digest ${actual_digest} is not the exact failed release digest."
-              exit 1
-            fi
-            skopeo_cmd delete --authfile /auth/config.json "${dockerhub_reference}"
-            echo "Removed exact failed artifact ${dockerhub_reference}@${actual_digest}."
-          else
-            echo "${dockerhub_reference} is already absent."
-          fi
-
-          ghcr_reference="docker://${GHCR_IMAGE}:0.9.18"
-          if actual_digest="$(skopeo_cmd inspect \
-            --authfile /auth/config.json --format '{{.Digest}}' "${ghcr_reference}" 2>/dev/null)"; then
-            if [ "${actual_digest}" != "${FAILED_DIGEST}" ]; then
-              echo "::error::Refusing to delete ${ghcr_reference}; digest ${actual_digest} is not the exact failed release digest."
-              exit 1
-            fi
-            versions_url="https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/channelwatch/versions?per_page=100"
-            versions="$(curl --fail --silent --show-error \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "${versions_url}")"
-            version_id="$(jq --exit-status --raw-output \
-              --arg digest "${FAILED_DIGEST}" \
-              '[.[] | select(.name == $digest and (.metadata.container.tags | index("0.9.18")))] | if length == 1 then .[0].id else error("expected exactly one matching failed GHCR version") end' \
-              <<<"${versions}")"
-            curl --fail --silent --show-error --request DELETE \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/channelwatch/versions/${version_id}"
-            echo "Removed exact failed artifact ${ghcr_reference}@${actual_digest}."
-          else
-            echo "${ghcr_reference} is already absent."
-          fi
-
   python:
     name: Python
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,11 +43,6 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            deploy/requirements/runtime.txt
-            deploy/requirements/dev.txt
-            deploy/requirements/dev.constraints.txt
       - name: Install dependencies
         run: python -m pip install -c deploy/requirements/dev.constraints.txt -r deploy/requirements/runtime.txt -r deploy/requirements/dev.txt
       - name: Compile Python
@@ -138,7 +54,7 @@ jobs:
 
   frontend:
     name: Frontend
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -150,6 +66,7 @@ jobs:
       - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
           node-version: '24'
+          package-manager-cache: false
       - name: Enable pinned pnpm
         run: corepack enable
       - name: Install dependencies
@@ -161,7 +78,7 @@ jobs:
 
   browser:
     name: Browser
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -173,6 +90,7 @@ jobs:
       - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
           node-version: '24'
+          package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
@@ -181,7 +99,7 @@ jobs:
 
   docs-config:
     name: Docs and config
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,6 +108,7 @@ jobs:
       - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
           node-version: '24'
+          package-manager-cache: false
       - run: bash deploy/scripts/doc-qa/diataxis-check.sh
       - run: bash deploy/scripts/doc-qa/spell-check.sh
       - name: Validate Compose examples
@@ -200,7 +119,7 @@ jobs:
 
   helm:
     name: Helm
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,7 +143,7 @@ jobs:
 
   container:
     name: Container build
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -240,7 +159,7 @@ jobs:
 
   security:
     name: Security
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -339,8 +258,7 @@ jobs:
           PY
   signed-candidate:
     name: Build and verify private signed candidate
-    needs: cleanup-failed-v0918
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     outputs:
@@ -356,20 +274,26 @@ jobs:
 
       - name: Verify exact candidate identity
         env:
+          EXPECTED_BRANCH: ${{ github.ref_name }}
           EXPECTED_SHA: ${{ github.sha }}
-          EXPECTED_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
           actual_sha="$(git rev-parse HEAD)"
           actual_version="$(jq -r '.version' scripts/release/release-config.json)"
           actual_tag="v${actual_version}"
+          actual_subject="$(git log -1 --format=%s)"
+          actual_body="$(git log -1 --format=%b)"
           if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::The pushed candidate must resolve to a complete commit SHA."
             exit 1
           fi
-          if [ "${EXPECTED_TAG}" != "${actual_tag}" ]; then
-            echo "::error::The version branch must match release-config version ${actual_tag}."
+          if [ "${EXPECTED_BRANCH}" != "main" ]; then
+            echo "::error::The release commit must be pushed to main."
+            exit 1
+          fi
+          if [ "${actual_subject}" != "${actual_tag}" ] || [ -n "${actual_body}" ]; then
+            echo "::error::The release commit must use subject ${actual_tag} with an empty body."
             exit 1
           fi
           if [ "${actual_sha}" != "${EXPECTED_SHA}" ]; then
@@ -385,11 +309,6 @@ jobs:
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            deploy/requirements/runtime.txt
-            deploy/requirements/dev.txt
-            deploy/requirements/dev.constraints.txt
 
       - name: Set up pinned Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
@@ -410,6 +329,9 @@ jobs:
 
       - name: Install constrained Python dependencies
         run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/runtime.constraints.txt \
+            -r deploy/requirements/runtime.txt
           python -m pip install --upgrade \
             -c deploy/requirements/dev.constraints.txt \
             -r deploy/requirements/runtime.txt \
@@ -889,10 +811,55 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  promote-release-identity:
+    name: Fast-forward main and create release tag
+    needs: signed-candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Fast-forward main and create the reviewed lightweight release tag.
+    steps:
+      - name: Checkout exact approved candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Atomically publish main and the lightweight tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          expected_tag="v${version}"
+          if [ "${GITHUB_REF_NAME}" != "main" ] || [ "${RELEASE_TAG}" != "${expected_tag}" ]; then
+            echo "::error::Approved candidate identity changed before publication."
+            exit 1
+          fi
+          git fetch --force origin main --tags
+          remote_main="$(git rev-parse refs/remotes/origin/main)"
+          previous_tag="$(git tag --sort=-version:refname --merged "${RELEASE_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          previous_sha="$(git rev-parse "${previous_tag}^{commit}")"
+          if [ "${remote_main}" != "${RELEASE_SHA}" ]; then
+            echo "::error::Remote main no longer points to the exact candidate."
+            exit 1
+          fi
+          if [ "$(git rev-list --count "${previous_sha}..${RELEASE_SHA}")" != "1" ]; then
+            echo "::error::The release must add exactly one commit to main."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::The release tag already exists."
+            exit 1
+          fi
+          git push origin "${RELEASE_SHA}:refs/tags/${RELEASE_TAG}"
+
   build-update-bundle-and-release:
     name: Build signed update bundle and release
-    needs: signed-candidate
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - signed-candidate
+      - promote-release-identity
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write # Create the exact-SHA draft and upload signed update assets.
@@ -944,7 +911,7 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify CHANGELOG entry
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
@@ -962,6 +929,9 @@ jobs:
 
       - name: Install Python release dependencies
         run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/runtime.constraints.txt \
+            -r deploy/requirements/runtime.txt
           python -m pip install --upgrade \
             -c deploy/requirements/dev.constraints.txt \
             -r deploy/requirements/runtime.txt \
@@ -1298,7 +1268,7 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify CHANGELOG entry
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           raw_ref="${RELEASE_TAG}"
@@ -1698,7 +1668,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main'
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
           HOME: ${{ runner.temp }}/docker-auth
@@ -1712,7 +1682,7 @@ jobs:
     name: Update Docker Hub description
     runs-on: ubuntu-latest
     needs: advance-compatible-aliases
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
 
@@ -1738,7 +1708,7 @@ jobs:
     needs:
       - build-update-bundle-and-release
       - build-and-push
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write # Promote the exact-SHA draft to the public GitHub release.
 
@@ -1757,6 +1727,17 @@ jobs:
           raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install update verifier dependencies
+        run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/runtime.constraints.txt \
+            -r deploy/requirements/runtime.txt
 
       - name: Render release body
         env:
@@ -2092,7 +2073,7 @@ jobs:
       - build-update-bundle-and-release
       - build-and-push
       - publish-github-release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
 
@@ -2276,7 +2257,7 @@ jobs:
       - build-and-push
       - publish-github-release
       - verify-public-release-assets
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
 
@@ -2387,6 +2368,11 @@ jobs:
         with:
           ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
 
       - name: Parse release configuration
         id: release

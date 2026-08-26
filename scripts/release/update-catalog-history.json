@@ -1,4 +1,71 @@
 {
   "schema": 1,
-  "releases": []
+  "releases": [
+    {
+      "version": "0.9.18",
+      "version_tag": "v0.9.18",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update_with_image_refresh",
+      "image_refresh_recommended": true,
+      "minimum_image_version": "0.9.11",
+      "updater_protocol": 2,
+      "recommended_image_version": "0.9.18",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.18",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.18/channelwatch-app-v0.9.18.zip",
+      "bundle_sha256": "81d5511dd9517934bc26be4d11a77d26a793be1129c13e42f6539f4b81d7f546",
+      "bundle_signature": "ZetCaXKYiiArO/v/e3VH+7rqps4OtO7TnIb3G1XyDmGK6/aN5+uXcQw51LK6Kl9hPPmtOaZke63prbG+TDeJCQ==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-26T01:25:00Z",
+      "highlights": [
+        "The immutable published v0.9.9 and v0.9.10 entrypoints cannot activate v0.9.18 safely through their old in-app bridge. If you are still on either image, preserve `/config`, pull/recreate the v0.9.18 image once, let v0.9.18 repair any stale legacy update marker without discarding the preserved configuration, and then use the improved Update Center for future releases.",
+        "Add application-managed local encryption-key creation under persistent `/config`, with no secret variable, key prompt, or manual key-generation step for fresh installations.",
+        "Add authenticated, rate-limited legacy recovery that can use the old wrapping value for an envelope created by v0.9.5–v0.9.17, or an original raw 32-byte key once, plus a confirmed last-resort reset that preserves non-secret settings and history.",
+        "Add a narrowly scoped official signed recovery-update path so an installation blocked before administrator login can still check and apply a compatible fix using short-lived same-origin CSRF and exact typed confirmation, without accepting custom sources or downgrades.",
+        "Add an automatic signed-update policy, defaulting to a 03:00–05:00 local maintenance window, with notify-only, bounded postpone, retry, failure quarantine, and rollback controls.",
+        "Show the application version, container image version, runtime source, launcher protocol, and whether an eventual image refresh is recommended or required.",
+        "Make Update Center the normal upgrade path from operational v0.9.11–v0.9.17 installations, prominently including v0.9.15, v0.9.16, and v0.9.17; compatible app updates are signed, backed up, activated atomically, validated after restart, and rollback-capable.",
+        "Keep the schema-1 stable feed permanently pinned to the v0.9.18 bridge for v0.9.11–v0.9.17 clients, while v0.9.18 and later independently select compatible releases from the new signed schema-2 catalog.",
+        "Classify v0.9.9 and v0.9.10 honestly as immutable image-pull-only exceptions; their in-bundle safeguards remain defense-in-depth and are not counted as proof that those published images can activate the bundle.",
+        "Remove the required `CHANNELWATCH_SECRET_STORAGE_KEY` from Compose, Helm, Unraid, and fresh-install documentation. Existing values remain accepted only as deprecated one-time legacy migration input.",
+        "Require v0.9.9, v0.9.10, and an already-blocked v0.9.17 missing-key installation to pull/recreate the v0.9.18 image once while preserving `/config`; operational v0.9.11–v0.9.17 installations can install v0.9.18 directly in Update Center.",
+        "Keep login reachable when older protected credentials need attention, pause only work that needs the locked credentials, and present generic authenticated recovery guidance without exposing key details.",
+        "Keep dirty support-report drafts and private attachments in page memory while showing a restart countdown and one server-authorized 24-hour postponement before a scheduled automatic update.",
+        "Require the core process to confirm that notification queues remain held before an automatic update can begin, renew that hold throughout apply, and fail closed when the two-process handshake cannot be confirmed.",
+        "Stop fresh third-party one-click and ordinary Docker installations from appearing partly healthy while monitoring is blocked by a missing deployment key.",
+        "Let a mature, already-secured `/config` continue read-only monitoring when its storage is later remounted read-only, while disabling persistent logs, state changes, updates, and other writes until storage is repaired.",
+        "Keep existing RBAC sessions and API-key access usable in read-only mode; creating or revoking sessions, changing credentials, and every other persistent mutation returns an actionable error until `/config` is writable. Monitoring and delivery continue, but secondary session, stream-count, activity, and delivery-history diagnostics may remain stale while writes are unavailable.",
+        "Prevent Helm upgrades from deadlocking against the single-writer `/config` lock by using a `Recreate` Deployment, and restart the pod when the chart-managed ConfigMap or Secret changes.",
+        "Preserve the logical encryption key and saved credentials when a recoverable v0.9.5–v0.9.17 legacy envelope is converted to the application-managed local format.",
+        "Preserve legacy envelopes and settings byte-for-byte when their old input is missing or wrong, and offer authenticated recovery or an explicit protected-credential-only reset instead of overwriting them.",
+        "Distinguish an in-app application upgrade from the container image underneath it, so a compatible v0.9.18 release is not unnecessarily blocked on an image pull.",
+        "Continue encrypting DVR API keys and custom webhook URLs/secrets at rest while eliminating the fragile user-managed wrapping-key dependency from normal operation.",
+        "Keep official signature, digest, ABI, schema, source allowlist, release revocation, backup, activation quorum, health, quarantine, and rollback checks mandatory for every automatic or manually retried update.",
+        "Never place recovery values or raw key files in browser storage, settings, logs, API responses, evidence, release artifacts, or container metadata.",
+        "Treat full `/config` access and complete backups as credential-bearing because they contain both encrypted settings and the application-managed local decryption key.",
+        "Keep `settings.json`, managed keys, private backups, recovery snapshots, and maintenance transaction files owner-only, and fail closed on linked, special, oversized, or unstable key/settings paths."
+      ],
+      "automatic_install_after": "2026-09-03T12:00:00Z",
+      "compatible_source_application_versions": [
+        "0.9.18"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-26T01:25:00Z"
+    }
+  ]
 }

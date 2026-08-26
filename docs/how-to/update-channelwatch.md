@@ -1,6 +1,8 @@
 # Update ChannelWatch
 
-Install ChannelWatch v0.9.18 normally through Docker, Unraid, Compose, or Helm. Once v0.9.18 is running, use **Settings > Updates** as the normal upgrade path for future compatible signed releases.
+Install ChannelWatch v0.9.19 normally through Docker, Unraid, Compose, or Helm. v0.9.18 updates directly to v0.9.19 through **Settings > Updates**. Operational v0.9.11–v0.9.17 installations use the pinned v0.9.18 bridge first and then install v0.9.19 from the signed v2 catalog.
+
+v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
 The Update Center is meant to make routine updates feel like a normal app update while keeping container-runtime changes explicit and safe.
 

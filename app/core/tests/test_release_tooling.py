@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -390,7 +391,7 @@ def test_update_bundle_retains_deterministic_v2_catalog_history(tmp_path):
 
     history.write_text('{"schema":1,"releases":[]}', encoding="utf-8")
     with pytest.raises(ValueError, match="retain the permanent v0.9.18 bridge"):
-        module.load_catalog_history("0.9.19", path=history)
+        module.load_catalog_history("0.9.20", path=history)
     assert module.load_catalog_history("0.9.18", path=history) == []
 
 
@@ -653,68 +654,28 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_0918_legacy_update_bridge():
+def test_release_config_declares_0919_v2_activity_update():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config == {
-        "version": "0.9.18",
-        "image_required": False,
-        "delivery_mode": "app_update_with_image_refresh",
-        "minimum_image_version": "0.9.11",
-        "updater_protocol": 2,
-        "recommended_image_version": "0.9.18",
-        "publication_time": "2026-08-26T01:25:00Z",
-        "automatic_install_after": "2026-09-03T12:00:00Z",
-        "compatible_source_application_versions": ["0.9.18"],
-        "compatible_launcher_protocols": [1, 2, 3],
-        "runtime_compatibility_evidence": {
-            **{
-                path: {
-                    "kind": "legacy_update_bridge_v1",
-                    "candidate_version": "0.9.18",
-                    "source_tags": [f"v0.9.{patch}" for patch in range(11, 18)],
-                    "minimum_image_version": "0.9.11",
-                    "expected_activations": {
-                        **{
-                            f"v0.9.{patch}": "protocol_1_adoption"
-                            for patch in range(11, 16)
-                        },
-                        "v0.9.16": "protocol_2_quorum",
-                        "v0.9.17": "protocol_2_quorum",
-                    },
-                    "image_pull_only_sources": {
-                        **{
-                            tag: {
-                                "required_image_version": "0.9.18",
-                                "preserve_config": True,
-                                "in_app_update_supported": False,
-                                "pre_pull_false_success_possible": True,
-                                "recovery_image_repairs_marker": True,
-                                "reason": "published_image_cannot_activate_bridge_bundle",
-                            }
-                            for tag in ("v0.9.9", "v0.9.10")
-                        }
-                    },
-                }
-                for path in (
-                    "app/core/docker-entrypoint.py",
-                    "app/core/runtime_launcher.py",
-                    "deploy/docker/Dockerfile",
-                )
-            }
-        },
-        "release_heading": (
-            "# ChannelWatch v0.9.18 - Simpler setup and automatic updates"
-        ),
-        "verification_assets": True,
-    }
+    assert config["version"] == "0.9.19"
+    assert config["image_required"] is False
+    assert config["delivery_mode"] == "app_update"
+    assert config["minimum_image_version"] == "0.9.18"
+    assert config["updater_protocol"] == 2
+    assert config["recommended_image_version"] == "0.9.19"
+    assert config["compatible_source_application_versions"] == ["0.9.18"]
+    assert config["compatible_launcher_protocols"] == [1, 2, 3]
+    assert config["release_heading"] == (
+        "# ChannelWatch v0.9.19 - Reliable activity history"
+    )
+    assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
     automatic = datetime.fromisoformat(
         config["automatic_install_after"].replace("Z", "+00:00")
     )
-    assert automatic >= publication + timedelta(hours=24)
+    assert automatic >= publication + timedelta(hours=48)
 
 
 def test_release_version_surfaces_accept_multi_digit_patch():
@@ -728,21 +689,21 @@ def test_release_version_surfaces_accept_multi_digit_patch():
         release_url=None,
     )
 
-    assert metadata["version"] == "0.9.18"
-    assert metadata["versionTag"] == "v0.9.18"
-    assert metadata["dockerTag"] == "0.9.18"
-    assert metadata["helmChartVersion"] == "0.9.18"
-    assert metadata["helmAppVersion"] == "0.9.18"
+    assert metadata["version"] == "0.9.19"
+    assert metadata["versionTag"] == "v0.9.19"
+    assert metadata["dockerTag"] == "0.9.19"
+    assert metadata["helmChartVersion"] == "0.9.19"
+    assert metadata["helmAppVersion"] == "0.9.19"
 
 
-def test_release_body_for_0918_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_0919_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
-        "render_release_body_0918_legal_assets",
+        "render_release_body_0919_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v0.9.18",
-        "releaseDate": "2026-08-24",
+        "versionTag": "v0.9.19",
+        "releaseDate": "2026-08-26",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
             "Bundle release license notices.",
@@ -753,7 +714,7 @@ def test_release_body_for_0918_links_license_and_sbom_assets(monkeypatch, capsys
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "0.9.18",
+        "dockerTag": "0.9.19",
     }
     monkeypatch.setattr(
         module,
@@ -763,23 +724,23 @@ def test_release_body_for_0918_links_license_and_sbom_assets(monkeypatch, capsys
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "0.9.18"],
+        ["render-release-body.py", "--version", "0.9.19"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v0.9.18 - Simpler setup and automatic updates\n"
+        "# ChannelWatch v0.9.19 - Reliable activity history\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v0.9.18-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v0.9.18-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v0.9.18-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v0.9.18-SHA256SUMS.txt" in output
+    assert "channelwatch-v0.9.19-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v0.9.19-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v0.9.19-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v0.9.19-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:0.9`" in output
@@ -2019,12 +1980,43 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
         "\n  verify-public-release-assets:", 1
     )[0]
     assert "fetch-depth: 0" in publish_job
+    assert publish_job.index("Install update verifier dependencies") < publish_job.index(
+        "Verify pinned bridge or rerun v0.9.18 historical canaries"
+    )
+    assert "-c deploy/requirements/runtime.constraints.txt" in publish_job
+    assert "-r deploy/requirements/runtime.txt" in publish_job
     assert "missing or already published; published releases are immutable" in publish_job
     assert ".draft == true" in publish_job
     assert "'.target_commitish'" in publish_job
 
 
-def test_release_workflow_uses_one_automatic_tag_run():
+def test_every_release_verifier_installs_pinned_runtime_dependencies_first():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    job_starts = list(re.finditer(r"(?m)^  ([a-z0-9-]+):\n", workflow))
+    checked = []
+
+    for index, match in enumerate(job_starts):
+        end = job_starts[index + 1].start() if index + 1 < len(job_starts) else len(workflow)
+        job_name = match.group(1)
+        block = workflow[match.start():end]
+        for verifier in (
+            "scripts/release/verify-pinned-v1-bridge.py",
+            "scripts/release/verify-update-assets.py",
+        ):
+            for invocation in re.finditer(re.escape(verifier), block):
+                prefix = block[: invocation.start()]
+                assert "actions/setup-python@" in prefix, job_name
+                assert "python-version: '3.12'" in prefix, job_name
+                assert "-c deploy/requirements/runtime.constraints.txt" in prefix, job_name
+                assert "-r deploy/requirements/runtime.txt" in prefix, job_name
+                checked.append((job_name, verifier))
+
+    assert checked
+
+
+def test_release_workflow_uses_one_automatic_candidate_run():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
     )
@@ -2034,39 +2026,26 @@ def test_release_workflow_uses_one_automatic_tag_run():
     )[0]
 
     assert "workflow_dispatch:" not in workflow
-    assert "RELEASE_TAG: ${{ github.ref_name }}" in workflow
+    assert "RELEASE_TAG: ${{ github.event.head_commit.message }}" in workflow
     assert "RELEASE_SHA: ${{ github.sha }}" in workflow
-    assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 7
+    assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 8
     assert "if: github.event_name == 'push'" in release_job
-    assert "needs: signed-candidate" in release_job
+    assert "- signed-candidate" in release_job
+    assert "- promote-release-identity" in release_job
     assert "APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}" in release_job
     assert "The verification job did not produce an approved candidate artifact" in release_job
 
 
-def test_release_workflow_removes_only_the_known_failed_v0918_images():
+def test_release_workflow_has_one_candidate_publication_run_per_release():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
     )
-    cleanup_job = workflow.split("  cleanup-failed-v0918:", 1)[1].split(
-        "\n  python:", 1
-    )[0]
-    candidate_job = workflow.split("  signed-candidate:", 1)[1].split(
-        "\n  build-update-bundle-and-release:", 1
-    )[0]
-
-    assert "sha256:166e713b4e8560e2aed0879fba4fe1942998a24dfe52f434624681eab7bce22c" in cleanup_job
-    assert 'if [ "${RELEASE_TAG}" != "v0.9.18" ]; then' in cleanup_job
-    assert 'if [ "${actual_digest}" != "${FAILED_DIGEST}" ]; then' in cleanup_job
-    assert "Refusing to delete" in cleanup_job
-    assert 'skopeo_cmd delete --authfile /auth/config.json "${dockerhub_reference}"' in cleanup_job
-    assert "packages/container/channelwatch/versions?per_page=100" in cleanup_job
-    assert "GH_TOKEN: ${{ secrets.GHCR_TOKEN }}" in cleanup_job
-    assert '.name == $digest and (.metadata.container.tags | index(\"0.9.18\"))' in cleanup_job
-    assert "expected exactly one matching failed GHCR version" in cleanup_job
-    assert "packages/container/channelwatch/versions/${version_id}" in cleanup_job
-    assert "needs: cleanup-failed-v0918" in candidate_job
-    assert "name: Login to Docker Hub" not in cleanup_job
-    assert "name: Login to GHCR" not in cleanup_job
+    trigger = workflow.split("on:", 1)[1].split("\nconcurrency:", 1)[0]
+    assert "push:\n    branches:\n      - main" in trigger
+    assert "tags:" not in trigger
+    assert "pull_request:\n    branches:\n      - main" in trigger
+    assert "cleanup-failed-v0918" not in workflow
+    assert "workflow_dispatch:" not in workflow
 
 
 def test_release_runs_the_complete_backend_suite_without_retry():
@@ -2211,7 +2190,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
-    assert "quay.io/skopeo/stable@sha256:11203e84159f6568c517c1765ee9a6de15685972c86bc1d27648ba7061486f65" in workflow
+    assert "quay.io/skopeo/stable@sha256:be235f63f7bb2d41b07d1b56bd0ea62b3a8c4d3f43f5f176d4ec832ef02d95a1" in workflow
     assert "Verify pinned publication helper is available" in workflow
     assert 'docker pull "${SKOPEO_IMAGE}"' in workflow
     assert 'root_index="$(cat "${OCI_LAYOUT}/index.json")"' in publish_job
@@ -2323,21 +2302,23 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
         "name: channelwatch-release-candidate-${{ github.sha }}"
         in candidate
     )
-    assert "run-name: ${{ github.ref_name }}" in candidate
+    assert "run-name: ${{ github.event.head_commit.message }}" in candidate
     assert "push:" in candidate
     assert "- 'v*.*.*'" not in candidate
     assert "workflow_dispatch:" not in candidate
-    assert "if: startsWith(github.ref, 'refs/tags/v')" in candidate
+    assert "if: github.ref == 'refs/heads/main'" in candidate
     assert "CHANNELWATCH_BUILD_ID: ${{ github.sha }}" in candidate
     assert not (ROOT / ".github/workflows/release-candidate.yml").exists()
     assert not (ROOT / ".github/workflows/ci.yml").exists()
     assert list((ROOT / ".github/workflows").glob("*.yml")) == [
         ROOT / ".github/workflows/docker-publish.yml"
     ]
-    assert "EXPECTED_TAG: ${{ github.ref_name }}" in candidate
+    assert "EXPECTED_BRANCH: ${{ github.ref_name }}" in candidate
     assert "EXPECTED_SHA: ${{ github.sha }}" in candidate
     assert 'actual_tag="v${actual_version}"' in candidate
-    assert 'if [ "${EXPECTED_TAG}" != "${actual_tag}" ]; then' in candidate
+    assert 'if [ "${EXPECTED_BRANCH}" != "main" ]; then' in candidate
+    assert 'if [ "${remote_main}" != "${RELEASE_SHA}" ]; then' in candidate
+    assert '"${RELEASE_SHA}:refs/tags/${RELEASE_TAG}"' in candidate
     upload_block = candidate.split(
         "      - name: Retain sealed nonpublishing candidate evidence", 1
     )[1]
@@ -2506,18 +2487,15 @@ def test_ci_trivy_scan_renders_helm_and_fails_if_chart_targets_are_skipped():
     assert '"templates/secret.yaml"' in security_job
 
 
-def test_ci_python_cache_tracks_repository_requirement_files():
+def test_ci_python_job_disables_cross_trust_dependency_caching():
     workflow = (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(
         encoding="utf-8"
     )
     python_job = workflow.split("  python:", 1)[1].split("\n  frontend:", 1)[0]
 
     assert "fetch-depth: 0" in python_job
-    assert "cache: pip" in python_job
-    assert "cache-dependency-path:" in python_job
-    assert "deploy/requirements/runtime.txt" in python_job
-    assert "deploy/requirements/dev.txt" in python_job
-    assert "deploy/requirements/dev.constraints.txt" in python_job
+    assert "cache: pip" not in python_job
+    assert "cache-dependency-path:" not in python_job
 
 
 def test_trivy_root_entrypoint_exception_is_narrow_and_expires():

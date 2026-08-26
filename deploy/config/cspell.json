@@ -13,6 +13,7 @@
     "webhook",
     "OpenAPI",
     "supervisord",
+    "Skopeo",
     "Pydantic",
     "mDNS",
     "RBAC",

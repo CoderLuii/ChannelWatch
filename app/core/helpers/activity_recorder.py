@@ -11,13 +11,18 @@ from typing import Dict, Any, Optional
 
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
 from .atomic_io import atomic_write_json
+from core.storage.activity_store import persist_activity_event
 
 # CONSTANTS
 CONFIG_DIR = os.getenv("CONFIG_PATH", "/config")
 HISTORY_FILE = os.path.join(CONFIG_DIR, "activity_history.json")
 _history_file_lock = threading.Lock()
 
-COOLDOWN_PERIOD = 5
+# Activity rows represent the start of a viewing session, not each telemetry
+# refresh emitted while that session is active.  Match the normal alert
+# cooldown so a long-running stream cannot create a new dashboard row every
+# few seconds when Channels changes the shape of its session identifier.
+COOLDOWN_PERIOD = 300
 
 
 def _history_file_path() -> str:
@@ -201,18 +206,14 @@ def record_activity(
             "dvr_name": dvr_name or "",
         }
 
-        with _history_file_lock:
-            history = load_history()
-            history.insert(0, new_activity)
-
-            if len(history) > 500:
-                history = history[:500]
-
-            saved = save_history(history)
+        saved = persist_activity_event(
+            new_activity,
+            config_dir=Path(_history_file_path()).parent,
+        )
 
         if saved:
             log(
-                f"Activity recorded directly to history file: {title} - {message}",
+                "Activity recorded in durable activity storage",
                 level=LOG_VERBOSE,
             )
             return True
@@ -341,14 +342,10 @@ def record_recording_event(
             "extra": extra or {},
         }
 
-        with _history_file_lock:
-            history = load_history()
-            history.insert(0, new_activity)
-
-            if len(history) > 500:
-                history = history[:500]
-
-            saved = save_history(history)
+        saved = persist_activity_event(
+            new_activity,
+            config_dir=Path(_history_file_path()).parent,
+        )
 
         if saved:
             log(f"Recording event recorded: {activity_message}", level=LOG_VERBOSE)
@@ -416,14 +413,10 @@ def record_disk_status(
         if is_test:
             new_activity["is_test"] = True
 
-        with _history_file_lock:
-            history = load_history()
-            history.insert(0, new_activity)
-
-            if len(history) > 500:
-                history = history[:500]
-
-            saved = save_history(history)
+        saved = persist_activity_event(
+            new_activity,
+            config_dir=Path(_history_file_path()).parent,
+        )
 
         if saved:
             log(f"Disk status alert recorded: {activity_message}", level=LOG_VERBOSE)
@@ -436,7 +429,4 @@ def record_disk_status(
         return False
 
 
-log(
-    "Activity recorder initialized with direct file writing to activity_history.json",
-    level=LOG_VERBOSE,
-)
+log("Activity recorder initialized with shared durable storage", level=LOG_VERBOSE)

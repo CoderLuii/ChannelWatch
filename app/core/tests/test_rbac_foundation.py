@@ -467,10 +467,17 @@ class TestLoginLogoutWhoami:
                 "warnings": [],
             },
             "credential_protection": payload["credential_protection"],
+            "activity_storage": payload["activity_storage"],
             "dvrs": [],
             "notification_routing_diagnostics": [],
         }
         assert payload["credential_protection"]["state"] == "managed_local"
+        assert payload["activity_storage"]["status"] in {
+            "healthy",
+            "reconciling",
+            "degraded",
+            "recovery_required",
+        }
         serialized_protection = json.dumps(payload["credential_protection"])
         assert "encryption.key" not in serialized_protection
         assert "fernet:" not in serialized_protection

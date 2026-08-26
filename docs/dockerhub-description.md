@@ -13,7 +13,7 @@ Recommended tags:
 
 - `latest` for the newest stable image
 - `0.9` for the current compatible v0.9 release
-- `0.9.18` for the v0.9.18 release
+- `0.9.19` for the v0.9.19 release
 
 ## Quick Start
 
@@ -37,15 +37,15 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v0.9.18, `0.9`, or `latest` for the current v0.9 release. It removes the normal deployment-key setup, automatically manages encryption under `/config`, and makes the signed in-app Update Center the default upgrade path.
+Use v0.9.19, `0.9`, or `latest` for the current v0.9 release. It repairs valid activity that could remain hidden when JSON and SQLite history diverged, while retaining automatic encryption-key management under `/config`.
 
-Operational v0.9.11–v0.9.17 installations can update directly to v0.9.18 from **Settings > Updates**, including the common v0.9.15, v0.9.16, and v0.9.17 installations. Compatible updates are signed, backed up, validated after restart, and rollback-capable. Automatic updates default to the local 03:00–05:00 maintenance window; notify-only is available.
+v0.9.18 updates directly to v0.9.19 from **Settings > Updates**. Operational v0.9.11–v0.9.17 installations first install the pinned v0.9.18 bridge and then v0.9.19 through the portal. Existing valid activity migrates automatically and no DVR credentials need to be re-entered.
 
 **Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v0.9.18 image once. The immutable published entrypoints in those images cannot safely activate v0.9.18. The v0.9.18 image repairs any stale legacy update marker without discarding the preserved configuration; after this one-time image refresh, use Update Center normally.
 
 An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v0.9.18 once, or provide the correct old key for one migration restart.
 
-After v0.9.18 is installed, a setup or legacy-recovery state can use a narrowly scoped official signed recovery update before normal admin navigation is available. It requires same-origin anti-CSRF state and exact typed confirmation and does not accept custom feeds, URLs, uploads, keys, or downgrades.
+After v0.9.18 or newer is installed, a setup or legacy-recovery state can use a narrowly scoped official signed recovery update before normal admin navigation is available. It requires same-origin anti-CSRF state and exact typed confirmation and does not accept custom feeds, URLs, uploads, keys, or downgrades.
 
 Releases that change the container runtime still require a normal image update. ChannelWatch will show **container image update required** when that is the safe path.
 

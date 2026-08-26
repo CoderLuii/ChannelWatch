@@ -5,7 +5,6 @@ import sqlite3
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.pool import NullPool
@@ -13,63 +12,12 @@ from sqlalchemy.pool import NullPool
 from core.helpers.atomic_io import fsync_directory
 from .database import create_db_engine, create_all_tables, get_session
 from .models import ActivityEvent
+from .activity_schema import activity_payload_to_model
 
 log = logging.getLogger(__name__)
 
 DEFAULT_JSON_PATH = "/config/activity_history.json"
 DEFAULT_DB_URL = "sqlite:////config/channelwatch.db"
-
-
-def _parse_timestamp(ts: object) -> datetime:
-    if isinstance(ts, datetime):
-        return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
-    raw = str(ts)
-    try:
-        dt = datetime.fromisoformat(raw)
-        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        log.warning("Cannot parse timestamp %r; falling back to epoch", raw)
-        return datetime(1970, 1, 1, tzinfo=timezone.utc)
-
-
-def _extra_to_str(extra: object) -> str:
-    if isinstance(extra, dict):
-        return json.dumps(extra)
-    if isinstance(extra, str):
-        try:
-            json.loads(extra)
-            return extra
-        except (ValueError, TypeError):
-            return json.dumps({"raw": extra})
-    return "{}"
-
-
-def _json_row_to_model(row: dict) -> Optional[ActivityEvent]:
-    row_id = (row.get("id") or "").strip()
-    # JSON shape uses "type"; ORM column is "event_type".
-    event_type = (row.get("type") or row.get("event_type") or "").strip()
-    if not row_id or not event_type:
-        return None
-
-    return ActivityEvent(
-        id=row_id,
-        dvr_id=row.get("dvr_id") or "",
-        event_type=event_type,
-        title=row.get("title") or "",
-        message=row.get("message") or "",
-        timestamp=_parse_timestamp(row.get("timestamp", datetime.now(timezone.utc))),
-        icon=row.get("icon") or "bell",
-        channel_name=row.get("channel_name") or "",
-        channel_number=row.get("channel_number") or "",
-        device_name=row.get("device_name") or "",
-        device_ip=row.get("device_ip") or "",
-        program_title=row.get("program_title") or "",
-        image_url=row.get("image_url") or "",
-        stream_source=row.get("stream_source") or "",
-        dvr_name=row.get("dvr_name") or "",
-        extra=_extra_to_str(row.get("extra", {})),
-        is_test=bool(row.get("is_test", False)),
-    )
 
 
 def migrate_activity_history(
@@ -150,7 +98,7 @@ def migrate_activity_history(
             result["errors"] += 1
             continue
 
-        model = _json_row_to_model(raw_row)
+        model = activity_payload_to_model(raw_row)
         if model is None:
             log.debug("Skipping row missing id/type: %r", raw_row)
             result["errors"] += 1

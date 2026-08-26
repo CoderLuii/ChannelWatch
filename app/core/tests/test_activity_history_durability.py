@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -23,8 +24,11 @@ def test_activity_recorder_quarantines_malformed_history_before_rewrite(tmp_path
     quarantined = list(tmp_path.glob("activity_history.json.corrupt-*"))
     assert len(quarantined) == 1
     assert quarantined[0].read_text(encoding="utf-8") == '{"partial":'
-    rewritten = json.loads(history_file.read_text(encoding="utf-8"))
-    assert rewritten[0]["title"] == "Watching TV"
+    assert json.loads(history_file.read_text(encoding="utf-8")) == []
+    with sqlite3.connect(tmp_path / "channelwatch.db") as connection:
+        assert connection.execute(
+            "SELECT title FROM activity_event"
+        ).fetchall() == [("Watching TV",)]
 
 
 def test_ui_loader_quarantines_malformed_history_without_erasing_memory(tmp_path):
@@ -101,5 +105,5 @@ async def test_clear_activity_history_offloads_legacy_file_truncation(tmp_path):
         result = await main.clear_activity_history()
 
     assert "cleared" in result["message"].lower()
-    assert calls == ["_clear_legacy_history_file"]
+    assert calls == ["clear_activity_storage"]
     assert json.loads(history_file.read_text(encoding="utf-8")) == []

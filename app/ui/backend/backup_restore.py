@@ -14,6 +14,8 @@ from importlib import import_module
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+from core.storage.activity_store import merge_recovery_journal_into_database
+
 from core.helpers.atomic_io import (
     _atomic_write_secret_bytes,
     _decrypt_secret_bytes,
@@ -103,24 +105,34 @@ def _read_settings_schema_version(config_dir: Path) -> int:
     return CURRENT_SCHEMA_VERSION
 
 
-def _sqlite_snapshot_bytes(database_file: Path) -> bytes:
-    if not database_file.exists() and not database_file.is_symlink():
-        return b""
-    source_bytes = read_regular_file_bytes(database_file)
+def _sqlite_snapshot_bytes(
+    database_file: Path,
+    *,
+    activity_journal: Path | None = None,
+) -> bytes:
+    database_exists = database_file.exists() or database_file.is_symlink()
+    source_bytes = read_regular_file_bytes(database_file) if database_exists else b""
     header = source_bytes[:16]
-    if header != b"SQLite format 3\x00":
+    if database_exists and header != b"SQLite format 3\x00":
         # Historical tests and pre-database installations may contain a
         # placeholder/non-SQLite file. Preserve it instead of fabricating data.
         return source_bytes
+    if not database_exists and not (
+        activity_journal is not None and activity_journal.exists()
+    ):
+        return b""
     with tempfile.TemporaryDirectory(prefix="channelwatch-db-backup-") as temp_dir:
         snapshot = Path(temp_dir) / "channelwatch.db"
-        source = sqlite3.connect(f"file:{database_file}?mode=ro", uri=True)
-        destination = sqlite3.connect(str(snapshot))
-        try:
-            source.backup(destination)
-        finally:
-            destination.close()
-            source.close()
+        if database_exists:
+            source = sqlite3.connect(f"file:{database_file}?mode=ro", uri=True)
+            destination = sqlite3.connect(str(snapshot))
+            try:
+                source.backup(destination)
+            finally:
+                destination.close()
+                source.close()
+        if activity_journal is not None and activity_journal.exists():
+            merge_recovery_journal_into_database(snapshot, activity_journal)
         return snapshot.read_bytes()
 
 
@@ -188,8 +200,19 @@ def _create_backup_zip_unlocked(config_dir: Path) -> bytes:
             max_bytes=MAX_SETTINGS_FILE_BYTES,
         )
         database_file = config_dir / "channelwatch.db"
-        if database_file.exists() or database_file.is_symlink():
-            _add_bytes(_sqlite_snapshot_bytes(database_file), "channelwatch.db")
+        activity_journal = config_dir / "activity_history.json"
+        if (
+            database_file.exists()
+            or database_file.is_symlink()
+            or activity_journal.exists()
+        ):
+            _add_bytes(
+                _sqlite_snapshot_bytes(
+                    database_file,
+                    activity_journal=activity_journal,
+                ),
+                "channelwatch.db",
+            )
 
         for state_file in sorted(config_dir.glob("session_state_*.json")):
             _add(state_file, state_file.name)
@@ -691,6 +714,12 @@ def restore_from_zip(
 
         if "channelwatch.db" in members:
             _validate_sqlite_restore_member(members["channelwatch.db"])
+
+        # The restored database already contains every activity event represented
+        # by its backup snapshot.  Clear the current installation's recovery
+        # journal in the same transaction so old JSON rows cannot mix with or
+        # resurrect over the restored history.
+        members["activity_history.json"] = b"[]\n"
 
         backups_dir = config_dir / "backups"
         try:

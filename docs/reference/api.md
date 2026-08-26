@@ -236,7 +236,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"0.9.18","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"0.9.19","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`

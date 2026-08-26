@@ -8,6 +8,32 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [0.9.19] - 2026-08-26
+
+### Changed
+
+- Make SQLite the authoritative activity store for core event writes, dashboard queries, per-DVR history, feeds, backups, retention, clear-history operations, and DVR hard deletion.
+- Keep `activity_history.json` as a bounded recovery journal for historical migrations, temporary SQLite failures, and rollback compatibility, with idempotent reconciliation by activity UUID.
+- Keep the legacy v1 update feed pinned to v0.9.18 while delivering v0.9.19 to v0.9.18 and newer installations through the signed v2 Update Center catalog.
+- Preserve a complete 48-hour review interval before automatic installation is allowed.
+
+### Fixed
+
+- Restore valid live-TV, VOD, movie, episode, recording, disk, and test activity that was detected and preserved in JSON but hidden whenever an empty SQLite activity table existed.
+- Make Recent Activity, the 24-Hour Timeline, per-DVR history, and activity feeds read the same merged durable view without duplicate events during migration or recovery.
+- Include valid pending recovery-journal activity in SQLite backup snapshots instead of silently omitting it.
+- Remove activity from both durable representations when history is cleared or a DVR is permanently deleted.
+- Preserve malformed recovery journals in private quarantine files and report storage degradation without replacing valid SQLite history.
+- Refresh the pinned Skopeo publication helper after the old digest disappeared upstream.
+- Make the early-SIGHUP Linux test use unbuffered child output instead of pipe timing.
+- Install constrained runtime dependencies before every pinned-v1 bridge verification step.
+- Make the single release workflow finish every non-publishing gate before it creates a public tag or publishes artifacts.
+
+### Security
+
+- Keep unauthenticated health responses minimal while adding only non-sensitive activity-storage status and counts to authenticated health diagnostics.
+- Continue managing credential encryption automatically under persistent `/config`; no DVR credential re-entry or user-managed storage key is required for this update.
+
 ## [0.9.18] - 2026-08-25
 
 ### Important
@@ -479,7 +505,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.18...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.19...HEAD
+[0.9.19]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.18...v0.9.19
 [0.9.18]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.17...v0.9.18
 [0.9.17]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.16...v0.9.17
 [0.9.16]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.15...v0.9.16

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 
 from core.helpers.activity_recorder import (
+    COOLDOWN_PERIOD,
     should_record_activity,
     cleanup_notification_history,
 )
@@ -29,6 +30,13 @@ class TestShouldRecordActivityWithExplicitHistory:
         history: dict[str, float] = {}
         should_record_activity("key1", history)
         assert should_record_activity("key1", history) is False
+
+    def test_telemetry_refresh_does_not_create_a_second_viewing_session(self):
+        now = time.time()
+        history: dict[str, float] = {"same-session": now - 10}
+
+        assert COOLDOWN_PERIOD >= 300
+        assert should_record_activity("same-session", history) is False
 
     def test_separate_dicts_are_independent(self):
         history_a: dict[str, float] = {}

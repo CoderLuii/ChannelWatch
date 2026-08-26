@@ -827,27 +827,32 @@ def classify_changes(
     for path in paths:
         normalized = normalize_path(path)
         if normalized == "app/ui/package.json":
+            refresh.discard(normalized)
             if _normalized_package_runtime(
                 before.get(path)
             ) != _normalized_package_runtime(after.get(path)):
                 refresh.add(normalized)
         elif normalized == "deploy/helm/channelwatch/Chart.yaml":
+            refresh.discard(normalized)
             if _without_release_version_lines(
                 before.get(path)
             ) != _without_release_version_lines(after.get(path)):
                 refresh.add(normalized)
         elif normalized == "deploy/helm/channelwatch/values.yaml":
+            refresh.discard(normalized)
             if _without_release_version_lines(
                 before.get(path), values=True
             ) != _without_release_version_lines(after.get(path), values=True):
                 refresh.add(normalized)
         elif normalized == "deploy/docker/Dockerfile":
+            refresh.discard(normalized)
             if _without_docker_release_metadata(
                 before.get(path)
             ) != _without_docker_release_metadata(after.get(path)):
                 triggering.add(normalized)
-            elif before.get(path) != after.get(path):
-                refresh.add(normalized)
+            # A release-number-only Dockerfile change does not alter the
+            # runtime and must not turn a complete app update into an image
+            # refresh recommendation.
     return _impact(triggering, refresh)
 
 

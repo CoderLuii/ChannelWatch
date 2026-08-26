@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
+from core.storage.activity_store import delete_dvr_activity
 
 SOFT_DELETE_RETENTION_DAYS = 30
 
@@ -43,23 +44,12 @@ def _remove_dvr_state_files(config_dir: Path, dvr_id: str) -> None:
 
 
 def _remove_dvr_history_rows(config_dir: Path, dvr_id: str) -> int:
-    history_file = config_dir / "activity_history.json"
-    if not history_file.is_file():
-        return 0
     try:
-        raw = json.loads(history_file.read_text())
-        if not isinstance(raw, list):
-            return 0
-        before = len(raw)
-        kept = [
-            r for r in raw if not (isinstance(r, dict) and r.get("dvr_id") == dvr_id)
-        ]
-        removed = before - len(kept)
+        removed = delete_dvr_activity(dvr_id, config_dir=config_dir)
         if removed > 0:
-            history_file.write_text(json.dumps(kept, indent=2))
             log(f"Removed {removed} history rows for DVR {dvr_id}", level=LOG_STANDARD)
         return removed
-    except (json.JSONDecodeError, OSError) as e:
+    except (OSError, RuntimeError, ValueError) as e:
         log(f"Could not purge history rows for DVR {dvr_id}: {e}", level=LOG_VERBOSE)
         return 0
 

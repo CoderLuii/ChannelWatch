@@ -14,7 +14,7 @@ and to keep the test setup mirroring what the real multi-DVR runtime
 produces.
 """
 
-import json
+import sqlite3
 from unittest.mock import patch
 
 
@@ -26,6 +26,15 @@ from core.helpers.activity_recorder import (
 
 
 pytest_plugins = ["core.tests.fixtures.mock_dvr_cluster"]
+
+
+def _read_history(config_dir):
+    with sqlite3.connect(config_dir / "channelwatch.db") as connection:
+        columns = [row[1] for row in connection.execute("PRAGMA table_info(activity_event)")]
+        return [
+            dict(zip(columns, row, strict=True))
+            for row in connection.execute("SELECT * FROM activity_event").fetchall()
+        ]
 
 
 class TestMultiDvrDedupIsolation:
@@ -67,7 +76,7 @@ class TestMultiDvrDedupIsolation:
                 notification_history=shared_history,
             )
 
-        history = json.loads((tmp_path / "activity_history.json").read_text())
+        history = _read_history(tmp_path)
         assert len(history) == 2, (
             f"Expected 2 history entries (one per DVR), got {len(history)}. "
             f"DVR-B's channel watch was suppressed because the tracking key "
@@ -110,7 +119,7 @@ class TestMultiDvrDedupIsolation:
                 notification_history=shared_history,
             )
 
-        history = json.loads((tmp_path / "activity_history.json").read_text())
+        history = _read_history(tmp_path)
         assert len(history) == 2, (
             f"Expected 2 history entries (one per DVR), got {len(history)}. "
             f"DVR-B's VOD activity was suppressed because the tracking key "
@@ -153,7 +162,7 @@ class TestMultiDvrDedupIsolation:
                 notification_history=shared_history,
             )
 
-        history = json.loads((tmp_path / "activity_history.json").read_text())
+        history = _read_history(tmp_path)
         assert len(history) == 2, (
             f"Expected 2 history entries (one per DVR), got {len(history)}. "
             f"DVR-B's recording event was suppressed because the tracking key "
@@ -200,7 +209,7 @@ class TestMultiDvrDedupIsolation:
                 notification_history=shared_history,
             )
 
-        history = json.loads((tmp_path / "activity_history.json").read_text())
+        history = _read_history(tmp_path)
         assert len(history) == 1, (
             f"Expected 1 history entry (duplicate suppressed), got {len(history)}. "
             f"Same-DVR dedup cooldown must remain active."

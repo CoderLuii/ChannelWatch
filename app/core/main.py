@@ -1396,6 +1396,21 @@ async def main() -> None:
 
     setup_logging(config_dir, retention_days, test_mode=test_mode)
 
+    # Reconcile activity captured by historical or rollback runtimes before
+    # monitors can emit new events.  The operation is idempotent and shared
+    # with the UI, so concurrent process startup cannot split the stores.
+    from .storage.activity_store import reconcile_activity_history
+
+    activity_reconciliation = await asyncio.to_thread(
+        reconcile_activity_history,
+        config_dir,
+    )
+    if activity_reconciliation.get("errors"):
+        log(
+            "Activity history recovery needs attention; monitoring will continue "
+            "with the recovery journal available to the UI."
+        )
+
     def _record_runtime_ready() -> None:
         if test_mode or os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
             return

@@ -216,15 +216,15 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:0.9.18`, `0.9`, or `latest` for the current v0.9 release. v0.9.18 removes the normal deployment-key setup, migrates healthy older encrypted installations, and makes the signed Update Center the default upgrade path.
+Use `coderluii/channelwatch:0.9.19`, `0.9`, or `latest` for the current v0.9 release. v0.9.19 repairs activity history that was detected but hidden by the earlier split JSON and SQLite storage paths.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 
-Operational v0.9.11–v0.9.17 installations can update directly to v0.9.18 through the portal, including the common v0.9.15, v0.9.16, and v0.9.17 installations. An already-blocked v0.9.17 installation that cannot open its old envelope cannot reach its old Update Center; preserve `/config` and pull/recreate v0.9.18 once, or provide the correct old deployment key for one migration restart.
+v0.9.18 updates directly to v0.9.19 through the signed v2 Update Center. Operational v0.9.11–v0.9.17 installations first install the pinned v0.9.18 bridge through Update Center and then install v0.9.19. Existing valid JSON activity migrates automatically; users do not edit activity files or re-enter DVR credentials.
 
 **Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** The immutable published entrypoints in those images cannot safely activate v0.9.18. Preserve the existing `/config` volume and pull/recreate the v0.9.18 image once. v0.9.18 repairs any stale legacy update marker without discarding the preserved configuration, and its improved Update Center becomes the normal path for future compatible releases.
 
-Once v0.9.18 is installed, its setup and legacy-recovery shell can use only the official signed stable recovery channel before normal administrator navigation is available. The narrow recovery action uses same-origin anti-CSRF state and exact typed confirmation; it cannot accept custom feeds, URLs, uploads, signing keys, or downgrades.
+Once v0.9.18 or newer is installed, its setup and legacy-recovery shell can use only the official signed stable recovery channel before normal administrator navigation is available. The narrow recovery action uses same-origin anti-CSRF state and exact typed confirmation; it cannot accept custom feeds, URLs, uploads, signing keys, or downgrades.
 
 The Update Center checks trusted public ChannelWatch release metadata, verifies signed app bundles, creates a pre-update backup, activates the update, restarts ChannelWatch, and keeps rollback available when the previous runtime can be restored. It does not add telemetry.
 
@@ -234,7 +234,7 @@ Some releases still require a normal container image update. ChannelWatch will s
 
 ### Project One-Click and older deployment-key installs
 
-Fresh v0.9.18 Project One-Click installations no longer need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
+Fresh v0.9.19 Project One-Click installations do not need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
 
 If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first v0.9.18 restart. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. v0.9.9 and v0.9.10 still require the one-time image pull described above; their preserved envelopes migrate after v0.9.18 starts.
 

@@ -571,7 +571,7 @@ print(json.dumps({
     assert payload["retention_days"] == 3
 
 
-def test_activity_recorder_writes_history_under_config_path(tmp_path, monkeypatch):
+def test_activity_recorder_writes_database_under_config_path(tmp_path, monkeypatch):
     from core.helpers import activity_recorder
 
     monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
@@ -587,10 +587,15 @@ def test_activity_recorder_writes_history_under_config_path(tmp_path, monkeypatc
         monkeypatch.delenv("CONFIG_PATH", raising=False)
         importlib.reload(activity_recorder)
 
-    history_file = tmp_path / "activity_history.json"
-    assert history_file.is_file()
-    history = json.loads(history_file.read_text(encoding="utf-8"))
-    assert history[0]["title"] == "Config path test"
+    database_file = tmp_path / "channelwatch.db"
+    assert database_file.is_file()
+    engine = create_db_engine(f"sqlite:///{database_file}")
+    try:
+        with get_session(engine) as session:
+            rows = list(session.exec(select(ActivityEvent)).all())
+        assert [row.title for row in rows] == ["Config path test"]
+    finally:
+        engine.dispose()
 
 
 def test_app_settings_auth_mode_accepts_legacy_empty_and_known_modes():

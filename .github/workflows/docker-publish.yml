@@ -339,6 +339,7 @@ jobs:
 
       - name: Run source gates
         run: |
+          python scripts/release/release_version_policy.py
           python -m compileall app/core app/ui/backend
           PYTHONPATH=app python -m pytest app/core/tests
 
@@ -941,6 +942,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/release/release_version_policy.py
           python -m pytest app/core/tests
           python -m compileall app/core app/ui/backend
 

@@ -8,6 +8,27 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.0] - 2026-08-26
+
+### Important
+
+- Establish v1.0.0 as the first intentional container-image milestone. Preserve `/config`, pull or recreate with the `1.0.0` image once, and use the in-app Update Center for v1.0.1 through v1.0.9.
+
+### Added
+
+- Enforce the post-v1 release cadence in release tooling: every `X.Y.0` release requires the matching container image, `X.Y.1` through `X.Y.9` remain in-app releases, and patch numbers above 9 are rejected in favor of the next minor milestone.
+- Show that an update check is already in progress while retaining the last trustworthy application, image, runtime, and release status.
+
+### Fixed
+
+- Prevent a concurrent scheduled and manual update check from replacing every Update Center version field with `Unknown`.
+- Validate release delivery metadata against the version milestone before signing or publication, preventing an in-app patch release from accidentally requiring a newer container image.
+
+### Changed
+
+- Treat v1.0.0 as an explicit image refresh that establishes the base for the v1.0.x in-app update line.
+- Keep the signed v2 catalog as the source for update availability while leaving the legacy v1 bridge pinned to v0.9.18.
+
 ## [0.9.19] - 2026-08-26
 
 ### Changed
@@ -505,7 +526,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.19...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.19...v1.0.0
 [0.9.19]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.18...v0.9.19
 [0.9.18]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.17...v0.9.18
 [0.9.17]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.16...v0.9.17

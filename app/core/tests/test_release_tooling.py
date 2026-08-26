@@ -654,21 +654,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_0919_v2_activity_update():
+def test_release_config_declares_100_image_milestone():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "0.9.19"
-    assert config["image_required"] is False
-    assert config["delivery_mode"] == "app_update"
-    assert config["minimum_image_version"] == "0.9.18"
+    assert config["version"] == "1.0.0"
+    assert config["image_required"] is True
+    assert config["delivery_mode"] == "image_required"
+    assert config["minimum_image_version"] == "1.0.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "0.9.19"
-    assert config["compatible_source_application_versions"] == ["0.9.18"]
+    assert config["recommended_image_version"] == "1.0.0"
+    assert config["automatic_install_allowed"] is False
+    assert config["compatible_source_application_versions"] == ["0.9.18", "0.9.19"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v0.9.19 - Reliable activity history"
+        "# ChannelWatch v1.0.0 - Predictable updates"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -678,7 +679,75 @@ def test_release_config_declares_0919_v2_activity_update():
     assert automatic >= publication + timedelta(hours=48)
 
 
-def test_release_version_surfaces_accept_multi_digit_patch():
+def test_release_version_policy_enforces_single_digit_patch_cadence():
+    module = _load_script(
+        "release_version_policy",
+        "scripts/release/release_version_policy.py",
+    )
+
+    milestone = module.validate_release_config(
+        {
+            "version": "1.2.0",
+            "image_required": True,
+            "delivery_mode": "image_required",
+            "minimum_image_version": "1.2.0",
+            "automatic_install_allowed": False,
+        }
+    )
+    assert milestone.image_milestone is True
+
+    patch_release = module.validate_release_config(
+        {
+            "version": "1.2.9",
+            "image_required": False,
+            "delivery_mode": "app_update",
+            "minimum_image_version": "1.2.0",
+        }
+    )
+    assert patch_release.image_milestone is False
+
+    with pytest.raises(ValueError, match="patch versions stop at 9"):
+        module.release_version_policy("1.2.10")
+    with pytest.raises(ValueError, match="X.Y.0 releases"):
+        module.validate_release_config(
+            {
+                "version": "1.3.0",
+                "image_required": False,
+                "delivery_mode": "app_update",
+                "minimum_image_version": "1.3.0",
+            }
+        )
+    with pytest.raises(ValueError, match="must remain in-app"):
+        module.validate_release_config(
+            {
+                "version": "1.3.1",
+                "image_required": True,
+                "delivery_mode": "image_required",
+                "minimum_image_version": "1.3.0",
+            }
+        )
+
+
+def test_release_impact_classifier_forces_v1_minor_milestone_image():
+    module = _load_script(
+        "release_impact_version_policy",
+        "scripts/release/classify-release-impact.py",
+    )
+    empty = module.classify_paths([])
+    policy_module = _load_script(
+        "release_version_policy_for_classifier",
+        "scripts/release/release_version_policy.py",
+    )
+    policy = policy_module.release_version_policy("1.4.0")
+
+    result = module.apply_release_version_policy(empty, policy)
+
+    assert result.delivery_mode == "image_required"
+    assert result.image_required is True
+    assert result.triggering_paths == ("scripts/release/release-config.json",)
+
+
+def test_release_version_surfaces_use_100_image_milestone():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -689,20 +758,20 @@ def test_release_version_surfaces_accept_multi_digit_patch():
         release_url=None,
     )
 
-    assert metadata["version"] == "0.9.19"
-    assert metadata["versionTag"] == "v0.9.19"
-    assert metadata["dockerTag"] == "0.9.19"
-    assert metadata["helmChartVersion"] == "0.9.19"
-    assert metadata["helmAppVersion"] == "0.9.19"
+    assert metadata["version"] == "1.0.0"
+    assert metadata["versionTag"] == "v1.0.0"
+    assert metadata["dockerTag"] == "1.0.0"
+    assert metadata["helmChartVersion"] == "1.0.0"
+    assert metadata["helmAppVersion"] == "1.0.0"
 
 
-def test_release_body_for_0919_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_100_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
-        "render_release_body_0919_legal_assets",
+        "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v0.9.19",
+        "versionTag": "v1.0.0",
         "releaseDate": "2026-08-26",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -714,7 +783,7 @@ def test_release_body_for_0919_links_license_and_sbom_assets(monkeypatch, capsys
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "0.9.19",
+        "dockerTag": "1.0.0",
     }
     monkeypatch.setattr(
         module,
@@ -724,27 +793,27 @@ def test_release_body_for_0919_links_license_and_sbom_assets(monkeypatch, capsys
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "0.9.19"],
+        ["render-release-body.py", "--version", "1.0.0"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v0.9.19 - Reliable activity history\n"
+        "# ChannelWatch v1.0.0 - Predictable updates\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v0.9.19-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v0.9.19-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v0.9.19-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v0.9.19-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.0-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.0-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.0-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.0-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
-    assert "`coderluii/channelwatch:0.9`" in output
-    assert "`ghcr.io/coderluii/channelwatch:0.9`" in output
+    assert "`coderluii/channelwatch:1.0`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.0`" in output
 
 
 def test_release_workflow_uses_explicit_config_and_python_gate():
@@ -1802,7 +1871,13 @@ def test_release_impact_classifier_cli_forwards_ephemeral_public_key(
     monkeypatch.setattr(module, "apply_verified_runtime_compatibility", capture)
     config = tmp_path / "release-config.json"
     config.write_text(
-        json.dumps({"image_required": False, "delivery_mode": "app_update"}),
+        json.dumps(
+            {
+                "version": "0.9.19",
+                "image_required": False,
+                "delivery_mode": "app_update",
+            }
+        ),
         encoding="utf-8",
     )
 

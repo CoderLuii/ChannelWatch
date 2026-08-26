@@ -6101,9 +6101,18 @@ async def update_postpone(body: UpdatePostponeRequest):
     dependencies=[require_role("admin")],
 )
 async def update_check():
+    from core.update_center import UpdateLockedError
+
     _require_persistent_config_writable()
+    manager = _build_update_manager()
     try:
-        return await asyncio.to_thread(_build_update_manager().check)
+        return await asyncio.to_thread(manager.check)
+    except UpdateLockedError:
+        # A scheduled check may briefly own the same single-flight lock. A
+        # manual check is idempotent, so preserve the last trustworthy status
+        # instead of turning every version field into "Unknown" in the UI.
+        status = await asyncio.to_thread(manager.status)
+        return {**status, "operation_busy": True}
     except Exception as exc:
         log.exception("Update check failed: %s", exc)
         _raise_update_error(exc)

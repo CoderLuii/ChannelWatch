@@ -20,6 +20,12 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from release_version_policy import validate_release_config
+
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_ABI = "channelwatch-runtime-v1"
 SETTINGS_SCHEMA_VERSION = 7
@@ -421,6 +427,7 @@ def main() -> int:
     configured_delivery_mode = None
     configured_publication_time = None
     configured_automatic_install_after = None
+    configured_automatic_install_allowed = None
     configured_source_versions = None
     configured_launcher_protocols = None
     try:
@@ -432,10 +439,14 @@ def main() -> int:
         if not isinstance(release_config, dict):
             raise ValueError("release-config.json must contain a JSON object.")
         if str(release_config.get("version") or "").lstrip("v") == version:
+            validate_release_config(release_config)
             configured_delivery_mode = release_config.get("delivery_mode")
             configured_publication_time = release_config.get("publication_time")
             configured_automatic_install_after = release_config.get(
                 "automatic_install_after"
+            )
+            configured_automatic_install_allowed = release_config.get(
+                "automatic_install_allowed"
             )
             configured_source_versions = release_config.get(
                 "compatible_source_application_versions"
@@ -457,6 +468,10 @@ def main() -> int:
                 raise ValueError(
                     "release-config.json automatic_install_after is required for the target release."
                 )
+            if not isinstance(configured_automatic_install_allowed, bool):
+                raise ValueError(
+                    "release-config.json automatic_install_allowed must be a boolean."
+                )
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("release-config.json could not be read safely.") from exc
     if configured_delivery_mode not in {*DELIVERY_MODES, None}:
@@ -467,6 +482,11 @@ def main() -> int:
         else args.delivery_mode
         or configured_delivery_mode
         or "app_update"
+    )
+    automatic_install_allowed = (
+        configured_automatic_install_allowed
+        if configured_automatic_install_allowed is not None
+        else args.automatic_install_allowed == "true"
     )
     out_dir = (ROOT / args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -550,7 +570,7 @@ def main() -> int:
         "minimum_image_version": args.minimum_image_version.strip().lstrip("v"),
         "updater_protocol": args.updater_protocol,
         "recommended_image_version": recommended_image_version,
-        "automatic_install_allowed": args.automatic_install_allowed == "true",
+        "automatic_install_allowed": automatic_install_allowed,
         "recovery_compatible": args.recovery_compatible == "true",
         "release_url": args.release_url,
         "bundle_url": args.bundle_url,

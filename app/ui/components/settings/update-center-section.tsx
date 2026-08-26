@@ -63,18 +63,27 @@ export function UpdateCenterSection() {
 
   const primaryMessage = useMemo(() => {
     if (!status) return t("updates.loading")
+    if (status.operation_busy) return t("updates.state.checkInProgress")
     if (status.image_required && status.update_available) return t("updates.state.imageRequired")
     if (status.update_available) return t("updates.state.available", { version: latestVersion ?? t("common.unknown") })
     return t("updates.state.current")
   }, [latestVersion, status])
 
   const loadStatus = async () => {
-    const [next, nextPolicy] = await Promise.all([fetchUpdateStatus(), fetchUpdatePolicy()])
-    setStatus(next)
-    setJob(next.last_job ?? null)
-    setPolicy(nextPolicy)
-    setMaintenanceStart(nextPolicy.maintenance_window_start)
-    setMaintenanceMinutes(String(nextPolicy.maintenance_window_minutes))
+    const [statusResult, policyResult] = await Promise.allSettled([fetchUpdateStatus(), fetchUpdatePolicy()])
+    if (statusResult.status === "fulfilled") {
+      const next = statusResult.value
+      setStatus(next)
+      setJob(next.last_job ?? null)
+    }
+    if (policyResult.status === "fulfilled") {
+      const nextPolicy = policyResult.value
+      setPolicy(nextPolicy)
+      setMaintenanceStart(nextPolicy.maintenance_window_start)
+      setMaintenanceMinutes(String(nextPolicy.maintenance_window_minutes))
+    }
+    if (statusResult.status === "rejected") throw statusResult.reason
+    if (policyResult.status === "rejected") throw policyResult.reason
   }
 
   useEffect(() => {

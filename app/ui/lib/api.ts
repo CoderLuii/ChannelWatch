@@ -383,6 +383,7 @@ export interface UpdateStatus {
   latest?: UpdateManifestPayload | null
   update_available: boolean
   image_required: boolean
+  operation_busy?: boolean
   last_job?: UpdateJob | null
   rollback_available: boolean
   auth_disabled_warning: boolean

@@ -1,16 +1,16 @@
 # Update ChannelWatch
 
-Install ChannelWatch v0.9.19 normally through Docker, Unraid, Compose, or Helm. v0.9.18 updates directly to v0.9.19 through **Settings > Updates**. Operational v0.9.11–v0.9.17 installations use the pinned v0.9.18 bridge first and then install v0.9.19 from the signed v2 catalog.
+Install ChannelWatch v1.0.0 through Docker, Unraid, Compose, or Helm while preserving `/config`. v1.0.0 is the first intentional `.0` container-image milestone and establishes the runtime used by the v1.0.1 through v1.0.9 in-app update line.
 
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
-The Update Center is meant to make routine updates feel like a normal app update while keeping container-runtime changes explicit and safe.
+The Update Center remains the normal path for routine releases. From v1.0.0 forward, `X.Y.0` releases require the matching image, while `X.Y.1` through `X.Y.9` install in-app. After `X.Y.9`, the next release is `X.(Y+1).0`.
 
-If you are still on an immutable published v0.9.9 or v0.9.10 image, **do not use its old in-app bridge for this upgrade**. Those entrypoints cannot safely activate v0.9.18. Preserve the existing `/config` volume, pull/recreate the v0.9.18 image once, and confirm ChannelWatch starts from the v0.9.18 image. The new image repairs any stale legacy update marker without discarding settings or invalidating protected credentials. Future compatible releases then use the improved Update Center normally.
+If you are still on an immutable published v0.9.9 or v0.9.10 image, **do not use its old in-app bridge for this upgrade**. Preserve the existing `/config` volume and pull/recreate the v1.0.0 image. The new image repairs stale legacy update markers without discarding settings or invalidating protected credentials. Future compatible releases then use the improved Update Center normally.
 
 Operational v0.9.11–v0.9.17 installations can upgrade directly to v0.9.18 through Update Center. This includes the common v0.9.15, v0.9.16, and v0.9.17 installations. The stable v0.9.18 manifest keeps runtime ABI `channelwatch-runtime-v1` and settings schema `7`, so those compatible images can verify and activate the new bundle without intermediate releases.
 
-An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v0.9.18 once, or restore the correct old key for one migration restart. Fresh v0.9.18 and Project One-Click-style installations do not need an encryption variable.
+An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v1.0.0, or restore the correct old key for one migration restart. Fresh v1.0.0 and Project One-Click-style installations do not need an encryption variable.
 
 If a future credential-protection problem blocks normal administrator navigation after v0.9.18 is installed, the setup/recovery shell can check and apply only the official signed stable recovery update. That narrow path requires same-origin anti-CSRF state and exact typed confirmation; it cannot accept a custom feed, upload, signing key, URL, or downgrade.
 
@@ -69,6 +69,8 @@ Some releases cannot be safely applied inside the current image. ChannelWatch wi
 - runtime ABI;
 - container entrypoint, Supervisor, privilege, or image-owned launcher behavior;
 - persistent settings schema.
+
+Starting with v1.0.0, every `X.Y.0` release is also an intentional image milestone even when its individual changes could fit in a bundle. This keeps one known container baseline for the following `X.Y.1` through `X.Y.9` in-app releases and makes the required update method clear from the version number.
 
 Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. The v0.9.18 release still publishes normal AMD64/ARM64 images for fresh installation, recovery, and optional base-image refresh.
 

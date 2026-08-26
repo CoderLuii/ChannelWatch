@@ -2027,6 +2027,7 @@ class UpdateManager:
             ),
             "latest": payload if isinstance(payload, dict) else None,
             "update_available": update_available,
+            "operation_busy": False,
             "image_required": image_required if update_available else False,
             "delivery_mode": (
                 str(payload.get("delivery_mode") or DeliveryMode.APP_UPDATE.value)

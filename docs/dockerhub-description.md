@@ -13,7 +13,7 @@ Recommended tags:
 
 - `latest` for the newest stable image
 - `0.9` for the current compatible v0.9 release
-- `0.9.19` for the v0.9.19 release
+- `1.0.0` for the v1.0 image milestone
 
 ## Quick Start
 
@@ -37,13 +37,13 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v0.9.19, `0.9`, or `latest` for the current v0.9 release. It repairs valid activity that could remain hidden when JSON and SQLite history diverged, while retaining automatic encryption-key management under `/config`.
+Use v1.0.0, `1.0`, or `latest` for the current v1.0 image milestone. Preserve `/config` when recreating the container; ChannelWatch continues managing credential protection automatically.
 
-v0.9.18 updates directly to v0.9.19 from **Settings > Updates**. Operational v0.9.11–v0.9.17 installations first install the pinned v0.9.18 bridge and then v0.9.19 through the portal. Existing valid activity migrates automatically and no DVR credentials need to be re-entered.
+From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v0.9.18 image once. The immutable published entrypoints in those images cannot safely activate v0.9.18. The v0.9.18 image repairs any stale legacy update marker without discarding the preserved configuration; after this one-time image refresh, use Update Center normally.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.0.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
 
-An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v0.9.18 once, or provide the correct old key for one migration restart.
+An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v1.0.0, or provide the correct old key for one migration restart.
 
 After v0.9.18 or newer is installed, a setup or legacy-recovery state can use a narrowly scoped official signed recovery update before normal admin navigation is available. It requires same-origin anti-CSRF state and exact typed confirmation and does not accept custom feeds, URLs, uploads, keys, or downgrades.
 

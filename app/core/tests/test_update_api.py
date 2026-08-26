@@ -217,6 +217,31 @@ def test_update_check_network_error_maps_to_check_failure(tmp_path: Path):
     assert resp.json()["detail"]["code"] == "ERR_UPDATE_CHECK_FAILED"
 
 
+def test_update_check_returns_last_status_when_another_check_owns_lock(tmp_path: Path):
+    import ui.backend.main as ui_main
+    from core.update_center import UpdateLockedError
+
+    class BusyManager(FakeUpdateManager):
+        def check(self):
+            raise UpdateLockedError("Another update operation is already running.")
+
+    manager = BusyManager()
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(ui_main, "_build_update_manager", return_value=manager),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        resp = client.post("/api/v1/update/check")
+
+    assert resp.status_code == 200
+    assert resp.json()["current_version"] == "0.9.9"
+    assert resp.json()["operation_busy"] is True
+
+
 def test_missing_update_job_uses_structured_error(tmp_path: Path):
     import ui.backend.main as ui_main
 

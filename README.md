@@ -216,11 +216,11 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:0.9.19`, `0.9`, or `latest` for the current v0.9 release. v0.9.19 repairs activity history that was detected but hidden by the earlier split JSON and SQLite storage paths.
+Use `coderluii/channelwatch:1.0.0`, `1.0`, or `latest` for the v1.0 image milestone. Preserve `/config` when recreating the container.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 
-v0.9.18 updates directly to v0.9.19 through the signed v2 Update Center. Operational v0.9.11–v0.9.17 installations first install the pinned v0.9.18 bridge through Update Center and then install v0.9.19. Existing valid JSON activity migrates automatically; users do not edit activity files or re-enter DVR credentials.
+From v1.0.0 forward, every `X.Y.0` release requires its matching container image, and `X.Y.1` through `X.Y.9` install through the signed Update Center. After `X.Y.9`, ChannelWatch advances to `X.(Y+1).0` rather than publishing patch 10.
 
 **Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** The immutable published entrypoints in those images cannot safely activate v0.9.18. Preserve the existing `/config` volume and pull/recreate the v0.9.18 image once. v0.9.18 repairs any stale legacy update marker without discarding the preserved configuration, and its improved Update Center becomes the normal path for future compatible releases.
 
@@ -234,7 +234,7 @@ Some releases still require a normal container image update. ChannelWatch will s
 
 ### Project One-Click and older deployment-key installs
 
-Fresh v0.9.19 Project One-Click installations do not need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
+Fresh v1.0.0 Project One-Click installations do not need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
 
 If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first v0.9.18 restart. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. v0.9.9 and v0.9.10 still require the one-time image pull described above; their preserved envelopes migrate after v0.9.18 starts.
 

@@ -373,6 +373,7 @@
   "updates.state.current": "ChannelWatch is up to date.",
   "updates.state.available": "{version} is available.",
   "updates.state.imageRequired": "A container image update is required.",
+  "updates.state.checkInProgress": "An update check is already in progress. Showing the latest trusted status.",
   "updates.bootstrapNote": "Update Center is the normal upgrade path. It verifies the official signature, creates a backup, activates the update, validates both services, and keeps rollback available. Only operating-system or container-runtime changes require an image refresh.",
   "updates.noAuthWarningTitle": "No authentication is enabled",
   "updates.noAuthWarningDesc": "Anyone who can reach this UI can run admin actions, including updates and rollback. Keep no-auth installs on a trusted private network only.",

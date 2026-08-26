@@ -14,6 +14,12 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from release_version_policy import validate_release_config
+
 
 class ReleaseImpact(NamedTuple):
     delivery_mode: str
@@ -140,6 +146,18 @@ def classify_paths(paths: list[str]) -> ReleaseImpact:
     required = {normalize_path(path) for path in paths if requires_image(path)}
     refresh = {normalize_path(path) for path in paths if recommends_image_refresh(path)}
     return _impact(required, refresh)
+
+
+def apply_release_version_policy(
+    result: ReleaseImpact, policy: object | None
+) -> ReleaseImpact:
+    """Make a post-v1 minor milestone image-required regardless of path mix."""
+    if policy is None or not bool(getattr(policy, "image_milestone", False)):
+        return result
+    return _impact(
+        set(result.triggering_paths) | {"scripts/release/release-config.json"},
+        set(result.refresh_paths),
+    )
 
 
 def expected_entrypoint_compatibility_declaration() -> dict[str, object]:
@@ -946,6 +964,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     public_keys = parse_public_key_overrides(args.public_key)
     config = json.loads(open(args.config, encoding="utf-8").read())
+    version_policy = validate_release_config(config)
     declared = config.get("image_required")
     if not isinstance(declared, bool):
         raise ReleaseImpactMismatch("release-config image_required must be a boolean")
@@ -980,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
         public_keys=public_keys,
         audited_change_paths=audited_runtime_change_paths(before, after),
     )
+    result = apply_release_version_policy(result, version_policy)
     verify_declared_impact(
         result,
         declared_image_required=declared,

@@ -485,6 +485,109 @@ class TestDvrStreams:
         body = resp.json()
         assert body["total"] >= 1
 
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (
+                "Watching ch5 CBS from Living Room TV (10.0.0.5)",
+                {
+                    "kind": "live",
+                    "device": "Living Room TV",
+                    "channel": "CBS",
+                    "channel_number": "5",
+                },
+            ),
+            (
+                "Watching channel 13.1 PBS Kids from Bedroom",
+                {
+                    "kind": "live",
+                    "device": "Bedroom",
+                    "channel": "PBS Kids",
+                    "channel_number": "13.1",
+                },
+            ),
+            (
+                "Watching WYFF News 4 at 6pm from bedroom channels at 4m18s",
+                {
+                    "kind": "vod",
+                    "device": "bedroom channels",
+                    "channel": "WYFF News 4 at 6pm",
+                    "channel_number": "",
+                },
+            ),
+            (
+                "Watching Away From Home from Den at 44s",
+                {
+                    "kind": "vod",
+                    "device": "Den",
+                    "channel": "Away From Home",
+                    "channel_number": "",
+                },
+            ),
+        ],
+    )
+    def test_shared_watching_parser_handles_live_and_vod(self, value, expected):
+        from ui.backend.main import _parse_active_watching_value
+
+        assert _parse_active_watching_value(value) == expected
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/streams/details",
+            "/api/v1/dvrs/dvr_aaa11111/streams",
+        ],
+    )
+    def test_vod_stream_uses_program_and_clean_device_in_subtitle(self, client, path):
+        activity = {
+            "file-123-bedroom": "Watching WYFF News 4 at 6pm from bedroom channels at 4m18s"
+        }
+
+        async def dvr_get(url, **_kwargs):
+            response = MagicMock()
+            if url.endswith("/dvr"):
+                response.status_code = 200
+                response.json.return_value = {"activity": activity}
+            else:
+                response.status_code = 404
+                response.json.return_value = []
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=dvr_get)
+        server = (
+            "dvr_aaa11111",
+            "Living Room",
+            "http://192.168.1.10:8089",
+        )
+        with (
+            patch("ui.backend.main._dvr_http_client", mock_client),
+            patch(
+                "ui.backend.main._get_dvr_servers_async",
+                new_callable=AsyncMock,
+                return_value=[server],
+            ),
+            patch(
+                "ui.backend.main._get_dvr_server_by_id_async",
+                new_callable=AsyncMock,
+                return_value=server,
+            ),
+        ):
+            resp = client.get(path)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["watching"] == [
+            {
+                "device": "bedroom channels",
+                "channel": "WYFF News 4 at 6pm",
+                "image": "",
+            }
+        ]
+        assert body["subtitle"] == "bedroom channels watching WYFF News 4 at 6pm"
+        assert "Unknown" not in body["subtitle"]
+
 
 class TestDvrSystemInfo:
     def _mock_client(self, connected=True):

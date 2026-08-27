@@ -13,18 +13,12 @@ import {
   CartesianGrid,
   Tooltip as RechartsTooltip,
   Legend,
+  ReferenceDot,
 } from "recharts"
-
-interface StreamingDataPoint {
-  name: string
-  streams: number
-  recordings: number
-  vod: number
-  isNow?: boolean
-  hour?: number
-  minute?: number
-  timestamp?: number
-}
+import {
+  activityTimelineTicks,
+  type ActivityTimelinePoint,
+} from "@/lib/activity-timeline"
 
 interface ChartVisibility {
   streams: boolean
@@ -33,22 +27,34 @@ interface ChartVisibility {
 }
 
 interface ActivityTimelineProps {
-  streamingData: StreamingDataPoint[]
+  streamingData: ActivityTimelinePoint[]
   chartVisibility: ChartVisibility
   onToggleVisibility: (key: keyof ChartVisibility) => void
 }
 
 export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisibility }: ActivityTimelineProps) {
+  const timelineTicks = activityTimelineTicks(streamingData)
+  const timelineStart = streamingData[0]?.intervalStart
+  const timelineEnd = streamingData[streamingData.length - 1]?.intervalEnd
+  const nowPoint = streamingData.find((point) => point.isNow)
+  const formatTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })
+
   return (
     <Card className="md:col-span-2">
       <CardHeader className="pb-1 pt-3">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Activity className="h-4 w-4 text-primary" />
-          {t("timeline.title")}
-        </CardTitle>
+        <div>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Activity className="h-4 w-4 text-primary" />
+            {t("timeline.title")}
+          </CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">{t("timeline.description")}</p>
+        </div>
       </CardHeader>
       <CardContent className="p-0">
-          <div className="h-[180px] sm:h-[200px] w-full relative" role="img" aria-label={t("timeline.ariaChart")}>
+        <div className="h-[180px] sm:h-[200px] w-full relative" role="img" aria-label={t("timeline.ariaChart")}>
           {streamingData.every(d => d.streams === 0 && d.recordings === 0 && d.vod === 0) && (
             <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none gap-1">
               <Activity className="h-6 w-6 text-muted-foreground/30" />
@@ -73,13 +79,16 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                 </linearGradient>
               </defs>
               <XAxis
-                dataKey="name"
+                dataKey="timestamp"
+                type="number"
+                scale="time"
+                domain={timelineStart != null && timelineEnd != null ? [timelineStart, timelineEnd] : ["auto", "auto"]}
+                ticks={timelineTicks}
                 tick={{ fontSize: 10 }}
                 axisLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 tickLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 padding={{ left: 0, right: 0 }}
-                tickFormatter={(value) => value || ""}
-                interval={0}
+                tickFormatter={(value) => new Date(Number(value)).toLocaleTimeString([], { hour: "numeric" })}
                 minTickGap={50}
                 height={30}
               />
@@ -88,6 +97,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                 axisLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 tickLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 domain={[0, 'auto']}
+                allowDecimals={false}
                 width={25}
               />
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -98,27 +108,16 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                   fontSize: "12px",
                 }}
                 formatter={(value, name) => {
-                  return [value ?? 0, name ?? ""]
+                  const count = Number(value ?? 0)
+                  const unit = count === 1 ? t("timeline.event") : t("timeline.events")
+                  return [`${count} ${unit}`, name ?? ""]
                 }}
-                labelFormatter={(label, payload) => {
-                  if (label === "Now") {
-                    return t("timeline.now")
-                  }
+                labelFormatter={(_label, payload) => {
                   if (Array.isArray(payload) && payload.length > 0) {
-                    const chartX = payload[0].payload?.timestamp
-                    if (chartX) {
-                      const point = streamingData.find(d => d.timestamp === chartX)
-                      if (point) {
-                        let displayHour = (point.hour ?? 0) % 12
-                        if (displayHour === 0) displayHour = 12
-                        const amPm = (point.hour ?? 0) < 12 ? "AM" : "PM"
-                        const formattedMinute = (point.minute ?? 0).toString().padStart(2, '0')
-                        return `${displayHour}:${formattedMinute} ${amPm}`
-                      }
+                    const point = payload[0].payload as ActivityTimelinePoint | undefined
+                    if (point) {
+                      return `${formatTime(point.intervalStart)}–${formatTime(point.intervalEnd)}`
                     }
-                  }
-                  if (label && label !== "") {
-                    return label
                   }
                   return t("timeline.unknownTime")
                 }}
@@ -127,62 +126,49 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
 
               {chartVisibility.streams && (
                 <Area
-                  type="monotone"
+                  type="step"
                   name={t("timeline.liveTV")}
                   stroke="var(--chart-streams)"
                   fillOpacity={1}
                   fill="url(#colorStreams)"
                   strokeWidth={2}
-                  connectNulls={true}
+                  dot={false}
                   dataKey="streams"
                 />
               )}
               {chartVisibility.recordings && (
                 <Area
-                  type="monotone"
+                  type="step"
                   name={t("timeline.recordings")}
                   stroke="var(--chart-recordings)"
                   fillOpacity={1}
                   fill="url(#colorRecordings)"
                   strokeWidth={2}
-                  connectNulls={true}
+                  dot={false}
                   dataKey="recordings"
                 />
               )}
               {chartVisibility.vod && (
                 <Area
-                  type="monotone"
+                  type="step"
                   name={t("timeline.vod")}
                   stroke="var(--chart-vod)"
                   fillOpacity={1}
                   fill="url(#colorVOD)"
                   strokeWidth={2}
-                  connectNulls={true}
+                  dot={false}
                   dataKey="vod"
                 />
               )}
-              {streamingData.findIndex(d => d.isNow) >= 0 && (
-                <Area
-                  type="monotone"
-                  dataKey={() => 0}
-                  name=""
-                  fill="none"
-                  stroke="none"
-                  legendType="none"
-                  dot={(props) => {
-                    const nowIndex = streamingData.findIndex(d => d.isNow)
-                    if (props.index !== nowIndex) return <g />
-                    return (
-                      <circle
-                        cx={props.cx}
-                        cy={props.cy}
-                        r={6}
-                        stroke="var(--chart-now-stroke)"
-                        strokeWidth={2}
-                        fill="var(--chart-now-fill)"
-                      />
-                    )
-                  }}
+              {nowPoint && (
+                <ReferenceDot
+                  x={nowPoint.nowTimestamp ?? nowPoint.timestamp}
+                  y={0}
+                  r={6}
+                  stroke="var(--chart-now-stroke)"
+                  strokeWidth={2}
+                  fill="var(--chart-now-fill)"
+                  ifOverflow="visible"
                 />
               )}
             </AreaChart>
@@ -191,9 +177,11 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
         {/* Custom interactive legend */}
         <div className="flex justify-center items-center gap-6 mt-2 mb-1 text-xs">
           <button
+            type="button"
             onClick={() => onToggleVisibility('streams')}
-            className="flex items-center gap-1.5 opacity-90 hover:opacity-100 transition-opacity"
+            className="flex min-h-11 items-center gap-1.5 rounded-md px-2 opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             aria-label={t("timeline.ariaToggleLiveTV")}
+            aria-pressed={chartVisibility.streams}
           >
             <div className="w-4 h-4 rounded flex items-center justify-center" style={{ backgroundColor: chartVisibility.streams ? 'var(--chart-streams)' : 'transparent', border: '1px solid var(--chart-streams)' }}>
               {chartVisibility.streams && <Check className="h-3 w-3 text-white" />}
@@ -201,9 +189,11 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             <span>{t("timeline.liveTV")}</span>
           </button>
           <button
+            type="button"
             onClick={() => onToggleVisibility('recordings')}
-            className="flex items-center gap-1.5 opacity-90 hover:opacity-100 transition-opacity"
+            className="flex min-h-11 items-center gap-1.5 rounded-md px-2 opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             aria-label={t("timeline.ariaToggleRecordings")}
+            aria-pressed={chartVisibility.recordings}
           >
             <div className="w-4 h-4 rounded flex items-center justify-center" style={{ backgroundColor: chartVisibility.recordings ? 'var(--chart-recordings)' : 'transparent', border: '1px solid var(--chart-recordings)' }}>
               {chartVisibility.recordings && <Check className="h-3 w-3 text-white" />}
@@ -211,9 +201,11 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             <span>{t("timeline.recordings")}</span>
           </button>
           <button
+            type="button"
             onClick={() => onToggleVisibility('vod')}
-            className="flex items-center gap-1.5 opacity-90 hover:opacity-100 transition-opacity"
+            className="flex min-h-11 items-center gap-1.5 rounded-md px-2 opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             aria-label={t("timeline.ariaToggleVod")}
+            aria-pressed={chartVisibility.vod}
           >
             <div className="w-4 h-4 rounded flex items-center justify-center" style={{ backgroundColor: chartVisibility.vod ? 'var(--chart-vod)' : 'transparent', border: '1px solid var(--chart-vod)' }}>
               {chartVisibility.vod && <Check className="h-3 w-3 text-white" />}

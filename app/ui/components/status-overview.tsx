@@ -8,15 +8,18 @@ import {
   fetchSystemInfo,
   fetchUpcomingRecordings,
   fetchStreamDetails,
-  fetchRecentActivity,
+  fetchCompleteActivityHistory,
   fetchSettings,
   fetchDvrStreams,
   fetchDvrUpcomingRecordings,
-  fetchDvrActivityHistory,
   fetchActivityClientFilters,
 } from "@/lib/api";
 import type { ActivityClientFacet } from "@/lib/api";
 import { canonicalActivityClientValue } from "@/lib/activity-clients";
+import {
+  buildActivityTimeline,
+  type ActivityTimelinePoint,
+} from "@/lib/activity-timeline";
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import { t } from "@/lib/i18n";
 import type { ActivityItem } from "@/lib/types";
@@ -105,18 +108,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const [channelwatchVersion, setChannelwatchVersion] = useState("");
   const [activityHours, setActivityHours] = useState(24);
   const [selectedFilters, setSelectedFilters] = useState<string[]>(["all"]);
-  const [streamingData, setStreamingData] = useState<
-    Array<{
-      name: string;
-      streams: number;
-      recordings: number;
-      vod: number;
-      isNow?: boolean;
-      hour?: number;
-      minute?: number;
-      timestamp?: number;
-    }>
-  >([]);
+  const [streamingData, setStreamingData] = useState<ActivityTimelinePoint[]>([]);
 
   const [chartVisibility, setChartVisibility] = useState({
     streams: true,
@@ -256,203 +248,19 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     }
   };
 
-  const processActivityDataForChart = (
-    activityItems: ActivityItem[],
-    customDate: Date = new Date(),
-  ) => {
-    const currentDate = customDate;
-    const slotCount = 72;
-
-    const startOfDay = new Date(currentDate);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const allPossibleSlots = [];
-    for (let i = 0; i < 24 * 3; i++) {
-      const slotTime = new Date(startOfDay);
-      slotTime.setMinutes(i * 20);
-      allPossibleSlots.push({
-        time: slotTime,
-        hour: slotTime.getHours(),
-        minute: slotTime.getMinutes(),
-        timestamp: slotTime.getTime(),
-      });
-    }
-
-    let currentSlotIndex = -1;
-    let minDiff = Infinity;
-
-    for (let i = 0; i < allPossibleSlots.length; i++) {
-      const diff = currentDate.getTime() - allPossibleSlots[i].timestamp;
-      if (diff >= 0 && diff < minDiff) {
-        minDiff = diff;
-        currentSlotIndex = i;
-      }
-    }
-
-    if (currentSlotIndex === -1) {
-      const yesterdaySlot = new Date(startOfDay);
-      yesterdaySlot.setDate(yesterdaySlot.getDate() - 1);
-      yesterdaySlot.setHours(23, 40, 0, 0);
-      currentSlotIndex = 0;
-      allPossibleSlots[0] = {
-        time: yesterdaySlot,
-        hour: yesterdaySlot.getHours(),
-        minute: yesterdaySlot.getMinutes(),
-        timestamp: yesterdaySlot.getTime(),
-      };
-    }
-
-    const nowIndex = slotCount - 6;
-
-    const currentMinutes = currentDate.getMinutes();
-    const currentSeconds = currentDate.getSeconds();
-    const slotMinute = allPossibleSlots[currentSlotIndex].minute;
-
-    const minutesElapsed = currentMinutes - slotMinute + currentSeconds / 60;
-    const slotPositionsElapsed = minutesElapsed / 20;
-    const currentPosition = Math.floor(nowIndex - slotPositionsElapsed);
-    const slotsToGoBack = currentPosition;
-    const startSlotIndex = currentSlotIndex - slotsToGoBack;
-
-    const timeSlots = [];
-    for (let i = 0; i < slotCount; i++) {
-      let actualIndex = startSlotIndex + i;
-      let slotTime;
-
-      if (actualIndex < 0) {
-        const daysToGoBack = Math.floor(Math.abs(actualIndex) / (24 * 3)) + 1;
-        const wrappedIndex = 24 * 3 + (actualIndex % (24 * 3));
-        slotTime = new Date(allPossibleSlots[wrappedIndex].time);
-        slotTime.setDate(slotTime.getDate() - daysToGoBack);
-      } else if (actualIndex >= allPossibleSlots.length) {
-        const daysToGoForward = Math.floor(actualIndex / (24 * 3));
-        const wrappedIndex = actualIndex % (24 * 3);
-        slotTime = new Date(allPossibleSlots[wrappedIndex].time);
-        slotTime.setDate(slotTime.getDate() + daysToGoForward);
-      } else {
-        slotTime = new Date(allPossibleSlots[actualIndex].time);
-      }
-
-      const slotHour = slotTime.getHours();
-      const slotMinute = slotTime.getMinutes();
-
-      let displayHour = slotHour % 12;
-      if (displayHour === 0) displayHour = 12;
-      const amPm = slotHour < 12 ? "AM" : "PM";
-
-      let name;
-
-      if (i > nowIndex) {
-        name = "";
-      } else if (slotMinute === 0 && slotHour % 3 === 0) {
-        if (Math.abs(i - nowIndex) > 3) {
-          name = `${displayHour}${amPm}`;
-        } else {
-          name = "";
-        }
-      } else if (i === nowIndex) {
-        name = "Now";
-      } else {
-        name = "";
-      }
-
-      const isNow = i === nowIndex;
-      const isBeforeCurrentTime = i <= nowIndex;
-
-      timeSlots.push({
-        name,
-        hour: slotHour,
-        minute: slotMinute,
-        exactTime: slotTime,
-        timestamp: slotTime.getTime(),
-        isNow,
-        isBeforeCurrentTime,
-      });
-    }
-
-    const chartData = timeSlots.map((slot) => ({
-      name: slot.name,
-      hour: slot.hour,
-      minute: slot.minute,
-      exactTime: slot.exactTime,
-      isNow: slot.isNow,
-      isBeforeCurrentTime: slot.isBeforeCurrentTime,
-      timestamp: slot.timestamp,
-      streams: 0,
-      recordings: 0,
-      vod: 0,
-    }));
-
-    activityItems.forEach((activity) => {
-      try {
-        const activityDate = new Date(activity.timestamp);
-
-        let closestIndex = -1;
-        let minDistance = Infinity;
-
-        chartData.forEach((slot, index) => {
-          if (!slot.isBeforeCurrentTime) {
-            return;
-          }
-
-          const distance = Math.abs(activityDate.getTime() - slot.timestamp);
-
-          if (distance <= 10 * 60 * 1000 && distance < minDistance) {
-            minDistance = distance;
-            closestIndex = index;
-          }
-        });
-
-        if (closestIndex >= 0) {
-          if (
-            activity.type === "watching_channel" ||
-            activity.type === "stream_started"
-          ) {
-            chartData[closestIndex].streams += 1;
-          } else if (
-            activity.type === "recording_event" ||
-            activity.type === "recording_started" ||
-            activity.type === "recording_completed" ||
-            activity.type === "recording_scheduled" ||
-            activity.type === "recording_stopped" ||
-            activity.type === "recording_cancelled"
-          ) {
-            chartData[closestIndex].recordings += 1;
-          } else if (
-            activity.type === "watching_vod" ||
-            activity.type === "vod_playback"
-          ) {
-            chartData[closestIndex].vod += 1;
-          }
-        }
-      } catch (error) {
-        console.error("Error processing activity timestamp:", error);
-      }
-    });
-
-    return chartData;
-  };
-
   const loadActivity = async (
     controller: AbortController,
     client?: string,
+    maxItems?: number,
+    hours: number = activityHours,
   ): Promise<ActivityItem[]> => {
-    if (selectedDvr !== "all") {
-      const response = await fetchDvrActivityHistory(selectedDvr, {
-        limit: 250,
-        sort: "desc",
-        hours: activityHours,
-        client,
-        signal: controller.signal,
-      });
-      return response.items;
-    }
-    return fetchRecentActivity(
-      activityHours,
-      250,
+    return fetchCompleteActivityHistory({
+      sort: "desc",
+      hours,
       client,
-      controller.signal,
-    );
+      dvr_id: selectedDvr === "all" ? undefined : selectedDvr,
+      signal: controller.signal,
+    }, maxItems);
   };
 
   const fetchAggregateActivityData = async () => {
@@ -461,10 +269,15 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     aggregateActivityRequestRef.current = controller;
     setActivityLoading(true);
     try {
-      const activity = await loadActivity(controller);
+      const [timelineActivity, recent] = activityHours === 24
+        ? await loadActivity(controller).then((activity) => [activity, activity.slice(0, 250)] as const)
+        : await Promise.all([
+            loadActivity(controller, undefined, undefined, 24),
+            loadActivity(controller, undefined, 250, activityHours),
+          ]);
       if (controller.signal.aborted) return;
-      setRecentActivity(activity);
-      const chartData = processActivityDataForChart(activity);
+      setRecentActivity(recent);
+      const chartData = buildActivityTimeline(timelineActivity);
       setStreamingData(chartData);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -487,7 +300,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     clientActivityRequestRef.current = controller;
     setClientActivityLoading(true);
     try {
-      const activity = await loadActivity(controller, selectedClient);
+      const activity = await loadActivity(controller, selectedClient, 250);
       if (!controller.signal.aborted) setClientActivity(activity);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;

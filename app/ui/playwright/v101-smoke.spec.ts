@@ -12,6 +12,33 @@ test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
 })
 
+test("Active Streams renders recorded-content title and clean client metadata", async ({ page }) => {
+  const streamDetails = {
+    total: 1,
+    watching: [{
+      device: "bedroom channels",
+      channel: "WYFF News 4 at 6pm",
+      image: "",
+    }],
+    recording: [],
+    subtitle: "bedroom channels watching WYFF News 4 at 6pm",
+    image: "",
+  }
+  await page.route("**/api/streams/details", (route) => fulfillJson(route, streamDetails))
+  await page.route("**/api/v1/dvrs/*/streams", (route) => fulfillJson(route, {
+    ...streamDetails,
+    dvr_id: "main-dvr",
+    dvr_name: "Main DVR",
+  }))
+
+  await page.goto("/#overview")
+  await page.getByRole("button", { name: "Refresh" }).click()
+
+  await expect(page.getByText("bedroom channels watching WYFF News 4 at 6pm")).toBeVisible()
+  const activeStreamsCard = page.getByText("Active Streams").locator("..", { hasText: "Active Streams" }).locator("..")
+  await expect(activeStreamsCard).not.toContainText("Unknown")
+})
+
 test("alert presets remain unsaved until Save Settings and disclosures are semantic", async ({ page }) => {
   let savedSettings: Record<string, unknown> | null = null
   await page.route("**/api/settings", async (route) => {
@@ -64,11 +91,11 @@ test("alert presets remain unsaved until Save Settings and disclosures are seman
 
 test("Recent Activity applies an exact client without changing the aggregate timeline", async ({ page }) => {
   const clientQueries: string[] = []
-  await page.route("**/api/recent-activity**", async (route) => {
+  await page.route("**/api/activity-history**", async (route) => {
     const url = new URL(route.request().url())
     const client = url.searchParams.get("client")
     if (client) clientQueries.push(client)
-    return fulfillJson(route, client === "Living Room Apple TV"
+    const items = client === "Living Room Apple TV"
       ? [{
           id: "activity-client-filtered",
           type: "watching_channel",
@@ -80,7 +107,13 @@ test("Recent Activity applies an exact client without changing the aggregate tim
           dvr_id: "main-dvr",
           dvr_name: "Main DVR",
         }]
-      : [])
+      : []
+    return fulfillJson(route, {
+      items,
+      total: items.length,
+      offset: Number(url.searchParams.get("offset") ?? 0),
+      limit: Number(url.searchParams.get("limit") ?? 100),
+    })
   })
 
   await page.goto("/#overview")
@@ -91,6 +124,124 @@ test("Recent Activity applies an exact client without changing the aggregate tim
   await expect.poll(() => clientQueries).toContain("Living Room Apple TV")
   await expect(page.getByText("Filtered live TV activity")).toBeVisible()
   await expect(page.getByText("24-Hour Timeline")).toBeVisible()
+})
+
+test("24-Hour Timeline tooltip matches a discrete event interval without an unnamed zero row", async ({ page }, testInfo) => {
+  const bucketMs = 20 * 60 * 1000
+  const eventTime = Math.floor((Date.now() - 2 * 60 * 60 * 1000) / bucketMs) * bucketMs + 60_000
+  const items = [
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `recording-${index}`,
+      type: "recording_scheduled",
+      title: `Recording ${index}`,
+      message: `Recording ${index} scheduled`,
+      timestamp: new Date(eventTime + index * 1_000).toISOString(),
+      icon: "video",
+    })),
+    {
+      id: "vod-1",
+      type: "watching_vod",
+      title: "VOD activity",
+      message: "VOD activity",
+      timestamp: new Date(eventTime + 5_000).toISOString(),
+      icon: "play",
+    },
+  ]
+  await page.route("**/api/activity-history**", async (route) => {
+    const url = new URL(route.request().url())
+    return fulfillJson(route, {
+      items,
+      total: items.length,
+      offset: Number(url.searchParams.get("offset") ?? 0),
+      limit: Number(url.searchParams.get("limit") ?? 100),
+    })
+  })
+
+  await page.goto("/#overview")
+  await expect(page.getByText("Detected events in each 20-minute interval")).toBeVisible()
+
+  const chart = page.getByRole("img", { name: /24-hour activity timeline/ })
+  if (testInfo.project.name === "v101-mobile-safari") {
+    await expect(chart).toHaveAttribute("aria-label", /events grouped into 20-minute intervals/i)
+    await expect(page.getByRole("button", { name: "Toggle recordings on chart" })).toHaveAttribute("aria-pressed", "true")
+    await expect(page.getByRole("button", { name: "Toggle VOD on chart" })).toHaveAttribute("aria-pressed", "true")
+    return
+  }
+  const box = await chart.boundingBox()
+  expect(box).not.toBeNull()
+  const tooltip = page.locator(".recharts-tooltip-wrapper")
+  const currentIntervalStart = Math.floor(Date.now() / bucketMs) * bucketMs
+  const windowEnd = currentIntervalStart + bucketMs
+  const windowStart = windowEnd - 72 * bucketMs
+  const eventPoint = Math.floor(eventTime / bucketMs) * bucketMs + bucketMs / 2
+  const plotLeft = 30
+  const plotWidth = box!.width - plotLeft
+  const targetX = box!.x + plotLeft + ((eventPoint - windowStart) / (windowEnd - windowStart)) * plotWidth
+  const targetY = box!.y + box!.height / 2
+  let found = false
+  for (const offset of [0, -4, 4, -8, 8]) {
+    await page.mouse.move(targetX + offset, targetY)
+    const text = await tooltip.textContent().catch(() => "")
+    if (text?.includes("4 events") && text.includes("1 event")) {
+      found = true
+      break
+    }
+  }
+
+  expect(found).toBe(true)
+  const tooltipItems = tooltip.locator(".recharts-tooltip-item")
+  await expect(tooltipItems).toHaveCount(3)
+  await expect(tooltip).toContainText("Recordings : 4 events")
+  await expect(tooltip).toContainText("VOD : 1 event")
+  await expect(tooltip.locator(".recharts-tooltip-item-name")).toHaveText(["Live TV", "Recordings", "VOD"])
+  const expectedStart = new Date(Math.floor(eventTime / bucketMs) * bucketMs).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })
+  const expectedEnd = new Date(Math.floor(eventTime / bucketMs) * bucketMs + bucketMs).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })
+  await expect(tooltip).toContainText(`${expectedStart}–${expectedEnd}`)
+})
+
+test("a seven-day Recent Activity selection keeps the Timeline query fixed at 24 hours", async ({ page }) => {
+  const activityQueries: URL[] = []
+  await page.route("**/api/activity-history**", async (route) => {
+    const url = new URL(route.request().url())
+    const hours = Number(url.searchParams.get("hours") ?? 24)
+    const offset = Number(url.searchParams.get("offset") ?? 0)
+    const total = hours === 168 ? 1000 : 261
+    const size = Math.min(100, Math.max(0, total - offset))
+    activityQueries.push(url)
+    return fulfillJson(route, {
+      items: Array.from({ length: size }, (_, index) => ({
+        id: `${hours}-${offset + index}`,
+        type: "watching_channel",
+        title: `Activity ${offset + index}`,
+        message: "Synthetic activity",
+        timestamp: new Date(Date.now() - (offset + index) * 60_000).toISOString(),
+        icon: "tv",
+      })),
+      total,
+      offset,
+      limit: 100,
+    })
+  })
+
+  await page.goto("/#overview")
+  await expect(page.getByText("Detected events in each 20-minute interval")).toBeVisible()
+  activityQueries.length = 0
+  await page.getByRole("combobox", { name: "Select activity time range" }).click()
+  await page.getByRole("option", { name: "Last 7 Days" }).click()
+
+  await expect.poll(() => activityQueries.filter((url) => url.searchParams.get("hours") === "168").length).toBe(3)
+  const sevenDayOffsets = activityQueries
+    .filter((url) => url.searchParams.get("hours") === "168")
+    .map((url) => Number(url.searchParams.get("offset")))
+  expect(sevenDayOffsets).toEqual([0, 100, 200])
+  expect(activityQueries.some((url) => url.searchParams.get("hours") === "24")).toBe(true)
+  expect(activityQueries.some((url) => url.searchParams.get("hours") === "168" && Number(url.searchParams.get("offset")) >= 300)).toBe(false)
 })
 
 test("Watch History sends the exact client filter and resets it with Clear filters", async ({ page }) => {

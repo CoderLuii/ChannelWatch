@@ -773,6 +773,32 @@ export async function fetchActivityHistory(options: FetchActivityHistoryOptions 
   return response.json()
 }
 
+export async function fetchCompleteActivityHistory(
+  options: Omit<FetchActivityHistoryOptions, "offset" | "limit"> = {},
+  maxItems?: number,
+): Promise<ActivityItem[]> {
+  const pageSize = 100
+  const items = new Map<string, ActivityItem>()
+  let offset = 0
+  let total = Number.POSITIVE_INFINITY
+
+  while (offset < total && (maxItems == null || items.size < maxItems)) {
+    const response = await fetchActivityHistory({
+      ...options,
+      offset,
+      limit: pageSize,
+    })
+    total = response.total
+    for (const item of response.items) items.set(item.id, item)
+    if (response.items.length === 0) break
+    offset += response.items.length
+  }
+
+  return Array.from(items.values())
+    .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
+    .slice(0, maxItems)
+}
+
 export async function downloadActivityHistoryCsv(
   options: Omit<FetchActivityHistoryOptions, "offset" | "limit" | "signal"> = {},
 ): Promise<Blob> {

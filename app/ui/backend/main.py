@@ -4924,6 +4924,99 @@ async def _get_per_dvr_active_stream_counts() -> Dict[str, int]:
     return dict(await _bounded_dvr_probe_gather(servers, _count_for_dvr))
 
 
+def _parse_active_watching_value(value: Any) -> Optional[Dict[str, str]]:
+    """Parse a Channels DVR ``Watching`` activity into display-safe fields.
+
+    Live TV values identify a ``ch<number>`` channel, while recorded-content
+    values put the program title directly after ``Watching`` and append the
+    playback position after the client name.  Keeping this parser shared avoids
+    the aggregate and per-DVR stream endpoints interpreting those formats
+    differently.
+    """
+    if not isinstance(value, str):
+        return None
+
+    match = re.fullmatch(
+        r"\s*Watching\s+(?P<subject>.+)\s+from\s+(?P<device>.+?)\s*",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+
+    subject = match.group("subject").strip()
+    device = match.group("device").strip()
+
+    # Channels appends transport details to live sessions and a playback
+    # position (for example ``at 4m18s``) to recorded-content sessions.
+    device = re.sub(r"\s*:\s*buf=.*$", "", device, flags=re.IGNORECASE).strip()
+    device = re.sub(
+        r"\s+at\s+(?=\d)(?:\d+h)?(?:\d+m)?(?:\d+s)?\s*$",
+        "",
+        device,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Remove a trailing parenthesized address without discarding legitimate
+    # parenthetical text that may be part of a client name.
+    address_match = re.search(r"\s*\(([^()]*)\)\s*$", device)
+    if address_match is not None:
+        try:
+            ipaddress.ip_address(address_match.group(1).strip())
+        except ValueError:
+            pass
+        else:
+            device = device[: address_match.start()].strip()
+
+    live_match = re.fullmatch(
+        r"ch(?:annel)?\s*(?P<number>\d+(?:\.\d+)?)\s*(?P<label>.*)",
+        subject,
+        flags=re.IGNORECASE,
+    )
+    if live_match is not None:
+        channel_number = live_match.group("number")
+        label = live_match.group("label").strip() or f"Channel {channel_number}"
+        stream_kind = "live"
+    else:
+        channel_number = ""
+        label = subject
+        stream_kind = "vod"
+
+    return {
+        "kind": stream_kind,
+        "device": device or "Unknown",
+        # ``channel`` is retained for compatibility; for VOD it is the content
+        # title shown in the same compact Active Streams subtitle position.
+        "channel": label or "Unknown",
+        "channel_number": channel_number,
+    }
+
+
+def _active_stream_subtitle(
+    watching: List[Dict[str, str]], recording: List[Dict[str, str]]
+) -> str:
+    """Build one consistent subtitle for aggregate and per-DVR stream cards."""
+    total = len(watching) + len(recording)
+    if total == 0:
+        return "No active streams"
+    if total == 1:
+        if watching:
+            return f"{watching[0]['device']} watching {watching[0]['channel']}"
+        return f"Recording {recording[0]['title']} until {recording[0]['until']}"
+    if watching and recording:
+        return f"{len(watching)} watching, {len(recording)} recording"
+    if len(watching) == 1:
+        return f"{watching[0]['device']} watching {watching[0]['channel']}"
+    if watching:
+        return (
+            f"{watching[0]['device']} watching {watching[0]['channel']} "
+            f"+{len(watching) - 1} more"
+        )
+    if len(recording) == 1:
+        return f"Recording {recording[0]['title']} until {recording[0]['until']}"
+    return f"{len(recording)} recordings active"
+
+
 @app.get("/api/streams/details", tags=["DVR"])
 async def get_active_streams_details(response: Response):
     response.headers["X-Deprecated-API"] = "Use /api/v1/"
@@ -5005,25 +5098,18 @@ async def get_active_streams_details(response: Response):
             elif stream_pref == "channel":
                 channel_images = channel_logos
 
-            for sid, val in activity.items():
-                if val.startswith("Watching"):
-                    device_match = re.search(r"from\s+([^:(]+)", val)
-                    channel_match = re.search(
-                        r"ch\d+\s+([^:]+?)(?:\s+from|\s*[:(])", val
-                    )
-                    ch_num_match = re.search(r"ch(\d+)", val)
-                    device = (
-                        device_match.group(1).strip() if device_match else "Unknown"
-                    )
-                    channel = (
-                        channel_match.group(1).strip() if channel_match else "Unknown"
-                    )
-                    ch_num = ch_num_match.group(1) if ch_num_match else ""
-                    image = channel_images.get(ch_num, "")
+            for _sid, val in activity.items():
+                parsed = _parse_active_watching_value(val)
+                if parsed is not None:
+                    image = channel_images.get(parsed["channel_number"], "")
                     dvr_watching.append(
-                        {"device": device, "channel": channel, "image": image}
+                        {
+                            "device": parsed["device"],
+                            "channel": parsed["channel"],
+                            "image": image,
+                        }
                     )
-                elif val.startswith("Recording"):
+                elif isinstance(val, str) and val.startswith("Recording"):
                     title_match = re.search(r"for\s+(.+?)\s+until\s+", val)
                     until_match = re.search(r"until\s+(.+?)(?=:\s*buf|$)", val)
                     title = title_match.group(1) if title_match else "Unknown"
@@ -5045,25 +5131,7 @@ async def get_active_streams_details(response: Response):
     if watching and watching[0].get("image"):
         image = watching[0]["image"]
 
-    if total == 0:
-        subtitle = "No active streams"
-    elif total == 1:
-        if watching:
-            subtitle = f"{watching[0]['device']} watching {watching[0]['channel']}"
-        else:
-            subtitle = (
-                f"Recording {recording[0]['title']} until {recording[0]['until']}"
-            )
-    elif len(watching) > 0 and len(recording) > 0:
-        subtitle = f"{len(watching)} watching, {len(recording)} recording"
-    elif len(watching) == 1:
-        subtitle = f"{watching[0]['device']} watching {watching[0]['channel']}"
-    elif len(watching) > 1:
-        subtitle = f"{watching[0]['device']} watching {watching[0]['channel']} +{len(watching) - 1} more"
-    elif len(recording) == 1:
-        subtitle = f"Recording {recording[0]['title']} until {recording[0]['until']}"
-    else:
-        subtitle = f"{len(recording)} recordings active"
+    subtitle = _active_stream_subtitle(watching, recording)
 
     return {
         "total": total,
@@ -6854,21 +6922,16 @@ async def get_dvr_streams_v1(dvr_id: str):
             channel_images = channel_logos
 
         for _sid, val in activity.items():
-            if val.startswith("Watching"):
-                device_match = _re.search(r"from\s+([^:(]+)", val)
-                channel_match = _re.search(r"ch\d+\s+([^:]+?)(?:\s+from|\s*[:(])", val)
-                ch_num_match = _re.search(r"ch(\d+)", val)
-                device = device_match.group(1).strip() if device_match else "Unknown"
-                channel = channel_match.group(1).strip() if channel_match else "Unknown"
-                ch_num = ch_num_match.group(1) if ch_num_match else ""
+            parsed = _parse_active_watching_value(val)
+            if parsed is not None:
                 watching.append(
                     {
-                        "device": device,
-                        "channel": channel,
-                        "image": channel_images.get(ch_num, ""),
+                        "device": parsed["device"],
+                        "channel": parsed["channel"],
+                        "image": channel_images.get(parsed["channel_number"], ""),
                     }
                 )
-            elif val.startswith("Recording"):
+            elif isinstance(val, str) and val.startswith("Recording"):
                 title_match = _re.search(r"for\s+(.+?)\s+until\s+", val)
                 until_match = _re.search(r"until\s+(.+?)(?=:\s*buf|$)", val)
                 title = title_match.group(1) if title_match else "Unknown"
@@ -6879,25 +6942,7 @@ async def get_dvr_streams_v1(dvr_id: str):
 
     total = len(watching) + len(recording)
     image = watching[0].get("image", "") if watching else ""
-    if total == 0:
-        subtitle = "No active streams"
-    elif total == 1:
-        if watching:
-            subtitle = f"{watching[0]['device']} watching {watching[0]['channel']}"
-        else:
-            subtitle = (
-                f"Recording {recording[0]['title']} until {recording[0]['until']}"
-            )
-    elif len(watching) > 0 and len(recording) > 0:
-        subtitle = f"{len(watching)} watching, {len(recording)} recording"
-    elif len(watching) == 1:
-        subtitle = f"{watching[0]['device']} watching {watching[0]['channel']}"
-    elif len(watching) > 1:
-        subtitle = f"{watching[0]['device']} watching {watching[0]['channel']} +{len(watching) - 1} more"
-    elif len(recording) == 1:
-        subtitle = f"Recording {recording[0]['title']} until {recording[0]['until']}"
-    else:
-        subtitle = f"{len(recording)} recordings active"
+    subtitle = _active_stream_subtitle(watching, recording)
 
     return {
         "dvr_id": sid,

@@ -8,6 +8,31 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.3] - 2026-08-27
+
+### Changed
+
+- Define the 24-Hour Timeline as detected activity-event counts grouped into 20-minute intervals. The chart does not represent simultaneous streams, viewing duration, or stream-hours.
+- Use discrete step geometry, real timestamp ticks, and exact interval labels so the graph, cursor position, tooltip time, and event counts describe the same interval.
+- Load the complete 24-hour timeline through bounded pagination while keeping longer Recent Activity views capped at 250 records.
+
+### Fixed
+
+- Prevent smoothed chart interpolation from drawing activity peaks over intervals whose tooltip correctly contained zero events.
+- Remove the unnamed zero-valued tooltip row that was created by the previous current-time marker.
+- Keep selected-DVR timeline requests within the backend's supported 100-row page limit instead of returning HTTP 422, and deduplicate activity UUIDs across pages.
+- Show the actual title and clean Channels client name for recorded and VOD playback in Active Streams instead of displaying `Unknown` or including playback progress in the client label.
+- Make the legacy and v1 stream-detail endpoints use the same metadata parser without changing their response contracts.
+
+### Security
+
+- Preserve existing authentication, activity-history privacy, DVR destination validation, signed-update verification, and v1.0.0 runtime compatibility boundaries.
+- Keep v1.0.3 a signed in-app update with `image_required=false`; no container recreation is required for operational v1.0.0 through v1.0.2 installations.
+
+### Reliability
+
+- Make the early-SIGHUP Linux release test consume the complete buffered startup stream, preventing a healthy Core process from being mistaken for a startup timeout under CI load.
+
 ## [1.0.2] - 2026-08-27
 
 ### Important

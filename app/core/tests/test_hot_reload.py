@@ -79,7 +79,7 @@ class TestEarlySighupHandling:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            bufsize=0,
             preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL),
         )
 
@@ -88,19 +88,21 @@ class TestEarlySighupHandling:
             # other release-gate load can legitimately take more than five
             # seconds.  This test is about SIGHUP safety after the no-DVR
             # startup boundary, not import speed.
-            deadline = time.time() + 20.0
-            startup_line = ""
-            while time.time() < deadline:
+            deadline = time.monotonic() + 20.0
+            startup_output = ""
+            while time.monotonic() < deadline:
                 ready, _, _ = select.select([proc.stdout], [], [], 0.1)
                 if not ready:
                     assert (
                         proc.poll() is None
                     ), "core exited before no-DVR startup completed"
                     continue
-                startup_line = proc.stdout.readline()
-                if "Waiting for DVR server configuration" in startup_line:
+                startup_output += os.read(proc.stdout.fileno(), 4096).decode(
+                    "utf-8", errors="replace"
+                )
+                if "Waiting for DVR server configuration" in startup_output:
                     break
-            assert "Waiting for DVR server configuration" in startup_line
+            assert "Waiting for DVR server configuration" in startup_output
 
             os.kill(proc.pid, signal.SIGHUP)
             time.sleep(2.0)

@@ -7,6 +7,7 @@ import os
 import secrets
 import stat
 import threading
+import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, dataclass, fields
@@ -15,6 +16,11 @@ from datetime import time as clock_time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+try:  # pragma: no cover - exercised by fail-closed platform tests
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms are unsupported
+    fcntl = None
 
 from core.helpers.atomic_io import atomic_write_json
 from core.update_catalog import DEFAULT_UPDATE_CATALOG_URL, DeliveryMode
@@ -25,7 +31,6 @@ from core.update_center import (
     UpdateLockedError,
     UpdateManager,
     UpdateManifestError,
-    UpdateOperationLock,
     compare_versions,
     load_json,
 )
@@ -66,6 +71,7 @@ ATTEMPT_FIELDS = {
 }
 MAX_SCHEDULER_HISTORY_ITEMS = 128
 MAX_POLICY_STATE_BYTES = 1024 * 1024
+SCHEDULER_LOCK_WAIT_SECONDS = 5.0
 SCHEDULER_STATE_FIELDS = {
     "schema",
     "created_at",
@@ -220,6 +226,71 @@ def _safe_atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     atomic_write_json(path, dict(payload), sort_keys=True)
 
 
+class UpdateSchedulerStateLock:
+    """Serialize scheduler state through a real kernel-held advisory lock.
+
+    Older releases used the existence of ``update-scheduler.lock`` as the lock
+    itself.  If a thread was interrupted after creating that file, the same
+    still-running UI process could make the marker appear live forever.  This
+    lock uses ``flock`` ownership instead: a leftover file is harmless unless
+    another process is actively holding its descriptor.
+    """
+
+    def __init__(self, lock_path: Path, *, wait_timeout: float = 0.0):
+        self.lock_path = Path(lock_path)
+        self.wait_timeout = max(0.0, float(wait_timeout))
+        self._fd: int | None = None
+
+    def __enter__(self) -> UpdateSchedulerStateLock:
+        if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
+            raise UpdateLockedError(
+                "Safe update scheduler state locking is unavailable."
+            )
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._fd = os.open(
+                self.lock_path,
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError as exc:
+            raise UpdateLockedError(
+                "The update scheduler state lock cannot be opened safely."
+            ) from exc
+        try:
+            metadata = os.fstat(self._fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise UpdateLockedError(
+                    "The update scheduler state lock is not a single-link regular file."
+                )
+            os.fchmod(self._fd, 0o600)
+            deadline = time.monotonic() + self.wait_timeout
+            while True:
+                try:
+                    fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    if time.monotonic() >= deadline:
+                        raise UpdateLockedError(
+                            "Another update scheduler state operation is already running."
+                        ) from exc
+                    time.sleep(0.02)
+        except Exception:
+            os.close(self._fd)
+            self._fd = None
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._fd is None:
+            return
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self._fd)
+            self._fd = None
+
+
 class UpdatePolicyStore:
     """Atomic policy persistence outside the v0.9 settings schema."""
 
@@ -232,9 +303,50 @@ class UpdatePolicyStore:
         self.runtime_dir = Path(config_dir) / "channelwatch-runtime"
         self.policy_path = self.runtime_dir / "update-policy.json"
         self.state_path = self.runtime_dir / "update-scheduler.json"
-        self.state_lock_path = self.runtime_dir / "update-scheduler.lock"
+        self.legacy_state_lock_path = self.runtime_dir / "update-scheduler.lock"
+        self.state_lock_path = self.runtime_dir / "update-scheduler-v2.lock"
         self.clock = clock
         self._lock = threading.RLock()
+
+    def _remove_legacy_state_lock(self) -> None:
+        """Remove only the exact safe marker used by pre-v1.0.2 releases.
+
+        The v2 advisory lock is already held when this runs, and v1.0.2 never
+        creates the legacy marker.  Runtime activation stops the previous UI
+        before the new backend starts, so a remaining regular marker is an
+        abandoned compatibility artifact rather than live lock ownership.
+        """
+
+        try:
+            metadata = self.legacy_state_lock_path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise UpdateLockedError(
+                "The legacy update scheduler lock cannot be inspected safely."
+            ) from exc
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+        ):
+            raise UpdateLockedError(
+                "The legacy update scheduler lock is not a single-link regular file."
+            )
+        try:
+            self.legacy_state_lock_path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise UpdateLockedError(
+                "The abandoned legacy update scheduler lock could not be cleared."
+            ) from exc
+
+    def _state_lock(self) -> UpdateSchedulerStateLock:
+        return UpdateSchedulerStateLock(
+            self.state_lock_path,
+            wait_timeout=SCHEDULER_LOCK_WAIT_SECONDS,
+        )
 
     def get(self) -> UpdatePolicy:
         with self._lock:
@@ -557,11 +669,13 @@ class UpdatePolicyStore:
         return normalized
 
     def get_state(self) -> dict[str, Any]:
-        with self._lock, UpdateOperationLock(self.state_lock_path):
+        with self._lock, self._state_lock():
+            self._remove_legacy_state_lock()
             return self._get_state_unlocked()
 
     def put_state(self, changes: Mapping[str, Any]) -> dict[str, Any]:
-        with self._lock, UpdateOperationLock(self.state_lock_path):
+        with self._lock, self._state_lock():
+            self._remove_legacy_state_lock()
             return self._write_state_unlocked(
                 {**self._get_state_unlocked(), **dict(changes)}
             )
@@ -572,7 +686,8 @@ class UpdatePolicyStore:
     ) -> dict[str, Any]:
         """Apply one cross-process read/modify/write scheduler transition."""
 
-        with self._lock, UpdateOperationLock(self.state_lock_path):
+        with self._lock, self._state_lock():
+            self._remove_legacy_state_lock()
             current = self._get_state_unlocked()
             return self._write_state_unlocked(transform(dict(current)))
 

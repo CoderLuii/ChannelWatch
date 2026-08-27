@@ -247,6 +247,7 @@ test("feature requests are lightweight and submit no diagnostics", async ({ page
   expect(submitted).not.toHaveProperty("debug_bundle")
 
   await dialog.getByTestId("feature-request-success").getByRole("button", { name: "Close" }).click()
+  await expect(dialog).toHaveCount(0)
   await page.getByTestId("help-request-feature").click()
   const reopened = page.getByRole("dialog", { name: "Request a feature or change" })
   await expect(reopened.getByLabel("Short title")).toHaveValue("")

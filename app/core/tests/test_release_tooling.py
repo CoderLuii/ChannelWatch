@@ -654,22 +654,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_101_in_app_release():
+def test_release_config_declares_102_in_app_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.0.1"
+    assert config["version"] == "1.0.2"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.0.0"
     assert config["updater_protocol"] == 2
     assert config["recommended_image_version"] == "1.0.0"
     assert config["automatic_install_allowed"] is True
-    assert config["compatible_source_application_versions"] == ["1.0.0"]
+    assert config["compatible_source_application_versions"] == ["1.0.0", "1.0.1"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.0.1 - Useful alerts and easier feedback"
+        "# ChannelWatch v1.0.2 - Reliable in-app updates"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -747,7 +747,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_101_in_app_release():
+def test_release_version_surfaces_use_102_in_app_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -758,21 +758,21 @@ def test_release_version_surfaces_use_101_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.0.1"
-    assert metadata["versionTag"] == "v1.0.1"
-    assert metadata["dockerTag"] == "1.0.1"
-    assert metadata["helmChartVersion"] == "1.0.1"
-    assert metadata["helmAppVersion"] == "1.0.1"
+    assert metadata["version"] == "1.0.2"
+    assert metadata["versionTag"] == "v1.0.2"
+    assert metadata["dockerTag"] == "1.0.2"
+    assert metadata["helmChartVersion"] == "1.0.2"
+    assert metadata["helmAppVersion"] == "1.0.2"
 
 
-def test_release_body_for_101_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_102_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.0.1",
-        "releaseDate": "2026-08-26",
+        "versionTag": "v1.0.2",
+        "releaseDate": "2026-08-27",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
             "Bundle release license notices.",
@@ -783,7 +783,7 @@ def test_release_body_for_101_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.0.1",
+        "dockerTag": "1.0.2",
     }
     monkeypatch.setattr(
         module,
@@ -793,23 +793,23 @@ def test_release_body_for_101_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.0.1"],
+        ["render-release-body.py", "--version", "1.0.2"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.0.1 - Useful alerts and easier feedback\n"
+        "# ChannelWatch v1.0.2 - Reliable in-app updates\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.0.1-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.0.1-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.0.1-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.0.1-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.2-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.2-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.2-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.2-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.0`" in output
@@ -1125,6 +1125,19 @@ def test_release_impact_classifier_keeps_update_center_app_deliverable():
     )
 
     result = module.classify_paths(["app/core/update_center.py"])
+
+    assert result.delivery_mode == "app_update"
+    assert result.image_required is False
+    assert result.image_refresh_recommended is False
+
+
+def test_release_impact_classifier_keeps_update_policy_app_deliverable():
+    module = _load_script(
+        "classify_release_impact_update_policy_app",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    result = module.classify_paths(["app/core/update_policy.py"])
 
     assert result.delivery_mode == "app_update"
     assert result.image_required is False

@@ -1,15 +1,16 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.0.0",
   "updater_protocol": 2,
   "recommended_image_version": "1.0.0",
-  "publication_time": "2026-08-27T07:25:00Z",
-  "automatic_install_after": "2026-08-29T07:25:00Z",
+  "publication_time": "2026-08-27T08:48:00Z",
+  "automatic_install_after": "2026-08-29T08:48:00Z",
   "automatic_install_allowed": true,
   "compatible_source_application_versions": [
-    "1.0.0"
+    "1.0.0",
+    "1.0.1"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -17,6 +18,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.0.1 - Useful alerts and easier feedback",
+  "release_heading": "# ChannelWatch v1.0.2 - Reliable in-app updates",
   "verification_assets": true
 }

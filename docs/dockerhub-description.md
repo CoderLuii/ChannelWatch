@@ -14,7 +14,7 @@ Recommended tags:
 - `latest` for the newest stable image
 - `0.9` for the current compatible v0.9 release
 - `1.0.0` for the v1.0 image milestone
-- `1.0.1` for a fresh install containing the current v1.0.1 app; existing v1.0.0 installations update in-app
+- `1.0.2` for a fresh install containing the current v1.0.2 app; existing operational v1.0.0 and v1.0.1 installations update in-app
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Open `http://localhost:8501` after the container starts.
 
 Use v1.0.0, `1.0`, or `latest` for the current v1.0 image milestone. Preserve `/config` when recreating the container; ChannelWatch continues managing credential protection automatically.
 
-Existing v1.0.0 installations install v1.0.1 through **Settings > Updates**. A v1.0.0 container running the signed v1.0.1 bundle is fully current and does not need to be recreated.
+Existing operational v1.0.0 and v1.0.1 installations install v1.0.2 through **Settings > Updates**. A v1.0.0 container running the signed v1.0.2 bundle is fully current and does not need to be recreated. If an older Update Center is already trapped by an abandoned scheduler lock, preserve `/config` and recreate with `coderluii/channelwatch:1.0.2` once; no settings or credentials need to be re-entered.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

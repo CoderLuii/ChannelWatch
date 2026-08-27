@@ -2,6 +2,7 @@ import base64
 import importlib.util
 import io
 import json
+import os
 import sys
 import zipfile
 from contextlib import contextmanager
@@ -38,6 +39,7 @@ from core.update_policy import (
     UpdatePolicy,
     UpdatePolicyStorageError,
     UpdatePolicyStore,
+    UpdateSchedulerStateLock,
     format_timestamp,
     maintenance_opportunity,
     parse_timestamp,
@@ -509,6 +511,92 @@ def test_policy_default_file_is_exact_and_first_check_is_five_minutes(tmp_path: 
         ]
         == first_state["stable_install_jitter_minutes"]
     )
+
+
+def test_scheduler_store_recovers_same_process_legacy_marker(tmp_path: Path):
+    """Reproduce an abandoned marker owned by the still-running UI process."""
+
+    runtime = tmp_path / "channelwatch-runtime"
+    runtime.mkdir()
+    legacy_lock = runtime / "update-scheduler.lock"
+    legacy_lock.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "process_identity": "same-live-process-abandoned-marker",
+                "created_at": "2026-08-27T08:10:25Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy_lock.chmod(0o600)
+
+    store = UpdatePolicyStore(tmp_path)
+    state = store.get_state()
+
+    assert state["schema"] == 1
+    assert not legacy_lock.exists()
+    assert store.state_lock_path.name == "update-scheduler-v2.lock"
+    assert store.state_lock_path.is_file()
+    assert store.get_state() == state
+
+
+def test_scheduler_state_lock_blocks_only_while_kernel_lock_is_held(
+    tmp_path: Path,
+):
+    lock_path = tmp_path / "channelwatch-runtime" / "update-scheduler-v2.lock"
+
+    with UpdateSchedulerStateLock(lock_path):
+        with pytest.raises(UpdateLockedError, match="state operation"):
+            with UpdateSchedulerStateLock(lock_path):
+                pytest.fail("a second descriptor must not enter the held lock")
+
+    with UpdateSchedulerStateLock(lock_path):
+        pass
+
+
+def test_scheduler_state_lock_releases_after_exception(tmp_path: Path):
+    lock_path = tmp_path / "channelwatch-runtime" / "update-scheduler-v2.lock"
+
+    with pytest.raises(RuntimeError, match="injected"):
+        with UpdateSchedulerStateLock(lock_path):
+            raise RuntimeError("injected failure")
+
+    with UpdateSchedulerStateLock(lock_path):
+        pass
+
+
+def test_scheduler_store_rejects_unsafe_legacy_lock(tmp_path: Path):
+    runtime = tmp_path / "channelwatch-runtime"
+    runtime.mkdir()
+    outside = tmp_path / "outside.lock"
+    outside.write_text("preserve", encoding="utf-8")
+    (runtime / "update-scheduler.lock").symlink_to(outside)
+
+    with pytest.raises(UpdateLockedError, match="single-link regular file"):
+        UpdatePolicyStore(tmp_path).get_state()
+    assert outside.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_scheduler_state_lock_rejects_linked_path(
+    tmp_path: Path,
+    link_kind: str,
+):
+    runtime = tmp_path / "channelwatch-runtime"
+    runtime.mkdir()
+    outside = tmp_path / "outside-v2.lock"
+    outside.write_text("preserve", encoding="utf-8")
+    lock_path = runtime / "update-scheduler-v2.lock"
+    if link_kind == "symlink":
+        lock_path.symlink_to(outside)
+    else:
+        os.link(outside, lock_path)
+
+    with pytest.raises(UpdateLockedError, match="scheduler state lock"):
+        with UpdateSchedulerStateLock(lock_path):
+            pytest.fail("linked scheduler locks must fail closed")
+    assert outside.read_text(encoding="utf-8") == "preserve"
 
 
 @pytest.mark.parametrize("filename", ["update-policy.json", "update-scheduler.json"])
@@ -1078,6 +1166,38 @@ def test_manual_apply_tracks_exact_identity_for_post_restart_reconciliation(
     assert attempt["bundle_sha256"] == payload["bundle_sha256"]
     assert result["job_id"] == attempt["job_id"]
     assert result["scheduler_attempt_id"] == attempt["attempt_id"]
+
+
+def test_manual_apply_recovers_abandoned_pre_v102_scheduler_marker(
+    tmp_path: Path,
+):
+    payload = _automatic_payload()
+    manager = _FakeManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        clock=lambda: datetime(2026, 8, 27, 8, 10, tzinfo=timezone.utc),
+        timezone_provider=lambda: timezone.utc,
+    )
+    service.store.legacy_state_lock_path.parent.mkdir(parents=True)
+    service.store.legacy_state_lock_path.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "process_identity": "same-live-ui-process",
+                "created_at": "2026-08-27T08:10:25Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.apply_release(version=payload["version"])
+
+    assert result["status"] == "restarting"
+    assert manager.applies == 1
+    assert not service.store.legacy_state_lock_path.exists()
+    assert service.store.state_lock_path.is_file()
+    assert service.store.get_state()["last_attempt"]["phase"] == "activation_pending"
 
 
 def test_manual_apply_activation_failure_is_quarantined_by_exact_digest(

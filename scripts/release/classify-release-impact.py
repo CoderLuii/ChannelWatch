@@ -89,7 +89,6 @@ IMAGE_REFRESH_PATHS = {
     "app/core/helpers/atomic_io.py",
     "app/core/helpers/migration.py",
     "app/core/update_catalog.py",
-    "app/core/update_policy.py",
     "app/ui/pnpm-lock.yaml",
     "app/ui/pnpm-workspace.yaml",
 }

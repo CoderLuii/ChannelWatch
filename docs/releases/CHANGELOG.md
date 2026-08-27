@@ -8,6 +8,27 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.2] - 2026-08-27
+
+### Important
+
+- Operational v1.0.0 and v1.0.1 installations update normally through **Settings > Updates**. An installation already trapped by a persistent `Another update operation is already running` error can preserve `/config` and recreate with the optional v1.0.2 image once; saved DVRs, credentials, settings, and history remain intact.
+
+### Changed
+
+- Serialize scheduler-state reads and writes with an operating-system-held advisory lock. A lock is busy only while another process genuinely owns it, rather than whenever a marker file exists.
+- Keep v1.0.2 a signed in-app update for the v1.0.0 runtime with `image_required=false`, while publishing the normal multi-architecture image as a recovery and fresh-install option.
+
+### Fixed
+
+- Recover automatically from the abandoned `update-scheduler.lock` marker that could make Check, Apply, policy loading, and automatic updates return `ERR_UPDATE_LOCKED` indefinitely even when no update was running.
+- Prevent Core/UI restarts, same-process ownership metadata, PID reuse, exceptions, and leftover lock files from permanently blocking later Update Center operations.
+- Preserve fail-closed handling for symlinked, hard-linked, special, or otherwise unsafe scheduler lock paths while allowing verified legacy markers to be retired safely.
+
+### Security
+
+- Continue requiring signed compatible bundles, exact digest verification, pre-update backup, activation quorum, and rollback while changing only scheduler-state serialization.
+
 ## [1.0.1] - 2026-08-26
 
 ### Added

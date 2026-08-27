@@ -244,6 +244,8 @@ class TestVodWatchingDI:
 
             assert result is True
             record_mock.assert_called_once()
+            assert record_mock.call_args.kwargs["dvr_id"] == am.dvr.id
+            assert record_mock.call_args.kwargs["dvr_name"] == am.dvr.name
             notification_manager.send_notification_async.assert_awaited_once()
 
         __import__("asyncio").run(run())

@@ -2,6 +2,8 @@
 
 Install ChannelWatch v1.0.0 through Docker, Unraid, Compose, or Helm while preserving `/config`. v1.0.0 is the first intentional `.0` container-image milestone and establishes the runtime used by the v1.0.1 through v1.0.9 in-app update line.
 
+ChannelWatch v1.0.1 is the first release on that in-app line. A v1.0.0 installation discovers and installs it through **Settings > Updates**. After activation, `Application version` shows v1.0.1 while `Container image version` may remain v1.0.0. That combination is fully current and does not require an image refresh.
+
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
 The Update Center remains the normal path for routine releases. From v1.0.0 forward, `X.Y.0` releases require the matching image, while `X.Y.1` through `X.Y.9` install in-app. After `X.Y.9`, the next release is `X.(Y+1).0`.
@@ -72,7 +74,7 @@ Some releases cannot be safely applied inside the current image. ChannelWatch wi
 
 Starting with v1.0.0, every `X.Y.0` release is also an intentional image milestone even when its individual changes could fit in a bundle. This keeps one known container baseline for the following `X.Y.1` through `X.Y.9` in-app releases and makes the required update method clear from the version number.
 
-Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. The v0.9.18 release still publishes normal AMD64/ARM64 images for fresh installation, recovery, and optional base-image refresh.
+Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. v1.0.1 still publishes normal AMD64/ARM64 images for fresh installations, but existing v1.0.0 users do not need to pull them.
 
 When this appears, update the container using your normal Docker, Unraid, Compose, or Helm process. The in-app updater intentionally does not replace the Docker image.
 

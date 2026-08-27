@@ -489,6 +489,23 @@ class DiskSpaceAlert(BaseAlert):
 
             self._persist_disk_state(updated_state)
 
+            # Disk monitoring and activity history remain active even when
+            # notification delivery is disabled.  Record each transition into
+            # a warning or critical state independently from provider delivery.
+            # The existing activity cooldown makes the later notification path
+            # idempotent when delivery is enabled for the same transition.
+            if (
+                current_severity != self.SEVERITY_NORMAL
+                and current_severity != previous_status
+            ):
+                transition_payload = self._build_disk_space_notification(
+                    free_bytes,
+                    total_bytes,
+                    disk_info,
+                    severity=current_severity,
+                )
+                self._record_disk_space_activity(transition_payload)
+
             if current_severity == self.SEVERITY_NORMAL:
                 if previous_status != self.SEVERITY_NORMAL:
                     log("DVR Storage: Returned to normal levels", level=LOG_STANDARD)
@@ -821,7 +838,16 @@ class DiskSpaceAlert(BaseAlert):
             self.send_alert(payload["title"], payload["message"], **notification_kwargs)
         )
 
-        if not payload.get("is_test", False):
+        self._record_disk_space_activity(payload)
+
+        return notification_sent
+
+    def _record_disk_space_activity(self, payload: Dict[str, Any]) -> bool:
+        """Persist a real disk transition independently from delivery."""
+
+        if payload.get("is_test", False):
+            return True
+        return bool(
             record_disk_status(
                 free_space=payload["free_formatted"],
                 total_space=payload["total_formatted"],
@@ -835,8 +861,7 @@ class DiskSpaceAlert(BaseAlert):
                 is_test=False,
                 notification_history=self._notification_history,
             )
-
-        return notification_sent
+        )
 
     # NOTIFICATIONS
     def _send_disk_space_alert(

@@ -60,6 +60,16 @@ Defaults match between `AppSettings` and `CoreSettings` unless noted below. The 
 
 ## Alerts tab
 
+### Alert policy and DVR health
+
+- `notification_preferences_version` | JSON path: `notification_preferences_version` | Type: integer | Default: `1` for a fresh v1.0.1 installation; `0` when an upgraded installation has not acknowledged the revised alert model | Description: Records deliberate review of the v1.0.1 alert policies without changing delivery by itself. | Valid values: `0` or `1`. | Env override: none. | Reload behavior: `restart-required`.
+- `alert_dvr_health` | JSON path: `alert_dvr_health` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Master delivery toggle for DVR health notifications. Monitoring and activity history continue when false. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `dvr_alert_unreachable` | JSON path: `dvr_alert_unreachable` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Sends one notification after a confirmed DVR outage passes its delay. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `dvr_alert_recovered` | JSON path: `dvr_alert_recovered` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Sends one recovery notification only after an unreachable notification was accepted for that outage. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `dvr_health_alert_delay_seconds` | JSON path: `dvr_health_alert_delay_seconds` | Type: integer | Default: `120` | Description: Continuous confirmed-unavailable time before an established DVR outage is reported. Startup uses a separate five-minute grace period. | Valid values: `30` through `3600`. | Env override: none. | Reload behavior: `restart-required`.
+
+The Alert policy selector is a UI operation over existing switches. It is not a separate routing mode and does not change providers, templates, rate limits, monitoring, or per-DVR overrides outside the selected scope.
+
 ### Stream counter
 
 - `stream_count` | JSON path: `stream_count` | Type: boolean | Default: `true` | Description: Include total active stream count in channel watching notifications. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
@@ -98,6 +108,10 @@ Defaults match between `AppSettings` and `CoreSettings` unless noted below. The 
 - `rd_alert_started` | JSON path: `rd_alert_started` | Type: boolean | Default: `true` | Description: Send notifications when recordings start. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_alert_completed` | JSON path: `rd_alert_completed` | Type: boolean | Default: `true` | Description: Send notifications when recordings complete. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_alert_cancelled` | JSON path: `rd_alert_cancelled` | Type: boolean | Default: `true` | Description: Send notifications when recordings are cancelled. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `rd_alert_failed` | JSON path: `rd_alert_failed` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Send notifications when Channels DVR reports a failed, dead, or errored recording job. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `rd_alert_skipped` | JSON path: `rd_alert_skipped` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Send notifications when Channels DVR explicitly skips a recording. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `rd_alert_missed` | JSON path: `rd_alert_missed` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Send notifications when an observed schedule did not start after the grace period and two reachable-DVR confirmations. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
+- `rd_alert_interrupted` | JSON path: `rd_alert_interrupted` | Type: boolean | Default: `true` for a fresh v1.0.1 installation and `false` when added to an existing installation | Description: Send notifications when a previously started recording is confirmed to have ended without successful completion. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_program_name` | JSON path: `rd_program_name` | Type: boolean | Default: `true` | Description: Include program name in recording event notifications. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_program_desc` | JSON path: `rd_program_desc` | Type: boolean | Default: `true` | Description: Include program description in recording event notifications. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_duration` | JSON path: `rd_duration` | Type: boolean | Default: `true` | Description: Include duration in recording event notifications. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
@@ -200,7 +214,7 @@ Defaults match between `AppSettings` and `CoreSettings` unless noted below. The 
 
 ### Notification routing
 
-- `notification_routing` | JSON path: `notification_routing` | Type: object | Default: `{}` | Description: Per DVR, per event type routing for Apprise and webhook destinations. An empty routing configuration, or a DVR/event mapping with no explicit route, preserves the legacy all-enabled behavior. Within an explicit event mapping, omitted destinations default to disabled. | Valid values: object shaped as `dvr_id -> event_type -> destination -> boolean`; event keys in the UI are `channel`, `vod`, `recording`, and `disk`. | Env override: none. | Reload behavior: `restart-required`.
+- `notification_routing` | JSON path: `notification_routing` | Type: object | Default: `{}` | Description: Per DVR, per event type routing for Apprise and webhook destinations. An empty routing configuration, or a DVR/event mapping with no explicit route, preserves the legacy all-enabled behavior. Within an explicit event mapping, omitted destinations default to disabled. | Valid values: object shaped as `dvr_id -> event_type -> destination -> boolean`; event keys in the UI are `channel`, `vod`, `recording`, `disk`, and `health`. | Env override: none. | Reload behavior: `restart-required`.
 
 > **Field naming note**: The persisted settings field is `notification_routing`. The UI may describe the same feature as notification routing or a routing matrix, but the settings file always uses `notification_routing`.
 

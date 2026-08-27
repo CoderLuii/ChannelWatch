@@ -91,7 +91,7 @@ The in-app Update Center fetches public release metadata from the official Chann
 
 If a compatible app-only update is available, ChannelWatch downloads the signed app bundle from the trusted public release URL, verifies the signature and hash locally, writes a pre-update backup under `/config/backups/`, and stores runtime metadata under `/config/channelwatch-runtime/`.
 
-## In-app support reports
+## In-app support reports and feedback
 
 The Diagnostics page includes **Report a Problem** for support cases that need more structure than a normal issue form.
 
@@ -105,6 +105,12 @@ The report preview is designed to be public-safe. It can include:
 Private support details are kept out of the public issue text. Screenshots, debug bundle ZIPs, private email addresses, attachment filenames, raw logs, API keys, webhook secrets, notification tokens, DVR API keys, and private config values are not published in the issue body.
 
 Direct in-app submit is operator controlled. If direct submit is not available, ChannelWatch can create a support code or offline package for the hosted upload portal. The hosted portal re-validates the support code and attachments before creating a public issue or sending private troubleshooting material.
+
+The **Help & Feedback** page also offers a lightweight feature/change request. It submits only the entered title, requested change, use case, product area, optional contact information, and optional screenshot. It does not attach diagnostics, logs, a debug bundle, DVR inventory, client details, credentials, or configuration.
+
+Problem and feature drafts remain only in page memory. They are not written to localStorage, sessionStorage, IndexedDB, logs, metrics, or telemetry. Failed preparation or delivery keeps the draft available for retry. Successful submission, confirmed discard, or leaving the page clears it.
+
+Public feature-request text excludes private contact values, attachment details and filenames, proof material, IP addresses, and server metadata. Private contact information and attachments remain on the private intake path.
 
 ## Backup archive versus debug bundle
 
@@ -201,4 +207,4 @@ For privacy questions, use the GitHub repository discussions or issues for non-s
 
 - [`docs/reference/health-diagnostics.md`](../reference/health-diagnostics.md) for debug bundle sanitization details.
 
-Last updated: April 2026
+Last updated: August 2026

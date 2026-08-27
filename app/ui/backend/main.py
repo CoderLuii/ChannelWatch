@@ -94,6 +94,7 @@ from typing import Optional, List, Dict, Any, Literal, cast
 import time
 import threading
 import re
+import unicodedata
 import logging
 from contextvars import ContextVar
 from xml.sax.saxutils import escape as xml_escape
@@ -2331,6 +2332,13 @@ async def _parse_support_report_request(
             ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID,
             _REPORT_DEBUG_BUNDLE_INVALID_MESSAGE,
         )
+    if payload.kind == "feature" and (
+        len(screenshot_files) > 1 or isinstance(debug_bundle, StarletteUploadFile)
+    ):
+        raise _report_error(
+            ErrorCode.SUPPORT_REPORT_ATTACHMENT_INVALID,
+            "Feature requests can include one screenshot, but not a diagnostic bundle.",
+        )
 
     try:
         for upload in screenshot_files:
@@ -2569,6 +2577,16 @@ class ActivityHistoryResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class ActivityClientFilterItem(BaseModel):
+    value: str
+    label: str
+    count: int
+
+
+class ActivityClientFiltersResponse(BaseModel):
+    clients: List[ActivityClientFilterItem]
 
 
 ACTIVITY_HISTORY: List[AlertHistoryItem] = []
@@ -3148,6 +3166,47 @@ def _activity_matches_search(
     )
 
 
+def _normalize_client_name(value: Any) -> str:
+    """Return a stable exact-match key without exposing network identities."""
+
+    if value is None:
+        return ""
+    normalized = unicodedata.normalize("NFKC", str(value))
+    return " ".join(normalized.split()).casefold()
+
+
+def _natural_client_sort_key(value: Any) -> tuple[tuple[int, Any], ...]:
+    """Sort human client labels so Client 2 precedes Client 10."""
+
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part)
+        for part in re.split(r"(\d+)", normalized)
+        if part
+    )
+
+
+def _activity_matches_client(
+    item: AlertHistoryItem, requested_client: Optional[str]
+) -> bool:
+    if requested_client is None:
+        return True
+    normalized_client = _normalize_client_name(requested_client)
+    if not normalized_client:
+        return True
+    return _normalize_client_name(item.device_name) == normalized_client
+
+
+def _activity_matches_hours(item: AlertHistoryItem, hours: Optional[int]) -> bool:
+    if hours is None or hours <= 0:
+        return True
+    cutoff = datetime.now(_tz.utc) - timedelta(hours=hours)
+    try:
+        return _parse_history_timestamp(item.timestamp) >= cutoff
+    except Exception:
+        return False
+
+
 def _load_merged_activity_items_sync() -> list[AlertHistoryItem]:
     """Return one de-duplicated view of SQLite and the recovery journal."""
 
@@ -3484,7 +3543,11 @@ class DVRStatus(BaseModel):
     host: str = ""
     port: int = 8089
     connected: bool = False
+    enabled: bool = True
     version: Optional[str] = None
+    started_at: Optional[str] = None
+    uptime_seconds: Optional[int] = None
+    uptime_available: bool = False
     version_compatible: Optional[bool] = None
     version_warning: Optional[str] = None
     disk_usage_percent: Optional[float] = None
@@ -3518,6 +3581,10 @@ class SystemInfo(BaseModel):
     log_retention_days: Optional[int] = None
     start_time: Optional[str] = None
     container_start_time: Optional[str] = None
+    channelwatch_core_started_at: Optional[str] = None
+    channelwatch_core_uptime_seconds: Optional[int] = None
+    channelwatch_ui_started_at: Optional[str] = None
+    channelwatch_ui_uptime_seconds: Optional[int] = None
     uptime_data: Dict[str, int] = {}
     core_status: str = "Unknown"
     library_shows: int = 0
@@ -3664,6 +3731,24 @@ def _parse_dvr_storage(storage_data: Any):
     return d_percent, d_total, d_free, d_used
 
 
+def _parse_dvr_uptime(start_time: Any, *, now: Optional[datetime] = None):
+    """Validate a DVR start timestamp and return UTC start plus uptime seconds."""
+
+    if not isinstance(start_time, str) or not start_time.strip():
+        return None, None
+    try:
+        parsed = datetime.fromisoformat(start_time.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None, None
+    if parsed.tzinfo is None:
+        return None, None
+    parsed = parsed.astimezone(_tz.utc)
+    current = (now or datetime.now(_tz.utc)).astimezone(_tz.utc)
+    if parsed > current + timedelta(minutes=5):
+        return None, None
+    return parsed.isoformat(), max(0, int((current - parsed).total_seconds()))
+
+
 def _read_dvr_session_state_summary(dvr_id: str) -> tuple[Optional[str], Optional[int]]:
     state_file = _CORE_CONFIG_DIR / f"session_state_{dvr_id}.json"
     if not state_file.is_file():
@@ -3694,6 +3779,10 @@ async def get_system_info(
     dvr_id: Optional[str] = Query(
         default=None, description="Limit DVR probes to one DVR"
     ),
+    include_all_dvr_status: bool = Query(
+        default=False,
+        description="Return every configured DVR status while keeping summary totals scoped",
+    ),
 ):
     global CORE_LAST_START_TIME
     response.headers["X-Deprecated-API"] = "Use /api/v1/"
@@ -3706,10 +3795,12 @@ async def get_system_info(
     DEFAULT_CRITICAL_THRESHOLD_PERCENT = 5.0
     DEFAULT_CRITICAL_THRESHOLD_GB = 25.0
 
-    if CORE_APP_AVAILABLE:
-        settings = await asyncio.to_thread(_get_core_settings_sync)
-    else:
-        settings = await _load_settings_async()
+    # System information must reflect the current persisted settings generation.
+    # The UI process can outlive a first-run DVR save or a later hot reload, while
+    # the imported CoreSettings singleton still represents UI startup.  Reading
+    # through the UI settings loader keeps the uptime disclosure, summary cards,
+    # and the independently reloaded core monitor on the same DVR generation.
+    settings = await _load_settings_async()
 
     disk_usage_percent = None
     disk_usage_gb = None
@@ -3718,8 +3809,25 @@ async def get_system_info(
     disk_severity = "normal"
     dvr_version = None
 
-    servers = await _get_dvr_servers_async()
+    configured_servers: list[tuple[str, str, str, bool]] = []
+    for raw_server in getattr(settings, "dvr_servers", None) or []:
+        if not isinstance(raw_server, dict) or raw_server.get("deleted_at"):
+            continue
+        host = str(raw_server.get("host") or "")
+        port = int(raw_server.get("port", 8089) or 8089)
+        configured_servers.append(
+            (
+                str(raw_server.get("id") or ""),
+                dvr_display_name(raw_server.get("name"), host),
+                build_dvr_base_url(host, port),
+                bool(raw_server.get("enabled", True)),
+            )
+        )
+    summary_server_ids = {entry[0] for entry in configured_servers}
     if dvr_id:
+        summary_server_ids = {dvr_id}
+    servers = configured_servers
+    if dvr_id and not include_all_dvr_status:
         servers = [entry for entry in servers if entry[0] == dvr_id]
     dvr_status_list = []
     monitoring_by_id = {
@@ -3787,13 +3895,29 @@ async def get_system_info(
         return "normal"
 
     async def _build_dvr_status(entry):
-        dvr_id, dvr_name, dvr_url = entry
+        dvr_id, dvr_name, dvr_url, dvr_enabled = entry
         monitor_entry = monitoring_by_id.get(dvr_id, {})
         s_version = None
         s_percent, s_total, s_free = None, None, None
         s_shows, s_movies, s_episodes = 0, 0, 0
         s_active_streams = 0
         s_connected = False
+        s_started_at = None
+        s_uptime_seconds = None
+
+        if not dvr_enabled:
+            return DVRStatus(
+                id=dvr_id,
+                name=dvr_name,
+                host=dvr_url.replace("http://", "").rsplit(":", 1)[0],
+                port=int(dvr_url.rsplit(":", 1)[1]),
+                connected=False,
+                enabled=False,
+                monitoring_status="disabled",
+                monitoring_ready=False,
+                monitoring_reason="DVR monitoring is disabled",
+                freshness_status="disabled",
+            )
 
         status_result, storage_result = await asyncio.gather(
             _safe_dvr_get_url(f"{dvr_url}/status", timeout=3),
@@ -3815,13 +3939,24 @@ async def get_system_info(
             not isinstance(status_result, BaseException)
             and status_result.status_code == 200
         ):
-            s_version = status_result.json().get("version", None)
-            s_connected = True
+            try:
+                status_payload = status_result.json()
+            except (TypeError, ValueError):
+                status_payload = None
+            if isinstance(status_payload, dict):
+                s_version = status_payload.get("version", None)
+                s_started_at, s_uptime_seconds = _parse_dvr_uptime(
+                    status_payload.get("start_time")
+                )
+                s_connected = True
         if (
             not isinstance(storage_result, BaseException)
             and storage_result.status_code == 200
         ):
-            storage_payload = storage_result.json()
+            try:
+                storage_payload = storage_result.json()
+            except (TypeError, ValueError):
+                storage_payload = None
             s_percent, s_total, s_free, _ = _parse_dvr_storage(storage_payload)
             if isinstance(storage_payload, dict):
                 activity = storage_payload.get("activity", {})
@@ -3841,7 +3976,11 @@ async def get_system_info(
             host=dvr_url.replace("http://", "").rsplit(":", 1)[0],
             port=int(dvr_url.rsplit(":", 1)[1]),
             connected=s_connected,
+            enabled=dvr_enabled,
             version=s_version_status["version"],
+            started_at=s_started_at,
+            uptime_seconds=s_uptime_seconds,
+            uptime_available=s_uptime_seconds is not None,
             version_compatible=s_version_status["version_compatible"],
             version_warning=s_version_status["version_warning"],
             disk_usage_percent=s_percent,
@@ -3863,11 +4002,15 @@ async def get_system_info(
 
     dvr_status_list = await _bounded_dvr_probe_gather(servers, _build_dvr_status)
 
-    # Aggregate totals from all DVRs
-    if dvr_status_list:
-        dvr_version = next((d.version for d in dvr_status_list if d.version), None)
-        agg_total = sum(d.disk_total_gb or 0 for d in dvr_status_list)
-        agg_free = sum(d.disk_free_gb or 0 for d in dvr_status_list)
+    # Summary values remain scoped to the selected DVR even when the caller
+    # requests the complete status list for the uptime disclosure.
+    summary_status_list = [
+        status for status in dvr_status_list if status.id in summary_server_ids
+    ]
+    if summary_status_list:
+        dvr_version = next((d.version for d in summary_status_list if d.version), None)
+        agg_total = sum(d.disk_total_gb or 0 for d in summary_status_list)
+        agg_free = sum(d.disk_free_gb or 0 for d in summary_status_list)
         agg_used = agg_total - agg_free
         disk_total_gb = round(agg_total, 2) if agg_total else None
         disk_free_gb = round(agg_free, 2) if agg_free else None
@@ -3907,7 +4050,14 @@ async def get_system_info(
         core_status = "Error"
 
     current_time = datetime.now(_tz.utc)
-    uptime_seconds = int((current_time - APP_START_TIME).total_seconds())
+    ui_uptime_seconds = max(0, int((current_time - APP_START_TIME).total_seconds()))
+    core_started_at = actual_core_start_time or CORE_LAST_START_TIME
+    core_uptime_seconds = (
+        max(0, int((current_time - core_started_at).total_seconds()))
+        if core_started_at is not None
+        else None
+    )
+    uptime_seconds = core_uptime_seconds if core_uptime_seconds is not None else ui_uptime_seconds
 
     uptime_days = uptime_seconds // (24 * 3600)
     uptime_seconds %= 24 * 3600
@@ -3923,10 +4073,9 @@ async def get_system_info(
         "seconds": uptime_seconds,
     }
 
-    # Aggregate library totals from all DVRs
-    library_shows = sum(d.library_shows for d in dvr_status_list)
-    library_movies = sum(d.library_movies for d in dvr_status_list)
-    library_episodes = sum(d.library_episodes for d in dvr_status_list)
+    library_shows = sum(d.library_shows for d in summary_status_list)
+    library_movies = sum(d.library_movies for d in summary_status_list)
+    library_episodes = sum(d.library_episodes for d in summary_status_list)
 
     _raw_dvr = (getattr(settings, "dvr_servers", None) or []) if settings else []
 
@@ -3944,6 +4093,12 @@ async def get_system_info(
         log_retention_days=settings.log_retention_days if settings else 7,
         start_time=CORE_LAST_START_TIME.isoformat() if CORE_LAST_START_TIME else None,
         container_start_time=APP_START_TIME.isoformat(),
+        channelwatch_core_started_at=(
+            core_started_at.isoformat() if core_started_at is not None else None
+        ),
+        channelwatch_core_uptime_seconds=core_uptime_seconds,
+        channelwatch_ui_started_at=APP_START_TIME.isoformat(),
+        channelwatch_ui_uptime_seconds=ui_uptime_seconds,
         uptime_data=uptime_data,
         core_status=core_status,
         library_shows=library_shows,
@@ -4382,16 +4537,14 @@ async def _collect_upcoming_recordings(limit: int = 250) -> list[RecordingInfo]:
 
 
 async def _load_recent_activity_items(
-    *, hours: int = 24, limit: int = 250
+    *, hours: int = 24, limit: int = 250, client: Optional[str] = None
 ) -> list[AlertHistoryItem]:
     history_snapshot = await _load_merged_activity_items()
-    if hours <= 0:
-        return history_snapshot[:limit]
-    cutoff_time = datetime.now(_tz.utc) - timedelta(hours=hours)
     recent_items = [
         item
         for item in history_snapshot
-        if _parse_history_timestamp(item.timestamp) >= cutoff_time
+        if _activity_matches_hours(item, hours)
+        and _activity_matches_client(item, client)
     ]
     return recent_items[:limit]
 
@@ -5146,10 +5299,17 @@ async def trigger_test_endpoint(test_name_url: str):
 @app.get(
     "/api/recent-activity", response_model=List[AlertHistoryItem], tags=["Activity"]
 )
-async def get_recent_activity(response: Response, hours: int = 24, limit: int = 250):
+async def get_recent_activity(
+    response: Response,
+    hours: int = Query(default=24, ge=0, le=24 * 365),
+    limit: int = Query(default=250, ge=1, le=500),
+    client: Optional[str] = Query(default=None),
+):
     response.headers["X-Deprecated-API"] = "Use /api/v1/"
     try:
-        return await _load_recent_activity_items(hours=hours, limit=limit)
+        return await _load_recent_activity_items(
+            hours=hours, limit=limit, client=client
+        )
     except Exception:
         raise structured_error(ErrorCode.ACTIVITY_FETCH_FAILED)
 
@@ -5163,6 +5323,9 @@ async def get_activity_history(
     limit: int = Query(default=50, ge=1, le=100),
     activity_type: Optional[str] = Query(default=None, alias="type"),
     search: Optional[str] = Query(default=None),
+    client: Optional[str] = Query(default=None),
+    dvr_id: Optional[str] = Query(default=None),
+    hours: Optional[int] = Query(default=None, ge=0, le=24 * 365),
     sort_order: str = Query(default="desc", alias="sort"),
 ):
     response.headers["X-Deprecated-API"] = "Use /api/v1/"
@@ -5178,6 +5341,9 @@ async def get_activity_history(
             for item in history_snapshot
             if _activity_matches_type(item, activity_type)
             and _activity_matches_search(item, search)
+            and _activity_matches_client(item, client)
+            and _activity_matches_hours(item, hours)
+            and (not dvr_id or item.dvr_id == dvr_id)
         ]
         filtered_history.sort(key=_history_sort_key, reverse=normalized_sort == "desc")
 
@@ -5190,6 +5356,56 @@ async def get_activity_history(
         )
     except HTTPException:
         raise
+    except Exception:
+        raise structured_error(ErrorCode.ACTIVITY_FETCH_FAILED)
+
+
+@app.get(
+    "/api/v1/activity-history/filters",
+    response_model=ActivityClientFiltersResponse,
+    tags=["Activity"],
+)
+async def get_activity_history_filters(
+    dvr_id: Optional[str] = Query(default=None),
+    hours: int = Query(default=24, ge=0, le=24 * 365),
+    event_type: Optional[str] = Query(default=None),
+):
+    """Return exact client facets from the same merged view as activity queries."""
+
+    try:
+        history_snapshot = await _load_merged_activity_items()
+        grouped: dict[str, dict[str, Any]] = {}
+        for item in history_snapshot:
+            if dvr_id and item.dvr_id != dvr_id:
+                continue
+            if not _activity_matches_hours(item, hours):
+                continue
+            if not _activity_matches_type(item, event_type):
+                continue
+            normalized = _normalize_client_name(item.device_name)
+            if not normalized:
+                continue
+            existing = grouped.get(normalized)
+            if existing is None:
+                label = " ".join(
+                    unicodedata.normalize("NFKC", item.device_name).split()
+                )
+                grouped[normalized] = {"label": label, "count": 1}
+            else:
+                existing["count"] += 1
+
+        clients = [
+            ActivityClientFilterItem(
+                value=entry["label"],
+                label=entry["label"],
+                count=entry["count"],
+            )
+            for _, entry in sorted(
+                grouped.items(),
+                key=lambda pair: _natural_client_sort_key(pair[1]["label"]),
+            )
+        ]
+        return ActivityClientFiltersResponse(clients=clients)
     except Exception:
         raise structured_error(ErrorCode.ACTIVITY_FETCH_FAILED)
 
@@ -5249,12 +5465,31 @@ def _csv_escape(value: object) -> str:
     return s
 
 
-def _iter_csv(dvr_id: Optional[str]):
+def _iter_csv(
+    dvr_id: Optional[str],
+    *,
+    activity_type: Optional[str] = None,
+    search: Optional[str] = None,
+    client: Optional[str] = None,
+    hours: Optional[int] = None,
+    sort_order: str = "asc",
+):
     yield ",".join(_CSV_COLUMNS) + "\r\n"
     items = _load_merged_activity_items_sync()
-    items.sort(key=lambda item: (_history_sort_key(item), item.id))
+    items.sort(
+        key=lambda item: (_history_sort_key(item), item.id),
+        reverse=sort_order == "desc",
+    )
     for item in items:
         if dvr_id and item.dvr_id != dvr_id:
+            continue
+        if not _activity_matches_type(item, activity_type):
+            continue
+        if not _activity_matches_search(item, search):
+            continue
+        if not _activity_matches_client(item, client):
+            continue
+        if not _activity_matches_hours(item, hours):
             continue
         row = [
             item.id,
@@ -5280,16 +5515,31 @@ def _iter_csv(dvr_id: Optional[str]):
 async def export_history_csv(
     dvr_id: Optional[str] = Query(default=None),
     format: str = Query(default="csv"),
+    activity_type: Optional[str] = Query(default=None, alias="type"),
+    search: Optional[str] = Query(default=None),
+    client: Optional[str] = Query(default=None),
+    hours: Optional[int] = Query(default=None, ge=0, le=24 * 365),
+    sort_order: str = Query(default="asc", alias="sort"),
 ):
     if format.lower() != "csv":
         raise structured_error(ErrorCode.ACTIVITY_FORMAT_UNSUPPORTED)
+    normalized_sort = sort_order.lower()
+    if normalized_sort not in {"asc", "desc"}:
+        raise structured_error(ErrorCode.ACTIVITY_SORT_INVALID)
 
     filename = _content_disposition_filename(
         f"channelwatch-history-{dvr_id or 'all'}.csv"
     )
 
     def _sync_gen():
-        yield from _iter_csv(dvr_id)
+        yield from _iter_csv(
+            dvr_id,
+            activity_type=activity_type,
+            search=search,
+            client=client,
+            hours=hours,
+            sort_order=normalized_sort,
+        )
 
     return StreamingResponse(
         _sync_gen(),
@@ -6112,7 +6362,15 @@ async def update_check():
         # manual check is idempotent, so preserve the last trustworthy status
         # instead of turning every version field into "Unknown" in the UI.
         status = await asyncio.to_thread(manager.status)
-        return {**status, "operation_busy": True}
+        return {
+            **status,
+            "operation_state": (
+                status.get("operation_state")
+                if status.get("operation_state") != "idle"
+                else "checking"
+            ),
+            "operation_busy": True,
+        }
     except Exception as exc:
         log.exception("Update check failed: %s", exc)
         _raise_update_error(exc)
@@ -6152,14 +6410,14 @@ async def update_retry():
     _require_persistent_config_writable()
     try:
         manager_status = await asyncio.to_thread(_build_update_manager().status)
-        latest = manager_status.get("latest")
-        if not isinstance(latest, dict):
+        target = manager_status.get("trusted_target")
+        if not isinstance(target, dict):
             checked = await asyncio.to_thread(_build_update_manager().check)
-            latest = checked.get("latest")
-        if not isinstance(latest, dict):
+            target = checked.get("trusted_target")
+        if not isinstance(target, dict):
             raise ValueError("No signed release is available to retry.")
-        version = str(latest.get("version") or "")
-        digest = str(latest.get("bundle_sha256") or "")
+        version = str(target.get("version") or "")
+        digest = str(target.get("bundle_sha256") or "")
         return await asyncio.to_thread(
             _get_update_automation_service().retry_release,
             version=version,
@@ -6745,6 +7003,8 @@ async def get_dvr_activity_history_v1(
     limit: int = Query(default=50, ge=1, le=100),
     activity_type: Optional[str] = Query(default=None, alias="type"),
     search: Optional[str] = Query(default=None),
+    client: Optional[str] = Query(default=None),
+    hours: Optional[int] = Query(default=None, ge=0, le=24 * 365),
     sort_order: str = Query(default="desc", alias="sort"),
 ):
     server = await _get_dvr_server_by_id_async(dvr_id)
@@ -6765,6 +7025,8 @@ async def get_dvr_activity_history_v1(
             if item.dvr_id == dvr_id
             and _activity_matches_type(item, activity_type)
             and _activity_matches_search(item, search)
+            and _activity_matches_client(item, client)
+            and _activity_matches_hours(item, hours)
         ]
         filtered.sort(key=_history_sort_key, reverse=(normalized_sort == "desc"))
         paginated = filtered[offset : offset + limit]

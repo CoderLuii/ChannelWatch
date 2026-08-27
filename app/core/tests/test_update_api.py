@@ -486,6 +486,10 @@ def test_update_retry_admin_postpone_and_rollback_hold(tmp_path: Path):
             return {
                 **super().status(),
                 "latest": {"version": "0.9.19", "bundle_sha256": digest},
+                "trusted_target": {
+                    "version": "0.9.19",
+                    "bundle_sha256": digest,
+                },
                 "active_bundle": {
                     "version": "0.9.18",
                     "manifest": {"bundle_sha256": "a" * 64},

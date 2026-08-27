@@ -1,6 +1,6 @@
 "use client"
 
-import { GitMerge, Tv, Film, CircleDot, HardDrive } from "lucide-react"
+import { GitMerge, Tv, Film, CircleDot, HardDrive, ShieldAlert } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
@@ -43,6 +43,7 @@ function getEventColumns(): EventColumn[] {
     { key: "vod", label: t("type.vod"), icon: Film, accentClass: "text-purple-400", headerClass: "bg-purple-500/10 border-purple-400/20" },
     { key: "recording", label: t("type.recording"), icon: CircleDot, accentClass: "text-amber-400", headerClass: "bg-amber-500/10 border-amber-400/20" },
     { key: "disk", label: t("status.monitoring.disk"), icon: HardDrive, accentClass: "text-red-400", headerClass: "bg-red-500/10 border-red-400/20" },
+    { key: "health", label: t("routing.event.health"), icon: ShieldAlert, accentClass: "text-orange-400", headerClass: "bg-orange-500/10 border-orange-400/20" },
   ]
 }
 
@@ -111,15 +112,16 @@ export function activeRoutingDestinations(settings: AppSettings): DestChannel[] 
 
 interface RoutingCellProps {
   dvrId: string
+  dvrName: string
   eventKey: string
   routing: RoutingState
   activeChannels: DestChannel[]
   onToggle: (dvrId: string, eventKey: string, dest: string, value: boolean) => void
 }
 
-function RoutingCell({ dvrId, eventKey, routing, activeChannels, onToggle }: RoutingCellProps) {
+function RoutingCell({ dvrId, dvrName, eventKey, routing, activeChannels, onToggle }: RoutingCellProps) {
   if (activeChannels.length === 0) {
-    return <span className="text-[10px] text-muted-foreground/50 italic">{t("settings.routing.noneConfigured")}</span>
+    return <span className="text-xs text-muted-foreground italic">{t("settings.routing.noneConfigured")}</span>
   }
 
   return (
@@ -127,16 +129,17 @@ function RoutingCell({ dvrId, eventKey, routing, activeChannels, onToggle }: Rou
       {activeChannels.map((ch) => {
         const on = getRoutingValue(routing, dvrId, eventKey, ch.key)
         return (
-          <div key={ch.key} className="flex items-center gap-1.5 w-full">
+          <label key={ch.key} className="flex min-h-11 w-full items-center gap-2 md:min-h-0">
             <Switch
               checked={on}
               onCheckedChange={(v) => onToggle(dvrId, eventKey, ch.key, v)}
+              aria-label={`${ch.label}, ${eventKey}, ${dvrName}`}
               className={cn("scale-[0.65] shrink-0", on ? "data-[state=checked]:bg-teal-600" : "")}
             />
-            <span className={cn("text-[10px] leading-tight transition-colors", on ? "text-foreground" : "text-muted-foreground/50 line-through")}>
+            <span className={cn("text-xs leading-tight transition-colors", on ? "text-foreground" : "text-muted-foreground line-through")}>
               {ch.label}
             </span>
-          </div>
+          </label>
         )
       })}
     </div>
@@ -233,7 +236,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                             <span className="font-medium text-sm truncate max-w-[160px]">
                               {server.name || server.host || server.id}
                             </span>
-                            <span className="text-[10px] text-muted-foreground/60 font-mono truncate max-w-[160px]">
+                            <span className="text-xs text-muted-foreground font-mono truncate max-w-[160px]">
                               {server.host}:{server.port}
                             </span>
                           </div>
@@ -241,7 +244,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                             <button
                               type="button"
                               onClick={() => resetDvr(server.id)}
-                              className="mt-1.5 text-[10px] text-teal-400/70 hover:text-teal-400 transition-colors underline underline-offset-2"
+                              className="mt-1.5 min-h-11 text-xs text-teal-400/80 hover:text-teal-400 transition-colors underline underline-offset-2 md:min-h-0"
                             >
                               {t("settings.routing.resetToDefaults")}
                             </button>
@@ -254,6 +257,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                           >
                             <RoutingCell
                               dvrId={server.id}
+                              dvrName={server.name || server.host || server.id}
                               eventKey={col.key}
                               routing={routing}
                               activeChannels={activeChannels}

@@ -113,6 +113,15 @@ export const mockSettings = {
   rd_alert_started: true,
   rd_alert_completed: true,
   rd_alert_cancelled: true,
+  rd_alert_failed: false,
+  rd_alert_skipped: false,
+  rd_alert_missed: false,
+  rd_alert_interrupted: false,
+  alert_dvr_health: false,
+  dvr_alert_unreachable: false,
+  dvr_alert_recovered: false,
+  dvr_health_alert_delay_seconds: 120,
+  notification_preferences_version: 0,
   rd_program_name: true,
   rd_program_desc: true,
   rd_duration: true,
@@ -169,8 +178,8 @@ export const mockSettings = {
   notification_routing: {},
 }
 
-const systemInfo = {
-  channelwatch_version: "0.9.18",
+export const mockSystemInfo = {
+  channelwatch_version: "1.0.1",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",
@@ -181,8 +190,8 @@ const systemInfo = {
   disk_free_gb: 11202.56,
   disk_severity: "normal",
   log_retention_days: 14,
-  start_time: "2026-04-21T10:00:00Z",
-  container_start_time: "2026-04-21T10:00:00Z",
+  start_time: "2026-08-26T10:00:00Z",
+  container_start_time: "2026-08-26T10:00:00Z",
   uptime_data: { days: 2, hours: 5, minutes: 10, seconds: 0 },
   core_status: "Running",
   library_shows: 120,
@@ -206,8 +215,8 @@ const systemInfo = {
       monitoring_ready: true,
       monitoring_reason: null,
       freshness_status: "fresh",
-      last_freshness_at: "2026-04-21T12:00:00Z",
-      last_event_at: "2026-04-21T12:00:00Z",
+      last_freshness_at: "2026-08-26T11:59:50Z",
+      last_event_at: "2026-08-26T11:59:50Z",
       freshness_age_seconds: 10,
       stale_threshold_seconds: 60,
     },
@@ -230,10 +239,10 @@ const upcomingRecordings = [
   {
     id: "rec-1",
     title: "Evening News",
-    start_time: 1713702000,
-    end_time: 1713703800,
+    start_time: 1787774400,
+    end_time: 1787776200,
     channel: "HBO",
-    scheduled_time: "2026-04-21T20:00:00Z",
+    scheduled_time: "2026-08-26T20:00:00Z",
     image: "/images/channelwatch-logo.png",
     dvr_id: "main-dvr",
     dvr_name: "Main DVR",
@@ -246,7 +255,7 @@ const activityItems = [
     type: "watching_channel",
     title: "Watching HBO",
     message: "Living Room Apple TV is watching HBO",
-    timestamp: "2026-04-21T11:45:00Z",
+    timestamp: "2026-08-26T11:45:00Z",
     icon: "tv",
     channel_name: "HBO",
     channel_number: "501",
@@ -264,7 +273,7 @@ const activityItems = [
     type: "recording_event",
     title: "Evening News",
     message: "Scheduled: Evening News",
-    timestamp: "2026-04-21T10:30:00Z",
+    timestamp: "2026-08-26T10:30:00Z",
     icon: "recording",
     channel_name: "CBS",
     program_title: "Evening News",
@@ -288,7 +297,7 @@ const notificationLog = {
       retry_count: 0,
       payload_size: 512,
       error: null,
-      sent_at: "2026-04-21T11:46:00Z",
+      sent_at: "2026-08-26T11:46:00Z",
     },
   ],
   total: 1,
@@ -298,8 +307,8 @@ const notificationLog = {
 
 const diagnosticsLogs = {
   lines: [
-    "2026-04-21 11:45:00 INFO ChannelWatch started successfully",
-    "2026-04-21 11:46:00 INFO Notification delivered via apprise",
+    "2026-08-26 11:45:00 INFO ChannelWatch started successfully",
+    "2026-08-26 11:46:00 INFO Notification delivered via apprise",
   ],
 }
 
@@ -378,6 +387,12 @@ const updateStatus = {
   image_refresh_recommended: true,
   settings_schema_version: 7,
   active_bundle: null,
+  catalog_state: "current",
+  catalog_checked_at: "2026-08-25T00:00:00Z",
+  trusted_target: null,
+  cached_release_stale: false,
+  operation_state: "idle",
+  operation_busy: false,
   latest: {
     version: "0.9.18",
     version_tag: "v0.9.18",
@@ -411,7 +426,7 @@ const updatePolicy = {
   maintenance_window_start: "03:00",
   maintenance_window_minutes: 120,
   postponed_until: null,
-  next_attempt_at: "2026-08-25T03:00:00-04:00",
+  next_attempt_at: "2026-08-27T03:00:00-04:00",
   last_attempt_at: null,
   retry_count: 0,
   last_error: null,
@@ -456,7 +471,7 @@ export async function installApiMocks(page: Page) {
     const { pathname } = url
 
     if (pathname === "/api/settings") return json(route, mockSettings)
-    if (pathname === "/api/system-info") return json(route, systemInfo)
+    if (pathname === "/api/system-info") return json(route, mockSystemInfo)
     if (pathname === "/api/streams/details") return json(route, streamDetails)
     if (pathname === "/api/recordings/upcoming") return json(route, upcomingRecordings)
     if (pathname === "/api/recent-activity") return json(route, activityItems)
@@ -466,6 +481,13 @@ export async function installApiMocks(page: Page) {
         total: activityItems.length,
         offset: Number(url.searchParams.get("offset") ?? 0),
         limit: Number(url.searchParams.get("limit") ?? 25),
+      })
+    }
+    if (pathname === "/api/v1/activity-history/filters") {
+      return json(route, {
+        clients: [
+          { value: "Living Room Apple TV", label: "Living Room Apple TV", count: 1 },
+        ],
       })
     }
     if (pathname === "/api/v1/notification-log") return json(route, notificationLog)
@@ -592,7 +614,7 @@ export async function installApiMocks(page: Page) {
     if (pathname === "/api/health") return json(route, { ok: true })
     if (pathname.startsWith("/api/v1/dvrs/") && pathname.endsWith("/system-info")) {
       return json(route, {
-        ...systemInfo.dvr_status[0],
+        ...mockSystemInfo.dvr_status[0],
         dvr_id: "main-dvr",
         dvr_name: "Main DVR",
         version_compatible: true,

@@ -146,9 +146,11 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
   }
 
   const cardFieldKeys: Record<string, AppSettingsFieldKey[]> = {
+    policy: ["alert_channel_watching", "alert_vod_watching", "alert_disk_space", "alert_recording_events", "alert_dvr_health", "rd_alert_scheduled", "rd_alert_started", "rd_alert_completed", "rd_alert_cancelled", "rd_alert_failed", "rd_alert_skipped", "rd_alert_missed", "rd_alert_interrupted", "dvr_alert_unreachable", "dvr_alert_recovered"],
+    health: ["alert_dvr_health", "dvr_alert_unreachable", "dvr_alert_recovered", "dvr_health_alert_delay_seconds"],
     cw: ["alert_channel_watching", "cw_image_source", "cw_channel_name", "cw_channel_number", "cw_program_name", "cw_device_name", "cw_device_ip", "cw_stream_source"],
     vod: ["alert_vod_watching", "vod_title", "vod_episode_title", "vod_summary", "vod_duration", "vod_progress", "vod_image", "vod_rating", "vod_genres", "vod_cast", "vod_device_name", "vod_device_ip"],
-    rec: ["alert_recording_events", "rd_alert_scheduled", "rd_alert_started", "rd_alert_completed", "rd_alert_cancelled", "rd_program_name", "rd_program_desc", "rd_duration", "rd_channel_name", "rd_channel_number", "rd_type"],
+    rec: ["alert_recording_events", "rd_alert_scheduled", "rd_alert_started", "rd_alert_completed", "rd_alert_cancelled", "rd_alert_failed", "rd_alert_skipped", "rd_alert_missed", "rd_alert_interrupted", "rd_program_name", "rd_program_desc", "rd_duration", "rd_channel_name", "rd_channel_number", "rd_type"],
     disk: ["alert_disk_space", "ds_warning_threshold_percent", "ds_warning_threshold_gb", "ds_critical_threshold_percent", "ds_critical_threshold_gb", "ds_startup_grace_seconds", "ds_worsening_delta_gb", "ds_worsening_delta_percent", "ds_alert_cooldown", "ds_test_route_override"],
     sc: ["stream_count"],
     cache: ["channel_cache_ttl", "program_cache_ttl", "job_cache_ttl", "vod_cache_ttl"],

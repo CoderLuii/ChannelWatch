@@ -81,6 +81,7 @@ class CoreSettings:
     alert_vod_watching: bool = True
     alert_disk_space: bool = True
     alert_recording_events: bool = True
+    alert_dvr_health: bool = False
 
     # Stream Monitoring
     stream_count: bool = True
@@ -126,6 +127,14 @@ class CoreSettings:
     rd_alert_started: bool = True
     rd_alert_completed: bool = True
     rd_alert_cancelled: bool = True
+    rd_alert_failed: bool = False
+    rd_alert_skipped: bool = False
+    rd_alert_missed: bool = False
+    rd_alert_interrupted: bool = False
+    dvr_alert_unreachable: bool = False
+    dvr_alert_recovered: bool = False
+    dvr_health_alert_delay_seconds: int = 120
+    notification_preferences_version: int = 0
     rd_program_name: bool = True
     rd_program_desc: bool = True
     rd_duration: bool = True

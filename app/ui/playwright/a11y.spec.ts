@@ -6,10 +6,12 @@ import { installApiMocks } from "./support/mock-api"
 const views = [
   { hash: "#overview", readyName: "Dashboard Overview", kind: "heading" as const },
   { hash: "#settings", readyName: "Settings", kind: "heading" as const },
+  { hash: "#settings:alerts", readyName: "Alert policy", kind: "text" as const },
   { hash: "#settings:updates", readyName: "Update policy", kind: "text" as const },
   { hash: "#diagnostics", readyName: "Diagnostics", kind: "heading" as const },
   { hash: "#watch-history", readyName: "Watch History", kind: "title" as const },
   { hash: "#notification-log", readyName: "Notification Delivery Log", kind: "text" as const },
+  { hash: "#help-feedback", readyName: "Help & Feedback", kind: "heading" as const },
   { hash: "#about", readyName: "Story", kind: "tab" as const },
 ]
 
@@ -44,6 +46,31 @@ test("axe: report problem dialog has no accessibility violations", async ({ page
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
   await expect(page.getByRole("dialog", { name: "Report a Problem" })).toBeVisible()
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze()
+
+  expect(results.violations).toEqual([])
+})
+
+test("axe: feature request dialog has no accessibility violations", async ({ page }) => {
+  await page.goto("/#help-feedback")
+  await expect(page.getByRole("heading", { name: "Help & Feedback" })).toBeVisible()
+  await page.getByTestId("help-request-feature").click()
+  await expect(page.getByRole("dialog", { name: "Request a feature or change" })).toBeVisible()
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze()
+
+  expect(results.violations).toEqual([])
+})
+
+test("axe: DVR uptime dialog has no accessibility violations", async ({ page }) => {
+  await page.goto("/#overview")
+  await page.getByRole("button", { name: /DVR uptime/ }).click()
+  await expect(page.getByRole("dialog", { name: "DVR uptime" })).toBeVisible()
 
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

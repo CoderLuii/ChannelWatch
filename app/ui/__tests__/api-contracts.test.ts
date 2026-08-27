@@ -298,6 +298,11 @@ describe("browser API contract manifest", () => {
       {
         method: "POST",
         path: "/api/v1/support/report-dry-run",
+        source: "components/feature-request-dialog.tsx",
+      },
+      {
+        method: "POST",
+        path: "/api/v1/support/report-dry-run",
         source: "components/report-problem-dialog.tsx",
       },
     ])

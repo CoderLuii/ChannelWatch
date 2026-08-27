@@ -64,6 +64,9 @@ class AppSettings(BaseModel):
     alert_vod_watching: bool = BoolTrue()
     alert_disk_space: bool = BoolTrue()
     alert_recording_events: bool = BoolTrue()
+    # Operational alert delivery is opt-in for upgraded installations. Fresh
+    # installs receive explicit Important Only values from the entrypoint.
+    alert_dvr_health: bool = Field(default=False)
 
     multi_dvr_v2_enabled: bool = Field(default=True)
     rbac_enabled: bool = Field(default=False)
@@ -152,6 +155,18 @@ class AppSettings(BaseModel):
     rd_alert_started: bool = BoolTrue()
     rd_alert_completed: bool = BoolTrue()
     rd_alert_cancelled: bool = BoolTrue()
+    rd_alert_failed: bool = Field(default=False)
+    rd_alert_skipped: bool = Field(default=False)
+    rd_alert_missed: bool = Field(default=False)
+    rd_alert_interrupted: bool = Field(default=False)
+    dvr_alert_unreachable: bool = Field(default=False)
+    dvr_alert_recovered: bool = Field(default=False)
+    dvr_health_alert_delay_seconds: int = IntField(
+        120, ge=30, le=3600, description="Confirmed outage delay before alerting"
+    )
+    notification_preferences_version: int = IntField(
+        0, ge=0, le=1, description="Alert-policy review version"
+    )
     rd_program_name: bool = BoolTrue()
     rd_program_desc: bool = BoolTrue()
     rd_duration: bool = BoolTrue()

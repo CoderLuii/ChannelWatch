@@ -210,6 +210,115 @@ class TestDbFirstActivityHistory:
         assert resp.status_code == 200
         assert resp.json()["total"] == 1
 
+    def test_client_filter_is_unicode_normalized_case_insensitive_and_exact(
+        self, client, mem_engine
+    ):
+        events = [
+            _make_event(title="One", device_name="Living   Room"),
+            _make_event(title="Two", device_name="living room"),
+            _make_event(title="Three", device_name="Living Room TV"),
+            _make_event(title="Four", device_name="Kitchen"),
+        ]
+        _seed(mem_engine, events)
+
+        resp = client.get("/api/activity-history?client=living%20room")
+
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 2
+        assert {item["title"] for item in resp.json()["items"]} == {"One", "Two"}
+
+    def test_client_filter_combines_with_type_search_and_hours(
+        self, client, mem_engine
+    ):
+        now = datetime.now(timezone.utc)
+        events = [
+            _make_event(
+                title="Current match",
+                event_type="watching_channel",
+                device_name="Tablet",
+                timestamp=now,
+            ),
+            _make_event(
+                title="Wrong type",
+                event_type="disk_alert",
+                device_name="Tablet",
+                timestamp=now,
+            ),
+            _make_event(
+                title="Old match",
+                event_type="watching_channel",
+                device_name="Tablet",
+                timestamp=now - timedelta(hours=48),
+            ),
+        ]
+        _seed(mem_engine, events)
+
+        resp = client.get(
+            "/api/activity-history?client=Tablet&type=channel&search=current&hours=24"
+        )
+
+        assert resp.status_code == 200
+        assert [item["title"] for item in resp.json()["items"]] == [
+            "Current match"
+        ]
+
+    def test_client_facets_group_case_variants_and_use_recent_spelling(
+        self, client, mem_engine
+    ):
+        now = datetime.now(timezone.utc)
+        events = [
+            _make_event(device_name="living room", timestamp=now - timedelta(minutes=5)),
+            _make_event(device_name="Living Room", timestamp=now),
+            _make_event(device_name="Kitchen", timestamp=now),
+            _make_event(device_name="", device_ip="192.0.2.10", timestamp=now),
+        ]
+        _seed(mem_engine, events)
+
+        resp = client.get("/api/v1/activity-history/filters?hours=24")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "clients": [
+                {"value": "Kitchen", "label": "Kitchen", "count": 1},
+                {"value": "Living Room", "label": "Living Room", "count": 2},
+            ]
+        }
+
+    def test_client_facets_use_natural_label_order(self, client, mem_engine):
+        _seed(
+            mem_engine,
+            [
+                _make_event(device_name="Client 10"),
+                _make_event(device_name="Client 2"),
+                _make_event(device_name="Client 1"),
+            ],
+        )
+
+        resp = client.get("/api/v1/activity-history/filters?hours=24")
+
+        assert resp.status_code == 200
+        assert [item["label"] for item in resp.json()["clients"]] == [
+            "Client 1",
+            "Client 2",
+            "Client 10",
+        ]
+
+    def test_recent_activity_supports_the_same_exact_client_filter(
+        self, client, mem_engine
+    ):
+        _seed(
+            mem_engine,
+            [
+                _make_event(title="Exact", device_name="Phone"),
+                _make_event(title="Substring", device_name="Phone Browser"),
+            ],
+        )
+
+        resp = client.get("/api/recent-activity?client=phone")
+
+        assert resp.status_code == 200
+        assert [item["title"] for item in resp.json()] == ["Exact"]
+
     def test_sort_desc_default(self, client, mem_engine):
         now = datetime.now(timezone.utc)
         events = [
@@ -264,6 +373,56 @@ class TestDbFirstActivityHistory:
         assert resp.status_code == 200
         rows = list(csv.DictReader(StringIO(resp.text)))
         assert [row["id"] for row in rows] == ["event-a", "event-b", "event-c"]
+
+    def test_csv_export_applies_watch_history_filters_and_sort(
+        self, client, mem_engine
+    ):
+        now = datetime.now(timezone.utc)
+        events = [
+            _make_event(
+                title="Matching older",
+                device_name="Living Room",
+                timestamp=now - timedelta(minutes=2),
+            ),
+            _make_event(
+                title="Matching newer",
+                device_name="living room",
+                timestamp=now - timedelta(minutes=1),
+            ),
+            _make_event(
+                event_type="watching_vod",
+                title="Matching wrong type",
+                device_name="Living Room",
+                timestamp=now,
+            ),
+            _make_event(
+                title="Other client",
+                device_name="Bedroom",
+                timestamp=now,
+            ),
+        ]
+        _seed(mem_engine, events)
+
+        resp = client.get(
+            "/api/v1/history/export",
+            params={
+                "type": "channel",
+                "client": "LIVING ROOM",
+                "search": "matching",
+                "sort": "desc",
+            },
+        )
+
+        assert resp.status_code == 200
+        rows = list(csv.DictReader(StringIO(resp.text)))
+        assert [row["title"] for row in rows] == [
+            "Matching newer",
+            "Matching older",
+        ]
+
+    def test_csv_export_rejects_invalid_sort(self, client):
+        resp = client.get("/api/v1/history/export?sort=random")
+        assert resp.status_code == 400
 
 
 class TestDbFirstRecentActivity:

@@ -12,6 +12,8 @@ This docs tree is the home for ChannelWatch user, operator, reference, and archi
 - [multi-dvr.md](how-to/multi-dvr.md) - Add a second or third Channels DVR server.
 - [configure-webhooks.md](how-to/configure-webhooks.md) - Send signed ChannelWatch alerts to an external HTTP receiver.
 - [troubleshoot-notifications.md](how-to/troubleshoot-notifications.md) - Diagnose missing, failing, or surprising notification delivery.
+- [manage-alerts.md](how-to/manage-alerts.md) - Choose an alert policy and understand recording and DVR-health outcomes.
+- [use-help-feedback.md](how-to/use-help-feedback.md) - Report a problem, request a feature, or find help without mixing privacy boundaries.
 - [reverse-proxy.md](how-to/reverse-proxy.md) - Publish ChannelWatch through Nginx, Caddy, Traefik, or Cloudflare Tunnel.
 - [update-channelwatch.md](how-to/update-channelwatch.md) - Use the in-app Update Center and understand image-required releases.
 - [backup-restore.md](how-to/backup-restore.md) - Back up and restore configuration, DVR state, and activity data.

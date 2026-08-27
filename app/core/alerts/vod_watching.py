@@ -656,6 +656,8 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
                     if v
                 }
                 or None,
+                dvr_id=getattr(self.dvr, "id", None),
+                dvr_name=getattr(self.dvr, "name", None),
                 notification_history=self._notification_history,
             )
 

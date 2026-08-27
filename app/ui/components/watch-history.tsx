@@ -7,32 +7,52 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/base/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
 import { ActivityDetailDialog } from "@/components/dashboard/activity-detail-dialog"
-import { fetchActivityHistory, fetchDvrActivityHistory } from "@/lib/api"
-import type { ActivityHistoryResponse, FetchActivityHistoryOptions } from "@/lib/api"
+import { ClientFilterCombobox } from "@/components/activity/client-filter-combobox"
+import {
+  downloadActivityHistoryCsv,
+  fetchActivityClientFilters,
+  fetchActivityHistory,
+  fetchDvrActivityHistory,
+} from "@/lib/api"
+import type { ActivityClientFacet, ActivityHistoryResponse, FetchActivityHistoryOptions } from "@/lib/api"
+import { recordingEventPresentation } from "@/lib/activity-presentation"
+import { canonicalActivityClientValue } from "@/lib/activity-clients"
 import { t } from "@/lib/i18n"
 import { useDvrSelection } from "@/lib/dvr-selection-context"
 import type { ActivityItem } from "@/lib/types"
 import {
   AlertCircle,
   Bell,
-  Calendar,
-  CheckCircle,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Download,
   Loader2,
   Play,
   Search,
-  Square,
   Tv,
   Video,
-  X,
 } from "lucide-react"
 
 type ActivitySortOrder = "desc" | "asc"
 type WatchHistoryRequestOptions = Omit<FetchActivityHistoryOptions, "dvr_id">
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100]
+const ACTIVITY_TYPES = new Set(["all", "channel", "vod", "recording", "disk"])
+
+function readUrlFilterState() {
+  const params = new URLSearchParams(window.location.search)
+  const requestedType = params.get("wh_type") ?? "all"
+  const requestedSort = params.get("wh_sort") ?? "desc"
+  const requestedPageSize = Number(params.get("wh_page_size") ?? 25)
+  return {
+    search: params.get("wh_search") ?? "",
+    type: ACTIVITY_TYPES.has(requestedType) ? requestedType : "all",
+    client: params.get("wh_client")?.trim() || null,
+    sort: requestedSort === "asc" ? ("asc" as const) : ("desc" as const),
+    pageSize: PAGE_SIZE_OPTIONS.includes(requestedPageSize) ? requestedPageSize : 25,
+  }
+}
 
 export async function fetchWatchHistoryForDvrSelection(
   selectedDvr: string,
@@ -63,11 +83,8 @@ function formatFullTimestamp(timestamp: string): string {
 
 function getActivityIcon(type: string, message?: string) {
   if (type === "recording_event" && message) {
-    if (message.startsWith("Scheduled:")) return <Calendar className="h-4 w-4" />
-    if (message.startsWith("Cancelled:")) return <X className="h-4 w-4" />
-    if (message.startsWith("Recording(") || message.startsWith("Recording (")) return <Video className="h-4 w-4" />
-    if (message.startsWith("Completed")) return <CheckCircle className="h-4 w-4" />
-    if (message.startsWith("Stopped:")) return <Square className="h-4 w-4" />
+    const Icon = recordingEventPresentation(message).icon
+    return <Icon className="h-4 w-4" />
   }
 
   switch (type) {
@@ -90,11 +107,7 @@ function getActivityIcon(type: string, message?: string) {
 
 function getIconColorClasses(type: string, message?: string) {
   if (type === "recording_event" && message) {
-    if (message.startsWith("Scheduled:")) return "bg-amber-500/20 text-amber-600 dark:text-amber-400"
-    if (message.startsWith("Cancelled:")) return "bg-red-500/20 text-red-600 dark:text-red-400"
-    if (message.startsWith("Recording(") || message.startsWith("Recording (")) return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
-    if (message.startsWith("Completed")) return "bg-purple-500/20 text-purple-600 dark:text-purple-400"
-    if (message.startsWith("Stopped:")) return "bg-slate-500/20 text-slate-600 dark:text-slate-400"
+    return recordingEventPresentation(message).colorClasses
   }
 
   switch (type) {
@@ -106,7 +119,7 @@ function getIconColorClasses(type: string, message?: string) {
       return "bg-amber-500/20 text-amber-600 dark:text-amber-400"
     case "recording_started":
     case "recording_event":
-      return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+      return "bg-slate-500/20 text-slate-600 dark:text-slate-300"
     case "recording_completed":
       return "bg-purple-500/20 text-purple-600 dark:text-purple-400"
     case "disk_alert":
@@ -143,21 +156,95 @@ export function WatchHistory() {
   const [items, setItems] = useState<ActivityItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null)
   const [searchInput, setSearchInput] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
+  const [clientFilter, setClientFilter] = useState<string | null>(null)
+  const [clientFacets, setClientFacets] = useState<ActivityClientFacet[]>([])
+  const [clientsLoading, setClientsLoading] = useState(false)
+  const [clientFacetError, setClientFacetError] = useState(false)
+  const [clientStatus, setClientStatus] = useState<string | null>(null)
   const [sortOrder, setSortOrder] = useState<ActivitySortOrder>("desc")
   const [pageSize, setPageSize] = useState(25)
   const [offset, setOffset] = useState(0)
+  const [urlStateReady, setUrlStateReady] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const initial = readUrlFilterState()
+    setSearchInput(initial.search)
+    setSearchQuery(initial.search.trim())
+    setTypeFilter(initial.type)
+    setClientFilter(initial.client)
+    setSortOrder(initial.sort)
+    setPageSize(initial.pageSize)
+    setUrlStateReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!urlStateReady) return
+
+    const url = new URL(window.location.href)
+    const setOptionalParam = (name: string, value: string, defaultValue = "") => {
+      if (value && value !== defaultValue) url.searchParams.set(name, value)
+      else url.searchParams.delete(name)
+    }
+    setOptionalParam("wh_search", searchInput.trim())
+    setOptionalParam("wh_type", typeFilter, "all")
+    setOptionalParam("wh_client", clientFilter ?? "")
+    setOptionalParam("wh_sort", sortOrder, "desc")
+    setOptionalParam("wh_page_size", String(pageSize), "25")
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
+  }, [clientFilter, pageSize, searchInput, sortOrder, typeFilter, urlStateReady])
 
   useEffect(() => {
     setOffset(0)
   }, [selectedDvr])
 
   useEffect(() => {
+    if (!urlStateReady) return
+    const controller = new AbortController()
+    setClientsLoading(true)
+    setClientFacetError(false)
+
+    fetchActivityClientFilters(
+      {
+        dvr_id: selectedDvr === "all" ? undefined : selectedDvr,
+        event_type: typeFilter,
+      },
+      controller.signal,
+    )
+      .then(({ clients }) => {
+        setClientFacets(clients)
+        setClientFilter((current) => {
+          if (!current) return null
+          const canonical = canonicalActivityClientValue(clients, current)
+          if (!canonical) {
+            setClientStatus(t("activity.clientReset"))
+            setOffset(0)
+            return null
+          }
+          return canonical
+        })
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return
+        setClientFacetError(true)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setClientsLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [selectedDvr, typeFilter, urlStateReady])
+
+  useEffect(() => {
+    if (!urlStateReady) return
     const debounceId = window.setTimeout(() => {
       const normalizedQuery = searchInput.trim()
       setOffset(0)
@@ -165,9 +252,11 @@ export function WatchHistory() {
     }, 250)
 
     return () => window.clearTimeout(debounceId)
-  }, [searchInput])
+  }, [searchInput, urlStateReady])
 
   useEffect(() => {
+    if (!urlStateReady) return
+    const controller = new AbortController()
     const loadHistory = async () => {
       try {
         setLoading(true)
@@ -179,21 +268,52 @@ export function WatchHistory() {
           type: typeFilter,
           search: searchQuery,
           sort: sortOrder,
+          client: clientFilter ?? undefined,
+          signal: controller.signal,
         })
 
         setItems(response.items)
         setTotal(response.total)
+        setHistoryLoaded(true)
       } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return
         setError(err instanceof Error ? err.message : t("watchHistory.loadError"))
         setItems([])
         setTotal(0)
       } finally {
-        setLoading(false)
+        if (!controller.signal.aborted) setLoading(false)
       }
     }
 
     loadHistory()
-  }, [offset, pageSize, reloadToken, searchQuery, sortOrder, typeFilter, selectedDvr])
+    return () => controller.abort()
+  }, [clientFilter, offset, pageSize, reloadToken, searchQuery, sortOrder, typeFilter, selectedDvr, urlStateReady])
+
+  const exportHistory = async () => {
+    setExporting(true)
+    setExportError(null)
+    try {
+      const blob = await downloadActivityHistoryCsv({
+        type: typeFilter,
+        search: searchQuery,
+        sort: sortOrder,
+        client: clientFilter ?? undefined,
+        dvr_id: selectedDvr === "all" ? undefined : selectedDvr,
+      })
+      const objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = objectUrl
+      anchor.download = "channelwatch-history.csv"
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+    } catch {
+      setExportError(t("watchHistory.exportError"))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const pageCount = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [pageSize, total])
   const currentPage = useMemo(() => Math.floor(offset / pageSize) + 1, [offset, pageSize])
@@ -201,6 +321,7 @@ export function WatchHistory() {
   const showingTo = total === 0 ? 0 : Math.min(offset + items.length, total)
   const canGoPrevious = offset > 0
   const canGoNext = offset + pageSize < total
+  const hasNonDefaultFilters = Boolean(searchInput || typeFilter !== "all" || clientFilter || sortOrder !== "desc" || pageSize !== 25)
 
   return (
     <>
@@ -218,12 +339,25 @@ export function WatchHistory() {
                   {t("watchHistory.description")}
                 </CardDescription>
               </div>
-              <div className="text-sm text-muted-foreground">
-                {t("watchHistory.showing", { from: showingFrom, to: showingTo, total })}
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <div className="text-sm text-muted-foreground">
+                  {t("watchHistory.showing", { from: showingFrom, to: showingTo, total })}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 sm:min-h-9"
+                  onClick={exportHistory}
+                  disabled={exporting || loading}
+                >
+                  {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  {t("watchHistory.exportCsv")}
+                </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_200px_180px_160px]">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_190px_220px_170px_150px]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -253,6 +387,18 @@ export function WatchHistory() {
                   <SelectItem value="disk">{t("type.diskAlerts")}</SelectItem>
                 </SelectContent>
               </Select>
+
+              <ClientFilterCombobox
+                clients={clientFacets}
+                value={clientFilter}
+                onChange={(value) => {
+                  setClientFilter(value)
+                  setClientStatus(null)
+                  setOffset(0)
+                }}
+                loading={clientsLoading}
+                ariaLabel={t("watchHistory.aria.filterClient")}
+              />
 
               <Select
                 value={sortOrder}
@@ -289,12 +435,36 @@ export function WatchHistory() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex min-h-6 flex-wrap items-center justify-between gap-2">
+              <div aria-live="polite" className="text-sm text-muted-foreground">
+                {exportError ?? clientStatus ?? (clientFacetError ? t("watchHistory.clientFilterError") : "")}
+              </div>
+              {hasNonDefaultFilters ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSearchInput("")
+                    setSearchQuery("")
+                    setTypeFilter("all")
+                    setClientFilter(null)
+                    setSortOrder("desc")
+                    setPageSize(25)
+                    setOffset(0)
+                    setClientStatus(null)
+                  }}
+                >
+                  {t("activity.clearFilters")}
+                </Button>
+              ) : null}
+            </div>
           </CardHeader>
         </Card>
 
         <Card>
-          <CardContent className="p-0">
-            {loading ? (
+          <CardContent className="relative p-0">
+            {loading && !historyLoaded ? (
               <div className="flex min-h-[360px] items-center justify-center">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -322,7 +492,9 @@ export function WatchHistory() {
                 <Clock className="h-8 w-8 text-muted-foreground/40" />
                 <p className="text-sm font-medium">{t("watchHistory.emptyTitle")}</p>
                 <p className="text-sm text-muted-foreground">
-                  {t("watchHistory.emptyHint")}
+                  {clientFilter
+                    ? t("watchHistory.emptyClientHint", { client: clientFilter })
+                    : t("watchHistory.emptyHint")}
                 </p>
               </div>
             ) : (
@@ -361,7 +533,7 @@ export function WatchHistory() {
                           <div className="min-w-0 space-y-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="truncate text-sm font-medium">{activity.title}</p>
-                              <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                              <Badge variant="outline" className="text-xs uppercase tracking-wide text-muted-foreground">
                                 {getTypeLabel(activity.type)}
                               </Badge>
                               {activity.dvr_name && <Badge variant="secondary">{activity.dvr_name}</Badge>}
@@ -385,6 +557,14 @@ export function WatchHistory() {
                 })}
               </div>
             )}
+            {loading && historyLoaded ? (
+              <div className="absolute inset-0 z-10 flex items-start justify-center bg-background/45 pt-6" aria-live="polite">
+                <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm text-muted-foreground shadow-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  {t("watchHistory.loading")}
+                </div>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 

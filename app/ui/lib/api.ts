@@ -269,9 +269,10 @@ export async function fetchAboutInfo(): Promise<AboutInfo> {
   return response.json()
 }
 
-export async function fetchSystemInfo(options: { dvr_id?: string } = {}): Promise<SystemInfo> {
+export async function fetchSystemInfo(options: { dvr_id?: string; include_all_dvr_status?: boolean } = {}): Promise<SystemInfo> {
   const params = new URLSearchParams()
   if (options.dvr_id) params.set("dvr_id", options.dvr_id)
+  if (options.include_all_dvr_status) params.set("include_all_dvr_status", "true")
   const queryString = params.toString()
   const response = await fetch(`${API_BASE}/system-info${queryString ? `?${queryString}` : ""}`, {
     headers: authHeaders(),
@@ -381,6 +382,11 @@ export interface UpdateStatus {
   settings_schema_version: number
   active_bundle?: Record<string, unknown> | null
   latest?: UpdateManifestPayload | null
+  trusted_target?: UpdateManifestPayload | null
+  catalog_state?: "not_checked" | "checking" | "current" | "update_available" | "stale_cache" | "error"
+  catalog_checked_at?: string | null
+  cached_release_stale?: boolean
+  operation_state?: "idle" | "checking" | "downloading" | "backing_up" | "applying" | "restarting" | "validating" | "rolling_back" | "failed"
   update_available: boolean
   image_required: boolean
   operation_busy?: boolean
@@ -708,9 +714,12 @@ export async function fetchStreamDetails(): Promise<StreamDetails> {
   return response.json()
 }
 
-export async function fetchRecentActivity(hours: number = 24, limit: number = 10): Promise<ActivityItem[]> {
-  const response = await fetch(`${API_BASE}/recent-activity?hours=${hours}&limit=${limit}`, {
+export async function fetchRecentActivity(hours: number = 24, limit: number = 10, client?: string, signal?: AbortSignal): Promise<ActivityItem[]> {
+  const params = new URLSearchParams({ hours: String(hours), limit: String(limit) })
+  if (client) params.set("client", client)
+  const response = await fetch(`${API_BASE}/recent-activity?${params.toString()}`, {
     headers: authHeaders(),
+    signal,
   });
 
   if (!response.ok) {
@@ -734,6 +743,9 @@ export interface FetchActivityHistoryOptions {
   search?: string
   sort?: "asc" | "desc"
   dvr_id?: string
+  client?: string
+  hours?: number
+  signal?: AbortSignal
 }
 
 export async function fetchActivityHistory(options: FetchActivityHistoryOptions = {}): Promise<ActivityHistoryResponse> {
@@ -745,10 +757,13 @@ export async function fetchActivityHistory(options: FetchActivityHistoryOptions 
   if (options.search) params.set("search", options.search)
   if (options.sort) params.set("sort", options.sort)
   if (options.dvr_id) params.set("dvr_id", options.dvr_id)
+  if (options.client) params.set("client", options.client)
+  if (options.hours != null) params.set("hours", String(options.hours))
 
   const queryString = params.toString()
   const response = await fetch(`${API_BASE}/activity-history${queryString ? `?${queryString}` : ""}`, {
     headers: authHeaders(),
+    signal: options.signal,
   })
 
   if (!response.ok) {
@@ -756,6 +771,64 @@ export async function fetchActivityHistory(options: FetchActivityHistoryOptions 
   }
 
   return response.json()
+}
+
+export async function downloadActivityHistoryCsv(
+  options: Omit<FetchActivityHistoryOptions, "offset" | "limit" | "signal"> = {},
+): Promise<Blob> {
+  const params = new URLSearchParams({ format: "csv" })
+  if (options.type && options.type !== "all") params.set("type", options.type)
+  if (options.search) params.set("search", options.search)
+  if (options.sort) params.set("sort", options.sort)
+  if (options.dvr_id) params.set("dvr_id", options.dvr_id)
+  if (options.client) params.set("client", options.client)
+  if (options.hours != null) params.set("hours", String(options.hours))
+
+  const response = await fetch(`${API_BASE}/v1/history/export?${params.toString()}`, {
+    headers: authHeaders(),
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP error ${response.status}`)
+  }
+  return response.blob()
+}
+
+export interface ActivityClientFacet {
+  value: string
+  label: string
+  count: number
+}
+
+export async function fetchActivityClientFilters(options: {
+  dvr_id?: string
+  hours?: number
+  event_type?: string
+} = {}, signal?: AbortSignal): Promise<{ clients: ActivityClientFacet[] }> {
+  const params = new URLSearchParams()
+  if (options.dvr_id && options.dvr_id !== "all") params.set("dvr_id", options.dvr_id)
+  if (options.hours != null) params.set("hours", String(options.hours))
+  if (options.event_type && options.event_type !== "all") params.set("event_type", options.event_type)
+  const query = params.toString()
+  const response = await fetch(`${API_BASE}/v1/activity-history/filters${query ? `?${query}` : ""}`, {
+    headers: authHeaders(),
+    signal,
+  })
+  if (!response.ok) throw new Error(`HTTP error ${response.status}`)
+  const payload: unknown = await response.json()
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { clients?: unknown }).clients)) {
+    throw new Error("Activity client filters returned an invalid response")
+  }
+  const clients = (payload as { clients: unknown[] }).clients.filter(
+    (item): item is ActivityClientFacet => Boolean(
+      item
+      && typeof item === "object"
+      && typeof (item as ActivityClientFacet).value === "string"
+      && typeof (item as ActivityClientFacet).label === "string"
+      && Number.isFinite((item as ActivityClientFacet).count),
+    ),
+  )
+  return { clients }
 }
 
 export async function clearActivityHistory(): Promise<{ message: string }> {
@@ -880,11 +953,13 @@ export async function fetchDvrActivityHistory(
   if (options.type && options.type !== "all") params.set("type", options.type)
   if (options.search) params.set("search", options.search)
   if (options.sort) params.set("sort", options.sort)
+  if (options.client) params.set("client", options.client)
+  if (options.hours != null) params.set("hours", String(options.hours))
 
   const queryString = params.toString()
   const response = await fetch(
     `${API_BASE}/v1/dvrs/${encodeURIComponent(dvrId)}/activity-history${queryString ? `?${queryString}` : ""}`,
-    { headers: authHeaders() },
+    { headers: authHeaders(), signal: options.signal },
   )
 
   if (!response.ok) {
@@ -940,13 +1015,28 @@ export interface ReportDiagnostics {
   feature_toggles: ReportFeatureToggles
 }
 
+export type ReportKind = "problem" | "feature"
+
+export type ReportArea =
+  | "dashboard"
+  | "activity"
+  | "notifications"
+  | "dvr_monitoring"
+  | "updates"
+  | "backup_restore"
+  | "authentication_security"
+  | "other"
+
 export interface ReportProblemPayload {
+  kind?: ReportKind
+  area?: ReportArea | null
   summary: string
   expected?: string | null
+  use_case?: string | null
   getchannels_username?: string | null
   github_username?: string | null
   email?: string | null
-  diagnostics: ReportDiagnostics
+  diagnostics?: ReportDiagnostics
   turnstile_token?: string | null
 }
 
@@ -1024,9 +1114,15 @@ function createReportId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+function payloadForSubmission(payload: ReportProblemPayload): ReportProblemPayload {
+  if (payload.kind !== "feature") return payload
+  const { diagnostics: _diagnostics, ...featurePayload } = payload
+  return featurePayload
+}
+
 function payloadForSupportCode(payload: ReportProblemPayload): ReportProblemPayload {
   return {
-    ...payload,
+    ...payloadForSubmission(payload),
     turnstile_token: null,
   }
 }
@@ -1046,13 +1142,14 @@ export function createReportSupportCode(
   options: { reportId?: string; createdAt?: string } = {},
 ): string {
   const reportId = options.reportId ?? createReportId()
+  const reportPayload = payloadForSupportCode(payload)
   const envelope = {
     schema: 2,
     report_id: reportId,
     created_at: options.createdAt ?? new Date().toISOString(),
-    report: payloadForSupportCode(payload),
+    report: reportPayload,
     client: {
-      channelwatch_version: payload.diagnostics.channelwatch_version ?? "unknown",
+      channelwatch_version: reportPayload.diagnostics?.channelwatch_version ?? "unknown",
       submission_source: "in-app",
     },
   }
@@ -1076,6 +1173,10 @@ function buildReportBody(
   attachments: ReportSubmissionAttachments = {},
   options: { includeSupportCode?: boolean; supportCode?: string } = {},
 ) {
+  if (payload.kind === "feature" && attachments.debugBundle) {
+    throw new Error("Feature requests can include a screenshot, but not a diagnostic bundle.")
+  }
+  const submissionPayload = payloadForSubmission(payload)
   const screenshotFiles = attachments.screenshots ?? []
   const hasAttachments = screenshotFiles.length > 0 || Boolean(attachments.debugBundle)
   const supportCode = options.includeSupportCode
@@ -1083,12 +1184,12 @@ function buildReportBody(
     : null
   const body = hasAttachments
     ? new FormData()
-    : JSON.stringify(supportCode ? { support_code: supportCode } : payload)
+    : JSON.stringify(supportCode ? { support_code: supportCode } : submissionPayload)
   if (body instanceof FormData) {
     if (supportCode) {
       body.append("support_code", supportCode)
     } else {
-      body.append("payload", JSON.stringify(payload))
+      body.append("payload", JSON.stringify(submissionPayload))
     }
     for (const file of screenshotFiles) {
       body.append("screenshots", file, file.name)

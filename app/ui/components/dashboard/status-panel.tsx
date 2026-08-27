@@ -83,8 +83,12 @@ function formatDvrVersion(version: string | null): string | null {
   return parts.length >= 3 ? `v${parts.slice(0, 3).join(".")}` : version
 }
 
-function buildMonitoringBanner(dvrStatusList: DVRStatusInfo[]) {
-  const degraded = dvrStatusList.filter((dvr) => dvr.monitoring_ready === false)
+export function buildMonitoringBanner(dvrStatusList: DVRStatusInfo[]) {
+  const degraded = dvrStatusList.filter(
+    (dvr) => dvr.enabled !== false
+      && dvr.monitoring_status !== "disabled"
+      && dvr.monitoring_ready === false,
+  )
   if (!degraded.length) return null
 
   const stale = degraded.filter((dvr) => dvr.monitoring_status === "stale")

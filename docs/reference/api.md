@@ -236,7 +236,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"1.0.0","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"1.0.1","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -792,7 +792,7 @@ Example response:
 Example request:
 
 ```sh
-curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/recent-activity?hours=24&limit=5"
+curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/recent-activity?hours=24&limit=5&client=Living%20Room"
 ```
 
 Example response:
@@ -800,6 +800,8 @@ Example response:
 ```json
 [{"id":"evt-1","type":"watching_channel","title":"Channel started","message":"Living Room is watching NBC","timestamp":"2026-04-26T00:00:00+00:00","channel_name":"NBC","device_name":"Living Room","dvr_id":"main","dvr_name":"Main DVR"}]
 ```
+
+The optional `client` parameter is an exact, case-insensitive match after Unicode and whitespace normalization. It composes with DVR, type, time, search, sorting, offset, and limit filters.
 
 ### `GET /api/activity-history`
 
@@ -816,13 +818,33 @@ Example response:
 Example request:
 
 ```sh
-curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/activity-history?offset=0&limit=10&type=channel&sort=desc"
+curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/activity-history?offset=0&limit=10&type=channel&sort=desc&client=Living%20Room"
 ```
 
 Example response:
 
 ```json
 {"items":[{"id":"evt-1","type":"watching_channel","title":"Channel started","message":"Living Room is watching NBC","timestamp":"2026-04-26T00:00:00+00:00"}],"total":1,"offset":0,"limit":10}
+```
+
+### `GET /api/v1/activity-history/filters`
+
+| Field | Value |
+| --- | --- |
+| Function | `get_activity_history_filters` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | viewer |
+| Request body schema | `none` |
+| Response body schema | `ActivityClientFiltersResponse` |
+| Status codes | 200, 401, 429, 500 |
+| Rate limit applies | yes |
+
+Optional query parameters are `dvr_id`, `hours`, and `event_type`. The endpoint reads the same merged, deduplicated activity view as the history endpoints. Case variants group into one client with the most recently observed spelling, empty values are omitted, and IP addresses are not substituted for missing names.
+
+Example response:
+
+```json
+{"clients":[{"value":"Living Room","label":"Living Room","count":12}]}
 ```
 
 ### `GET /api/v1/dvrs/{dvr_id}/activity-history`
@@ -840,7 +862,7 @@ Example response:
 Example request:
 
 ```sh
-curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/activity-history?offset=0&limit=10&sort=desc"
+curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/dvrs/main/activity-history?offset=0&limit=10&sort=desc&client=Living%20Room"
 ```
 
 Example response:
@@ -944,8 +966,40 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"0.9.18","channels_dvr_host":"192.0.2.10","channels_dvr_port":8089,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[]}
+{"channelwatch_version":"1.0.1","channelwatch_core_started_at":"2026-08-26T12:00:00Z","channelwatch_core_uptime_seconds":3600,"channelwatch_ui_started_at":"2026-08-26T12:00:05Z","channelwatch_ui_uptime_seconds":3595,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[{"id":"main","name":"Main DVR","connected":true,"started_at":"2026-08-20T12:00:00Z","uptime_seconds":522000,"uptime_available":true}]}
 ```
+
+Core uptime is the primary ChannelWatch uptime because Core owns continuous monitoring. UI uptime is separate because Supervisor can restart the processes independently. Each DVR uptime is derived from the read-only Channels DVR `status.start_time`; malformed, naive, future, disabled, or disconnected values are reported unavailable without failing the entire response.
+
+## Help and feedback
+
+### `GET /api/v1/support/report-config`
+
+| Field | Value |
+| --- | --- |
+| Function | `get_support_report_config` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | operator |
+| Request body schema | `none` |
+| Response body schema | `ReportConfigResponse` |
+| Status codes | 200, 401, 403, 429 |
+| Rate limit applies | yes |
+
+Returns the configured intake mode, endpoint, proof and attachment limits, and allowed attachment types. It does not return report drafts, credentials, or diagnostic content.
+
+### `POST /api/v1/support/report-dry-run`
+
+| Field | Value |
+| --- | --- |
+| Function | `submit_support_report_dry_run` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | operator |
+| Request body schema | `ReportProblemPayload` JSON, or multipart `payload` plus attachments |
+| Response body schema | `ReportPreviewResponse` |
+| Status codes | 200, 400, 401, 403, 413, 429 |
+| Rate limit applies | yes |
+
+`kind` is `problem` or `feature`; an omitted kind remains `problem` for older clients. `area` and `use_case` are optional. A feature request omits diagnostics by default. Public feature text excludes private contact data, attachment details, proof material, addresses, and server metadata.
 
 ### `GET /api/v1/debug/bundle`
 
@@ -1208,10 +1262,12 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
 Example response:
 
 ```json
-{"current_version":"0.9.18","image_version":"0.9.17","runtime_abi":"channelwatch-runtime-v1","launcher_protocol":1,"runtime_source":"app_bundle","delivery_mode":"app_update_with_image_refresh","image_refresh_recommended":true,"settings_schema_version":7,"active_bundle":{"version":"0.9.18"},"latest":null,"update_available":false,"image_required":false,"last_job":null,"rollback_available":true,"auth_disabled_warning":false}
+{"current_version":"1.0.0","image_version":"1.0.0","runtime_abi":"channelwatch-runtime-v1","launcher_protocol":3,"runtime_source":"image","delivery_mode":"app_update","image_refresh_recommended":false,"settings_schema_version":7,"active_bundle":null,"catalog_state":"update_available","catalog_checked_at":"2026-08-26T12:00:00Z","trusted_target":{"version":"1.0.1","version_tag":"v1.0.1","image_required":false},"cached_release_stale":false,"operation_state":"idle","operation_busy":false,"update_available":true,"image_required":false,"last_job":null,"rollback_available":true,"auth_disabled_warning":false}
 ```
 
 Application and image versions are intentionally separate. `delivery_mode` is one of `app_update`, `app_update_with_image_refresh`, or `image_required`. A compatible signed application update may therefore be active while the older container image remains safe to refresh later.
+
+`catalog_state` is `not_checked`, `checking`, `current`, `update_available`, `stale_cache`, or `error`. `operation_state` is `idle`, `checking`, `downloading`, `backing_up`, `applying`, `restarting`, `validating`, `rolling_back`, or `failed`. Only a strictly newer, compatible, signed `trusted_target` can be applied. An older cache can remain available for audit but cannot control the UI or apply path.
 
 ### `GET /api/v1/update/policy`
 

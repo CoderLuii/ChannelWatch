@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { applyUpdateAndReconnect, waitForUpdatedRuntime } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, isPendingUpdateJob, requiresUpdateReconnect, waitForUpdatedRuntime } from "@/lib/update-reconnect"
 
 function status(version: string) {
   return {
@@ -63,6 +63,13 @@ describe("waitForUpdatedRuntime", () => {
 })
 
 describe("applyUpdateAndReconnect", () => {
+  it("keeps a status-less historical job idle while preserving legacy reconnect behavior", () => {
+    const legacyJob = { job_id: "legacy-job", restart_required: true }
+
+    expect(isPendingUpdateJob({ status: undefined })).toBe(false)
+    expect(requiresUpdateReconnect(legacyJob)).toBe(true)
+  })
+
   it("leaves non-restarting update jobs in the normal in-page flow", async () => {
     const job = { job_id: "job-1", restart_required: false }
     const fetchStatus = vi.fn()

@@ -13,7 +13,10 @@ import {
   fetchDvrStreams,
   fetchDvrUpcomingRecordings,
   fetchDvrActivityHistory,
+  fetchActivityClientFilters,
 } from "@/lib/api";
+import type { ActivityClientFacet } from "@/lib/api";
+import { canonicalActivityClientValue } from "@/lib/activity-clients";
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import { t } from "@/lib/i18n";
 import type { ActivityItem } from "@/lib/types";
@@ -38,7 +41,7 @@ type DiskSeverity = "normal" | "warning" | "critical";
 
 export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const { selectedDvr } = useDvrSelection();
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [failedFetches, setFailedFetches] = useState<Set<string>>(new Set());
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -49,16 +52,15 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const latestRefreshRef = React.useRef<
     (manual?: boolean) => Promise<void> | void
   >(() => undefined);
-  const [appContainerStartTime, setAppContainerStartTime] =
-    useState<Date | null>(null);
+  const [coreStartedAt, setCoreStartedAt] = useState<Date | null>(null);
+  const [uiStartedAt, setUiStartedAt] = useState<Date | null>(null);
   const [coreUptime, setCoreUptime] = useState({
     days: 0,
     hours: 0,
     minutes: 0,
     seconds: 0,
   });
-  const [containerUptimeDisplay, setContainerUptimeDisplay] =
-    useState<string>("");
+  const [uiUptimeDisplay, setUiUptimeDisplay] = useState<string>(t("uptime.unavailable"));
   const [diskSpace, setDiskSpace] = useState<DiskSpaceState>({
     usedPercent: 0,
     freePercent: 0,
@@ -85,6 +87,14 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     RecordingInfo[]
   >([]);
   const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
+  const [clientActivity, setClientActivity] = useState<ActivityItem[] | null>(null);
+  const [selectedClient, setSelectedClient] = useState<string | null>(null);
+  const [clientFacets, setClientFacets] = useState<ActivityClientFacet[]>([]);
+  const [clientFacetsLoading, setClientFacetsLoading] = useState(false);
+  const [clientFacetsError, setClientFacetsError] = useState(false);
+  const [clientFilterStatus, setClientFilterStatus] = useState<string | null>(null);
+  const aggregateActivityRequestRef = useRef<AbortController | null>(null);
+  const clientActivityRequestRef = useRef<AbortController | null>(null);
   const [activeNotificationServices, setActiveNotificationServices] =
     useState(0);
   const [activeProviderNames, setActiveProviderNames] = useState<string[]>([]);
@@ -116,6 +126,12 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const [refreshedSettings, setRefreshedSettings] =
     useState<AppSettings | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [clientActivityLoading, setClientActivityLoading] = useState(false);
+
+  useEffect(() => () => {
+    aggregateActivityRequestRef.current?.abort();
+    clientActivityRequestRef.current?.abort();
+  }, []);
 
   const applyDiskData = (
     diskTotalGb: number | null,
@@ -155,12 +171,21 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const fetchSystemData = async () => {
     try {
       const systemInfo = await fetchSystemInfo(
-        selectedDvr !== "all" ? { dvr_id: selectedDvr } : {},
+        selectedDvr !== "all"
+          ? { dvr_id: selectedDvr, include_all_dvr_status: true }
+          : {},
       );
 
-      if (systemInfo.container_start_time) {
-        setAppContainerStartTime(new Date(systemInfo.container_start_time));
-      }
+      const parsedCoreStart = systemInfo.channelwatch_core_started_at
+        ? new Date(systemInfo.channelwatch_core_started_at)
+        : null;
+      const parsedUiStart = systemInfo.channelwatch_ui_started_at
+        ? new Date(systemInfo.channelwatch_ui_started_at)
+        : systemInfo.container_start_time
+          ? new Date(systemInfo.container_start_time)
+          : null;
+      setCoreStartedAt(parsedCoreStart && Number.isFinite(parsedCoreStart.getTime()) ? parsedCoreStart : null);
+      setUiStartedAt(parsedUiStart && Number.isFinite(parsedUiStart.getTime()) ? parsedUiStart : null);
       if (systemInfo.uptime_data) {
         setCoreUptime(systemInfo.uptime_data);
       }
@@ -408,28 +433,120 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     return chartData;
   };
 
-  const fetchActivityData = async () => {
+  const loadActivity = async (
+    controller: AbortController,
+    client?: string,
+  ): Promise<ActivityItem[]> => {
+    if (selectedDvr !== "all") {
+      const response = await fetchDvrActivityHistory(selectedDvr, {
+        limit: 250,
+        sort: "desc",
+        hours: activityHours,
+        client,
+        signal: controller.signal,
+      });
+      return response.items;
+    }
+    return fetchRecentActivity(
+      activityHours,
+      250,
+      client,
+      controller.signal,
+    );
+  };
+
+  const fetchAggregateActivityData = async () => {
+    aggregateActivityRequestRef.current?.abort();
+    const controller = new AbortController();
+    aggregateActivityRequestRef.current = controller;
     setActivityLoading(true);
     try {
-      let activity: ActivityItem[];
-      if (selectedDvr !== "all") {
-        const response = await fetchDvrActivityHistory(selectedDvr, {
-          limit: 250,
-          sort: "desc",
-        });
-        activity = response.items;
-      } else {
-        activity = await fetchRecentActivity(activityHours, 250);
-      }
+      const activity = await loadActivity(controller);
+      if (controller.signal.aborted) return;
       setRecentActivity(activity);
       const chartData = processActivityDataForChart(activity);
       setStreamingData(chartData);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       console.error("Error fetching recent activity:", error);
     } finally {
-      setActivityLoading(false);
+      if (aggregateActivityRequestRef.current === controller) {
+        setActivityLoading(false);
+      }
     }
   };
+
+  const fetchClientActivityData = async () => {
+    clientActivityRequestRef.current?.abort();
+    if (!selectedClient) {
+      setClientActivity(null);
+      setClientActivityLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    clientActivityRequestRef.current = controller;
+    setClientActivityLoading(true);
+    try {
+      const activity = await loadActivity(controller, selectedClient);
+      if (!controller.signal.aborted) setClientActivity(activity);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      console.error("Error fetching client activity:", error);
+    } finally {
+      if (clientActivityRequestRef.current === controller) {
+        setClientActivityLoading(false);
+      }
+    }
+  };
+
+  const fetchActivityData = async () => {
+    await Promise.all([
+      fetchAggregateActivityData(),
+      fetchClientActivityData(),
+    ]);
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setClientFacetsLoading(true);
+    setClientFacetsError(false);
+    fetchActivityClientFilters(
+      {
+        dvr_id: selectedDvr === "all" ? undefined : selectedDvr,
+        hours: activityHours,
+      },
+      controller.signal,
+    )
+      .then(({ clients }) => {
+        setClientFacets(clients);
+        setSelectedClient((current) => {
+          if (!current) return null;
+          const canonical = canonicalActivityClientValue(clients, current);
+          if (!canonical) {
+            setClientFilterStatus(t("activity.clientReset"));
+            return null;
+          }
+          return canonical;
+        });
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setClientFacetsError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setClientFacetsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [activityHours, selectedDvr]);
+
+  useEffect(() => {
+    if (!dataLoaded) return;
+    fetchClientActivityData();
+    // Exact client changes refetch only the list. The aggregate Timeline is
+    // intentionally independent and must not incur a duplicate request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient]);
 
   const calculateActiveNotificationServices = (
     settingsToUse = settings || refreshedSettings,
@@ -464,6 +581,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       alertTypes.push(t("alerts.vodWatching.title"));
     if (settingsToUse.alert_recording_events)
       alertTypes.push(t("alerts.recordingEvents.title"));
+    if (settingsToUse.alert_dvr_health)
+      alertTypes.push(t("alerts.health.title"));
     return alertTypes;
   };
 
@@ -503,34 +622,44 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       fetchSystemData(),
       fetchRecordingsInfo(),
       fetchActivityData(),
-    ]).then(() => setDataLoaded(true));
+    ]).then(() => {
+      setDataLoaded(true);
+      setLastUpdated(new Date());
+    });
     // DVR-switch reload only; including the fetch closures would re-trigger fetches
     // on unrelated state updates and cause request loops.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDvr]);
 
-  // Live uptime ticker: increment every second from container start
+  // Uptime changes client-side without adding a minute-by-minute API poll.
   useEffect(() => {
-    if (!appContainerStartTime) return;
+    if (!coreStartedAt && !uiStartedAt) return;
     const tick = () => {
       const now = new Date();
-      let diff = Math.floor(
-        (now.getTime() - appContainerStartTime.getTime()) / 1000,
-      );
-      if (diff < 0) diff = 0;
-      const days = Math.floor(diff / 86400);
-      diff %= 86400;
-      const hours = Math.floor(diff / 3600);
-      diff %= 3600;
-      const minutes = Math.floor(diff / 60);
-      const seconds = diff % 60;
-      setCoreUptime({ days, hours, minutes, seconds });
-      setContainerUptimeDisplay(`${days}d ${hours}h ${minutes}m`);
+      if (coreStartedAt) {
+        let coreDiff = Math.max(0, Math.floor((now.getTime() - coreStartedAt.getTime()) / 1000));
+        const days = Math.floor(coreDiff / 86400);
+        coreDiff %= 86400;
+        const hours = Math.floor(coreDiff / 3600);
+        coreDiff %= 3600;
+        const minutes = Math.floor(coreDiff / 60);
+        const seconds = coreDiff % 60;
+        setCoreUptime({ days, hours, minutes, seconds });
+      }
+      if (uiStartedAt) {
+        let uiDiff = Math.max(0, Math.floor((now.getTime() - uiStartedAt.getTime()) / 1000));
+        const days = Math.floor(uiDiff / 86400);
+        uiDiff %= 86400;
+        const hours = Math.floor(uiDiff / 3600);
+        uiDiff %= 3600;
+        const minutes = Math.floor(uiDiff / 60);
+        setUiUptimeDisplay(days > 0 ? `${days}d ${hours}h ${minutes}m` : `${hours}h ${minutes}m`);
+      }
     };
     tick();
-    const uptimeInterval = setInterval(tick, 1000);
+    const uptimeInterval = setInterval(tick, 60_000);
     return () => clearInterval(uptimeInterval);
-  }, [appContainerStartTime]);
+  }, [coreStartedAt, uiStartedAt]);
 
   useEffect(() => {
     fetchSettings()
@@ -555,6 +684,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           );
           setFailedFetches(failed);
           setDataLoaded(true);
+          setLastUpdated(new Date());
         });
       })
       .catch((error) => {
@@ -578,6 +708,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           );
           setFailedFetches(failed);
           setDataLoaded(true);
+          setLastUpdated(new Date());
         });
       });
     // Bootstrap-on-settings-change effect; including the fetch/notification helpers
@@ -623,17 +754,18 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   latestRefreshRef.current = refreshDashboardData;
 
   const formatLastUpdated = () => {
-    return lastUpdated.toLocaleTimeString();
+    return lastUpdated?.toLocaleTimeString() ?? t("common.loading");
   };
 
   const currentSettings = refreshedSettings || settings;
 
   const filteredActivity = React.useMemo((): ActivityItem[] => {
+    const sourceActivity = selectedClient ? (clientActivity ?? []) : recentActivity;
     if (selectedFilters.includes("all")) {
-      return recentActivity;
+      return sourceActivity;
     }
 
-    return recentActivity.filter((activity: ActivityItem) => {
+    return sourceActivity.filter((activity: ActivityItem) => {
       if (
         selectedFilters.includes("channel-watching") &&
         (activity.type === "watching_channel" ||
@@ -667,7 +799,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
 
       return false;
     });
-  }, [recentActivity, selectedFilters]);
+  }, [clientActivity, recentActivity, selectedClient, selectedFilters]);
 
   const toggleFilter = (filter: string) => {
     if (filter === "all") {
@@ -705,11 +837,18 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     setChartVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const statusPanelDvrStatusList = React.useMemo(
+    () => selectedDvr === "all"
+      ? dvrStatusList
+      : dvrStatusList.filter((status) => status.id === selectedDvr),
+    [dvrStatusList, selectedDvr],
+  );
+
   let nextRecordingLabel = t("dashboard.noUpcomingRecordings");
   if (upcomingRecordings > 0) {
     const next = upcomingRecordingsList[0];
-    if (next && next.start_time) {
-      const diffMin = Math.floor((next.start_time * 1000 - Date.now()) / 60000);
+    if (next && next.start_time && lastUpdated) {
+      const diffMin = Math.floor((next.start_time * 1000 - lastUpdated.getTime()) / 60000);
       if (diffMin <= 0) {
         nextRecordingLabel = t("dashboard.recordingNow");
       } else {
@@ -781,7 +920,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
 
         <UptimeCard
           coreUptime={coreUptime}
-          containerUptimeDisplay={containerUptimeDisplay}
+          uiUptimeDisplay={uiUptimeDisplay}
           dvrStatusList={dvrStatusList}
           loading={!dataLoaded}
           hasError={failedFetches.has("system")}
@@ -826,7 +965,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         />
 
         <StatusPanel
-          dvrStatusList={dvrStatusList}
+          dvrStatusList={statusPanelDvrStatusList}
           activeNotificationServices={activeNotificationServices}
           activeProviderNames={activeProviderNames}
           activeAlertTypes={activeAlertTypes}
@@ -847,11 +986,20 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           onToggleFilter={toggleFilter}
           activityHours={activityHours}
           onChangeHours={setActivityHours}
-          activityLoading={activityLoading}
+          activityLoading={activityLoading || clientActivityLoading}
           dataLoaded={dataLoaded}
           hasError={failedFetches.has("activity")}
           onRetry={fetchActivityData}
           getFilterDisplayName={getFilterDisplayName}
+          clients={clientFacets}
+          selectedClient={selectedClient}
+          onSelectClient={(client) => {
+            setSelectedClient(client);
+            setClientFilterStatus(null);
+          }}
+          clientsLoading={clientFacetsLoading}
+          clientsError={clientFacetsError}
+          clientStatus={clientFilterStatus}
         />
 
         <UpcomingRecordingsList

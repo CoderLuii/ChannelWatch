@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { AlertTriangle, CheckCircle2, DownloadCloud, ExternalLink, Loader2, PackageCheck, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
@@ -12,7 +12,7 @@ import { Label } from "@/components/base/label"
 import { TabsContent } from "@/components/base/tabs"
 import { ApiError, applyUpdate, checkForUpdate, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { applyUpdateAndReconnect, isPendingUpdateJob } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, isPendingUpdateJob, requiresUpdateReconnect } from "@/lib/update-reconnect"
 
 type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling" | "saving-policy" | "postponing" | "retrying"
 
@@ -39,6 +39,20 @@ function versionLabel(status: UpdateStatus | null): string {
   return active ? `${status.current_version} (${t("updates.activeBundle", { version: String(active) })})` : status.current_version
 }
 
+function trustedReleaseLabel(status: UpdateStatus | null): string {
+  if (!status) return t("updates.notChecked")
+  if (status.catalog_state === "checking") return t("updates.catalog.checking")
+  if (status.catalog_state === "error") return t("updates.catalog.unavailable")
+  const target = status.trusted_target
+  if (target && status.catalog_state === "update_available") {
+    return target.version_tag || `v${target.version}`
+  }
+  if (["current", "stale_cache"].includes(status.catalog_state ?? "")) {
+    return t("updates.catalog.current", { version: `v${status.current_version.replace(/^v/, "")}` })
+  }
+  return t("updates.notChecked")
+}
+
 function maintenanceWindowEnd(start: string, minutes: number): string {
   const match = /^(\d{2}):(\d{2})$/.exec(start)
   if (!match) return t("common.unknown")
@@ -56,20 +70,25 @@ export function UpdateCenterSection() {
   const [error, setError] = useState<string | null>(null)
   const [remediation, setRemediation] = useState<string | null>(null)
 
-  const latest = status?.latest ?? null
+  const latest = status?.trusted_target ?? null
   const latestVersion = latest?.version_tag ?? (latest?.version ? `v${latest.version}` : null)
-  const canApply = Boolean(status?.update_available && !status.image_required && latest?.version && busy === "idle")
-  const canRollback = Boolean(status?.rollback_available && busy === "idle")
+  const remoteOperationBusy = Boolean(status?.operation_busy && status.operation_state !== "idle")
+  const controlsBusy = busy !== "idle" || remoteOperationBusy
+  const canApply = Boolean(status?.update_available && !status.image_required && latest?.version && !controlsBusy)
+  const canRollback = Boolean(status?.rollback_available && !controlsBusy)
 
   const primaryMessage = useMemo(() => {
     if (!status) return t("updates.loading")
-    if (status.operation_busy) return t("updates.state.checkInProgress")
+    if (status.operation_state === "checking" || busy === "checking") return t("updates.state.checkInProgress")
+    if (status.operation_busy && status.operation_state !== "idle") {
+      return t("updates.state.operationActive", { state: (status.operation_state ?? "update").replaceAll("_", " ") })
+    }
     if (status.image_required && status.update_available) return t("updates.state.imageRequired")
     if (status.update_available) return t("updates.state.available", { version: latestVersion ?? t("common.unknown") })
     return t("updates.state.current")
-  }, [latestVersion, status])
+  }, [busy, latestVersion, status])
 
-  const loadStatus = async () => {
+  const loadStatus = useCallback(async () => {
     const [statusResult, policyResult] = await Promise.allSettled([fetchUpdateStatus(), fetchUpdatePolicy()])
     if (statusResult.status === "fulfilled") {
       const next = statusResult.value
@@ -84,14 +103,14 @@ export function UpdateCenterSection() {
     }
     if (statusResult.status === "rejected") throw statusResult.reason
     if (policyResult.status === "rejected") throw policyResult.reason
-  }
+  }, [])
 
   useEffect(() => {
     loadStatus().catch((err) => {
       setError(updateErrorMessage(err))
       setRemediation(updateErrorRemediation(err))
     })
-  }, [])
+  }, [loadStatus])
 
   const activeJobId = job?.job_id
   const activeJobStatus = job?.status
@@ -113,7 +132,19 @@ export function UpdateCenterSection() {
       }
     }, 3000)
     return () => window.clearInterval(timer)
-  }, [activeJobId, activeJobStatus])
+  }, [activeJobId, activeJobStatus, loadStatus])
+
+  const pendingJob = Boolean(job && isPendingUpdateJob(job))
+  useEffect(() => {
+    if (!remoteOperationBusy || pendingJob || busy !== "idle") return
+    const timer = window.setInterval(() => {
+      loadStatus().catch((err) => {
+        setError(updateErrorMessage(err))
+        setRemediation(updateErrorRemediation(err))
+      })
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [busy, loadStatus, pendingJob, remoteOperationBusy])
 
   const handleCheck = async () => {
     setBusy("checking")
@@ -141,7 +172,7 @@ export function UpdateCenterSection() {
       const nextJob = await applyUpdateAndReconnect(targetVersion, {
         apply: async (version) => {
           const startedJob = await applyUpdate(version)
-          if (startedJob.restart_required && isPendingUpdateJob(startedJob)) {
+          if (requiresUpdateReconnect(startedJob)) {
             setBusy("polling")
           } else {
             setJob(startedJob)
@@ -152,7 +183,7 @@ export function UpdateCenterSection() {
         reload: () => window.location.reload(),
         isRejectedUpdate: (err) => err instanceof ApiError,
       })
-      if (nextJob && (!nextJob.restart_required || !isPendingUpdateJob(nextJob))) {
+      if (nextJob && !requiresUpdateReconnect(nextJob)) {
         setJob(nextJob)
         setBusy("idle")
       }
@@ -273,8 +304,12 @@ export function UpdateCenterSection() {
             </div>
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
               <p className="text-xs uppercase text-muted-foreground">{t("updates.latestVersion")}</p>
-              <p className="mt-1 text-lg font-semibold">{latestVersion ?? t("updates.notChecked")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t(`updates.delivery.${status?.delivery_mode ?? "app_update"}`)}</p>
+              <p className="mt-1 text-lg font-semibold">{trustedReleaseLabel(status)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {status?.catalog_state === "update_available"
+                  ? t(`updates.delivery.${status.delivery_mode ?? "app_update"}`)
+                  : t("updates.catalog.currentDescription")}
+              </p>
             </div>
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
               <p className="text-xs uppercase text-muted-foreground">{t("updates.protocol")}</p>
@@ -289,6 +324,14 @@ export function UpdateCenterSection() {
             <AlertDescription>{t("updates.bootstrapNote")}</AlertDescription>
           </Alert>
 
+          {status?.cached_release_stale ? (
+            <Alert data-testid="update-stale-cache-notice">
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              <AlertTitle>{t("updates.staleCache.title")}</AlertTitle>
+              <AlertDescription>{t("updates.staleCache.description")}</AlertDescription>
+            </Alert>
+          ) : null}
+
           {status?.auth_disabled_warning && (
             <Alert variant="destructive" className="border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100 [&>svg]:text-amber-500">
               <AlertTriangle className="h-4 w-4" />
@@ -297,7 +340,7 @@ export function UpdateCenterSection() {
             </Alert>
           )}
 
-          {latest?.highlights && latest.highlights.length > 0 && (
+          {status?.catalog_state === "update_available" && latest?.highlights && latest.highlights.length > 0 && (
             <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-3">
               <p className="text-sm font-semibold">{t("updates.highlights")}</p>
               <ul className="space-y-2 text-sm text-muted-foreground">
@@ -320,7 +363,7 @@ export function UpdateCenterSection() {
               <Button
                 type="button"
                 variant={(policy?.mode ?? "automatic") === "automatic" ? "default" : "outline"}
-                disabled={busy !== "idle" || !policyFieldsValid}
+                disabled={controlsBusy || !policyFieldsValid}
                 aria-pressed={(policy?.mode ?? "automatic") === "automatic"}
                 onClick={() => handlePolicyMode("automatic")}
               >
@@ -329,7 +372,7 @@ export function UpdateCenterSection() {
               <Button
                 type="button"
                 variant={policy?.mode === "notify_only" ? "default" : "outline"}
-                disabled={busy !== "idle" || !policyFieldsValid}
+                disabled={controlsBusy || !policyFieldsValid}
                 aria-pressed={policy?.mode === "notify_only"}
                 onClick={() => handlePolicyMode("notify_only")}
               >
@@ -363,7 +406,7 @@ export function UpdateCenterSection() {
               </div>
             </div>
             {!policyFieldsValid ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.windowInvalid")}</p> : null}
-            <Button type="button" variant="outline" disabled={busy !== "idle" || !policyFieldsValid} onClick={handlePolicySchedule}>
+            <Button type="button" variant="outline" disabled={controlsBusy || !policyFieldsValid} onClick={handlePolicySchedule}>
               {busy === "saving-policy" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {t("updates.policy.saveWindow")}
             </Button>
@@ -381,7 +424,9 @@ export function UpdateCenterSection() {
           {job && (
             <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold">{t("updates.lastJob")}</p>
+                <p className="text-sm font-semibold">
+                  {isPendingUpdateJob(job) ? t("updates.activeJob") : t("updates.lastJob")}
+                </p>
                 <Badge variant={statusTone(job.status)}>{job.status}</Badge>
               </div>
               <p className="text-sm text-muted-foreground">{job.message ?? t("updates.jobNoMessage")}</p>
@@ -401,7 +446,7 @@ export function UpdateCenterSection() {
           )}
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant="outline" onClick={handleCheck} disabled={busy !== "idle"} className="gap-2">
+            <Button type="button" variant="outline" onClick={handleCheck} disabled={controlsBusy} className="gap-2">
               {busy === "checking" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               {busy === "checking" ? t("updates.checking") : t("updates.check")}
             </Button>
@@ -415,16 +460,16 @@ export function UpdateCenterSection() {
             </Button>
             {status?.update_available ? (
               <>
-                <Button type="button" variant="ghost" onClick={() => handlePostpone(24)} disabled={busy !== "idle"}>
+                <Button type="button" variant="ghost" onClick={() => handlePostpone(24)} disabled={controlsBusy}>
                   {t("updates.postponeDay")}
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => handlePostpone(168)} disabled={busy !== "idle"}>
+                <Button type="button" variant="ghost" onClick={() => handlePostpone(168)} disabled={controlsBusy}>
                   {t("updates.postponeWeek")}
                 </Button>
               </>
             ) : null}
-            {(policy?.last_error || job?.status === "failed") ? (
-              <Button type="button" variant="outline" onClick={handleRetry} disabled={busy !== "idle"} className="gap-2">
+            {(policy?.last_error || (job?.status === "failed" && Boolean(status?.trusted_target))) ? (
+              <Button type="button" variant="outline" onClick={handleRetry} disabled={controlsBusy} className="gap-2">
                 {busy === "retrying" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 {t("updates.retry")}
               </Button>

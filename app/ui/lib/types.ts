@@ -49,6 +49,7 @@ export interface AppSettings {
   alert_vod_watching: boolean
   alert_disk_space: boolean
   alert_recording_events: boolean
+  alert_dvr_health: boolean
 
   multi_dvr_v2_enabled: boolean
 
@@ -92,6 +93,14 @@ export interface AppSettings {
   rd_alert_started: boolean
   rd_alert_completed: boolean
   rd_alert_cancelled: boolean
+  rd_alert_failed: boolean
+  rd_alert_skipped: boolean
+  rd_alert_missed: boolean
+  rd_alert_interrupted: boolean
+  dvr_alert_unreachable: boolean
+  dvr_alert_recovered: boolean
+  dvr_health_alert_delay_seconds: number
+  notification_preferences_version: number
   rd_program_name: boolean
   rd_program_desc: boolean
   rd_duration: boolean
@@ -181,7 +190,11 @@ export interface DVRStatusInfo {
   host: string
   port: number
   connected: boolean
+  enabled?: boolean
   version: string | null
+  started_at?: string | null
+  uptime_seconds?: number | null
+  uptime_available?: boolean
   version_compatible: boolean | null
   version_warning: string | null
   disk_usage_percent: number | null
@@ -215,6 +228,10 @@ export interface SystemInfo {
   log_retention_days: number | null
   start_time: string | null
   container_start_time: string | null
+  channelwatch_core_started_at: string | null
+  channelwatch_core_uptime_seconds: number | null
+  channelwatch_ui_started_at: string | null
+  channelwatch_ui_uptime_seconds: number | null
   uptime_data: {
     days: number
     hours: number

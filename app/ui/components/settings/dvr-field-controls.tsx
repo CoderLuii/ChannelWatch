@@ -48,7 +48,7 @@ export function DvrTabBar({ cardId, helpers }: DvrTabBarProps) {
       <button
         type="button"
         className={cn(
-          "px-3 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
+          "min-h-11 px-3 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
           active === "global"
             ? "bg-blue-600 text-white"
             : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -64,7 +64,7 @@ export function DvrTabBar({ cardId, helpers }: DvrTabBarProps) {
             key={server.id}
             type="button"
             className={cn(
-              "px-3 py-1 rounded-md text-xs font-medium transition-colors truncate max-w-[140px] shrink-0",
+              "min-h-11 px-3 py-1 rounded-md text-xs font-medium transition-colors truncate max-w-[140px] shrink-0",
               active === server.id
                 ? "bg-blue-600 text-white"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -110,9 +110,9 @@ export function DvrFieldToggle({ cardId, fieldKey, label, desc, helpers }: DvrFi
           {showOverridden && <PenLine className="h-3.5 w-3.5 text-amber-400" />}
           <span className="text-sm">{label}</span>
         </div>
-        <span className="text-[11px] text-muted-foreground">{desc}</span>
-        {showInherited && <span className="text-[10px] text-blue-400/60 italic block">{t("dvr.usingGlobal")}</span>}
-        {showOverridden && <span className="text-[10px] text-amber-400/80 block">{t("dvr.overriddenForDvr")}</span>}
+        <span className="text-xs text-muted-foreground">{desc}</span>
+        {showInherited && <span className="block text-xs italic text-blue-500/80">{t("dvr.usingGlobal")}</span>}
+        {showOverridden && <span className="block text-xs text-amber-600 dark:text-amber-300">{t("dvr.overriddenForDvr")}</span>}
       </Label>
       <div className="flex items-center gap-1.5">
         <Switch
@@ -130,7 +130,8 @@ export function DvrFieldToggle({ cardId, fieldKey, label, desc, helpers }: DvrFi
         {showOverridden && (
           <button
             type="button"
-            className="p-0.5 text-amber-400/70 hover:text-red-400 transition-colors"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
           >
@@ -169,9 +170,9 @@ export function DvrFieldSelect({ cardId, fieldKey, label, desc, options, default
           {showOverridden && <PenLine className="h-3.5 w-3.5 text-amber-400" />}
           <span className="text-sm">{label}</span>
         </div>
-        <span className="text-[11px] text-muted-foreground">{desc}</span>
-        {showInherited && <span className="text-[10px] text-blue-400/60 italic block">{t("dvr.usingGlobal")}</span>}
-        {showOverridden && <span className="text-[10px] text-amber-400/80 block">{t("dvr.overriddenForDvr")}</span>}
+        <span className="text-xs text-muted-foreground">{desc}</span>
+        {showInherited && <span className="block text-xs italic text-blue-500/80">{t("dvr.usingGlobal")}</span>}
+        {showOverridden && <span className="block text-xs text-amber-600 dark:text-amber-300">{t("dvr.overriddenForDvr")}</span>}
       </Label>
       <div className="flex items-center gap-2">
         <Select
@@ -189,7 +190,7 @@ export function DvrFieldSelect({ cardId, fieldKey, label, desc, options, default
             else dvrFieldSet(cardId, settingsKey, parsedValue as FieldPathValue<AppSettings, typeof settingsKey>)
           }}
         >
-          <SelectTrigger className={cn("h-8 text-sm flex-1", showInherited && "opacity-50")}>
+          <SelectTrigger className={cn("min-h-11 flex-1 text-sm md:min-h-9", showInherited && "opacity-50")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -203,7 +204,8 @@ export function DvrFieldSelect({ cardId, fieldKey, label, desc, options, default
         {showOverridden && (
           <button
             type="button"
-            className="p-0.5 text-amber-400/70 hover:text-red-400 transition-colors"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
           >
@@ -244,9 +246,9 @@ export function DvrFieldInput({ cardId, fieldKey, label, desc, min, max, step, s
           {showOverridden && <PenLine className="h-3.5 w-3.5 text-amber-400" />}
           <span className="text-sm">{label}</span>
         </div>
-        <span className="text-[11px] text-muted-foreground">{desc}</span>
-        {showInherited && <span className="text-[10px] text-blue-400/60 italic block">{t("dvr.usingGlobal")}</span>}
-        {showOverridden && <span className="text-[10px] text-amber-400/80 block">{t("dvr.overriddenForDvr")}</span>}
+        <span className="text-xs text-muted-foreground">{desc}</span>
+        {showInherited && <span className="block text-xs italic text-blue-500/80">{t("dvr.usingGlobal")}</span>}
+        {showOverridden && <span className="block text-xs text-amber-600 dark:text-amber-300">{t("dvr.overriddenForDvr")}</span>}
       </Label>
       <div className="flex items-center gap-2">
         <Input
@@ -260,13 +262,14 @@ export function DvrFieldInput({ cardId, fieldKey, label, desc, min, max, step, s
             if (isGlobal) setValue(settingsKey, parsedValue as FieldPathValue<AppSettings, typeof settingsKey>, { shouldDirty: true })
             else dvrFieldSet(cardId, settingsKey, parsedValue as FieldPathValue<AppSettings, typeof settingsKey>)
           }}
-          className={cn("h-8 text-sm", showInherited && "opacity-50")}
+          className={cn("min-h-11 text-sm md:min-h-9", showInherited && "opacity-50")}
         />
         {suffix && <span className="text-muted-foreground text-sm shrink-0">{suffix}</span>}
         {showOverridden && (
           <button
             type="button"
-            className="p-0.5 text-amber-400/70 hover:text-red-400 transition-colors"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
           >
@@ -304,9 +307,9 @@ export function DvrFieldText({ cardId, fieldKey, label, desc, placeholder, helpe
           {showOverridden && <PenLine className="h-3.5 w-3.5 text-amber-400" />}
           <span className="text-sm">{label}</span>
         </div>
-        <span className="text-[11px] text-muted-foreground">{desc}</span>
-        {showInherited && <span className="text-[10px] text-blue-400/60 italic block">{t("dvr.usingGlobal")}</span>}
-        {showOverridden && <span className="text-[10px] text-amber-400/80 block">{t("dvr.overriddenForDvr")}</span>}
+        <span className="text-xs text-muted-foreground">{desc}</span>
+        {showInherited && <span className="block text-xs italic text-blue-500/80">{t("dvr.usingGlobal")}</span>}
+        {showOverridden && <span className="block text-xs text-amber-600 dark:text-amber-300">{t("dvr.overriddenForDvr")}</span>}
       </Label>
       <div className="flex items-center gap-2">
         <Input
@@ -320,12 +323,13 @@ export function DvrFieldText({ cardId, fieldKey, label, desc, placeholder, helpe
           onFocus={() => {
             if (showInherited) dvrFieldSet(cardId, settingsKey, (value ?? "") as FieldPathValue<AppSettings, typeof settingsKey>)
           }}
-          className={cn("h-8 text-sm", showInherited && "opacity-50")}
+          className={cn("min-h-11 text-sm md:min-h-9", showInherited && "opacity-50")}
         />
         {showOverridden && (
           <button
             type="button"
-            className="p-0.5 text-amber-400/70 hover:text-red-400 transition-colors"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
           >

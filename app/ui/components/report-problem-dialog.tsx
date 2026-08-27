@@ -91,6 +91,20 @@ const requiredDebugBundleMembers = new Set([
   "health_snapshot.json",
 ])
 
+const emptyReportDiagnostics: ReportDiagnostics = {
+  dvr_count: 0,
+  connected_dvr_count: 0,
+  monitoring_statuses: [],
+  notification_providers: [],
+  feature_toggles: {
+    channel_watching: false,
+    vod_watching: false,
+    disk_space: false,
+    recording_events: false,
+    stream_counter: false,
+  },
+}
+
 function formatRestartCountdown(seconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(seconds))
   const hours = Math.floor(safeSeconds / 3600)
@@ -144,6 +158,7 @@ const initialForm: ReportForm = {
 interface ReportProblemDialogProps {
   systemInfo: SystemInfo | null
   appSettings: AppSettings | null
+  trigger?: React.ReactNode
 }
 
 function modeLabel(mode: ReportMode): string {
@@ -238,7 +253,8 @@ function buildDiagnostics(
 
 function renderIssueTitle(payload: ReportProblemPayload): string {
   const summary = redactPublicText(payload.summary)
-  return `[In-App] ${summary.length > 90 ? `${summary.slice(0, 87).trim()}...` : summary}`
+  const prefix = payload.kind === "feature" ? "Feature" : "Bug"
+  return `[${prefix}] ${summary.length > 90 ? `${summary.slice(0, 87).trim()}...` : summary}`
 }
 
 function isPrivateAttachmentNameExposed(issueBody: string, filename: string): boolean {
@@ -304,7 +320,7 @@ function renderIssueBody(payload: ReportProblemPayload): string {
     `## Summary\n\n${redactPublicText(payload.summary)}`,
     `## Expected behavior\n\n${redactPublicText(payload.expected || "Not provided.")}`,
     `## Reporter\n\n${renderPublicContact(payload)}`,
-    `## Diagnostics\n\n${renderDiagnostics(payload.diagnostics)}`,
+    `## Diagnostics\n\n${renderDiagnostics(payload.diagnostics ?? emptyReportDiagnostics)}`,
   ].join("\n\n")
 }
 
@@ -623,7 +639,7 @@ function ReportPreviewCard({
             Diagnostics
           </h4>
           <dl className="mt-2 overflow-hidden rounded-md border border-border">
-            {diagnosticsRows(payload.diagnostics).map(([label, value]) => (
+            {diagnosticsRows(payload.diagnostics ?? emptyReportDiagnostics).map(([label, value]) => (
               <div
                 key={label}
                 className="grid gap-1 border-b border-border px-3 py-2 last:border-b-0 sm:grid-cols-[170px_minmax(0,1fr)]"
@@ -641,7 +657,7 @@ function ReportPreviewCard({
   )
 }
 
-export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDialogProps) {
+export function ReportProblemDialog({ systemInfo, appSettings, trigger }: ReportProblemDialogProps) {
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
   const debugBundleInputRef = useRef<HTMLInputElement | null>(null)
   const scrollBodyRef = useRef<HTMLDivElement | null>(null)
@@ -1185,16 +1201,18 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5 text-xs flex-shrink-0"
-          aria-label={t("diagnostics.reportProblem.aria")}
-          data-testid="report-problem-open"
-        >
-          <Bug className="h-3.5 w-3.5" />
-          {t("diagnostics.reportProblem.btn")}
-        </Button>
+        {trigger ?? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-xs flex-shrink-0"
+            aria-label={t("diagnostics.reportProblem.aria")}
+            data-testid="report-problem-open"
+          >
+            <Bug className="h-3.5 w-3.5" />
+            {t("diagnostics.reportProblem.btn")}
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="w-[calc(100vw-2rem)] max-w-3xl overflow-hidden p-0">
         <div
@@ -1620,7 +1638,7 @@ export function ReportProblemDialog({ systemInfo, appSettings }: ReportProblemDi
                         <h3 className="text-sm font-semibold">{t("supportReport.review.diagnostics")}</h3>
                       </div>
                       <dl className="divide-y divide-border text-sm">
-                        {diagnosticsRows(draftPayload.diagnostics).map(([label, value]) => (
+                        {diagnosticsRows(draftPayload.diagnostics ?? emptyReportDiagnostics).map(([label, value]) => (
                           <div key={label} className="px-3 py-2">
                             <dt className="text-xs text-muted-foreground">{label}</dt>
                             <dd className="mt-0.5 break-words">{value}</dd>

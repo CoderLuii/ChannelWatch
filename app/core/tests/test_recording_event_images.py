@@ -9,6 +9,7 @@ import pytest
 
 from core.alerts import recording_events as recording_events_module
 from core.alerts.recording_events import RecordingEventsAlert
+from core.alerts.recording_outcomes import RecordingOutcome
 from core.diagnostics.alerts import recording_events as recording_diagnostics
 from core.helpers.job_info import JobInfoProvider
 
@@ -96,6 +97,145 @@ def test_recording_image_returns_empty_when_no_art_exists():
 
     assert resolved == ""
     assert recording["artwork_fallback_exhausted"] is True
+
+
+@pytest.mark.asyncio
+async def test_recording_outcome_state_helpers_preserve_live_event_processing():
+    alert = _build_alert()
+    persist = MagicMock()
+
+    assert await alert._track_outcome_state(persist, "job-a") is True
+    persist.assert_called_once_with("job-a")
+    assert alert._outcome_persistence_error is None
+
+    failing_persist = MagicMock(side_effect=OSError("disk full"))
+    assert await alert._track_outcome_state(failing_persist, "job-b") is False
+    assert alert._outcome_persistence_error == "OSError"
+
+    alert.outcome_tracker.mark_terminal = MagicMock(return_value=True)
+    assert await alert._claim_terminal_outcome("job-a", "failed") is True
+    assert alert._outcome_persistence_error is None
+
+    alert.outcome_tracker.mark_terminal = MagicMock(return_value=False)
+    assert await alert._claim_terminal_outcome("job-a", "completed") is False
+
+    alert.outcome_tracker.mark_terminal = MagicMock(
+        side_effect=PermissionError("read-only state")
+    )
+    assert await alert._claim_terminal_outcome("job-b", "failed") is None
+    assert alert._outcome_persistence_error == "PermissionError"
+
+
+@pytest.mark.asyncio
+async def test_reconciled_recording_outcome_records_activity_and_awaits_delivery(
+    monkeypatch,
+):
+    alert = _build_alert()
+    alert.recording_failed_enabled = True
+    alert.channel_provider.get_channel_info = MagicMock(
+        return_value={"name": "Synthetic Channel"}
+    )
+    alert.alert_formatter.should_send_notification = AsyncMock(return_value=True)
+    alert.session_manager.record_notification = AsyncMock()
+    alert.send_alert_async = AsyncMock(return_value=True)
+    outcome = RecordingOutcome(
+        "job-a",
+        "failed",
+        {
+            "name": "Synthetic recording",
+            "channel": "7.1",
+            "image_url": "https://example.test/image.jpg",
+        },
+    )
+
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ) as record_activity:
+        assert await alert._process_reconciled_outcome(outcome) is True
+
+    record_activity.assert_called_once()
+    assert record_activity.call_args.kwargs["event_type"] == "Failed"
+    assert record_activity.call_args.kwargs["channel_name"] == "Synthetic Channel"
+    alert.send_alert_async.assert_awaited_once()
+    alert.session_manager.record_notification.assert_awaited_once_with(
+        "recording-failed-job-a"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconciled_recording_outcome_handles_invalid_disabled_and_cooldown(
+    monkeypatch,
+):
+    alert = _build_alert()
+    alert.send_alert_async = AsyncMock(return_value=False)
+
+    assert await alert._process_reconciled_outcome(
+        RecordingOutcome("job-a", "unknown", {})
+    ) is False
+
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ):
+        assert await alert._process_reconciled_outcome(
+            RecordingOutcome("job-a", "missed", {"name": "Synthetic recording"})
+        ) is True
+
+        alert.recording_missed_enabled = True
+        alert.alert_formatter.should_send_notification = AsyncMock(return_value=False)
+        assert await alert._process_reconciled_outcome(
+            RecordingOutcome("job-b", "missed", {"name": "Synthetic recording"})
+        ) is True
+
+    alert.send_alert_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recording_outcome_loop_reconciles_then_cancels_cleanly(monkeypatch):
+    alert = _build_alert()
+    outcome = RecordingOutcome("job-a", "failed", {"name": "Synthetic"})
+    alert.job_provider.fetch_jobs_snapshot = MagicMock(return_value=[{"id": "job-a"}])
+    alert.job_provider.fetch_recordings_snapshot = MagicMock(return_value=[])
+    alert.outcome_tracker.started_jobs_missing = MagicMock(return_value=True)
+    alert.outcome_tracker.reconcile = MagicMock(return_value=[outcome])
+    alert._process_reconciled_outcome = AsyncMock(return_value=True)
+    sleeps = 0
+
+    async def one_cycle(_delay):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(recording_events_module.asyncio, "sleep", one_cycle)
+
+    with pytest.raises(asyncio.CancelledError):
+        await alert._async_recording_outcome_loop()
+
+    alert.job_provider.fetch_jobs_snapshot.assert_called_once_with()
+    alert.job_provider.fetch_recordings_snapshot.assert_called_once_with()
+    alert.outcome_tracker.reconcile.assert_called_once()
+    alert._process_reconciled_outcome.assert_awaited_once_with(outcome)
+
+
+@pytest.mark.asyncio
+async def test_recording_outcome_loop_ignores_unreachable_snapshot(monkeypatch):
+    alert = _build_alert()
+    alert.job_provider.fetch_jobs_snapshot = MagicMock(return_value=None)
+    alert.outcome_tracker.reconcile = MagicMock()
+    sleeps = 0
+
+    async def one_cycle(_delay):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(recording_events_module.asyncio, "sleep", one_cycle)
+
+    with pytest.raises(asyncio.CancelledError):
+        await alert._async_recording_outcome_loop()
+
+    alert.outcome_tracker.reconcile.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -264,6 +404,8 @@ async def test_started_handler_offloads_job_channel_and_activity_work(monkeypatc
     assert alert.job_provider.get_job_by_id in calls
     assert alert.channel_provider.get_channel_info in calls
     assert mock_record in calls
+    assert mock_record.call_args.kwargs["dvr_id"] == "dvr_test01"
+    assert mock_record.call_args.kwargs["dvr_name"] == "TestDVR"
 
 
 @pytest.mark.asyncio
@@ -303,6 +445,42 @@ async def test_completed_handler_uses_pre_fetched_recording_and_offloads_activit
     assert result is True
     alert.job_provider.get_recording_by_id.assert_not_called()
     assert mock_record in calls
+    assert mock_record.call_args.kwargs["dvr_id"] == "dvr_test01"
+    assert mock_record.call_args.kwargs["dvr_name"] == "TestDVR"
+
+
+@pytest.mark.asyncio
+async def test_completed_activity_is_recorded_when_notification_cooldown_blocks_delivery(
+    monkeypatch,
+):
+    alert = _build_alert()
+    alert.alert_formatter.should_send_notification = AsyncMock(return_value=False)
+    alert._claim_terminal_outcome = AsyncMock(return_value=True)
+    alert.send_alert_async = AsyncMock(return_value=True)
+    recording = {
+        "id": "file-cooldown",
+        "processed": True,
+        "completed": True,
+        "title": "Evening News",
+        "duration": 1800,
+        "job_id": "job-cooldown",
+    }
+
+    async def run_inline(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(recording_events_module.asyncio, "to_thread", run_inline)
+
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ) as mock_record:
+        result = await alert._process_completed_recording(
+            "file-cooldown", recording, {}
+        )
+
+    assert result is True
+    mock_record.assert_called_once()
+    alert.send_alert_async.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
@@ -631,6 +632,258 @@ class TestMetricsPerDvrLabels:
         assert body["disk_total_gb"] == 1000.0
         assert body["disk_free_gb"] == sum(free_by_dvr)
         assert body["disk_severity"] == expected_severity
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, "", "not-a-time", "2026-08-26T12:00:00"],
+    )
+    def test_dvr_uptime_rejects_missing_malformed_or_naive_time(self, value):
+        from ui.backend.main import _parse_dvr_uptime
+
+        started_at, uptime_seconds = _parse_dvr_uptime(
+            value,
+            now=datetime(2026, 8, 26, 13, 0, tzinfo=timezone.utc),
+        )
+
+        assert started_at is None
+        assert uptime_seconds is None
+
+    def test_dvr_uptime_normalizes_timezone_and_rejects_future_time(self):
+        from ui.backend.main import _parse_dvr_uptime
+
+        now = datetime(2026, 8, 26, 13, 0, tzinfo=timezone.utc)
+        started_at, uptime_seconds = _parse_dvr_uptime(
+            "2026-08-26T08:00:00-04:00", now=now
+        )
+        future_started_at, future_uptime = _parse_dvr_uptime(
+            "2026-08-26T14:00:00Z", now=now
+        )
+
+        assert started_at == "2026-08-26T12:00:00+00:00"
+        assert uptime_seconds == 3600
+        assert future_started_at is None
+        assert future_uptime is None
+
+    def test_system_info_exposes_core_ui_and_each_dvr_uptime(self, client):
+        now = datetime.now(timezone.utc)
+        starts = {
+            "192.168.1.10": (now - timedelta(hours=2)).isoformat(),
+            "192.168.1.20": (now - timedelta(hours=3)).isoformat(),
+        }
+
+        async def fake_get(url, timeout, **kwargs):
+            response = MagicMock()
+            response.status_code = 200
+            host = url.split("//", 1)[1].split(":", 1)[0]
+            if url.endswith("/status"):
+                response.json.return_value = {
+                    "version": "2026.08.26",
+                    "start_time": starts[host],
+                }
+            else:
+                response.json.return_value = {"activity": {}}
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+        healthy_summary = {
+            "dvrs": [
+                {"id": "dvr_aaa11111", "ready": True},
+                {"id": "dvr_bbb22222", "ready": True},
+            ]
+        }
+
+        with (
+            patch("ui.backend.main.CORE_APP_AVAILABLE", False),
+            patch("ui.backend.main._dvr_http_client", mock_client),
+            patch(
+                "ui.backend.main._get_monitoring_health_summary",
+                return_value=healthy_summary,
+            ),
+            patch(
+                "ui.backend.main._fetch_dvr_library_counts",
+                new=AsyncMock(return_value=(0, 0, 0)),
+            ),
+            patch(
+                "ui.backend.main._get_core_process_info_from_supervisor",
+                return_value={
+                    "statename": "RUNNING",
+                    "start": int(now.timestamp()) - 3600,
+                },
+            ),
+        ):
+            resp = client.get("/api/system-info")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["channelwatch_core_started_at"]
+        assert body["channelwatch_core_uptime_seconds"] >= 3599
+        assert body["channelwatch_ui_started_at"]
+        assert body["channelwatch_ui_uptime_seconds"] >= 0
+        assert len(body["dvr_status"]) == 2
+        assert all(item["uptime_available"] for item in body["dvr_status"])
+        assert body["dvr_status"][0]["uptime_seconds"] >= 7199
+        assert body["dvr_status"][1]["uptime_seconds"] >= 10799
+
+    def test_system_info_uses_current_settings_after_first_dvr_save(self, client):
+        """The UI's startup-time CoreSettings snapshot must not hide a new DVR."""
+
+        from ui.backend import main as ui_main
+
+        current_settings = ui_main.AppSettings(**TWO_DVR_SETTINGS)
+
+        async def fake_get(url, timeout, **kwargs):
+            response = MagicMock()
+            response.status_code = 200
+            if url.endswith("/status"):
+                response.json.return_value = {
+                    "version": "2026.08.26",
+                    "start_time": "2026-08-26T00:00:00Z",
+                }
+            else:
+                response.json.return_value = {"activity": {}}
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+        with (
+            patch("ui.backend.main.CORE_APP_AVAILABLE", True),
+            patch(
+                "ui.backend.main._get_core_settings_sync",
+                side_effect=AssertionError("stale CoreSettings snapshot was read"),
+            ),
+            patch(
+                "ui.backend.main._load_settings_async",
+                new=AsyncMock(return_value=current_settings),
+            ),
+            patch("ui.backend.main._dvr_http_client", mock_client),
+            patch(
+                "ui.backend.main._get_monitoring_health_summary",
+                return_value={"dvrs": []},
+            ),
+            patch(
+                "ui.backend.main._fetch_dvr_library_counts",
+                new=AsyncMock(return_value=(0, 0, 0)),
+            ),
+            patch(
+                "ui.backend.main._get_core_process_info_from_supervisor",
+                return_value={"statename": "RUNNING", "start": 0},
+            ),
+        ):
+            response = client.get(
+                "/api/system-info?include_all_dvr_status=true"
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert [entry["id"] for entry in payload["dvr_status"]] == [
+            "dvr_aaa11111",
+            "dvr_bbb22222",
+        ]
+        assert all(entry["uptime_available"] for entry in payload["dvr_status"])
+
+    def test_malformed_status_payload_does_not_drop_other_dvr_uptime(self, client):
+        now = datetime.now(timezone.utc)
+
+        async def fake_get(url, timeout, **kwargs):
+            response = MagicMock()
+            response.status_code = 200
+            host = url.split("//", 1)[1].split(":", 1)[0]
+            if url.endswith("/status") and host == "192.168.1.10":
+                response.json.side_effect = ValueError("malformed status payload")
+            elif url.endswith("/status"):
+                response.json.return_value = {
+                    "version": "2026.08.26",
+                    "start_time": (now - timedelta(hours=3)).isoformat(),
+                }
+            else:
+                response.json.return_value = {"activity": {}}
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+        with (
+            patch("ui.backend.main.CORE_APP_AVAILABLE", False),
+            patch("ui.backend.main._dvr_http_client", mock_client),
+            patch(
+                "ui.backend.main._get_monitoring_health_summary",
+                return_value={"dvrs": []},
+            ),
+            patch(
+                "ui.backend.main._fetch_dvr_library_counts",
+                new=AsyncMock(return_value=(0, 0, 0)),
+            ),
+            patch(
+                "ui.backend.main._get_core_process_info_from_supervisor",
+                return_value={"statename": "RUNNING", "start": 0},
+            ),
+        ):
+            response = client.get("/api/system-info")
+
+        assert response.status_code == 200
+        dvr_status = response.json()["dvr_status"]
+        assert len(dvr_status) == 2
+        assert dvr_status[0]["connected"] is False
+        assert dvr_status[0]["uptime_available"] is False
+        assert dvr_status[1]["connected"] is True
+        assert dvr_status[1]["uptime_available"] is True
+
+    def test_selected_system_info_can_return_every_dvr_uptime_without_expanding_totals(
+        self, client
+    ):
+        from ui.backend import main as ui_main
+
+        free_by_host = {"192.168.1.10": 25, "192.168.1.20": 175}
+
+        async def fake_get(url, timeout, **kwargs):
+            response = MagicMock()
+            response.status_code = 200
+            host = url.split("//", 1)[1].split(":", 1)[0]
+            if url.endswith("/status"):
+                response.json.return_value = {
+                    "version": "2026.08.26",
+                    "start_time": "2026-08-26T00:00:00Z",
+                }
+            else:
+                response.json.return_value = {
+                    "ServerStorage": {
+                        "Available": free_by_host[host] * ui_main.BYTES_PER_GIB,
+                        "Total": 200 * ui_main.BYTES_PER_GIB,
+                    },
+                    "activity": {},
+                }
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+        with (
+            patch("ui.backend.main.CORE_APP_AVAILABLE", False),
+            patch("ui.backend.main._dvr_http_client", mock_client),
+            patch(
+                "ui.backend.main._get_monitoring_health_summary",
+                return_value={"dvrs": []},
+            ),
+            patch(
+                "ui.backend.main._fetch_dvr_library_counts",
+                new=AsyncMock(return_value=(0, 0, 0)),
+            ),
+            patch(
+                "ui.backend.main._get_core_process_info_from_supervisor",
+                return_value={"statename": "RUNNING", "start": 0},
+            ),
+        ):
+            response = client.get(
+                "/api/system-info?dvr_id=dvr_aaa11111&include_all_dvr_status=true"
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert [entry["id"] for entry in payload["dvr_status"]] == [
+            "dvr_aaa11111",
+            "dvr_bbb22222",
+        ]
+        assert payload["disk_total_gb"] == 200.0
+        assert payload["disk_free_gb"] == 25.0
 
     def test_metrics_has_per_dvr_disk_total(self, client):
         si = _mock_system_info()

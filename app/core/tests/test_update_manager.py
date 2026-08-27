@@ -325,6 +325,96 @@ def test_check_marks_image_required_release(tmp_path: Path):
     assert status["last_job"]["status"] == "image_required"
 
 
+def test_status_quarantines_a_cached_release_older_than_the_active_app(
+    tmp_path: Path,
+):
+    manager = UpdateManager(config_dir=tmp_path, current_version="1.0.0")
+    manager._ensure_runtime()
+    manager.latest_path.write_text(
+        json.dumps(
+            {
+                "schema": 2,
+                "payload": {
+                    "version": "0.9.19",
+                    "version_tag": "v0.9.19",
+                    "delivery_mode": "image_required",
+                    "highlights": ["Outdated release text"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = manager.status()
+
+    assert status["catalog_state"] == "stale_cache"
+    assert status["cached_release_stale"] is True
+    assert status["latest"] is None
+    assert status["trusted_target"] is None
+    assert status["update_available"] is False
+    assert status["image_required"] is False
+    assert status["operation_state"] == "idle"
+    assert status["operation_busy"] is False
+
+
+def test_status_reports_an_equal_cached_release_as_current_not_a_target(
+    tmp_path: Path,
+):
+    manager = UpdateManager(config_dir=tmp_path, current_version="1.0.0")
+    manager._ensure_runtime()
+    payload = {
+        "version": "1.0.0",
+        "version_tag": "v1.0.0",
+        "delivery_mode": "image_required",
+    }
+    manager.latest_path.write_text(
+        json.dumps({"schema": 2, "payload": payload}), encoding="utf-8"
+    )
+
+    status = manager.status()
+
+    assert status["catalog_state"] == "current"
+    assert status["cached_release_stale"] is False
+    assert status["latest"] == payload
+    assert status["trusted_target"] is None
+    assert status["update_available"] is False
+    assert status["operation_busy"] is False
+
+
+def test_status_derives_busy_state_from_the_live_single_flight_lock(tmp_path: Path):
+    manager = UpdateManager(config_dir=tmp_path, current_version="1.0.0")
+    manager._ensure_runtime()
+
+    with UpdateOperationLock(manager.lock_path):
+        status = manager.status()
+
+    assert status["catalog_state"] == "checking"
+    assert status["operation_state"] == "checking"
+    assert status["operation_busy"] is True
+    assert manager.status()["operation_state"] == "idle"
+
+
+def test_status_discards_a_dead_operation_lock(tmp_path: Path):
+    manager = UpdateManager(config_dir=tmp_path, current_version="1.0.0")
+    manager._ensure_runtime()
+    manager.lock_path.write_text(
+        json.dumps(
+            {
+                "pid": 2_000_000_000,
+                "process_identity": "old-boot:old-namespace:old-start",
+                "created_at": "2026-08-26T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = manager.status()
+
+    assert status["operation_state"] == "idle"
+    assert status["operation_busy"] is False
+    assert not manager.lock_path.exists()
+
+
 def test_apply_verified_bundle_records_backup_and_active_bundle(tmp_path: Path):
     private, public = _key_pair()
     bundle = _bundle()
@@ -986,7 +1076,9 @@ def test_protocol_three_duplicate_callback_waits_for_active_helper_marker(
             )
 
     monkeypatch.setattr(
-        update_center_module.time, "sleep", publish_during_reconciliation
+        update_center_module,
+        "_protocol_three_sleep",
+        publish_during_reconciliation,
     )
     manager.check()
     job = manager.apply()

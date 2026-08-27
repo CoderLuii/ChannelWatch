@@ -628,6 +628,27 @@ class TestDvrActivityHistory:
         assert body["total"] == 1
         assert body["items"][0]["type"] == "watching_channel"
 
+    def test_client_filter_applied_within_requested_dvr(self, client, mem_engine):
+        events = [
+            _make_event(
+                dvr_id="dvr_aaa11111", title="Match", device_name="Bedroom"
+            ),
+            _make_event(
+                dvr_id="dvr_aaa11111", title="Other", device_name="Office"
+            ),
+            _make_event(
+                dvr_id="dvr_bbb22222", title="Wrong DVR", device_name="Bedroom"
+            ),
+        ]
+        _seed(mem_engine, events)
+
+        resp = client.get(
+            "/api/v1/dvrs/dvr_aaa11111/activity-history?client=bedroom"
+        )
+
+        assert resp.status_code == 200
+        assert [item["title"] for item in resp.json()["items"]] == ["Match"]
+
 
 class TestDvrUpcomingRecordings:
     def _mock_jobs(self, jobs=None):

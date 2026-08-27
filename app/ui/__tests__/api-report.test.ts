@@ -66,6 +66,77 @@ afterEach(() => {
 })
 
 describe("support report API helpers", () => {
+  it("keeps feature-request classification while excluding diagnostics from the signed envelope", () => {
+    const featurePayload: ReportProblemPayload = {
+      ...payload,
+      kind: "feature",
+      area: "activity",
+      expected: "Add an exact client filter.",
+      use_case: "Shared devices would be easier to review.",
+      diagnostics: {
+        dvr_count: 0,
+        connected_dvr_count: 0,
+        monitoring_statuses: [],
+        notification_providers: [],
+        feature_toggles: {
+          channel_watching: false,
+          vod_watching: false,
+          disk_space: false,
+          recording_events: false,
+          stream_counter: false,
+        },
+      },
+    }
+
+    const decoded = decodeSupportCode(createReportDraft(featurePayload).supportCode)
+
+    expect(decoded.report).toMatchObject({
+      kind: "feature",
+      area: "activity",
+      use_case: "Shared devices would be easier to review.",
+    })
+    expect(decoded.report).not.toHaveProperty("diagnostics")
+    expect(decoded.client.channelwatch_version).toBe("unknown")
+  })
+
+  it("excludes diagnostics from same-origin feature submissions", async () => {
+    installBrowserAuth("csrf-feature")
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "dry-run-complete" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await submitReport("/api/v1/support/report-dry-run", {
+      ...payload,
+      kind: "feature",
+      area: "activity",
+      use_case: "Shared devices would be easier to review.",
+    })
+
+    const [, options] = fetchMock.mock.calls[0]
+    const submitted = JSON.parse(options.body)
+    expect(submitted.kind).toBe("feature")
+    expect(submitted).not.toHaveProperty("diagnostics")
+  })
+
+  it("rejects diagnostic bundles for feature submissions", async () => {
+    const debugBundle = new File(["zip-bytes"], "channelwatch_debug.zip", {
+      type: "application/zip",
+    })
+
+    await expect(submitReport("/api/v1/support/report-dry-run", {
+      ...payload,
+      kind: "feature",
+      area: "activity",
+      use_case: "Shared devices would be easier to review.",
+    }, { debugBundle })).rejects.toThrow(
+      "Feature requests can include a screenshot, but not a diagnostic bundle.",
+    )
+  })
+
   it("loads report config with app auth headers", async () => {
     installBrowserAuth("csrf-report")
     const responseBody = {

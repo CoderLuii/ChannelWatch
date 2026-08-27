@@ -210,22 +210,22 @@ export function Header() {
   return (
     <>
       <header className="fixed top-0 left-0 right-0 z-40 border-b bg-background/95 backdrop-blur-lg supports-[backdrop-filter]:bg-background/60 w-full">
-        <div className="flex h-16 items-center justify-between px-4 md:px-6 md:pl-[76px] w-full">
-          <div className="flex items-center gap-2 md:gap-4">
+        <div className="flex h-16 w-full items-center justify-between gap-2 px-2 sm:px-4 md:px-6 md:pl-[76px]">
+          <div data-testid="header-primary-controls" className="flex min-w-0 items-center gap-1 sm:gap-2 md:gap-4">
             <Button
               variant="ghost"
               size="icon"
-              className="md:hidden"
+              className="min-h-11 min-w-11 shrink-0 md:hidden"
               onClick={() => window.dispatchEvent(new CustomEvent("toggle-mobile-sidebar"))}
+              aria-label={t("header.toggleMenu")}
             >
-              <Menu className="h-5 w-5" />
-              <span className="sr-only">{t("header.toggleMenu")}</span>
+              <Menu className="h-5 w-5" aria-hidden="true" />
             </Button>
 
             {availableDvrs.length > 0 && (
               <Select value={selectedDvr} onValueChange={setSelectedDvr}>
                 <SelectTrigger
-                  className="h-8 text-xs min-w-[120px] max-w-[180px] border-border/60"
+                  className="h-11 w-[92px] min-w-0 max-w-[92px] border-border/60 px-2 text-xs sm:w-[120px] sm:min-w-[120px] sm:max-w-[180px] md:h-8"
                   aria-label={t("header.selectDvr")}
                 >
                   <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
@@ -245,22 +245,11 @@ export function Header() {
             )}
           </div>
 
-          {/* Mobile title */}
-          <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-2 md:hidden">
-            {/* eslint-disable-next-line @next/next/no-img-element -- static export: next/image optimizer unavailable */}
-            <img
-              src="/images/channelwatch-logo.png"
-              alt={t("sidebar.logoAlt")}
-              className="h-6 w-auto"
-            />
-            <span className="text-lg font-semibold">{t("header.brandName")}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
+          <div data-testid="header-utility-controls" className="flex shrink-0 items-center gap-1 sm:gap-2">
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 px-2 text-xs"
+              className="hidden h-8 px-2 text-xs sm:inline-flex"
               onClick={() => setActiveView("settings:security")}
             >
               {securityStatus ? <SecurityModeBadge status={securityStatus} compact /> : t("header.security")}
@@ -293,9 +282,10 @@ export function Header() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="md:hidden flex items-center gap-1"
+                    className="flex min-h-11 min-w-11 items-center gap-1 px-0 md:hidden"
                     onClick={handleRestart}
                     disabled={isRestarting}
+                    aria-label={t("header.restart")}
                   >
                     <Power className={`h-4 w-4 ${isRestarting ? "animate-spin" : ""}`} />
                   </Button>
@@ -313,7 +303,7 @@ export function Header() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="flex items-center gap-1"
+                      className="flex min-h-11 min-w-11 items-center gap-1 px-0 sm:px-3 md:min-h-9 md:min-w-0"
                       onClick={handleLogout}
                       disabled={isLoggingOut}
                       aria-label={t("header.signOut")}

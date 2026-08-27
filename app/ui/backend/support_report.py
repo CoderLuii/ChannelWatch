@@ -1309,8 +1309,20 @@ class ReportDiagnostics(BaseModel):
 class ReportProblemPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    kind: Literal["problem", "feature"] = "problem"
+    area: Literal[
+        "dashboard",
+        "activity",
+        "notifications",
+        "dvr_monitoring",
+        "updates",
+        "backup_restore",
+        "authentication_security",
+        "other",
+    ] | None = None
     summary: str = Field(min_length=1, max_length=500)
     expected: str | None = Field(default=None, max_length=2000)
+    use_case: str | None = Field(default=None, max_length=2000)
     getchannels_username: str | None = None
     github_username: str | None = None
     email: str | None = None
@@ -1322,9 +1334,9 @@ class ReportProblemPayload(BaseModel):
     def clean_summary(cls, value: Any) -> str:
         return _clean_single_line(value)
 
-    @field_validator("expected", mode="before")
+    @field_validator("expected", "use_case", mode="before")
     @classmethod
-    def clean_expected(cls, value: Any) -> str | None:
+    def clean_multiline_field(cls, value: Any) -> str | None:
         text = _clean_multiline(value)
         return text or None
 
@@ -1617,6 +1629,7 @@ def render_email_html(
 ) -> str:
     attachments = attachments or []
     diagnostics = payload.diagnostics
+    is_feature = payload.kind == "feature"
     submitted_at = datetime.now(timezone.utc).isoformat()
     issue_title = render_issue_title(payload)
     issue_body = render_issue_body(payload)
@@ -1681,6 +1694,16 @@ def render_email_html(
             else "None reported",
         ),
     ]
+    diagnostics_section = (
+        ""
+        if is_feature
+        else (
+            '<h2 style="color:#f8fbff;font-size:15px;margin:22px 0 8px;">Diagnostics</h2>'
+            '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">'
+            + "".join(diagnostics_rows)
+            + "</table>"
+        )
+    )
     attachment_html = (
         "".join(
             [
@@ -1728,7 +1751,7 @@ def render_email_html(
                       </a>
                     </td>
                     <td>
-                      <div style="color:#f8fbff;font-size:20px;font-weight:700;line-height:1.25;">New ChannelWatch report</div>
+                      <div style="color:#f8fbff;font-size:20px;font-weight:700;line-height:1.25;">{html_escape("New ChannelWatch feature request" if is_feature else "New ChannelWatch report")}</div>
                       <div style="color:#9aa9bc;font-size:13px;line-height:1.5;">{html_escape(mode)} &middot; {html_escape(submitted_at)}</div>
                     </td>
                   </tr>
@@ -1738,14 +1761,13 @@ def render_email_html(
             <tr>
               <td style="padding:28px;">
                 <h1 style="color:#f8fbff;font-size:20px;line-height:1.3;margin:0 0 8px;">{html_escape(payload.summary)}</h1>
-                <p style="color:#9aa9bc;font-size:14px;line-height:1.6;margin:0 0 18px;">{html_escape(payload.expected or "No expected behavior was provided.")}</p>
+                <p style="color:#9aa9bc;font-size:14px;line-height:1.6;margin:0 0 18px;">{html_escape(payload.expected or ("No requested change was provided." if is_feature else "No expected behavior was provided."))}</p>
                 <h2 style="color:#f8fbff;font-size:15px;margin:0 0 10px;">Next steps</h2>
                 <div style="margin:0 0 14px;">{action_buttons or '<span style="color:#9aa9bc;font-size:13px;">No contact or issue links are available yet.</span>'}</div>
                 <hr style="border:0;border-top:1px solid #22314f;margin:22px 0;" />
                 <h2 style="color:#f8fbff;font-size:15px;margin:0 0 8px;">Reporter contact</h2>
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{''.join(contact_rows)}</table>
-                <h2 style="color:#f8fbff;font-size:15px;margin:22px 0 8px;">Diagnostics</h2>
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{''.join(diagnostics_rows)}</table>
+                {diagnostics_section}
                 <h2 style="color:#f8fbff;font-size:15px;margin:22px 0 8px;">Private attachments</h2>
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0">{attachment_html}</table>
                 <h2 style="color:#f8fbff;font-size:15px;margin:22px 0 8px;">Report preview</h2>
@@ -1772,12 +1794,26 @@ def render_issue_title(payload: ReportProblemPayload) -> str:
     summary = redact_public_text(payload.summary)
     if len(summary) > 90:
         summary = f"{summary[:87].rstrip()}..."
-    return f"[In-App] {summary}"
+    prefix = "Feature" if payload.kind == "feature" else "Bug"
+    return f"[{prefix}] {summary}"
 
 
 def render_issue_body(payload: ReportProblemPayload) -> str:
     summary = redact_public_text(payload.summary)
     expected = redact_public_text(payload.expected or "Not provided.")
+    if payload.kind == "feature":
+        area = (payload.area or "other").replace("_", " ").title()
+        use_case = redact_public_text(payload.use_case or "Not provided.")
+        return "\n\n".join(
+            [
+                "# ChannelWatch Feature Request",
+                "## What should change?\n\n" + expected,
+                "## Why would it help?\n\n" + use_case,
+                "## Product area\n\n" + area,
+                "## Short title\n\n" + summary,
+                "## Reporter\n\n" + _format_public_contact(payload),
+            ]
+        )
     return "\n\n".join(
         [
             "# ChannelWatch Support Report",
@@ -1881,11 +1917,14 @@ def render_support_code(
     *,
     created_at: str | None = None,
 ) -> str:
+    report_payload = payload.model_dump(exclude_none=True)
+    if payload.kind == "feature":
+        report_payload.pop("diagnostics", None)
     envelope = {
         "schema": 1,
         "source": "channelwatch",
         "created_at": created_at or datetime.now(timezone.utc).isoformat(),
-        "report": payload.model_dump(exclude_none=True),
+        "report": report_payload,
     }
     raw = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -1976,9 +2015,10 @@ def build_offline_report_package(
         "upload_url": portal_url,
         "support_code_file": "support-code.txt",
         "public_issue_preview_file": "issue-preview.md",
-        "diagnostics_file": "diagnostics-summary.json",
         "attachments": attachment_entries,
     }
+    if payload.kind != "feature":
+        manifest["diagnostics_file"] = "diagnostics-summary.json"
     readme = "\n".join(
         [
             "ChannelWatch offline support package",
@@ -1999,10 +2039,11 @@ def build_offline_report_package(
         package.writestr("README.txt", readme)
         package.writestr("support-code.txt", support_code)
         package.writestr("issue-preview.md", issue_preview)
-        package.writestr(
-            "diagnostics-summary.json",
-            json.dumps(payload.diagnostics.model_dump(), indent=2),
-        )
+        if payload.kind != "feature":
+            package.writestr(
+                "diagnostics-summary.json",
+                json.dumps(payload.diagnostics.model_dump(), indent=2),
+            )
         package.writestr("manifest.json", json.dumps(manifest, indent=2))
         for entry, (_summary, content) in zip(attachment_entries, attachments):
             package.writestr(entry["path"], content)

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -116,3 +116,29 @@ class TestInitializeAlertsRequiresDvr:
             ValueError, match="initialize_alerts requires an explicit dvr"
         ):
             initialize_alerts(_make_nm(), _make_settings(), dvr=None)
+
+    def test_disabled_delivery_still_registers_activity_monitors(self):
+        settings = SimpleNamespace(
+            alert_channel_watching=False,
+            alert_disk_space=False,
+            alert_vod_watching=False,
+            alert_recording_events=False,
+        )
+        registered = []
+
+        with patch.object(
+            AlertManager,
+            "register_alert",
+            side_effect=lambda alert_type: registered.append(alert_type) or True,
+        ):
+            manager = initialize_alerts(
+                _make_nm(), settings, test_mode=True, dvr=_make_dvr()
+            )
+
+        assert manager.get_registered_alerts() == []
+        assert registered == [
+            "Channel-Watching",
+            "Disk-Space",
+            "VOD-Watching",
+            "Recording-Events",
+        ]

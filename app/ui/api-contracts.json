@@ -37,6 +37,8 @@
   {"method":"GET","path":"/api/streams/details","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/streams/details"},
   {"method":"GET","path":"/api/recent-activity","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/recent-activity"},
   {"method":"GET","path":"/api/activity-history","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/activity-history"},
+  {"method":"GET","path":"/api/v1/history/export","auth":"middleware","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/history/export"},
+  {"method":"GET","path":"/api/v1/activity-history/filters","auth":"middleware","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/activity-history/filters"},
   {"method":"POST","path":"/api/clear-activity-history","auth":"middleware","minimum_role":"operator","legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/clear-activity-history"},
   {"method":"POST","path":"/api/regenerate-api-key","auth":"middleware","minimum_role":"admin","legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/regenerate-api-key"},
   {"method":"GET","path":"/api/v1/security/status","auth":"public","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/security/status"},

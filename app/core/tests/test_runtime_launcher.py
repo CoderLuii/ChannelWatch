@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,48 @@ from core.update_center import (
 )
 
 _START_RESTART_REQUIRED_WATCHDOG = runtime_launcher.start_restart_required_watchdog
+
+
+def test_selected_bundle_replaces_image_owned_sqlmodel_registry(tmp_path: Path):
+    """A protocol-3 bundle can import models after image-side update lookup."""
+
+    config_dir = tmp_path / "config"
+    selected_bundle = config_dir / "channelwatch-runtime" / "releases" / "v1.0.1"
+    selected_bundle.mkdir(parents=True)
+    probe = """
+import importlib
+import os
+import sys
+
+os.environ.pop("CHANNELWATCH_APP_DIR", None)
+import core
+import core.storage.models
+from sqlmodel import SQLModel
+
+assert "dvr_server" in SQLModel.metadata.tables
+os.environ["CONFIG_PATH"] = sys.argv[1]
+os.environ["CHANNELWATCH_IMAGE_APP_DIR"] = "/app"
+os.environ["CHANNELWATCH_APP_DIR"] = sys.argv[2]
+assert core._reset_sqlmodel_registry_for_selected_bundle() is True
+assert not SQLModel.metadata.tables
+for name in tuple(sys.modules):
+    if name == "core.storage" or name.startswith("core.storage."):
+        sys.modules.pop(name, None)
+importlib.invalidate_caches()
+models = importlib.import_module("core.storage.models")
+assert models.DvrServer.__table__.name == "dvr_server"
+assert "dvr_server" in SQLModel.metadata.tables
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, str(config_dir), str(selected_bundle)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path.cwd() / "app")},
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 class _SimulatedPowerLoss(BaseException):

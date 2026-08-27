@@ -16,7 +16,7 @@ APPRISE_DEST_KEYS = (
     "custom",
 )
 ALL_DEST_KEYS = APPRISE_DEST_KEYS + ("webhook",)
-ROUTING_EVENT_TYPES = ("channel", "vod", "recording", "disk")
+ROUTING_EVENT_TYPES = ("channel", "vod", "recording", "disk", "health")
 
 _ALL_ENABLED = {key: True for key in ALL_DEST_KEYS}
 _ALL_DISABLED = {key: False for key in ALL_DEST_KEYS}

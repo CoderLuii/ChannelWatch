@@ -654,22 +654,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_100_image_milestone():
+def test_release_config_declares_101_in_app_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.0.0"
-    assert config["image_required"] is True
-    assert config["delivery_mode"] == "image_required"
+    assert config["version"] == "1.0.1"
+    assert config["image_required"] is False
+    assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.0.0"
     assert config["updater_protocol"] == 2
     assert config["recommended_image_version"] == "1.0.0"
-    assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["0.9.18", "0.9.19"]
+    assert config["automatic_install_allowed"] is True
+    assert config["compatible_source_application_versions"] == ["1.0.0"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.0.0 - Predictable updates"
+        "# ChannelWatch v1.0.1 - Useful alerts and easier feedback"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -747,7 +747,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_100_image_milestone():
+def test_release_version_surfaces_use_101_in_app_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -758,20 +758,20 @@ def test_release_version_surfaces_use_100_image_milestone():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.0.0"
-    assert metadata["versionTag"] == "v1.0.0"
-    assert metadata["dockerTag"] == "1.0.0"
-    assert metadata["helmChartVersion"] == "1.0.0"
-    assert metadata["helmAppVersion"] == "1.0.0"
+    assert metadata["version"] == "1.0.1"
+    assert metadata["versionTag"] == "v1.0.1"
+    assert metadata["dockerTag"] == "1.0.1"
+    assert metadata["helmChartVersion"] == "1.0.1"
+    assert metadata["helmAppVersion"] == "1.0.1"
 
 
-def test_release_body_for_100_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_101_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.0.0",
+        "versionTag": "v1.0.1",
         "releaseDate": "2026-08-26",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -783,7 +783,7 @@ def test_release_body_for_100_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.0.0",
+        "dockerTag": "1.0.1",
     }
     monkeypatch.setattr(
         module,
@@ -793,23 +793,23 @@ def test_release_body_for_100_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.0.0"],
+        ["render-release-body.py", "--version", "1.0.1"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.0.0 - Predictable updates\n"
+        "# ChannelWatch v1.0.1 - Useful alerts and easier feedback\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.0.0-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.0.0-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.0.0-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.0.0-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.1-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.1-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.1-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.1-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.0`" in output
@@ -953,6 +953,87 @@ def test_release_impact_classifier_keeps_bundle_packaging_app_deliverable():
     assert result.image_required is False
 
 
+def test_release_impact_classifier_allows_fresh_notification_defaults_only():
+    module = _load_script(
+        "classify_release_impact_fresh_notification_defaults",
+        "scripts/release/classify-release-impact.py",
+    )
+    before = {
+        "app/core/docker-entrypoint.py": (
+            "APP = 'channelwatch'\n"
+            "DEFAULT_SETTINGS = {\n"
+            "    'alert_channel_watching': True,\n"
+            "    'rd_alert_failed': False,\n"
+            "}\n"
+            "def main():\n"
+            "    return APP\n"
+        )
+    }
+    after = {
+        "app/core/docker-entrypoint.py": (
+            "APP = 'channelwatch'\n"
+            "DEFAULT_SETTINGS = {\n"
+            "    'alert_channel_watching': False,\n"
+            "    'rd_alert_failed': True,\n"
+            "    'notification_preferences_version': 1,\n"
+            "}\n"
+            "def main():\n"
+            "    return APP\n"
+        )
+    }
+
+    result = module.classify_changes(before, after)
+
+    assert result.delivery_mode == "app_update"
+    assert result.image_required is False
+    assert result.triggering_paths == ()
+
+
+def test_release_impact_classifier_rejects_other_entrypoint_default_changes():
+    module = _load_script(
+        "classify_release_impact_other_entrypoint_defaults",
+        "scripts/release/classify-release-impact.py",
+    )
+    before = {
+        "app/core/docker-entrypoint.py": "DEFAULT_SETTINGS = {'auth_mode': ''}\n"
+    }
+    after = {
+        "app/core/docker-entrypoint.py": "DEFAULT_SETTINGS = {'auth_mode': 'none'}\n"
+    }
+
+    result = module.classify_changes(before, after)
+
+    assert result.delivery_mode == "image_required"
+    assert result.image_required is True
+    assert result.triggering_paths == ("app/core/docker-entrypoint.py",)
+
+
+def test_release_impact_classifier_rejects_entrypoint_runtime_change_with_defaults():
+    module = _load_script(
+        "classify_release_impact_entrypoint_runtime_with_defaults",
+        "scripts/release/classify-release-impact.py",
+    )
+    before = {
+        "app/core/docker-entrypoint.py": (
+            "DEFAULT_SETTINGS = {'alert_channel_watching': True}\n"
+            "def main():\n"
+            "    return 1\n"
+        )
+    }
+    after = {
+        "app/core/docker-entrypoint.py": (
+            "DEFAULT_SETTINGS = {'alert_channel_watching': False}\n"
+            "def main():\n"
+            "    return 2\n"
+        )
+    }
+
+    result = module.classify_changes(before, after)
+
+    assert result.delivery_mode == "image_required"
+    assert result.image_required is True
+
+
 @pytest.mark.parametrize(
     ("before_version", "before_protocol", "after_version", "after_protocol"),
     (
@@ -1033,9 +1114,21 @@ def test_release_impact_classifier_requires_image_for_runtime_surfaces():
     assert result.refresh_paths == (
         "app/core/helpers/atomic_io.py",
         "app/core/helpers/migration.py",
-        "app/core/update_center.py",
         "app/ui/pnpm-lock.yaml",
     )
+
+
+def test_release_impact_classifier_keeps_update_center_app_deliverable():
+    module = _load_script(
+        "classify_release_impact_update_center_app",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    result = module.classify_paths(["app/core/update_center.py"])
+
+    assert result.delivery_mode == "app_update"
+    assert result.image_required is False
+    assert result.image_refresh_recommended is False
 
 
 def test_release_impact_classifier_requires_image_for_supervisor_template():
@@ -2091,7 +2184,7 @@ def test_every_release_verifier_installs_pinned_runtime_dependencies_first():
     assert checked
 
 
-def test_release_workflow_uses_one_automatic_candidate_run():
+def test_release_workflow_uses_one_tag_driven_candidate_run():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
     )
@@ -2101,12 +2194,12 @@ def test_release_workflow_uses_one_automatic_candidate_run():
     )[0]
 
     assert "workflow_dispatch:" not in workflow
-    assert "RELEASE_TAG: ${{ github.event.head_commit.message }}" in workflow
+    assert "RELEASE_TAG: ${{ github.ref_name }}" in workflow
     assert "RELEASE_SHA: ${{ github.sha }}" in workflow
-    assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 8
+    assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 7
     assert "if: github.event_name == 'push'" in release_job
-    assert "- signed-candidate" in release_job
-    assert "- promote-release-identity" in release_job
+    assert "needs: signed-candidate" in release_job
+    assert "promote-release-identity" not in workflow
     assert "APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}" in release_job
     assert "The verification job did not produce an approved candidate artifact" in release_job
 
@@ -2116,11 +2209,12 @@ def test_release_workflow_has_one_candidate_publication_run_per_release():
         encoding="utf-8"
     )
     trigger = workflow.split("on:", 1)[1].split("\nconcurrency:", 1)[0]
-    assert "push:\n    branches:\n      - main" in trigger
-    assert "tags:" not in trigger
+    assert 'push:\n    tags:\n      - "v*"' in trigger
+    assert "push:\n    branches:" not in trigger
     assert "pull_request:\n    branches:\n      - main" in trigger
     assert "cleanup-failed-v0918" not in workflow
     assert "workflow_dispatch:" not in workflow
+    assert 'run-name: "${{ github.event_name == \'push\' && github.ref_name' in workflow
 
 
 def test_release_runs_the_complete_backend_suite_without_retry():
@@ -2265,7 +2359,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
-    assert "quay.io/skopeo/stable@sha256:be235f63f7bb2d41b07d1b56bd0ea62b3a8c4d3f43f5f176d4ec832ef02d95a1" in workflow
+    assert "quay.io/skopeo/stable@sha256:4fcfc74eb89ec72dcd8caa7fbbf2a5f77d9fe3e2f5ac9e39192702f49c6d4d1a" in workflow
     assert "Verify pinned publication helper is available" in workflow
     assert 'docker pull "${SKOPEO_IMAGE}"' in workflow
     assert 'root_index="$(cat "${OCI_LAYOUT}/index.json")"' in publish_job
@@ -2377,23 +2471,25 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
         "name: channelwatch-release-candidate-${{ github.sha }}"
         in candidate
     )
-    assert "run-name: ${{ github.event.head_commit.message }}" in candidate
+    assert 'run-name: "${{ github.event_name == \'push\' && github.ref_name' in candidate
     assert "push:" in candidate
-    assert "- 'v*.*.*'" not in candidate
+    assert '- "v*"' in candidate
+    assert "branches:\n      - main\n  pull_request:" not in candidate
     assert "workflow_dispatch:" not in candidate
-    assert "if: github.ref == 'refs/heads/main'" in candidate
+    assert "if: startsWith(github.ref, 'refs/tags/v')" in candidate
     assert "CHANNELWATCH_BUILD_ID: ${{ github.sha }}" in candidate
     assert not (ROOT / ".github/workflows/release-candidate.yml").exists()
     assert not (ROOT / ".github/workflows/ci.yml").exists()
     assert list((ROOT / ".github/workflows").glob("*.yml")) == [
         ROOT / ".github/workflows/docker-publish.yml"
     ]
-    assert "EXPECTED_BRANCH: ${{ github.ref_name }}" in candidate
+    assert "EXPECTED_TAG: ${{ github.ref_name }}" in candidate
     assert "EXPECTED_SHA: ${{ github.sha }}" in candidate
     assert 'actual_tag="v${actual_version}"' in candidate
-    assert 'if [ "${EXPECTED_BRANCH}" != "main" ]; then' in candidate
-    assert 'if [ "${remote_main}" != "${RELEASE_SHA}" ]; then' in candidate
-    assert '"${RELEASE_SHA}:refs/tags/${RELEASE_TAG}"' in candidate
+    assert '"${GITHUB_REF}" != "refs/tags/${actual_tag}"' in candidate
+    assert 'tag_object_type="$(git cat-file -t "refs/tags/${EXPECTED_TAG}")"' in candidate
+    assert '"${remote_main}" != "${EXPECTED_SHA}"' in candidate
+    assert 'git push origin "${RELEASE_SHA}:refs/tags/${RELEASE_TAG}"' not in candidate
     upload_block = candidate.split(
         "      - name: Retain sealed nonpublishing candidate evidence", 1
     )[1]

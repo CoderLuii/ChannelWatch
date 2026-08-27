@@ -21,10 +21,18 @@ const PENDING_UPDATE_JOB_STATUSES = new Set([
 ])
 
 export function isPendingUpdateJob(job: { status?: string | null }): boolean {
-  // Historical update responses did not always expose status. Preserve their
-  // restart behavior while requiring current responses to name a pending state.
-  if (job.status == null) return true
+  // A durable job is active only when it names an explicit pending state.
+  // Legacy records without a status remain history rather than keeping the UI
+  // in a permanent polling state.
+  if (job.status == null) return false
   return PENDING_UPDATE_JOB_STATUSES.has(job.status)
+}
+
+export function requiresUpdateReconnect(job: RestartJob): boolean {
+  // Historical apply responses did not always expose status. Preserve their
+  // restart/reconnect behavior without treating a persisted status-less job as
+  // an active operation on a later page load.
+  return Boolean(job.restart_required && (job.status == null || isPendingUpdateJob(job)))
 }
 
 type ApplyAndReconnectOptions<TStatus extends RuntimeStatus, TJob extends RestartJob> = ReconnectOptions<TStatus> & {
@@ -90,7 +98,7 @@ export async function applyUpdateAndReconnect<
 
   try {
     job = await options.apply(targetVersion)
-    if (!job.restart_required || !isPendingUpdateJob(job)) return job
+    if (!requiresUpdateReconnect(job)) return job
   } catch (error) {
     if (options.isRejectedUpdate?.(error)) throw error
     const isRestartDisconnect = options.isRestartDisconnect

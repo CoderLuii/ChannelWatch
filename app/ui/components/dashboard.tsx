@@ -6,6 +6,7 @@ import { Header, HeaderContext } from "@/components/header"
 import { SettingsForm } from "@/components/settings-form"
 import { DiagnosticsPanel } from "@/components/diagnostics-panel"
 import { AboutSection } from "@/components/about-section"
+import { HelpFeedback } from "@/components/help-feedback"
 import { StatusOverview } from "@/components/status-overview"
 import { WatchHistory } from "@/components/watch-history"
 import { NotificationLog } from "@/components/notification-log"
@@ -22,7 +23,7 @@ import { AuthRequiredError, RESTART_RECOVERED_EVENT, RUNTIME_PREFLIGHT_CHANGED_E
 import { t } from "@/lib/i18n"
 import { Loader2 } from "lucide-react"
 
-const VALID_VIEWS = ["overview", "watch-history", "notification-log", "settings", "diagnostics", "about"]
+const VALID_VIEWS = ["overview", "watch-history", "notification-log", "settings", "diagnostics", "help-feedback", "about"]
 const VALID_SETTINGS_TABS = ["general", "alerts", "advanced", "notifications", "routing", "security", "backup", "updates"]
 
 function getViewFromHash(): string {
@@ -385,6 +386,8 @@ export function Dashboard() {
         return <SettingsForm settings={settings} onSettingsSaved={handleSettingsSaved} initialTab={settingsTab} />
       case "diagnostics":
         return <DiagnosticsPanel />
+      case "help-feedback":
+        return <HelpFeedback appSettings={settings} />
       case "about":
         return <AboutSection />
       default:

@@ -1,5 +1,5 @@
 name: ChannelWatch - Release
-run-name: ${{ github.event.head_commit.message }}
+run-name: "${{ github.event_name == 'push' && github.ref_name || format('PR #{0}', github.event.pull_request.number) }}"
 
 # Required repository secrets:
 # - CHANNELWATCH_UPDATE_SIGNING_KEY: Ed25519 private key used only for app-bundle signing.
@@ -10,8 +10,8 @@ run-name: ${{ github.event.head_commit.message }}
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   pull_request:
     branches:
       - main
@@ -26,8 +26,8 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:be235f63f7bb2d41b07d1b56bd0ea62b3a8c4d3f43f5f176d4ec832ef02d95a1 # v1.22.2
-  RELEASE_TAG: ${{ github.event.head_commit.message }}
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:4fcfc74eb89ec72dcd8caa7fbbf2a5f77d9fe3e2f5ac9e39192702f49c6d4d1a # v1.22.2
+  RELEASE_TAG: ${{ github.ref_name }}
   RELEASE_SHA: ${{ github.sha }}
 
 jobs:
@@ -93,9 +93,9 @@ jobs:
           package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Run Chromium smoke, keyboard, and accessibility checks
-        run: pnpm exec playwright test --project=smoke --project=a11y
+      - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - name: Run browser, responsive, visual, keyboard, and accessibility checks
+        run: pnpm exec playwright test
 
   docs-config:
     name: Docs and config
@@ -258,7 +258,7 @@ jobs:
           PY
   signed-candidate:
     name: Build and verify private signed candidate
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     outputs:
@@ -274,7 +274,7 @@ jobs:
 
       - name: Verify exact candidate identity
         env:
-          EXPECTED_BRANCH: ${{ github.ref_name }}
+          EXPECTED_TAG: ${{ github.ref_name }}
           EXPECTED_SHA: ${{ github.sha }}
         shell: bash
         run: |
@@ -288,8 +288,8 @@ jobs:
             echo "::error::The pushed candidate must resolve to a complete commit SHA."
             exit 1
           fi
-          if [ "${EXPECTED_BRANCH}" != "main" ]; then
-            echo "::error::The release commit must be pushed to main."
+          if [ "${EXPECTED_TAG}" != "${actual_tag}" ] || [ "${GITHUB_REF}" != "refs/tags/${actual_tag}" ]; then
+            echo "::error::The workflow must be triggered by the exact ${actual_tag} tag."
             exit 1
           fi
           if [ "${actual_subject}" != "${actual_tag}" ] || [ -n "${actual_body}" ]; then
@@ -301,7 +301,25 @@ jobs:
             exit 1
           fi
           if [ "${GITHUB_SHA}" != "${EXPECTED_SHA}" ]; then
-            echo "::error::The workflow must run from the exact pushed candidate commit."
+            echo "::error::The workflow must run from the exact tagged release commit."
+            exit 1
+          fi
+          git fetch --force origin main --tags
+          remote_main="$(git rev-parse refs/remotes/origin/main)"
+          tag_sha="$(git rev-parse "${EXPECTED_TAG}^{commit}")"
+          tag_object_type="$(git cat-file -t "refs/tags/${EXPECTED_TAG}")"
+          if [ "${tag_object_type}" != "commit" ]; then
+            echo "::error::${EXPECTED_TAG} must be a lightweight tag."
+            exit 1
+          fi
+          if [ "${tag_sha}" != "${EXPECTED_SHA}" ] || [ "${remote_main}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::The release tag, workflow SHA, and current main must identify the same commit."
+            exit 1
+          fi
+          previous_tag="$(git tag --sort=-version:refname --merged "${EXPECTED_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          previous_sha="$(git rev-parse "${previous_tag}^{commit}")"
+          if [ "$(git rev-list --count "${previous_sha}..${EXPECTED_SHA}")" != "1" ]; then
+            echo "::error::The release must add exactly one commit after ${previous_tag}."
             exit 1
           fi
 
@@ -354,7 +372,7 @@ jobs:
           pnpm lint
           pnpm test
           pnpm build
-          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright install --with-deps chromium firefox webkit
           pnpm exec playwright test
 
       - name: Build deterministic signed candidate twice
@@ -813,54 +831,10 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-  promote-release-identity:
-    name: Fast-forward main and create release tag
-    needs: signed-candidate
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # Fast-forward main and create the reviewed lightweight release tag.
-    steps:
-      - name: Checkout exact approved candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.RELEASE_SHA }}
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Atomically publish main and the lightweight tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(jq -r '.version' scripts/release/release-config.json)"
-          expected_tag="v${version}"
-          if [ "${GITHUB_REF_NAME}" != "main" ] || [ "${RELEASE_TAG}" != "${expected_tag}" ]; then
-            echo "::error::Approved candidate identity changed before publication."
-            exit 1
-          fi
-          git fetch --force origin main --tags
-          remote_main="$(git rev-parse refs/remotes/origin/main)"
-          previous_tag="$(git tag --sort=-version:refname --merged "${RELEASE_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
-          previous_sha="$(git rev-parse "${previous_tag}^{commit}")"
-          if [ "${remote_main}" != "${RELEASE_SHA}" ]; then
-            echo "::error::Remote main no longer points to the exact candidate."
-            exit 1
-          fi
-          if [ "$(git rev-list --count "${previous_sha}..${RELEASE_SHA}")" != "1" ]; then
-            echo "::error::The release must add exactly one commit to main."
-            exit 1
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "::error::The release tag already exists."
-            exit 1
-          fi
-          git push origin "${RELEASE_SHA}:refs/tags/${RELEASE_TAG}"
-
   build-update-bundle-and-release:
     name: Build signed update bundle and release
-    needs:
-      - signed-candidate
-      - promote-release-identity
-    if: github.ref == 'refs/heads/main'
+    needs: signed-candidate
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write # Create the exact-SHA draft and upload signed update assets.
@@ -912,7 +886,6 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify CHANGELOG entry
-        if: github.ref == 'refs/heads/main'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
@@ -1270,7 +1243,6 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify CHANGELOG entry
-        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           raw_ref="${RELEASE_TAG}"
@@ -1670,7 +1642,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Attest build provenance
-        if: github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
           HOME: ${{ runner.temp }}/docker-auth
@@ -1684,7 +1656,7 @@ jobs:
     name: Update Docker Hub description
     runs-on: ubuntu-latest
     needs: advance-compatible-aliases
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 
@@ -1710,7 +1682,7 @@ jobs:
     needs:
       - build-update-bundle-and-release
       - build-and-push
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write # Promote the exact-SHA draft to the public GitHub release.
 
@@ -2075,7 +2047,7 @@ jobs:
       - build-update-bundle-and-release
       - build-and-push
       - publish-github-release
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 
@@ -2259,7 +2231,7 @@ jobs:
       - build-and-push
       - publish-github-release
       - verify-public-release-assets
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 

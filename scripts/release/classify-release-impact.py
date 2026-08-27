@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import binascii
 import importlib.util
@@ -87,7 +88,6 @@ RUNTIME_PREFIXES = ("deploy/requirements/",)
 IMAGE_REFRESH_PATHS = {
     "app/core/helpers/atomic_io.py",
     "app/core/helpers/migration.py",
-    "app/core/update_center.py",
     "app/core/update_catalog.py",
     "app/core/update_policy.py",
     "app/ui/pnpm-lock.yaml",
@@ -106,6 +106,31 @@ STRUCTURED_RELEASE_PATHS = {
     "deploy/helm/channelwatch/values.yaml",
     "deploy/docker/Dockerfile",
 }
+
+# These defaults affect only a brand-new configuration created by a matching
+# optional image. They do not participate in launcher behavior and are never
+# applied to an existing settings file by an app bundle. Keeping this allowlist
+# narrow prevents unrelated entrypoint changes from being misclassified as an
+# in-app release.
+FRESH_NOTIFICATION_DEFAULT_KEYS = frozenset(
+    {
+        "alert_channel_watching",
+        "alert_vod_watching",
+        "alert_dvr_health",
+        "rd_alert_scheduled",
+        "rd_alert_started",
+        "rd_alert_completed",
+        "rd_alert_cancelled",
+        "rd_alert_failed",
+        "rd_alert_skipped",
+        "rd_alert_missed",
+        "rd_alert_interrupted",
+        "dvr_alert_unreachable",
+        "dvr_alert_recovered",
+        "dvr_health_alert_delay_seconds",
+        "notification_preferences_version",
+    }
+)
 
 
 def normalize_path(value: str) -> str:
@@ -140,6 +165,66 @@ def _impact(required: set[str], refresh: set[str]) -> ReleaseImpact:
         required_paths,
         refresh_paths,
     )
+
+
+def _entrypoint_without_default_settings(
+    source: str | None,
+) -> tuple[str, dict[str, str]] | None:
+    """Return executable entrypoint text and literal fresh-install defaults."""
+
+    if source is None:
+        return None
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    assignment: ast.Assign | None = None
+    for node in module.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id == "DEFAULT_SETTINGS":
+            assignment = node
+            break
+    if assignment is None or assignment.end_lineno is None:
+        return None
+    if not isinstance(assignment.value, ast.Dict):
+        return None
+    defaults: dict[str, str] = {}
+    for key_node, value_node in zip(
+        assignment.value.keys, assignment.value.values, strict=True
+    ):
+        if not isinstance(key_node, ast.Constant) or not isinstance(
+            key_node.value, str
+        ):
+            return None
+        defaults[key_node.value] = ast.dump(value_node, include_attributes=False)
+    lines = source.splitlines(keepends=True)
+    start = assignment.lineno - 1
+    end = assignment.end_lineno
+    normalized = "".join(lines[:start]) + "DEFAULT_SETTINGS = {}\n" + "".join(lines[end:])
+    return normalized, defaults
+
+
+def _only_fresh_notification_defaults_changed(
+    before: str | None, after: str | None
+) -> bool:
+    """Allow only the explicit fresh-install alert-policy table to differ."""
+
+    parsed_before = _entrypoint_without_default_settings(before)
+    parsed_after = _entrypoint_without_default_settings(after)
+    if parsed_before is None or parsed_after is None:
+        return False
+    before_runtime, before_defaults = parsed_before
+    after_runtime, after_defaults = parsed_after
+    if before_runtime != after_runtime:
+        return False
+    changed_keys = {
+        key
+        for key in set(before_defaults) | set(after_defaults)
+        if before_defaults.get(key) != after_defaults.get(key)
+    }
+    return bool(changed_keys) and changed_keys <= FRESH_NOTIFICATION_DEFAULT_KEYS
 
 
 def classify_paths(paths: list[str]) -> ReleaseImpact:
@@ -844,7 +929,13 @@ def classify_changes(
     refresh = set(initial.refresh_paths)
     for path in paths:
         normalized = normalize_path(path)
-        if normalized == "app/ui/package.json":
+        if normalized == ENTRYPOINT_COMPATIBILITY_PATH:
+            triggering.discard(normalized)
+            if not _only_fresh_notification_defaults_changed(
+                before.get(path), after.get(path)
+            ):
+                triggering.add(normalized)
+        elif normalized == "app/ui/package.json":
             refresh.discard(normalized)
             if _normalized_package_runtime(
                 before.get(path)

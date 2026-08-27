@@ -96,6 +96,43 @@ class JobInfoProvider:
             log(f"Unexpected error caching jobs: {e}", level=LOG_STANDARD)
             return 0
 
+    def fetch_jobs_snapshot(self) -> Optional[List[Dict[str, Any]]]:
+        """Return a fresh job snapshot, distinguishing offline from no jobs.
+
+        ``cache_jobs`` historically returned zero for both cases.  Recording
+        outcome reconciliation must never interpret a network failure as an
+        empty job list, because that could create a false missed alert.
+        """
+
+        try:
+            response = self._get("/api/v1/jobs", timeout=15)
+            response.raise_for_status()
+            jobs = response.json()
+            if not isinstance(jobs, list):
+                return None
+            valid_jobs = [job for job in jobs if isinstance(job, dict)]
+            new_cache = {
+                str(job["id"]): job for job in valid_jobs if job.get("id")
+            }
+            with self._lock:
+                self._jobs_cache = new_cache
+                self._jobs_cache_time = time.time()
+            return valid_jobs
+        except (
+            httpx.TimeoutException,
+            httpx.RequestError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            log(f"Recording job reconciliation unavailable: {exc}", level=LOG_VERBOSE)
+            return None
+        except Exception as exc:
+            log(
+                f"Unexpected recording job reconciliation error: {exc}",
+                level=LOG_VERBOSE,
+            )
+            return None
+
     # JOB RETRIEVAL
     def get_all_jobs(self) -> List[Dict[str, Any]]:
         """Retrieve all active recording jobs, refreshing cache if needed."""
@@ -275,6 +312,41 @@ class JobInfoProvider:
         except Exception as e:
             log(f"Unexpected error fetching all recordings: {e}", level=LOG_STANDARD)
             return []
+
+    def fetch_recordings_snapshot(self) -> Optional[List[Dict[str, Any]]]:
+        """Return a fresh completed-recording snapshot or ``None`` on failure.
+
+        Outcome reconciliation must distinguish a successful empty response
+        from a network or decoding failure.  That distinction prevents a DVR
+        outage from being misclassified as an interrupted recording.
+        """
+
+        try:
+            response = self._get("/api/v1/recordings", timeout=20)
+            if response.status_code == 404:
+                response = self._get("/api/v1/all", timeout=30)
+            response.raise_for_status()
+            recordings = response.json()
+            if not isinstance(recordings, list):
+                return None
+            return [item for item in recordings if isinstance(item, dict)]
+        except (
+            httpx.TimeoutException,
+            httpx.RequestError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            log(
+                f"Recording completion reconciliation unavailable: {exc}",
+                level=LOG_VERBOSE,
+            )
+            return None
+        except Exception as exc:
+            log(
+                f"Unexpected recording completion reconciliation error: {exc}",
+                level=LOG_VERBOSE,
+            )
+            return None
 
     # STATUS CHECKS
     def is_job_active(self, job_id: str) -> bool:

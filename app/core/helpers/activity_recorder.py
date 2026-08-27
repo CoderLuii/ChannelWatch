@@ -43,6 +43,8 @@ def get_icon_for_activity_type(activity_type: str) -> str:
         "disk_status": "alert-circle",
         "system": "cpu",
         "test_event": "bell",
+        "dvr_unreachable": "heart-pulse",
+        "dvr_recovered": "heart-pulse",
     }
     return icon_map.get(activity_type, "bell")
 

@@ -5,17 +5,16 @@ import { t } from "@/lib/i18n"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
 import { Badge } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuCheckboxItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-} from "@/components/base/dropdown-menu"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/base/command"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/base/popover"
+import { Separator } from "@/components/base/separator"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
-import { AlertCircle, Bell, Calendar, CheckCircle, Filter, Loader2, Play, Square, Tv, Video, X, Zap } from "lucide-react"
+import { AlertCircle, Bell, Check, Filter, Loader2, Play, Tv, Video, Zap } from "lucide-react"
 import type { ActivityItem } from "@/lib/types"
+import type { ActivityClientFacet } from "@/lib/api"
 import { ActivityDetailDialog } from "@/components/dashboard/activity-detail-dialog"
+import { cn } from "@/lib/utils"
+import { recordingEventPresentation } from "@/lib/activity-presentation"
 
 const formatTimeAgo = (timestamp: string) => {
   try {
@@ -57,18 +56,8 @@ function getDayLabel(timestamp: string): string {
 
 const ActivityIcon = ({ type, className, message }: { type: string; className?: string; message?: string }) => {
   if (type === 'recording_event' && message) {
-    if (message.startsWith('Scheduled:')) {
-      return <Calendar className={className} />
-    } else if (message.startsWith('Cancelled:')) {
-      return <X className={className} />
-    } else if (message.startsWith('Recording(') || message.startsWith('Recording (')) {
-      return <Video className={className} />
-    } else if (message.startsWith('Completed')) {
-      return <CheckCircle className={className} />
-    } else if (message.startsWith('Stopped:')) {
-      return <Square className={className} />
-    }
-    return <Video className={className} />
+    const Icon = recordingEventPresentation(message).icon
+    return <Icon className={className} />
   }
 
   switch (type) {
@@ -90,18 +79,7 @@ const ActivityIcon = ({ type, className, message }: { type: string; className?: 
 
 const getIconColorClasses = (type: string, message?: string) => {
   if (type === 'recording_event' && message) {
-    if (message.startsWith('Scheduled:')) {
-      return 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
-    } else if (message.startsWith('Cancelled:')) {
-      return 'bg-red-500/20 text-red-600 dark:text-red-400'
-    } else if (message.startsWith('Recording(') || message.startsWith('Recording (')) {
-      return 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-    } else if (message.startsWith('Completed')) {
-      return 'bg-purple-500/20 text-purple-600 dark:text-purple-400'
-    } else if (message.startsWith('Stopped:')) {
-      return 'bg-slate-500/20 text-slate-600 dark:text-slate-400'
-    }
-    return 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+    return recordingEventPresentation(message).colorClasses
   }
 
   switch (type) {
@@ -150,6 +128,12 @@ interface RecentActivityListProps {
   hasError: boolean
   onRetry: () => void
   getFilterDisplayName: () => string
+  clients: ActivityClientFacet[]
+  selectedClient: string | null
+  onSelectClient: (client: string | null) => void
+  clientsLoading: boolean
+  clientsError: boolean
+  clientStatus: string | null
 }
 
 export function RecentActivityList({
@@ -164,8 +148,21 @@ export function RecentActivityList({
   hasError,
   onRetry,
   getFilterDisplayName,
+  clients,
+  selectedClient,
+  onSelectClient,
+  clientsLoading,
+  clientsError,
+  clientStatus,
 }: RecentActivityListProps) {
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const selectedClientLabel = clients.find((client) => client.value === selectedClient)?.label ?? selectedClient
+  const typeFilterCount = selectedFilters.includes("all") ? 0 : selectedFilters.length
+  const activeFilterCount = typeFilterCount + (selectedClient ? 1 : 0)
+  const filterButtonLabel = activeFilterCount > 1
+    ? t("activity.activeFilters", { count: activeFilterCount })
+    : selectedClientLabel ?? getFilterDisplayName()
 
   const groupedActivity = useMemo(() => {
     const groups: { label: string; items: ActivityItem[] }[] = []
@@ -186,54 +183,89 @@ export function RecentActivityList({
     <>
       <Card className="flex flex-col h-[300px] sm:h-[350px] md:h-[420px] max-w-full overflow-hidden">
         <CardHeader className="pb-2 flex-shrink-0">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle className="flex items-center gap-2 text-base">
               <Zap className="h-4 w-4 text-primary" />
               {t("activity.title")}
               {filteredActivity.length > 0 && (
-                <Badge variant="secondary" className="text-[10px] py-0 h-4 px-1.5 font-normal leading-none">
+                <Badge variant="secondary" className="h-5 px-1.5 py-0 text-xs font-normal leading-none">
                   {filteredActivity.length}
                 </Badge>
               )}
             </CardTitle>
-            <div className="flex gap-2 items-center">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-6 gap-1 text-xs" aria-label={t("activity.aria.filterType")}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Popover open={filtersOpen} onOpenChange={setFiltersOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="min-h-11 max-w-44 gap-1 text-xs sm:min-h-8" aria-label={t("activity.aria.filterType")}>
                     <Filter className="h-3 w-3" />
-                    {getFilterDisplayName()}
+                    <span className="truncate">{filterButtonLabel}</span>
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuCheckboxItem
-                    checked={selectedFilters.includes("all")}
-                    onCheckedChange={() => onToggleFilter("all")}
-                  >
-                    {t("activity.filterAll")}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={selectedFilters.includes("channel-watching")}
-                    onCheckedChange={() => onToggleFilter("channel-watching")}
-                  >
-                    {t("activity.filterLiveTV")}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={selectedFilters.includes("vod-watching")}
-                    onCheckedChange={() => onToggleFilter("vod-watching")}
-                  >
-                    {t("activity.filterVod")}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={selectedFilters.includes("recording-events")}
-                    onCheckedChange={() => onToggleFilter("recording-events")}
-                  >
-                    {t("activity.filterRecordings")}
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-[min(22rem,calc(100vw-2rem))] space-y-3 p-3">
+                  <div>
+                    <p className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("activity.types")}</p>
+                    {[
+                      ["all", t("activity.filterAll")],
+                      ["channel-watching", t("activity.filterLiveTV")],
+                      ["vod-watching", t("activity.filterVod")],
+                      ["recording-events", t("activity.filterRecordings")],
+                    ].map(([value, label]) => (
+                      <Button
+                        key={value}
+                        type="button"
+                        variant="ghost"
+                        className="min-h-11 w-full justify-start gap-2 px-2 font-normal"
+                        aria-pressed={selectedFilters.includes(value)}
+                        onClick={() => onToggleFilter(value)}
+                      >
+                        <Check className={cn("h-4 w-4", selectedFilters.includes(value) ? "opacity-100" : "opacity-0")} />
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                  <Separator />
+                  <div>
+                    <p className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("activity.client")}</p>
+                    <Command>
+                      <CommandInput placeholder={t("activity.searchClients")} />
+                      <CommandList className="max-h-48">
+                        <CommandEmpty>{clientsLoading ? t("common.loading") : t("activity.noClients")}</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem value={t("activity.allClients")} className="min-h-11" onSelect={() => onSelectClient(null)}>
+                            <Check className={cn("h-4 w-4", selectedClient === null ? "opacity-100" : "opacity-0")} />
+                            <span>{t("activity.allClients")}</span>
+                          </CommandItem>
+                          {clients.map((client) => (
+                            <CommandItem key={client.value} value={`${client.label} ${client.value}`} className="min-h-11" onSelect={() => onSelectClient(client.value)}>
+                              <Check className={cn("h-4 w-4", selectedClient === client.value ? "opacity-100" : "opacity-0")} />
+                              <span className="min-w-0 flex-1 truncate" title={client.label}>{client.label}</span>
+                              <span className="text-xs tabular-nums text-muted-foreground">{client.count}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                    {clientsError ? <p className="px-2 pt-2 text-xs text-muted-foreground">{t("activity.clientFilterError")}</p> : null}
+                  </div>
+                  <Separator />
+                  <p className="px-2 text-xs text-muted-foreground">{t("activity.timelineAggregate")}</p>
+                  {activeFilterCount > 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="min-h-11 w-full"
+                      onClick={() => {
+                        if (!selectedFilters.includes("all")) onToggleFilter("all")
+                        onSelectClient(null)
+                      }}
+                    >
+                      {t("activity.clearFilters")}
+                    </Button>
+                  ) : null}
+                </PopoverContent>
+              </Popover>
               <Select value={String(activityHours)} onValueChange={(v) => onChangeHours(Number(v))}>
-                <SelectTrigger className="h-6 w-[140px] text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 border-blue-200 dark:border-blue-800" aria-label={t("activity.aria.timeRange")}>
+                <SelectTrigger className="min-h-11 w-[132px] border-blue-200 bg-blue-100 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-900 dark:text-blue-300 sm:min-h-8 sm:w-[140px]" aria-label={t("activity.aria.timeRange")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -245,6 +277,7 @@ export function RecentActivityList({
               </Select>
             </div>
           </div>
+          {clientStatus ? <p role="status" aria-live="polite" className="mt-2 text-xs text-muted-foreground">{clientStatus}</p> : null}
         </CardHeader>
         <CardContent className="p-0 flex-grow overflow-y-auto overflow-x-hidden pr-1 relative">
           {activityLoading && dataLoaded && (
@@ -256,7 +289,7 @@ export function RecentActivityList({
             groupedActivity.map((group) => (
               <div key={group.label}>
                 <div className="sticky top-0 z-[5] bg-muted/80 backdrop-blur-sm px-3 py-1">
-                  <span className="text-[10px] font-medium text-slate-700 dark:text-slate-300 uppercase tracking-wider">{group.label}</span>
+                  <span className="text-xs font-medium uppercase tracking-wider text-slate-700 dark:text-slate-300">{group.label}</span>
                 </div>
                 {group.items.map((activity) => {
                   const colorClasses = getIconColorClasses(activity.type, activity.message)
@@ -293,13 +326,13 @@ export function RecentActivityList({
                           {isTestAlert && (
                             <Badge
                               variant="outline"
-                              className="h-3.5 shrink-0 border-amber-300 bg-amber-100 px-1 text-[9px] font-normal leading-none text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
+                              className="h-5 shrink-0 border-amber-300 bg-amber-100 px-1 text-xs font-normal leading-none text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
                             >
                               {t("activity.testBadge")}
                             </Badge>
                           )}
                           {activity.dvr_name && (
-                            <Badge variant="secondary" className="text-[9px] py-0 h-3.5 px-1 font-normal leading-none shrink-0">{activity.dvr_name}</Badge>
+                            <Badge variant="secondary" className="h-5 shrink-0 px-1 py-0 text-xs font-normal leading-none">{activity.dvr_name}</Badge>
                           )}
                         </div>
                         <p className="text-xs text-muted-foreground truncate max-w-full">{activity.message}</p>
@@ -329,8 +362,14 @@ export function RecentActivityList({
                 <>
                   <Zap className="h-8 w-8 text-muted-foreground/40" />
                   <span className="text-sm text-muted-foreground">
-                    {selectedFilters.length > 0
-                      ? t("activity.emptyFiltered", { range: activityHours
+                    {!selectedFilters.includes("all") || selectedClient
+                      ? selectedClientLabel
+                        ? t("activity.emptyForClient", { client: selectedClientLabel, range: activityHours
+                            ? activityHours <= 24 ? t("activity.emptyFilteredRange24h")
+                              : activityHours <= 72 ? t("activity.emptyFilteredRange3d")
+                              : t("activity.emptyFilteredRange7d")
+                            : "" })
+                        : t("activity.emptyFiltered", { range: activityHours
                           ? activityHours <= 24 ? t("activity.emptyFilteredRange24h")
                             : activityHours <= 72 ? t("activity.emptyFilteredRange3d")
                             : t("activity.emptyFilteredRange7d")

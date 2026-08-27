@@ -11,7 +11,8 @@ flowchart TD
     A[Channels DVR per DVR event stream] --> B[Event listener]
     B --> C[Normalize JSON event type and fields]
     C --> D[Alert evaluation]
-    E[Per DVR disk poll] --> D
+    E[Per DVR disk and recording-job reconciliation] --> D
+    M[Existing monitor and watchdog state] --> D
     D -->|No match or cooldown active| F[Filtered event]
     D -->|Alert should notify| G[Render title, body, and optional image]
     G --> H[Rate limit and per DVR routing matrix]
@@ -40,10 +41,11 @@ Each enabled alert family decides whether that normalized event matters:
 | --- | --- | --- |
 | Live TV watching | `activities.set` events whose value describes watching a channel | A new channel viewing session, or a channel change that passes the cooldown and session checks. |
 | DVR playback | `activities.set` events for file playback sessions | A new or meaningful playback session update, with metadata looked up for the file. |
-| Recording events | Recording job and program events from the DVR stream, plus retry checks for pending job details | Scheduled, started, completed, cancelled, stopped, or failed recording states when that state is enabled. |
+| Recording outcomes | Recording job and program events from the DVR stream, plus a bounded read-only job reconciler | Scheduled, started, completed, cancelled, failed, skipped, interrupted, or confirmed missed outcomes when that delivery switch is enabled. |
 | Disk space | Periodic DVR storage poll, not the SSE stream | Warning or critical disk severity, a severity increase, or meaningful worsening after cooldown. |
+| DVR health | The existing monitor reconciler and watchdog state | One unreachable outcome after the configured delay and one corresponding recovery after monitoring becomes fresh again. |
 
-Alert evaluation is intentionally conservative. Session managers remember active sessions and recent notifications so repeated DVR activity updates do not become repeated phone alerts. Recording alerts keep pending state because some DVR events arrive before all job details are available. Disk alerts compare current severity with the previous and last notified severity so users get notified when storage crosses a worse threshold, not on every poll.
+Alert evaluation is intentionally conservative. Session managers remember active sessions and recent notifications so repeated DVR activity updates do not become repeated phone alerts. Recording reconciliation persists only the minimum lifecycle state and uses DVR id, job id, and outcome as its idempotency identity. It does not declare a recording missed from one negative check or while the DVR is unavailable. Disk alerts compare current severity with the previous and last notified severity so users get notified when storage crosses a worse threshold, not on every poll.
 
 ## Rendering the notification text
 
@@ -61,7 +63,7 @@ After an alert reaches the notification layer, a global notification rate limit 
 
 Severity currently affects disk alert content and behavior. Disk notifications are labeled warning or critical based on the configured free space thresholds. A move from warning to critical sends a new notification even if a previous warning was recent, because the severity has worsened.
 
-Routing is based on two pieces of context attached to every alert: the DVR id and the alert route type. The route types used by the current alert families are `channel`, `vod`, `recording`, and `disk`. ChannelWatch reads the per-DVR routing matrix from settings and decides which destination keys are allowed for that DVR and alert type.
+Routing is based on two pieces of context attached to every alert: the DVR id and the alert route type. The route types used by the current alert families are `channel`, `vod`, `recording`, `disk`, and `health`. ChannelWatch reads the per-DVR routing matrix from settings and decides which destination keys are allowed for that DVR and alert type.
 
 When a DVR or alert type has no routing entry, ChannelWatch treats every destination as enabled. When a route exists, each Apprise destination key and the native `webhook` key can be turned on or off separately. This means one DVR can send disk alerts to email and webhooks, while another DVR sends the same kind of alert only to Pushover.
 

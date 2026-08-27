@@ -196,11 +196,9 @@ describe("status-overview: passes selectedDvr to StatusPanel", () => {
     expect(src).toContain("selectedDvr={selectedDvr}");
   });
 
-  it("uses selected-DVR scoped system-info instead of duplicate per-DVR system polling", () => {
+  it("keeps selected-DVR summaries while requesting one complete uptime list", () => {
     const src = srcFile("../components/status-overview.tsx");
-    expect(src).toContain(
-      'selectedDvr !== "all" ? { dvr_id: selectedDvr } : {}',
-    );
+    expect(src).toContain("{ dvr_id: selectedDvr, include_all_dvr_status: true }");
     expect(src).not.toContain("fetchDvrSystemInfo");
   });
 

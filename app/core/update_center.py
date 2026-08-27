@@ -68,6 +68,10 @@ RESTART_REQUIRED_FILE = "restart-required.json"
 RESTART_JOURNAL_LOCK_FILE = "restart-required.lock"
 PROTOCOL_THREE_HANDOFF_FILE = "restart-services-accepted.json"
 PROTOCOL_THREE_HANDOFF_SCHEMA = 1
+
+# Keep protocol reconciliation sleeps module-local so tests and callers can
+# replace this wait without mutating the process-wide ``time.sleep`` function.
+_protocol_three_sleep = time.sleep
 PROTOCOL_THREE_HANDOFF_FIELDS = {"schema", "journal", "old_processes"}
 PROTOCOL_THREE_PROCESS_NAMES = {"core", "ui"}
 PROTOCOL_THREE_PROCESS_IDENTITY_FIELDS = {"pid", "start"}
@@ -1515,7 +1519,7 @@ class UpdateManager:
                 # the journal under the owner lock. Perform one final blocking
                 # exact-state reconciliation before considering an abort.
                 return self._protocol_three_handoff_result_once(expected_journal)
-            time.sleep(PROTOCOL_THREE_RECONCILE_INTERVAL_SECONDS)
+            _protocol_three_sleep(PROTOCOL_THREE_RECONCILE_INTERVAL_SECONDS)
             result = self._protocol_three_handoff_result_once(expected_journal)
             if result is not None:
                 return result
@@ -1995,6 +1999,70 @@ class UpdateManager:
             valid = False
         return "app_bundle" if valid else "image"
 
+    def _operation_lock_active(self) -> bool:
+        """Return whether a live update operation owns the single-flight lock.
+
+        The lock implementation already knows how to reject a dead or reused
+        PID.  Reusing that stale-owner cleanup here keeps status reporting from
+        presenting an abandoned lock as an active operation.
+        """
+
+        lock = UpdateOperationLock(self.lock_path)
+        lock._discard_stale_lock()
+        try:
+            metadata = self.lock_path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            # An uninspectable lock must fail closed.  Starting a second update
+            # would be less safe than temporarily reporting the operation busy.
+            return True
+        return not (
+            stat_module.S_ISREG(metadata.st_mode)
+            and metadata.st_nlink == 1
+        ) or self.lock_path.exists()
+
+    @staticmethod
+    def _job_operation_state(
+        job: Any, *, lock_active: bool, transition_pending: bool
+    ) -> str:
+        """Translate durable update records into the public operation state."""
+
+        record = job if isinstance(job, dict) else {}
+        status = str(record.get("status") or "").strip().lower()
+        operation = str(record.get("operation") or "").strip().lower()
+
+        if transition_pending:
+            if operation == "rollback":
+                return "rolling_back"
+            if status == "validating":
+                return "validating"
+            return "restarting"
+
+        if lock_active:
+            if operation == "rollback":
+                return "rolling_back"
+            return {
+                "backing_up": "backing_up",
+                "verifying": "downloading",
+                "applying": "applying",
+                "restarting": "restarting",
+                "validating": "validating",
+            }.get(status, "checking")
+
+        if status == "failed":
+            return "failed"
+        return "idle"
+
+    def _catalog_checked_at(self) -> str | None:
+        try:
+            checked_at = datetime.fromtimestamp(
+                self.latest_path.stat().st_mtime, tz=timezone.utc
+            )
+        except (FileNotFoundError, OSError, OverflowError, ValueError):
+            return None
+        return checked_at.isoformat().replace("+00:00", "Z")
+
     def status(self) -> dict[str, Any]:
         self._ensure_runtime()
         active = load_json(self.active_path, None)
@@ -2002,19 +2070,51 @@ class UpdateManager:
         job = load_json(self.job_path, None)
         rollback = load_json(self.rollback_path, None)
         payload = latest.get("payload") if isinstance(latest, dict) else None
+        catalog_checked_at = self._catalog_checked_at()
+        catalog_state = "not_checked" if latest is None else "error"
+        cached_release_stale = False
+        trusted_target: dict[str, Any] | None = None
+        visible_latest: dict[str, Any] | None = None
         update_available = False
         image_required = False
         if isinstance(payload, dict):
             try:
-                update_available = (
-                    compare_versions(
-                        str(payload.get("version") or "0.0.0"), self.current_version
-                    )
-                    > 0
+                comparison = compare_versions(
+                    str(payload.get("version") or "0.0.0"), self.current_version
                 )
-                image_required = self._payload_requires_image(payload)
+                if comparison < 0:
+                    cached_release_stale = True
+                    catalog_state = "stale_cache"
+                elif comparison == 0:
+                    visible_latest = payload
+                    catalog_state = "current"
+                else:
+                    visible_latest = payload
+                    trusted_target = payload
+                    update_available = True
+                    image_required = self._payload_requires_image(payload)
+                    catalog_state = "update_available"
             except Exception:
-                update_available = False
+                catalog_state = "error"
+
+        lock_active = self._operation_lock_active()
+        transition_pending = self.runtime_transition_pending()
+        operation_state = self._job_operation_state(
+            job,
+            lock_active=lock_active,
+            transition_pending=transition_pending,
+        )
+        if operation_state == "checking":
+            catalog_state = "checking"
+        operation_busy = operation_state in {
+            "checking",
+            "downloading",
+            "backing_up",
+            "applying",
+            "restarting",
+            "validating",
+            "rolling_back",
+        }
         return {
             "current_version": self.current_version,
             "image_version": self.image_version,
@@ -2025,21 +2125,32 @@ class UpdateManager:
             "active_bundle": (
                 active if isinstance(active, dict) and active.get("path") else None
             ),
-            "latest": payload if isinstance(payload, dict) else None,
+            # ``latest`` remains for v1 API compatibility, but it is now a
+            # safe visible release rather than an arbitrary stale cache row.
+            "latest": visible_latest,
+            "trusted_target": trusted_target,
             "update_available": update_available,
-            "operation_busy": False,
+            "catalog_state": catalog_state,
+            "catalog_checked_at": catalog_checked_at,
+            "cached_release_stale": cached_release_stale,
+            "operation_state": operation_state,
+            "operation_busy": operation_busy,
             "image_required": image_required if update_available else False,
             "delivery_mode": (
-                str(payload.get("delivery_mode") or DeliveryMode.APP_UPDATE.value)
-                if isinstance(payload, dict)
+                str(
+                    visible_latest.get("delivery_mode")
+                    or DeliveryMode.APP_UPDATE.value
+                )
+                if isinstance(visible_latest, dict)
                 else None
             ),
             "image_refresh_recommended": bool(
-                isinstance(payload, dict) and payload.get("image_refresh_recommended")
+                isinstance(visible_latest, dict)
+                and visible_latest.get("image_refresh_recommended")
             ),
             "recommended_image_version": (
-                payload.get("recommended_image_version")
-                if isinstance(payload, dict)
+                visible_latest.get("recommended_image_version")
+                if isinstance(visible_latest, dict)
                 else None
             ),
             "last_job": job if isinstance(job, dict) else None,
@@ -2102,11 +2213,16 @@ class UpdateManager:
                         ),
                     }
                 )
+                # The check owns the lock until this return value has been
+                # built.  Its work is nevertheless complete, so do not send a
+                # transient busy state back to the tab that initiated it.
                 return {
                     **self.status(),
-                    "latest": payload,
-                    "update_available": update_available,
-                    "image_required": image_required if update_available else False,
+                    "catalog_state": (
+                        "update_available" if update_available else "current"
+                    ),
+                    "operation_state": "idle",
+                    "operation_busy": False,
                     "last_job": job,
                 }
 

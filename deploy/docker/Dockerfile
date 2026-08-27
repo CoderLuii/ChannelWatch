@@ -51,7 +51,7 @@ FROM cgr.dev/chainguard/python:latest@sha256:1f6779775c9f466890da563e411cb677045
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.0.0
+ARG VERSION=1.0.1
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

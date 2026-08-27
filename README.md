@@ -218,6 +218,8 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 Use `coderluii/channelwatch:1.0.0`, `1.0`, or `latest` for the v1.0 image milestone. Preserve `/config` when recreating the container.
 
+ChannelWatch v1.0.1 is a signed in-app update for that v1.0.0 runtime. Open **Settings > Updates** to install it. A v1.0.0 image running the v1.0.1 app bundle is fully current; no image pull or container recreation is required.
+
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 
 From v1.0.0 forward, every `X.Y.0` release requires its matching container image, and `X.Y.1` through `X.Y.9` install through the signed Update Center. After `X.Y.9`, ChannelWatch advances to `X.(Y+1).0` rather than publishing patch 10.
@@ -258,9 +260,15 @@ For UI-based diagnostics, open ChannelWatch and use the Diagnostics page. It can
 
 The **Report a Problem** option prepares a sanitized support report from inside ChannelWatch. It can include a public issue preview, safe diagnostics, optional contact handles, screenshots, and one ChannelWatch-generated debug bundle ZIP. Private attachments and private contact details are handled separately from the public issue text.
 
+The sidebar also includes **Help & Feedback**. Use it to open the same secure problem-report flow, send a lightweight feature/change request without diagnostics, or open the documentation and community help destinations. Feature drafts and optional screenshots stay only in page memory until submission or explicit discard.
+
+Settings > Alerts includes Monitor Only, Important Only, Balanced, and Everything policies. Fresh v1.0.1 installations use Important Only. Upgrades preserve every existing notification and routing choice, and new operational delivery switches remain off until the administrator changes them. Recording failures, skips, missed starts, interruptions, cancellations, and DVR outages are still recorded in activity history even when notification delivery is disabled.
+
 More help:
 
 - [`docs/how-to/troubleshoot-notifications.md`](docs/how-to/troubleshoot-notifications.md)
+- [`docs/how-to/manage-alerts.md`](docs/how-to/manage-alerts.md)
+- [`docs/how-to/use-help-feedback.md`](docs/how-to/use-help-feedback.md)
 - [`docs/reference/logs-metrics.md`](docs/reference/logs-metrics.md)
 - [`docs/reference/disk-monitoring.md`](docs/reference/disk-monitoring.md)
 - [`docs/reference/api.md`](docs/reference/api.md)

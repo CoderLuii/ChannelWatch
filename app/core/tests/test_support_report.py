@@ -27,6 +27,7 @@ from ui.backend.support_report import (
     redact_public_text,
     render_email_html,
     render_issue_body,
+    render_issue_title,
     render_report_preview,
     render_support_code,
     summarize_report_attachment,
@@ -1007,10 +1008,58 @@ def test_support_report_dry_run_preview_has_no_delivery_claims():
     preview = render_report_preview(payload, mode="dry-run")
 
     assert preview.status == "dry-run-complete"
-    assert preview.issue_title.startswith("[In-App] ")
+    assert preview.issue_title.startswith("[Bug] ")
     assert preview.email_in_public_issue is False
     assert not hasattr(preview, "issue_url")
     assert "viewer@example.com" not in preview.issue_body
+
+
+def test_legacy_problem_payload_defaults_to_problem_kind():
+    payload = _parse(_payload())
+
+    assert payload.kind == "problem"
+    assert render_issue_title(payload).startswith("[Bug] ")
+    assert "## Diagnostics" in render_issue_body(payload)
+
+
+def test_feature_payload_has_enhancement_title_and_no_public_diagnostics():
+    payload = _parse(
+        _payload(
+            kind="feature",
+            area="activity",
+            expected="Add an exact client selector.",
+            use_case="It would make shared-device history easier to review.",
+        )
+    )
+
+    title = render_issue_title(payload)
+    body = render_issue_body(payload)
+
+    assert title.startswith("[Feature] ")
+    assert "# ChannelWatch Feature Request" in body
+    assert "Activity" in body
+    assert "shared-device history" in body
+    assert "## Diagnostics" not in body
+    assert "Pushover" not in body
+    assert "viewer@example.com" not in body
+
+    html = render_email_html(payload, mode="dry-run")
+    assert "New ChannelWatch feature request" in html
+    assert ">Diagnostics<" not in html
+    assert "Pushover" not in html
+
+    support_code = render_support_code(
+        payload, created_at="2026-08-26T00:00:00+00:00"
+    )
+    encoded = support_code.removeprefix("CW-REPORT-v1-")
+    padded = encoded + ("=" * ((4 - len(encoded) % 4) % 4))
+    decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    assert "diagnostics" not in decoded["report"]
+
+
+def test_feature_payload_rejects_unknown_product_area():
+    with pytest.raises(ReportPayloadInvalid):
+        _parse(_payload(kind="feature", area="unknown-area", use_case="Helpful"))
 
 
 def test_support_report_support_code_is_portable_report_draft():
@@ -1250,6 +1299,33 @@ def test_support_report_dry_run_endpoint_accepts_private_attachments(
     assert "active-stream.png" not in body["issue_body"]
     assert "channelwatch_debug.zip" not in body["issue_body"]
     assert body["attachments_sent"] is False
+
+
+def test_feature_request_endpoint_rejects_diagnostic_bundle(
+    support_api_client,
+):
+    response = support_api_client.post(
+        "/api/v1/support/report-dry-run",
+        data={
+            "payload": json.dumps(
+                _payload(
+                    kind="feature",
+                    area="activity",
+                    use_case="Exact client filtering would make shared devices easier to review.",
+                )
+            )
+        },
+        files=[
+            (
+                "debug_bundle",
+                ("channelwatch_debug.zip", _zip_bytes(), "application/zip"),
+            ),
+        ],
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "ERR_SUPPORT_REPORT_ATTACHMENT_INVALID"
+    assert "not a diagnostic bundle" in response.json()["detail"]["message"]
 
 
 def test_support_report_dry_run_endpoint_matches_worker_privacy_sanitization(

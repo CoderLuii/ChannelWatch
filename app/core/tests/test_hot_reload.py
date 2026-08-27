@@ -348,6 +348,38 @@ class TestComputeReloadTargets:
 
 
 class TestHandleConfigReload:
+    def test_actionable_reload_discards_cached_health_notification_managers(self):
+        import core.main as main_mod
+
+        dvr = _dvr("dvr_aaa", host="192.168.1.10", name="DVR-A")
+        dvr_connection = MagicMock(id="dvr_aaa", name="DVR-A")
+        new_settings = MagicMock()
+        new_settings.get_dvr_connections.return_value = [dvr_connection]
+        original_tasks = dict(main_mod._dvr_tasks)
+        original_managers = dict(main_mod._dvr_health_notification_managers)
+
+        async def run():
+            main_mod._dvr_tasks = {"dvr_aaa": object()}
+            main_mod._dvr_health_notification_managers = {"dvr_aaa": object()}
+            with (
+                patch("core.main.get_settings", return_value=new_settings),
+                patch("core.main._close_health_notification_manager") as close_manager,
+                patch("core.main._reconcile_dvr", new=AsyncMock(return_value=True)),
+            ):
+                await main_mod._handle_config_reload(
+                    _settings(dvr, log_level=1),
+                    _settings(dvr, log_level=2),
+                    MagicMock(),
+                )
+
+            close_manager.assert_called_once_with("dvr_aaa")
+
+        try:
+            asyncio.run(run())
+        finally:
+            main_mod._dvr_tasks = original_tasks
+            main_mod._dvr_health_notification_managers = original_managers
+
     def test_two_dvr_reload_restarts_only_changed_dvr(self):
         import core.main as main_mod
 

@@ -8,6 +8,37 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.1] - 2026-08-26
+
+### Added
+
+- Add Alert policy presets for Monitor Only, Important Only, Balanced, and Everything while keeping Save Settings as the only persistence action and preserving every existing installation's choices and per-DVR overrides.
+- Add deterministic recording failed, skipped, missed, interrupted, cancelled, started, and completed outcomes, plus one DVR-unreachable alert and its corresponding recovery alert per confirmed outage.
+- Add exact Channels client filtering to Recent Activity, Watch History, per-DVR history, and existing activity exports without changing the aggregate 24-Hour Timeline.
+- Add Core and UI uptime definitions plus a compact, accessible DVR uptime dialog for every configured DVR.
+- Add a permanent Help & Feedback page with the existing secure problem-report flow, a lightweight feature/change request form that omits diagnostics, and external help links.
+
+### Changed
+
+- Use Important Only for fresh installations. Upgrades preserve all existing notification choices and initialize new operational delivery switches off until the administrator deliberately changes them.
+- Reorganize Alerts so DVR health and recording problems appear before routine viewing notifications, with semantic disclosure buttons, mobile-safe one-column controls, and clear global or per-DVR scope.
+- Rename System Uptime to ChannelWatch Uptime and identify Core as the primary monitoring process while showing UI uptime separately.
+- Keep feature-request text and optional screenshots only in page memory until success or explicit discard; no DVR inventory, logs, credentials, or debug bundle is attached.
+- Keep v1.0.1 as a signed in-app update for the v1.0.0 image. No image pull or container recreation is required.
+
+### Fixed
+
+- Prevent stale v0.9.19 cache and completed jobs from appearing as an applicable update or an active operation on v1.0.0 and newer installations.
+- Prevent duplicate manual and scheduled update checks from blanking trusted version information or creating misleading busy state.
+- Deduplicate operational recording outcomes across event-stream and reconciled job state, defer missed/interrupted decisions while a DVR is unreachable, and preserve pending decisions across restart.
+- Keep one DVR's outage, recording job identifiers, client facets, and alert delivery state isolated from every other DVR.
+
+### Security
+
+- Keep public health probes free of DVR uptime, client, recording, alert, and update-operation details; these remain authenticated interfaces.
+- Keep feature-request diagnostics excluded by construction and preserve the existing proof, attachment, origin, CSRF, rate-limit, and private-contact boundaries.
+- Continue requiring signed, compatible app bundles and the v1.0.0 runtime baseline while keeping `image_required=false` for v1.0.1.
+
 ## [1.0.0] - 2026-08-26
 
 ### Important
@@ -526,7 +557,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.19...v1.0.0
 [0.9.19]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.18...v0.9.19
 [0.9.18]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.17...v0.9.18

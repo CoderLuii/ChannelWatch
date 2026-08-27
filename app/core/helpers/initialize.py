@@ -181,9 +181,12 @@ def initialize_alerts(
         "alert_recording_events": "Recording-Events",
     }
 
-    for setting_attr, alert_type in alert_mapping.items():
-        if not getattr(settings, setting_attr, False):
-            continue
+    # The top-level alert settings control notification delivery, not whether
+    # ChannelWatch observes DVR activity.  Keep every built-in monitor active
+    # so Monitor Only and upgraded installations continue to populate activity
+    # history while their provider delivery switches are off.  Each handler
+    # checks its own delivery setting immediately before sending.
+    for alert_type in alert_mapping.values():
         if alert_manager.register_alert(alert_type):
             registered_alerts.append(alert_type)
 

@@ -72,6 +72,30 @@ def get_last_notification_title(notification_manager):
 
 
 class TestDiskSpaceAlertSemantics:
+    def test_monitor_only_records_disk_transition_without_delivery(
+        self, alert_factory
+    ):
+        alert, notification_manager = alert_factory()
+        alert.settings.alert_disk_space = False
+        alert.start_monitoring_time = 0
+        alert.startup_complete_time = 0
+        disk_info = {
+            "free": 20 * GIB,
+            "total": 500 * GIB,
+            "used": 480 * GIB,
+            "path": "/shares/DVR",
+        }
+
+        with (
+            patch("core.alerts.disk_space.time.time", return_value=1_000),
+            patch.object(alert, "_get_disk_info", return_value=disk_info),
+            patch("core.alerts.disk_space.record_disk_status") as record_activity,
+        ):
+            alert._check_disk_space()
+
+        record_activity.assert_called_once()
+        notification_manager.send_notification.assert_not_called()
+
     def test_disk_fetch_uses_httpx_and_returns_normalized_payload(
         self, alert_factory
     ):

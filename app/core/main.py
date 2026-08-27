@@ -37,6 +37,8 @@ from .helpers.initialize import (
 from .diagnostics import run_test
 from .helpers.channel_info import ChannelInfoProvider
 from .engine.event_monitor import EventMonitor
+from .dvr_health import DvrHealthTracker, DvrHealthTransition
+from .helpers.activity_recorder import record_activity
 
 SIGHUP = getattr(signal, "SIGHUP", None)
 
@@ -71,6 +73,9 @@ _dvr_monitors: dict[str, Any] = {}
 _last_settings_raw: dict[str, Any] = {}
 _watchdog: Watchdog | None = None
 _monitor_stop_claim_lock = threading.Lock()
+_core_process_started_at = time.time()
+_dvr_health_trackers: dict[str, DvrHealthTracker] = {}
+_dvr_health_notification_managers: dict[str, Any] = {}
 
 
 def _read_config_snapshot() -> tuple[bytes | None, str]:
@@ -91,6 +96,194 @@ async def _persist_watchdog_async(*, force: bool = True) -> None:
     if _watchdog is None:
         return
     await asyncio.to_thread(_watchdog.persist, _dvr_tasks, _dvr_monitors, force=force)
+
+
+def _effective_dvr_settings(settings: Any, dvr: Any) -> Any:
+    from copy import copy
+
+    effective = copy(settings)
+    for key, value in (getattr(dvr, "overrides", None) or {}).items():
+        if hasattr(effective, key):
+            setattr(effective, key, value)
+    return effective
+
+
+def _close_health_notification_manager(dvr_id: str) -> None:
+    manager = _dvr_health_notification_managers.pop(str(dvr_id), None)
+    if manager is None:
+        return
+    from .notification_drain import unregister_notification_manager
+
+    unregister_notification_manager(manager)
+    shutdown = getattr(type(manager), "shutdown_delivery_queue", None)
+    if callable(shutdown):
+        shutdown(manager, drain=False, timeout=0.0)
+
+
+def _reset_dvr_health_state(dvr_id: str) -> None:
+    tracker = _dvr_health_trackers.pop(str(dvr_id), None)
+    if tracker is not None:
+        try:
+            tracker.reset()
+        except Exception:
+            log(
+                "DVR health state could not be reset after a configuration change.",
+                extra={"dvr_id": str(dvr_id)},
+            )
+    _close_health_notification_manager(str(dvr_id))
+
+
+def _health_tracker_for(dvr_id: str) -> DvrHealthTracker:
+    identifier = str(dvr_id)
+    tracker = _dvr_health_trackers.get(identifier)
+    if tracker is None:
+        tracker = DvrHealthTracker(
+            config_dir=Path(os.getenv("CONFIG_PATH", "/config")),
+            dvr_id=identifier,
+            process_started_at=_core_process_started_at,
+        )
+        _dvr_health_trackers[identifier] = tracker
+    return tracker
+
+
+def _health_notification_manager_for(
+    dvr: Any, settings: Any, *, test_mode: bool
+) -> Any | None:
+    dvr_id = str(getattr(dvr, "id", "") or "")
+    fallback = _dvr_health_notification_managers.get(dvr_id)
+    if fallback is not None:
+        return fallback
+
+    monitor = _dvr_monitors.get(dvr_id)
+    alert_manager = getattr(monitor, "alert_manager", None)
+    monitor_manager = getattr(alert_manager, "notification_manager", None)
+    if monitor_manager is not None and getattr(
+        monitor_manager, "_queue_accepting", True
+    ):
+        return monitor_manager
+
+    effective = _effective_dvr_settings(settings, dvr)
+    manager = initialize_notifications(
+        effective,
+        test_mode=test_mode,
+        installation_rate_limit=settings.global_rate_limit,
+        installation_rate_window=settings.global_rate_window,
+    )
+    if manager is None:
+        return None
+    from .notification_drain import register_notification_manager
+
+    register_notification_manager(manager)
+    _dvr_health_notification_managers[dvr_id] = manager
+    return manager
+
+
+async def _emit_dvr_health_transition(
+    dvr: Any,
+    settings: Any,
+    transition: DvrHealthTransition,
+    *,
+    test_mode: bool,
+) -> bool:
+    dvr_id = str(getattr(dvr, "id", "") or "")
+    dvr_name = str(getattr(dvr, "name", "") or "Channels DVR")
+    unreachable = transition.event == "unreachable"
+    title = "DVR is unreachable" if unreachable else "DVR connection recovered"
+    message = (
+        f"ChannelWatch cannot currently reach {dvr_name}."
+        if unreachable
+        else f"ChannelWatch is connected to {dvr_name} again."
+    )
+    await asyncio.to_thread(
+        record_activity,
+        activity_type="dvr_unreachable" if unreachable else "dvr_recovered",
+        title=title,
+        message=message,
+        dvr_id=dvr_id,
+        dvr_name=dvr_name,
+        extra={"outcome": transition.event},
+    )
+
+    effective = _effective_dvr_settings(settings, dvr)
+    if not getattr(effective, "alert_dvr_health", False):
+        return False
+    if not unreachable and not transition.notification_armed:
+        return False
+    enabled = (
+        getattr(effective, "dvr_alert_unreachable", False)
+        if unreachable
+        else getattr(effective, "dvr_alert_recovered", False)
+    )
+    if not enabled:
+        return False
+    manager = await asyncio.to_thread(
+        _health_notification_manager_for,
+        dvr,
+        settings,
+        test_mode=test_mode,
+    )
+    if manager is None:
+        return False
+    enqueue = getattr(manager, "enqueue_notification", None)
+    if callable(enqueue):
+        return bool(
+            enqueue(
+                title,
+                message,
+                dvr_id=dvr_id,
+                event_type="health",
+                notification_dedupe_key=(
+                    f"dvr-health:{dvr_id}:{transition.outage_id}:{transition.event}"
+                ),
+            )
+        )
+    return False
+
+
+async def _evaluate_dvr_health(*, test_mode: bool) -> None:
+    settings = await asyncio.to_thread(get_settings)
+    dvrs = {str(dvr.id): dvr for dvr in settings.get_dvr_connections()}
+    removed = set(_dvr_health_trackers) - set(dvrs)
+    for dvr_id in removed:
+        await asyncio.to_thread(_reset_dvr_health_state, dvr_id)
+
+    for dvr_id, dvr in dvrs.items():
+        tracker = _health_tracker_for(dvr_id)
+        try:
+            transition = await asyncio.to_thread(
+                tracker.evaluate,
+                healthy=_monitor_is_healthy(dvr_id),
+                delay_seconds=getattr(
+                    _effective_dvr_settings(settings, dvr),
+                    "dvr_health_alert_delay_seconds",
+                    120,
+                ),
+            )
+        except Exception:
+            log(
+                "DVR health transition state could not be persisted.",
+                extra={"dvr_id": dvr_id},
+            )
+            continue
+        if transition is not None:
+            accepted = await _emit_dvr_health_transition(
+                dvr,
+                settings,
+                transition,
+                test_mode=test_mode,
+            )
+            if transition.event == "unreachable":
+                try:
+                    await asyncio.to_thread(
+                        tracker.set_notification_armed,
+                        transition.outage_id,
+                        accepted,
+                    )
+                except Exception:
+                    log(
+                        "DVR health notification state could not be persisted.",
+                        extra={"dvr_id": dvr_id},
+                    )
 
 
 async def _run_dvr(monitor) -> None:
@@ -547,12 +740,23 @@ async def _start_dvr_supervisor(
 
 
 async def _watchdog_loop(
-    shutdown_event: asyncio.Event, started_event: asyncio.Event | None = None
+    shutdown_event: asyncio.Event,
+    started_event: asyncio.Event | None = None,
+    *,
+    test_mode: bool = False,
 ) -> None:
     if started_event is not None:
         started_event.set()
     while not shutdown_event.is_set():
         await _persist_watchdog_async(force=True)
+        if shutdown_event.is_set():
+            break
+        try:
+            await _evaluate_dvr_health(test_mode=test_mode)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log(f"DVR health evaluation failed: {type(exc).__name__}")
         try:
             await asyncio.wait_for(
                 shutdown_event.wait(), timeout=WATCHDOG_CHECK_INTERVAL_SECONDS
@@ -880,8 +1084,20 @@ async def _handle_config_reload(
             set(diff["changed_dvr_ids"]) | credential_or_target_changes
         )
         diff["any_action"] = True
+    for dvr_id in sorted(
+        credential_or_target_changes | set(diff.get("removed_dvr_ids", []))
+    ):
+        await asyncio.to_thread(_reset_dvr_health_state, dvr_id)
     if not diff["any_action"]:
         return
+
+    # Fallback managers are built from a settings snapshot. Any actionable
+    # reload can change routing, providers, credentials, rate limits, or DVR
+    # overrides, so discard the cached instances before the new settings are
+    # applied. Persistent outage state remains intact unless the DVR identity
+    # or connection target changed above.
+    for dvr_id in list(_dvr_health_notification_managers):
+        await asyncio.to_thread(_close_health_notification_manager, dvr_id)
 
     log(f"CONFIG_RELOADED: {format_diff_summary(diff)}")
 
@@ -1114,12 +1330,17 @@ async def _run_monitors_dynamic(
         name="config-watcher",
     )
     watchdog_task = asyncio.create_task(
-        _watchdog_loop(shutdown_event, watchdog_started), name="monitor-watchdog"
+        _watchdog_loop(
+            shutdown_event,
+            watchdog_started,
+            test_mode=test_mode,
+        ),
+        name="monitor-watchdog",
     )
     from .notification_drain import CoreNotificationDrainResponder
 
     def _current_notification_managers() -> tuple[Any, ...]:
-        managers: list[Any] = []
+        managers: list[Any] = list(_dvr_health_notification_managers.values())
         for monitor in tuple(_dvr_monitors.values()):
             alert_manager = getattr(monitor, "alert_manager", None)
             manager = getattr(alert_manager, "notification_manager", None)
@@ -1180,6 +1401,8 @@ async def _run_monitors_dynamic(
                     task.cancel()
             await asyncio.gather(*all_tasks, return_exceptions=True)
         await _persist_watchdog_async(force=True)
+        for dvr_id in list(_dvr_health_notification_managers):
+            await asyncio.to_thread(_close_health_notification_manager, dvr_id)
         log("All monitors stopped.")
 
 

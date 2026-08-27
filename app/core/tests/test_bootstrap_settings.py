@@ -248,6 +248,52 @@ def test_entrypoint_default_settings_bootstrap_creates_valid_json_atomically(
         assert stat.S_IMODE(settings_file.stat().st_mode) == 0o640
 
 
+def test_entrypoint_fresh_settings_use_important_only_alert_policy(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("TZ", raising=False)
+    entrypoint = _load_entrypoint()
+    _point_entrypoint_at_config(entrypoint, tmp_path)
+
+    assert entrypoint.ensure_settings(uid=1000, gid=1000) is True
+
+    settings = json.loads(
+        (tmp_path / "settings.json").read_text(encoding="utf-8")
+    )
+    assert settings["notification_preferences_version"] == 1
+    assert {
+        key: settings[key]
+        for key in (
+            "alert_channel_watching",
+            "alert_vod_watching",
+            "rd_alert_scheduled",
+            "rd_alert_started",
+            "rd_alert_completed",
+        )
+    } == {
+        "alert_channel_watching": False,
+        "alert_vod_watching": False,
+        "rd_alert_scheduled": False,
+        "rd_alert_started": False,
+        "rd_alert_completed": False,
+    }
+    assert all(
+        settings[key]
+        for key in (
+            "alert_disk_space",
+            "alert_recording_events",
+            "alert_dvr_health",
+            "rd_alert_cancelled",
+            "rd_alert_failed",
+            "rd_alert_skipped",
+            "rd_alert_missed",
+            "rd_alert_interrupted",
+            "dvr_alert_unreachable",
+            "dvr_alert_recovered",
+        )
+    )
+
+
 def test_entrypoint_default_settings_bootstrap_honors_config_path_without_config_dir(
     tmp_path, monkeypatch
 ):
@@ -280,6 +326,38 @@ def test_entrypoint_default_settings_bootstrap_does_not_overwrite_existing_file(
 
     assert created is False
     assert json.loads(settings_file.read_text(encoding="utf-8")) == original
+
+
+def test_entrypoint_preserves_historical_alert_settings_without_new_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("TZ", raising=False)
+    entrypoint = _load_entrypoint()
+    _point_entrypoint_at_config(entrypoint, tmp_path)
+    settings_file = tmp_path / "settings.json"
+    historical = {
+        "_version": 7,
+        "dvr_servers": [],
+        "alert_channel_watching": True,
+        "alert_vod_watching": False,
+        "alert_disk_space": False,
+        "alert_recording_events": True,
+        "rd_alert_scheduled": True,
+        "rd_alert_started": False,
+        "rd_alert_completed": True,
+        "rd_alert_cancelled": False,
+    }
+    original_bytes = json.dumps(historical, sort_keys=True).encode("utf-8")
+    settings_file.write_bytes(original_bytes)
+
+    assert entrypoint.ensure_settings(uid=1000, gid=1000) is False
+
+    assert settings_file.read_bytes() == original_bytes
+    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert persisted == historical
+    assert "alert_dvr_health" not in persisted
+    assert "rd_alert_failed" not in persisted
+    assert "notification_preferences_version" not in persisted
 
 
 def test_entrypoint_env_merge_uses_atomic_replace_and_seeds_dvr(tmp_path, monkeypatch):

@@ -202,6 +202,7 @@ export async function fetchSettings(): Promise<AppSettings> {
   const response = await fetch(`${API_BASE}/settings`, {
     headers: authHeaders(),
     credentials: "same-origin",
+    cache: "no-store",
   })
 
   if (!response.ok) {
@@ -215,6 +216,17 @@ export async function fetchSettings(): Promise<AppSettings> {
   const data = await response.json()
 
   return data
+}
+
+export async function verifyStartupReady(): Promise<void> {
+  const response = await fetch(`/healthz/startup`, {
+    credentials: "same-origin",
+    cache: "no-store",
+    signal: AbortSignal.timeout(2000),
+  })
+  if (!response.ok) {
+    throw new Error(`ChannelWatch startup is not ready: ${response.status}`)
+  }
 }
 
 export async function saveSettings(settings: AppSettings): Promise<{ message: string }> {

@@ -37,6 +37,8 @@ interface SettingsFormProps {
 
 export function SettingsForm({ settings: initialSettings, onSettingsSaved, initialTab }: SettingsFormProps) {
   const [isLoading, setIsLoading] = useState(true)
+  const [hasLoadedSettings, setHasLoadedSettings] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [activeTab, setActiveTab] = useState(initialTab || "general")
@@ -235,15 +237,17 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
 
         reset(normalizedData)
         lastFetchedRef.current = { ...normalizedData }
+        setHasLoadedSettings(true)
         setIsLoading(false)
       } catch (err) {
         setError(err instanceof Error ? err.message : t("settings.loadError"))
+        setHasLoadedSettings(false)
         setIsLoading(false)
       }
     }
 
     loadSettings()
-  }, [initialSettings, reset])
+  }, [initialSettings, loadAttempt, reset])
 
   const onSubmit = async (data: AppSettings) => {
     const submittedData = { ...data }
@@ -342,6 +346,29 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
             </div>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  if (!hasLoadedSettings) {
+    return (
+      <div className="container max-w-5xl mx-auto space-y-6">
+        <div className="space-y-2">
+          <h1 className="text-3xl font-bold tracking-tight">{t("settings.title")}</h1>
+          <p className="text-muted-foreground">{t("settings.description")}</p>
+        </div>
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{t("settings.temporarilyUnavailable")}</AlertTitle>
+          <AlertDescription className="space-y-3">
+            <p>{t("settings.temporarilyUnavailableDesc")}</p>
+            {error ? <p className="text-xs">{error}</p> : null}
+            <Button type="button" variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {t("common.tryAgain")}
+            </Button>
+          </AlertDescription>
+        </Alert>
       </div>
     )
   }
@@ -485,7 +512,7 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
             <RefreshCw className="mr-1 sm:mr-2 h-3 w-3 sm:h-4 sm:w-4" />
             {t("common.discard")}
           </Button>
-          <Button onClick={handleSubmit(onSubmit)} disabled={isSubmitting || !isDirty} size="sm" className="h-7 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm">
+          <Button onClick={handleSubmit(onSubmit)} disabled={!hasLoadedSettings || isSubmitting || !isDirty} size="sm" className="h-7 sm:h-10 px-2 sm:px-4 text-xs sm:text-sm">
             {isSubmitting ? (
               <>
                 <Loader2 className="mr-1 sm:mr-2 h-3 w-3 sm:h-4 sm:w-4 animate-spin" />

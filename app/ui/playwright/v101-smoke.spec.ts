@@ -1,6 +1,6 @@
 import { expect, test, type Route } from "@playwright/test"
 
-import { installApiMocks, mockSettings, mockSystemInfo } from "./support/mock-api"
+import { installApiMocks, mockSecurityStatus, mockSettings, mockSetupStatus, mockSystemInfo } from "./support/mock-api"
 
 const fulfillJson = (route: Route, body: unknown, status = 200) => route.fulfill({
   status,
@@ -10,6 +10,52 @@ const fulfillJson = (route: Route, body: unknown, status = 200) => route.fulfill
 
 test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
+})
+
+test("temporary restart failures never expose an empty savable Settings form", async ({ page }) => {
+  let settingsAvailable = false
+  await page.route("**/api/v1/security/status", (route) => fulfillJson(route, {
+    ...mockSecurityStatus,
+    persisted_mode: "none",
+    configured_mode: "none",
+    effective_mode: "none",
+    security_mode: "NO_AUTH",
+    auth_disabled: true,
+    rbac_enabled: false,
+    session_auth_available: false,
+  }))
+  await page.route("**/api/v1/auth/setup-status", (route) => fulfillJson(route, {
+    ...mockSetupStatus,
+    persisted_mode: "none",
+    configured_mode: "none",
+    effective_mode: "none",
+    current_mode: "none",
+    rbac_enabled: false,
+    session_auth_available: false,
+  }))
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() !== "GET") {
+      return fulfillJson(route, { message: "Settings saved successfully" })
+    }
+    if (!settingsAvailable) {
+      return fulfillJson(route, { detail: "ChannelWatch is restarting" }, 503)
+    }
+    return fulfillJson(route, mockSettings)
+  })
+
+  await page.goto("/#settings:general")
+
+  await expect(page.getByRole("heading", { name: "Settings are temporarily unavailable" })).toBeVisible()
+  await expect(page.getByText("Your saved settings have not been changed.")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Save Settings" })).toHaveCount(0)
+  await expect(page.getByText("No DVR servers configured.")).toHaveCount(0)
+
+  settingsAvailable = true
+  await page.getByRole("button", { name: "Try again" }).click()
+
+  await expect(page.getByText("Core Settings", { exact: true })).toBeVisible()
+  await expect(page.getByPlaceholder("e.g., Main DVR")).toHaveValue("Main DVR")
+  await expect(page.getByRole("button", { name: "Save Settings" })).toBeDisabled()
 })
 
 test("Active Streams renders recorded-content title and clean client metadata", async ({ page }) => {

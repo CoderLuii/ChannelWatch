@@ -18,7 +18,7 @@ describe("waitForUpdatedRuntime", () => {
       .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    const result = await waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 5, intervalMs: 10 })
+    const result = await waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 5, intervalMs: 10, requiredStableChecks: 1 })
 
     expect(result.current_version).toBe("0.9.16")
     expect(fetchStatus).toHaveBeenCalledTimes(3)
@@ -31,7 +31,7 @@ describe("waitForUpdatedRuntime", () => {
       .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    await expect(waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 3, intervalMs: 10 }))
+    await expect(waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 3, intervalMs: 10, requiredStableChecks: 1 }))
       .resolves.toMatchObject({ current_version: "0.9.16" })
     expect(wait).toHaveBeenCalledTimes(1)
   })
@@ -45,7 +45,7 @@ describe("waitForUpdatedRuntime", () => {
       .mockResolvedValueOnce(status("0.9.16"))
     const wait = vi.fn().mockResolvedValue(undefined)
 
-    await waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 2, intervalMs: 10 })
+    await waitForUpdatedRuntime("0.9.16", { fetchStatus, wait, maxAttempts: 2, intervalMs: 10, requiredStableChecks: 1 })
 
     expect(fetchStatus).toHaveBeenCalledTimes(2)
     expect(wait).toHaveBeenCalledTimes(1)
@@ -59,6 +59,28 @@ describe("waitForUpdatedRuntime", () => {
       .rejects.toThrow("ChannelWatch did not reconnect after applying v0.9.16")
     expect(fetchStatus).toHaveBeenCalledTimes(3)
     expect(wait).toHaveBeenCalledTimes(2)
+  })
+
+  it("requires two stable target-runtime bootstrap checks before reloading", async () => {
+    const fetchStatus = vi.fn().mockResolvedValue(status("0.9.16"))
+    const verifyReady = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new TypeError("Load failed"))
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+    const wait = vi.fn().mockResolvedValue(undefined)
+
+    await expect(waitForUpdatedRuntime("0.9.16", {
+      fetchStatus,
+      verifyReady,
+      wait,
+      maxAttempts: 5,
+      intervalMs: 10,
+    })).resolves.toMatchObject({ current_version: "0.9.16" })
+
+    expect(fetchStatus).toHaveBeenCalledTimes(4)
+    expect(verifyReady).toHaveBeenCalledTimes(4)
+    expect(wait).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -113,6 +135,7 @@ describe("applyUpdateAndReconnect", () => {
       reload,
       maxAttempts: 3,
       intervalMs: 10,
+      requiredStableChecks: 1,
     })
 
     expect(job).toEqual({ job_id: "job-1", restart_required: true })
@@ -131,6 +154,7 @@ describe("applyUpdateAndReconnect", () => {
       reload,
       maxAttempts: 2,
       intervalMs: 10,
+      requiredStableChecks: 1,
     })).resolves.toBeNull()
     expect(reload).toHaveBeenCalledTimes(1)
   })
@@ -157,6 +181,7 @@ describe("applyUpdateAndReconnect", () => {
       reload: vi.fn(),
       maxAttempts: 2,
       intervalMs: 1,
+      requiredStableChecks: 1,
     })
     await expect(promise).rejects.toMatchObject({ cause: disconnect })
   })

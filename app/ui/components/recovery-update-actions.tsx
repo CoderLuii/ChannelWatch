@@ -7,7 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
 import { Button } from "@/components/base/button"
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
-import { ApiError, applyRecoveryUpdate, checkRecoveryUpdate, fetchRecoveryUpdateStatus, type RecoveryUpdateStatus } from "@/lib/api"
+import { ApiError, applyRecoveryUpdate, checkRecoveryUpdate, fetchRecoveryUpdateStatus, verifyStartupReady, type RecoveryUpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { applyUpdateAndReconnect } from "@/lib/update-reconnect"
 
@@ -123,6 +123,7 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
                     acceptStatus(next)
                     return next
                   },
+                  verifyReady: verifyStartupReady,
                   reload: () => window.location.reload(),
                   isRejectedUpdate: (nextError) => nextError instanceof ApiError,
                 })

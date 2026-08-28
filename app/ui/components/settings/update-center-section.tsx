@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
 import { TabsContent } from "@/components/base/tabs"
-import { ApiError, applyUpdate, checkForUpdate, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
+import { ApiError, applyUpdate, checkForUpdate, fetchSettings, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, verifyStartupReady, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { applyUpdateAndReconnect, isPendingUpdateJob, requiresUpdateReconnect } from "@/lib/update-reconnect"
 
@@ -180,6 +180,12 @@ export function UpdateCenterSection() {
           return startedJob
         },
         fetchStatus: fetchUpdateStatus,
+        verifyReady: async () => {
+          const [, settings] = await Promise.all([verifyStartupReady(), fetchSettings()])
+          if (!Array.isArray(settings.dvr_servers)) {
+            throw new Error("ChannelWatch settings are not ready yet.")
+          }
+        },
         reload: () => window.location.reload(),
         isRejectedUpdate: (err) => err instanceof ApiError,
       })

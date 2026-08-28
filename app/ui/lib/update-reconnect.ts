@@ -5,9 +5,11 @@ type RuntimeStatus = {
 
 type ReconnectOptions<T extends RuntimeStatus> = {
   fetchStatus: () => Promise<T>
+  verifyReady?: () => Promise<void>
   wait?: (milliseconds: number) => Promise<void>
   maxAttempts?: number
   intervalMs?: number
+  requiredStableChecks?: number
 }
 
 type RestartJob = { restart_required?: boolean; status?: string | null }
@@ -63,18 +65,29 @@ export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
   {
     fetchStatus,
     wait = defaultWait,
-    maxAttempts = 20,
+    maxAttempts = 40,
     intervalMs = 1500,
+    verifyReady,
+    requiredStableChecks = 2,
   }: ReconnectOptions<T>,
 ): Promise<T> {
   const attempts = Math.max(1, maxAttempts)
+  const stableChecksRequired = Math.max(1, requiredStableChecks)
+  let stableChecks = 0
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const status = await fetchStatus()
-      if (isTargetRuntimeActive(status, targetVersion)) return status
+      if (isTargetRuntimeActive(status, targetVersion)) {
+        await verifyReady?.()
+        stableChecks += 1
+        if (stableChecks >= stableChecksRequired) return status
+      } else {
+        stableChecks = 0
+      }
     } catch {
       // A short disconnect is expected while the backend restarts.
+      stableChecks = 0
     }
 
     if (attempt < attempts) await wait(intervalMs)

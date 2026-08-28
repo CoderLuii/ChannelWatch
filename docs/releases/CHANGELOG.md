@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.5] - 2026-08-27
+
+### Changed
+
+- Wait for two consecutive healthy post-update checks before refreshing the browser, including successful startup and authenticated Settings reads.
+- Show a focused retry screen while Settings are temporarily unavailable during a restart instead of rendering an empty configuration form.
+
+### Fixed
+
+- Prevent an in-app update from refreshing during a short-lived UI startup window and producing Safari's generic `Load failed` message.
+- Prevent a temporary Settings request failure from making saved DVRs, timezone, and other values appear missing.
+- Remove Save and Discard actions until the real settings have loaded, preventing an empty form from replacing preserved configuration.
+- Let the Settings page recover in place after the restarted backend is stable without requiring a container restart.
+
+### Security
+
+- Preserve signed bundle verification, activation quorum, rollback, authentication, CSRF, and persistent `/config` protections.
+- Keep v1.0.5 a signed in-app update with `image_required=false`; no container recreation is required for operational v1.0.0 through v1.0.4 installations.
+
 ## [1.0.4] - 2026-08-27
 
 ### Changed

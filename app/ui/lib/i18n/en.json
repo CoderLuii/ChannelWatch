@@ -131,6 +131,8 @@
   "settings.saved": "Settings saved. Restarting core process...",
   "settings.saveError": "Error saving settings",
   "settings.loadError": "Failed to load settings",
+  "settings.temporarilyUnavailable": "Settings are temporarily unavailable",
+  "settings.temporarilyUnavailableDesc": "ChannelWatch may still be restarting. Your saved settings have not been changed. Wait a moment, then try again.",
   "settings.restartFailed": "Core restart failed",
   "settings.restartFailedDesc": "Settings were saved but the core process could not be restarted. You may need to restart manually.",
   "settings.tabs.general": "General",

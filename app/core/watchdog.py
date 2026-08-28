@@ -139,7 +139,7 @@ def summarize_enabled_dvrs(
             # closed until the current core publishes authoritative state.
             monitoring_status = "reconnecting"
             ready = False
-        elif not monitor_running:
+        elif not monitor_running and monitoring_status != "starting":
             monitoring_status = "dead"
             ready = False
 
@@ -357,12 +357,12 @@ class Watchdog:
                 elif not monitor_registered:
                     monitoring_status = "reconnecting"
                     reason = "No active DVR monitor is registered"
-                elif not monitor_running:
-                    monitoring_status = "dead"
-                    reason = "Registered DVR monitor is not running"
                 elif last_freshness_ts is None:
                     monitoring_status = "starting"
                     reason = "Waiting for the first freshness update"
+                elif not monitor_running:
+                    monitoring_status = "dead"
+                    reason = "Registered DVR monitor is not running"
                 elif stale:
                     monitoring_status = "stale"
                     reason = (

@@ -12,7 +12,7 @@ import { Label } from "@/components/base/label"
 import { TabsContent } from "@/components/base/tabs"
 import { ApiError, applyUpdate, checkForUpdate, fetchSettings, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, verifyStartupReady, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { applyUpdateAndReconnect, isPendingUpdateJob, requiresUpdateReconnect } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect } from "@/lib/update-reconnect"
 
 type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling" | "saving-policy" | "postponing" | "retrying"
 
@@ -186,7 +186,7 @@ export function UpdateCenterSection() {
             throw new Error("ChannelWatch settings are not ready yet.")
           }
         },
-        reload: () => window.location.reload(),
+        reload: reloadUpdatedDashboard,
         isRejectedUpdate: (err) => err instanceof ApiError,
       })
       if (nextJob && !requiresUpdateReconnect(nextJob)) {

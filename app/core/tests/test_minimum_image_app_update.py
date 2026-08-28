@@ -52,10 +52,10 @@ def test_active_runtime_changes_are_written_inside_the_container(monkeypatch):
         lambda name, code: calls.append((name, code)) or "",
     )
 
-    canary.write_active("canary", "1.0.6")
+    canary.write_active("canary", "1.0.7")
     canary.remove_active("canary")
 
     assert [name for name, _ in calls] == ["canary", "canary"]
     assert "/config/channelwatch-runtime/active.json" in calls[0][1]
-    assert '"version": "1.0.6"' in calls[0][1]
+    assert '"version": "1.0.7"' in calls[0][1]
     assert ".unlink()" in calls[1][1]

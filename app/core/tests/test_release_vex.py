@@ -7,7 +7,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-VEX_PATH = ROOT / "deploy" / "security" / "channelwatch-v1.0.6.openvex.json"
+VEX_PATH = ROOT / "deploy" / "security" / "channelwatch-v1.0.7.openvex.json"
 SCRIPT_PATH = ROOT / "scripts" / "release" / "verify-vex.py"
 
 
@@ -24,7 +24,7 @@ def _document():
 
 
 def test_release_vex_covers_exact_runtime_findings_and_architectures():
-    _module().validate_vex(_document(), expected_version="1.0.6")
+    _module().validate_vex(_document(), expected_version="1.0.7")
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,7 @@ def test_release_vex_rejects_incomplete_or_stale_dispositions(mutation):
     mutation(document)
     module = _module()
     with pytest.raises(module.VexValidationError):
-        module.validate_vex(document, expected_version="1.0.6")
+        module.validate_vex(document, expected_version="1.0.7")
 
 
 def test_runtime_sources_preserve_vex_execute_path_claims():

@@ -595,6 +595,68 @@ test("Update Center ignores an older cached release and offers v1.0.1 as an app 
   await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
 })
 
+test("a successful in-app update hard-refreshes onto the dashboard", async ({ page }) => {
+  let statusChecks = 0
+  const targetStatus = {
+    current_version: "1.0.7",
+    image_version: "1.0.0",
+    runtime_abi: "channelwatch-runtime-v1",
+    launcher_protocol: 3,
+    runtime_source: "app_bundle",
+    delivery_mode: "app_update",
+    image_refresh_recommended: false,
+    settings_schema_version: 7,
+    active_bundle: { version: "1.0.7", path: "/config/releases/v1.0.7" },
+    catalog_state: "current",
+    catalog_checked_at: "2026-08-28T12:05:00Z",
+    trusted_target: null,
+    cached_release_stale: false,
+    operation_state: "idle",
+    operation_busy: false,
+    latest: null,
+    update_available: false,
+    image_required: false,
+    last_job: null,
+    rollback_available: true,
+    auth_disabled_warning: false,
+  }
+  await page.route("**/api/v1/update/status", (route) => {
+    statusChecks += 1
+    return fulfillJson(route, statusChecks === 1 ? {
+      ...targetStatus,
+      current_version: "1.0.6",
+      active_bundle: { version: "1.0.6", path: "/config/releases/v1.0.6" },
+      catalog_state: "update_available",
+      trusted_target: {
+        version: "1.0.7",
+        version_tag: "v1.0.7",
+        image_required: false,
+        delivery_mode: "app_update",
+        runtime_abi: "channelwatch-runtime-v1",
+        settings_schema_version: 7,
+        highlights: [],
+      },
+      update_available: true,
+      rollback_available: false,
+    } : targetStatus)
+  })
+  await page.route("**/api/v1/update/apply", (route) => fulfillJson(route, {
+    job_id: "successful-dashboard-handoff",
+    operation: "apply",
+    status: "restarting",
+    version: "1.0.7",
+    message: "Update installed. Restarting ChannelWatch to activate it.",
+    restart_required: true,
+  }))
+
+  await page.goto("/#settings:updates")
+  await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
+  await page.getByRole("button", { name: "Apply update" }).click()
+
+  await expect(page).toHaveURL(/#overview$/, { timeout: 10_000 })
+  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+})
+
 test("Update Center follows an operation started in another tab", async ({ page }) => {
   let statusRequests = 0
   const baseStatus = {

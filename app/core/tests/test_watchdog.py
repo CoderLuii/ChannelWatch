@@ -192,6 +192,42 @@ class TestWatchdogSnapshot:
         assert dvr["monitoring_status"] == "dead"
         assert dvr["ready"] is False
 
+    def test_registered_monitor_without_first_freshness_is_starting_not_dead(self):
+        watchdog = Watchdog(stale_threshold_seconds=300)
+        monitor = _monitor()
+        monitor.running = False
+
+        alive_supervisor = MagicMock()
+        alive_supervisor.done.return_value = False
+
+        dvr = watchdog.snapshot(
+            {"dvr_aaa11111": alive_supervisor},
+            {"dvr_aaa11111": monitor},
+            now=101.0,
+        )["dvrs"][0]
+
+        assert dvr["monitor_registered"] is True
+        assert dvr["monitor_running"] is False
+        assert dvr.get("last_freshness_at") is None
+        assert dvr["monitoring_status"] == "starting"
+        assert dvr["reason"] == "Waiting for the first freshness update"
+        assert dvr["ready"] is False
+
+        summary = summarize_enabled_dvrs(
+            [
+                {
+                    "id": "dvr_aaa11111",
+                    "name": "Living Room",
+                    "host": "192.168.1.10",
+                    "port": 8089,
+                }
+            ],
+            {"dvrs": [dvr]},
+            now=102.0,
+        )
+        assert summary["dvrs"][0]["monitoring_status"] == "starting"
+        assert summary["dvrs"][0]["ready"] is False
+
     def test_summary_rejects_legacy_snapshot_without_monitor_registration(self):
         summary = summarize_enabled_dvrs(
             [

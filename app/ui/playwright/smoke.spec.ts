@@ -191,8 +191,7 @@ test("setup shell can apply only a confirmed official signed recovery update", a
   const confirmation = page.getByLabel(/INSTALL OFFICIAL UPDATE/)
   await confirmation.fill("INSTALL OFFICIAL UPDATE")
   await actions.getByRole("button", { name: "Apply signed v0.9.18 update" }).click()
-  await expect(actions).toContainText("Official recovery update installed.")
-  await expect(confirmation).toHaveValue("")
+  await expect(page).toHaveURL(/#overview$/)
   expect(await page.evaluate(() => sessionStorage.getItem("recovery_bootstrap_csrf"))).toBeNull()
 })
 

@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.7] - 2026-08-28
+
+### Changed
+
+- After a verified in-app update, hard-refresh the activated frontend directly onto Dashboard Overview instead of reopening the Settings page that initiated the update.
+- Present the first bounded monitoring pass after Core restarts as `Monitoring starting` until the monitor publishes freshness.
+- Apply the same dashboard handoff to successful official recovery updates while leaving rejected, failed, and timed-out updates on their current recovery screen.
+
+### Fixed
+
+- Prevent a normal post-update monitor initialization window from being shown as the alarming `Monitoring stopped` state.
+- Prevent a successful Update Center apply from preserving the `#settings:updates` route across the required browser refresh.
+- Refresh successful no-restart update completions once so the browser cannot keep stale application state.
+
+### Security
+
+- Preserve signed bundle verification, two-check startup verification, activation quorum, rollback, authentication, CSRF, and persistent `/config` protections.
+- Keep v1.0.7 a signed in-app update with `image_required=false`; operational v1.0.0 through v1.0.6 installations do not require a container recreation.
+
 ## [1.0.6] - 2026-08-28
 
 ### Changed

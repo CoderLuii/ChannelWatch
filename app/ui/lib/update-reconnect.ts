@@ -44,6 +44,21 @@ type ApplyAndReconnectOptions<TStatus extends RuntimeStatus, TJob extends Restar
   isRestartDisconnect?: (error: unknown) => boolean
 }
 
+type BrowserLocationForUpdate = {
+  hash: string
+  reload: () => void
+}
+
+export function reloadUpdatedDashboard(
+  location: BrowserLocationForUpdate = window.location,
+): void {
+  // Set the destination before the hard reload. This guarantees the freshly
+  // activated frontend starts on Home instead of reconstructing the Settings
+  // route that initiated the update.
+  location.hash = "#overview"
+  location.reload()
+}
+
 const defaultWait = (milliseconds: number) => new Promise<void>((resolve) => {
   window.setTimeout(resolve, milliseconds)
 })
@@ -111,7 +126,10 @@ export async function applyUpdateAndReconnect<
 
   try {
     job = await options.apply(targetVersion)
-    if (!requiresUpdateReconnect(job)) return job
+    if (!requiresUpdateReconnect(job)) {
+      if (job.status === "success") options.reload()
+      return job
+    }
   } catch (error) {
     if (options.isRejectedUpdate?.(error)) throw error
     const isRestartDisconnect = options.isRestartDisconnect

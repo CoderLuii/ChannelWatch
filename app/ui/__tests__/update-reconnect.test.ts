@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { applyUpdateAndReconnect, isPendingUpdateJob, requiresUpdateReconnect, waitForUpdatedRuntime } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect, waitForUpdatedRuntime } from "@/lib/update-reconnect"
 
 function status(version: string) {
   return {
@@ -85,6 +85,15 @@ describe("waitForUpdatedRuntime", () => {
 })
 
 describe("applyUpdateAndReconnect", () => {
+  it("hard-refreshes the dashboard after a verified update", () => {
+    const location = { hash: "#settings:updates", reload: vi.fn() }
+
+    reloadUpdatedDashboard(location)
+
+    expect(location.hash).toBe("#overview")
+    expect(location.reload).toHaveBeenCalledTimes(1)
+  })
+
   it("keeps a status-less historical job idle while preserving legacy reconnect behavior", () => {
     const legacyJob = { job_id: "legacy-job", restart_required: true }
 
@@ -104,6 +113,18 @@ describe("applyUpdateAndReconnect", () => {
     })).resolves.toBe(job)
     expect(fetchStatus).not.toHaveBeenCalled()
     expect(reload).not.toHaveBeenCalled()
+  })
+
+  it("refreshes a successful update even when no restart is required", async () => {
+    const job = { job_id: "job-success", status: "success", restart_required: false }
+    const reload = vi.fn()
+
+    await expect(applyUpdateAndReconnect("0.9.16", {
+      apply: vi.fn().mockResolvedValue(job),
+      fetchStatus: vi.fn(),
+      reload,
+    })).resolves.toBe(job)
+    expect(reload).toHaveBeenCalledTimes(1)
   })
 
   it("does not poll for a terminal failed job even when restart_required remains true", async () => {

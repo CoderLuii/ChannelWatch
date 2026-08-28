@@ -9,7 +9,7 @@ import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
 import { ApiError, applyRecoveryUpdate, checkRecoveryUpdate, fetchRecoveryUpdateStatus, verifyStartupReady, type RecoveryUpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { applyUpdateAndReconnect } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, reloadUpdatedDashboard } from "@/lib/update-reconnect"
 
 const RECOVERY_UPDATE_CONFIRMATION = "INSTALL OFFICIAL UPDATE" as const
 
@@ -124,7 +124,7 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
                     return next
                   },
                   verifyReady: verifyStartupReady,
-                  reload: () => window.location.reload(),
+                  reload: reloadUpdatedDashboard,
                   isRejectedUpdate: (nextError) => nextError instanceof ApiError,
                 })
                 setConfirmation("")

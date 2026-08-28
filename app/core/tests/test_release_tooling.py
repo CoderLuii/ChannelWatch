@@ -654,12 +654,12 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_106_in_app_release():
+def test_release_config_declares_107_in_app_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.0.6"
+    assert config["version"] == "1.0.7"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.0.0"
@@ -673,10 +673,11 @@ def test_release_config_declares_106_in_app_release():
         "1.0.3",
         "1.0.4",
         "1.0.5",
+        "1.0.6",
     ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.0.6 - Reliable in-app frontend activation"
+        "# ChannelWatch v1.0.7 - Smoother update recovery"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -754,7 +755,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_106_in_app_release():
+def test_release_version_surfaces_use_107_in_app_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -765,20 +766,20 @@ def test_release_version_surfaces_use_106_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.0.6"
-    assert metadata["versionTag"] == "v1.0.6"
-    assert metadata["dockerTag"] == "1.0.6"
-    assert metadata["helmChartVersion"] == "1.0.6"
-    assert metadata["helmAppVersion"] == "1.0.6"
+    assert metadata["version"] == "1.0.7"
+    assert metadata["versionTag"] == "v1.0.7"
+    assert metadata["dockerTag"] == "1.0.7"
+    assert metadata["helmChartVersion"] == "1.0.7"
+    assert metadata["helmAppVersion"] == "1.0.7"
 
 
-def test_release_body_for_106_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_107_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.0.6",
+        "versionTag": "v1.0.7",
         "releaseDate": "2026-08-28",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -790,7 +791,7 @@ def test_release_body_for_106_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.0.6",
+        "dockerTag": "1.0.7",
     }
     monkeypatch.setattr(
         module,
@@ -800,23 +801,23 @@ def test_release_body_for_106_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.0.6"],
+        ["render-release-body.py", "--version", "1.0.7"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.0.6 - Reliable in-app frontend activation\n"
+        "# ChannelWatch v1.0.7 - Smoother update recovery\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.0.6-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.0.6-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.0.6-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.0.6-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.7-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.7-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.7-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.7-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.0`" in output
@@ -1108,7 +1109,7 @@ def test_release_impact_classifier_accepts_exact_minimum_image_launcher_replay(
                 "schema": 1,
                 "status": "passed",
                 "source_image_version": "1.0.0",
-                "target_application_version": "1.0.6",
+                "target_application_version": "1.0.7",
                 "bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
                 "dynamic_activation": phase,
                 "ui_restart": phase,
@@ -1122,7 +1123,7 @@ def test_release_impact_classifier_accepts_exact_minimum_image_launcher_replay(
     result = module.apply_verified_minimum_image_app_update(
         module.classify_paths(["app/core/runtime_launcher.py"]),
         config={
-            "version": "1.0.6",
+            "version": "1.0.7",
             "minimum_image_version": "1.0.0",
             "delivery_mode": "app_update",
         },
@@ -1152,7 +1153,7 @@ def test_release_impact_classifier_rejects_minimum_image_evidence_for_other_bund
                 "schema": 1,
                 "status": "passed",
                 "source_image_version": "1.0.0",
-                "target_application_version": "1.0.6",
+                "target_application_version": "1.0.7",
                 "bundle_sha256": "0" * 64,
                 "dynamic_activation": phase,
                 "ui_restart": phase,
@@ -1167,7 +1168,7 @@ def test_release_impact_classifier_rejects_minimum_image_evidence_for_other_bund
         module.apply_verified_minimum_image_app_update(
             module.classify_paths(["app/core/runtime_launcher.py"]),
             config={
-                "version": "1.0.6",
+                "version": "1.0.7",
                 "minimum_image_version": "1.0.0",
                 "delivery_mode": "app_update",
             },

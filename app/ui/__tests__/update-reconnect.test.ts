@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { applyUpdateAndReconnect, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect, waitForUpdatedRuntime } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, consumeUpdatedDashboardHandoff, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect, UPDATE_HANDOFF_STORAGE_KEY, waitForUpdatedRuntime } from "@/lib/update-reconnect"
 
 function status(version: string) {
   return {
@@ -87,11 +87,20 @@ describe("waitForUpdatedRuntime", () => {
 describe("applyUpdateAndReconnect", () => {
   it("hard-refreshes the dashboard after a verified update", () => {
     const location = { hash: "#settings:updates", reload: vi.fn() }
+    const values = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    }
 
-    reloadUpdatedDashboard(location)
+    reloadUpdatedDashboard(location, storage)
 
     expect(location.hash).toBe("#overview")
     expect(location.reload).toHaveBeenCalledTimes(1)
+    expect(values.get(UPDATE_HANDOFF_STORAGE_KEY)).toBe("overview")
+    expect(consumeUpdatedDashboardHandoff(storage)).toBe(true)
+    expect(consumeUpdatedDashboardHandoff(storage)).toBe(false)
   })
 
   it("keeps a status-less historical job idle while preserving legacy reconnect behavior", () => {

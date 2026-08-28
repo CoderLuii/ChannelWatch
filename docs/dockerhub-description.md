@@ -14,7 +14,7 @@ Recommended tags:
 - `latest` for the newest stable image
 - `0.9` for the current compatible v0.9 release
 - `1.0.0` for the v1.0 image milestone
-- `1.0.7` for a fresh install containing the current v1.0.7 app; existing operational v1.0.0 through v1.0.6 installations update in-app
+- `1.0.8` for a fresh install containing the current v1.0.8 app; existing operational v1.0.0 through v1.0.7 installations update in-app
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Open `http://localhost:8501` after the container starts.
 
 Use v1.0.0, `1.0`, or `latest` for the current v1.0 image milestone. Preserve `/config` when recreating the container; ChannelWatch continues managing credential protection automatically.
 
-Existing operational v1.0.0 through v1.0.6 installations install v1.0.7 through **Settings > Updates**. A compatible v1.0 container running the signed v1.0.7 bundle is fully current and does not need to be recreated. After activation, v1.0.7 verifies the new runtime, hard-refreshes once, and opens Dashboard Overview. If an older Update Center is already trapped by an abandoned scheduler lock, preserve `/config` and recreate with `coderluii/channelwatch:1.0.7` once; no settings or credentials need to be re-entered.
+Existing operational v1.0.0 through v1.0.7 installations install v1.0.8 through **Settings > Updates**. A compatible v1.0 container running the signed v1.0.8 bundle is fully current and does not need to be recreated. After activation, v1.0.8 opens Dashboard Overview and follows monitoring startup automatically until it becomes healthy or reaches a real degraded state. It also reads immutable image metadata instead of a stale container environment value when displaying image version and launcher compatibility. If an older Update Center is already trapped by an abandoned scheduler lock, preserve `/config` and recreate with `coderluii/channelwatch:1.0.8` once; no settings or credentials need to be re-entered.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

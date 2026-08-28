@@ -49,12 +49,26 @@ type BrowserLocationForUpdate = {
   reload: () => void
 }
 
+type UpdateHandoffStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">
+
+export const UPDATE_HANDOFF_STORAGE_KEY = "channelwatch:update-handoff"
+
+export function consumeUpdatedDashboardHandoff(
+  storage: UpdateHandoffStorage = window.sessionStorage,
+): boolean {
+  if (storage.getItem(UPDATE_HANDOFF_STORAGE_KEY) !== "overview") return false
+  storage.removeItem(UPDATE_HANDOFF_STORAGE_KEY)
+  return true
+}
+
 export function reloadUpdatedDashboard(
   location: BrowserLocationForUpdate = window.location,
+  storage: UpdateHandoffStorage = window.sessionStorage,
 ): void {
   // Set the destination before the hard reload. This guarantees the freshly
   // activated frontend starts on Home instead of reconstructing the Settings
   // route that initiated the update.
+  storage.setItem(UPDATE_HANDOFF_STORAGE_KEY, "overview")
   location.hash = "#overview"
   location.reload()
 }

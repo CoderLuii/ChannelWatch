@@ -22,6 +22,7 @@ import type { AppSettings, AuthMode, AuthSetupStatus, SecurityStatus, RuntimePre
 import { AuthRequiredError, RESTART_RECOVERED_EVENT, RUNTIME_PREFLIGHT_CHANGED_EVENT, SessionRequiredError, cacheApiKey, clearCachedAuthState, completeInitialSetup, fetchRuntimePreflight, fetchSecurityStatus, fetchSettings, fetchSetupStatus, loginWithPassword } from "@/lib/api"
 import { t } from "@/lib/i18n"
 import { Loader2 } from "lucide-react"
+import { consumeUpdatedDashboardHandoff } from "@/lib/update-reconnect"
 
 const VALID_VIEWS = ["overview", "watch-history", "notification-log", "settings", "diagnostics", "help-feedback", "about"]
 const VALID_SETTINGS_TABS = ["general", "alerts", "advanced", "notifications", "routing", "security", "backup", "updates"]
@@ -175,6 +176,13 @@ export function Dashboard() {
   const navigate = useCallback((view: string) => {
     setActiveView(view)
     window.location.hash = `#${view}`
+  }, [])
+
+  useEffect(() => {
+    if (consumeUpdatedDashboardHandoff()) {
+      setActiveView("overview")
+      window.history.replaceState(null, "", "#overview")
+    }
   }, [])
 
   useEffect(() => {

@@ -160,7 +160,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     }
   };
 
-  const fetchSystemData = async () => {
+  const fetchSystemData = async (): Promise<DVRStatusInfo[] | null> => {
     try {
       const systemInfo = await fetchSystemInfo(
         selectedDvr !== "all"
@@ -188,8 +188,9 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         setChannelwatchVersion(systemInfo.channelwatch_version);
       }
 
+      const nextDvrStatuses = systemInfo.dvr_status || [];
       if (selectedDvr !== "all") {
-        setDvrStatusList(systemInfo.dvr_status || []);
+        setDvrStatusList(nextDvrStatuses);
         setDiskServerSeverity(systemInfo.disk_severity ?? undefined);
         applyDiskData(
           systemInfo.disk_total_gb,
@@ -209,8 +210,9 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           systemInfo.library_movies,
           systemInfo.library_episodes,
         );
-        setDvrStatusList(systemInfo.dvr_status || []);
+        setDvrStatusList(nextDvrStatuses);
       }
+      return nextDvrStatuses;
     } catch (error) {
       setDiskServerSeverity(undefined);
       setDiskSpace((prev: DiskSpaceState) => ({
@@ -219,6 +221,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         error: t("statusOverview.diskError"),
       }));
       console.error("Error fetching system info:", error);
+      return null;
     }
   };
 
@@ -407,6 +410,49 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       latestRefreshRef.current();
     }, 30000);
   }, []);
+
+  const transientMonitoringSignature = React.useMemo(
+    () => dvrStatusList
+      .filter((status) => ["starting", "reconnecting", "missing"].includes(status.monitoring_status || ""))
+      .map((status) => `${status.id}:${status.monitoring_status}`)
+      .sort()
+      .join("|"),
+    [dvrStatusList],
+  );
+
+  useEffect(() => {
+    if (!transientMonitoringSignature) return;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const wait = () => new Promise<void>((resolve) => {
+      timeoutId = setTimeout(resolve, 2000);
+    });
+
+    const pollMonitoringRecovery = async () => {
+      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
+        await wait();
+        if (cancelled) return;
+        const statuses = await fetchSystemData();
+        if (cancelled) return;
+        setLastUpdated(new Date());
+        if (statuses === null) continue;
+        const stillStarting = statuses.some((status) =>
+          ["starting", "reconnecting", "missing"].includes(status.monitoring_status || ""),
+        );
+        if (!stillStarting) return;
+      }
+    };
+
+    void pollMonitoringRecovery();
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+    // The signature changes only when a DVR enters or leaves a transient
+    // monitor state.  The bounded loop owns its own system-info refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transientMonitoringSignature, selectedDvr]);
 
   useEffect(() => {
     if (dataLoaded) fetchActivityData();

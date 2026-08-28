@@ -37,6 +37,7 @@ from core.helpers.atomic_io import (
     atomic_write_json,
     fsync_directory,
 )
+from core.image_metadata import resolve_image_metadata
 from core.update_catalog import (
     CATALOG_SCHEMA_VERSION,
     DEFAULT_UPDATE_CATALOG_URL,
@@ -226,14 +227,11 @@ def launcher_compatibility_status(
 ) -> dict[str, Any]:
     """Return non-sensitive launcher/image compatibility for API diagnostics."""
 
+    metadata = resolve_image_metadata(image_app_dir=DEFAULT_IMAGE_APP_DIR)
     configured_image = (
-        str(
-            image_version
-            or os.environ.get("CHANNELWATCH_IMAGE_VERSION", "")
-            or "unknown"
-        )
-        .strip()
-        .lstrip("v")
+        str(image_version).strip().lstrip("v")
+        if image_version is not None
+        else metadata.version
     )
     protocol = int(launcher_protocol_for_image_version(configured_image))
     try:
@@ -1039,9 +1037,8 @@ class UpdateManager:
         self.settings_schema_version = int(settings_schema_version)
         self.public_keys = dict(public_keys or UPDATE_PUBLIC_KEYS)
         self.manifest_url = manifest_url
-        configured_image_version = os.environ.get(
-            "CHANNELWATCH_IMAGE_VERSION", ""
-        ).strip()
+        metadata = resolve_image_metadata(image_app_dir=DEFAULT_IMAGE_APP_DIR)
+        configured_image_version = metadata.version if metadata.version != "unknown" else ""
         fallback_image_version = self.current_version
         if not image_version and not configured_image_version:
             # Library/unit-test callers outside a container have no immutable

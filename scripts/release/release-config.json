@@ -1,12 +1,12 @@
 {
-  "version": "1.0.7",
+  "version": "1.0.8",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.0.0",
   "updater_protocol": 2,
   "recommended_image_version": "1.0.0",
-  "publication_time": "2026-08-28T16:00:00Z",
-  "automatic_install_after": "2026-08-30T16:00:00Z",
+  "publication_time": "2026-08-28T17:18:00Z",
+  "automatic_install_after": "2026-08-30T17:18:00Z",
   "automatic_install_allowed": true,
   "compatible_source_application_versions": [
     "1.0.0",
@@ -15,7 +15,8 @@
     "1.0.3",
     "1.0.4",
     "1.0.5",
-    "1.0.6"
+    "1.0.6",
+    "1.0.7"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -23,6 +24,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.0.7 - Smoother update recovery",
+  "release_heading": "# ChannelWatch v1.0.8 - Reliable update handoff and image detection",
   "verification_assets": true
 }

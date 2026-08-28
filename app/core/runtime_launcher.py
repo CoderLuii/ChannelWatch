@@ -26,6 +26,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from core.image_metadata import resolve_image_metadata
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - container runtime is POSIX
@@ -848,9 +850,10 @@ def _parse_image_version(value: str) -> tuple[int, int, int]:
 
 
 def image_launcher_protocol(image_version: str | None = None) -> int:
-    version = _parse_image_version(
-        image_version or os.environ.get("CHANNELWATCH_IMAGE_VERSION", "")
-    )
+    resolved_version = image_version
+    if resolved_version is None:
+        resolved_version = resolve_image_metadata(image_app_dir=IMAGE_APP_DIR).version
+    version = _parse_image_version(resolved_version)
     if version <= (0, 9, 9):
         return 0
     if version <= (0, 9, 15):
@@ -1143,7 +1146,8 @@ def bootstrap_protocol_one_activation() -> bool:
 
 
 def launcher_protocol_status() -> dict[str, Any]:
-    image_version = os.environ.get("CHANNELWATCH_IMAGE_VERSION", "unknown")
+    metadata = resolve_image_metadata(image_app_dir=IMAGE_APP_DIR)
+    image_version = metadata.version
     protocol = image_launcher_protocol(image_version)
     return {
         "image_version": image_version,

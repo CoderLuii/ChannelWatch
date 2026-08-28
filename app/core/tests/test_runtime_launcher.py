@@ -1483,6 +1483,32 @@ def test_launcher_protocol_status_and_legacy_selection_fallback(
     assert runtime_launcher.selected_app_dir() == fallback.resolve()
 
 
+def test_launcher_status_prefers_embedded_image_metadata_over_stale_environment(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "channelwatch-image.json").write_text(
+        json.dumps(
+            {
+                "version": "1.0.0",
+                "runtime_abi": "channelwatch-runtime-v1",
+                "settings_schema_version": 7,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.17")
+
+    assert runtime_launcher.launcher_protocol_status() == {
+        "image_version": "1.0.0",
+        "launcher_protocol": 3,
+        "recovery_capable": True,
+        "recovery_mode": False,
+    }
+
+
 def test_protocol_three_selection_failure_falls_back_and_invalid_schema_defaults(
     tmp_path: Path, monkeypatch
 ):

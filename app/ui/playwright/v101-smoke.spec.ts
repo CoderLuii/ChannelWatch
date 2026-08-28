@@ -85,6 +85,29 @@ test("Active Streams renders recorded-content title and clean client metadata", 
   await expect(activeStreamsCard).not.toContainText("Unknown")
 })
 
+test("post-update monitoring startup clears itself without a manual refresh", async ({ page }) => {
+  let systemInfoRequests = 0
+  await page.route("**/api/system-info**", (route) => {
+    systemInfoRequests += 1
+    const starting = systemInfoRequests < 3
+    return fulfillJson(route, {
+      ...mockSystemInfo,
+      dvr_status: mockSystemInfo.dvr_status.map((dvr) => ({
+        ...dvr,
+        monitoring_ready: !starting,
+        monitoring_status: starting ? "starting" : "healthy",
+        monitoring_reason: starting ? "Waiting for first freshness signal" : "",
+      })),
+    })
+  })
+
+  await page.goto("/#overview")
+  await expect(page.getByText("Monitoring starting on Main DVR")).toBeVisible()
+  await expect(page.getByText("Monitoring starting on Main DVR")).toHaveCount(0, { timeout: 10_000 })
+  expect(systemInfoRequests).toBeGreaterThanOrEqual(3)
+  expect(systemInfoRequests).toBeLessThan(8)
+})
+
 test("alert presets remain unsaved until Save Settings and disclosures are semantic", async ({ page }) => {
   let savedSettings: Record<string, unknown> | null = null
   await page.route("**/api/settings", async (route) => {
@@ -598,7 +621,7 @@ test("Update Center ignores an older cached release and offers v1.0.1 as an app 
 test("a successful in-app update hard-refreshes onto the dashboard", async ({ page }) => {
   let statusChecks = 0
   const targetStatus = {
-    current_version: "1.0.7",
+    current_version: "1.0.8",
     image_version: "1.0.0",
     runtime_abi: "channelwatch-runtime-v1",
     launcher_protocol: 3,
@@ -606,7 +629,7 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
     delivery_mode: "app_update",
     image_refresh_recommended: false,
     settings_schema_version: 7,
-    active_bundle: { version: "1.0.7", path: "/config/releases/v1.0.7" },
+    active_bundle: { version: "1.0.8", path: "/config/releases/v1.0.8" },
     catalog_state: "current",
     catalog_checked_at: "2026-08-28T12:05:00Z",
     trusted_target: null,
@@ -628,8 +651,8 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
       active_bundle: { version: "1.0.6", path: "/config/releases/v1.0.6" },
       catalog_state: "update_available",
       trusted_target: {
-        version: "1.0.7",
-        version_tag: "v1.0.7",
+        version: "1.0.8",
+        version_tag: "v1.0.8",
         image_required: false,
         delivery_mode: "app_update",
         runtime_abi: "channelwatch-runtime-v1",
@@ -644,7 +667,7 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
     job_id: "successful-dashboard-handoff",
     operation: "apply",
     status: "restarting",
-    version: "1.0.7",
+    version: "1.0.8",
     message: "Update installed. Restarting ChannelWatch to activate it.",
     restart_required: true,
   }))

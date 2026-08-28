@@ -357,6 +357,30 @@ def test_status_quarantines_a_cached_release_older_than_the_active_app(
     assert status["operation_busy"] is False
 
 
+def test_manager_prefers_embedded_image_version_over_stale_environment(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "channelwatch-image.json").write_text(
+        json.dumps(
+            {
+                "version": "1.0.0",
+                "runtime_abi": "channelwatch-runtime-v1",
+                "settings_schema_version": 7,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.update_center.DEFAULT_IMAGE_APP_DIR", image_dir)
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "0.9.17")
+
+    manager = UpdateManager(config_dir=tmp_path / "config", current_version="1.0.8")
+
+    assert manager.image_version == "1.0.0"
+    assert manager.launcher_protocol == 3
+
+
 def test_status_reports_an_equal_cached_release_as_current_not_a_target(
     tmp_path: Path,
 ):

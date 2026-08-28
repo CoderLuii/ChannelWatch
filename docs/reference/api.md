@@ -236,7 +236,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/about"
 Example response:
 
 ```json
-{"app_name":"ChannelWatch","version":"1.0.7","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
+{"app_name":"ChannelWatch","version":"1.0.8","developer":"CoderLuii","description":"Channels DVR monitoring tool for real-time notifications.","github_url":"https://github.com/CoderLuii/ChannelWatch","dockerhub_url":"https://hub.docker.com/r/coderluii/channelwatch"}
 ```
 
 ### `GET /metrics`
@@ -966,7 +966,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/system-info"
 Example response:
 
 ```json
-{"channelwatch_version":"1.0.7","channelwatch_core_started_at":"2026-08-26T12:00:00Z","channelwatch_core_uptime_seconds":3600,"channelwatch_ui_started_at":"2026-08-26T12:00:05Z","channelwatch_ui_uptime_seconds":3595,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[{"id":"main","name":"Main DVR","connected":true,"started_at":"2026-08-20T12:00:00Z","uptime_seconds":522000,"uptime_available":true}]}
+{"channelwatch_version":"1.0.8","channelwatch_core_started_at":"2026-08-26T12:00:00Z","channelwatch_core_uptime_seconds":3600,"channelwatch_ui_started_at":"2026-08-26T12:00:05Z","channelwatch_ui_uptime_seconds":3595,"timezone":"America/Los_Angeles","disk_usage_percent":42,"disk_severity":"normal","core_status":"Running","library_shows":10,"library_movies":20,"library_episodes":30,"dvr_status":[{"id":"main","name":"Main DVR","connected":true,"started_at":"2026-08-20T12:00:00Z","uptime_seconds":522000,"uptime_available":true}]}
 ```
 
 Core uptime is the primary ChannelWatch uptime because Core owns continuous monitoring. UI uptime is separate because Supervisor can restart the processes independently. Each DVR uptime is derived from the read-only Channels DVR `status.start_time`; malformed, naive, future, disabled, or disconnected values are reported unavailable without failing the entire response.
@@ -1262,7 +1262,7 @@ curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/update/status"
 Example response:
 
 ```json
-{"current_version":"1.0.6","image_version":"1.0.0","runtime_abi":"channelwatch-runtime-v1","launcher_protocol":3,"runtime_source":"app_bundle","delivery_mode":"app_update","image_refresh_recommended":false,"settings_schema_version":7,"active_bundle":{"version":"1.0.6"},"catalog_state":"update_available","catalog_checked_at":"2026-08-28T15:30:00Z","trusted_target":{"version":"1.0.7","version_tag":"v1.0.7","image_required":false},"cached_release_stale":false,"operation_state":"idle","operation_busy":false,"update_available":true,"image_required":false,"last_job":null,"rollback_available":true,"auth_disabled_warning":false}
+{"current_version":"1.0.7","image_version":"1.0.0","runtime_abi":"channelwatch-runtime-v1","launcher_protocol":3,"runtime_source":"app_bundle","delivery_mode":"app_update","image_refresh_recommended":false,"settings_schema_version":7,"active_bundle":{"version":"1.0.7"},"catalog_state":"update_available","catalog_checked_at":"2026-08-28T17:30:00Z","trusted_target":{"version":"1.0.8","version_tag":"v1.0.8","image_required":false},"cached_release_stale":false,"operation_state":"idle","operation_busy":false,"update_available":true,"image_required":false,"last_job":null,"rollback_available":true,"auth_disabled_warning":false}
 ```
 
 Application and image versions are intentionally separate. `delivery_mode` is one of `app_update`, `app_update_with_image_refresh`, or `image_required`. A compatible signed application update may therefore be active while the older container image remains safe to refresh later.

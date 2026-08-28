@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.8] - 2026-08-28
+
+### Changed
+
+- Preserve a session-scoped post-update handoff so a newly activated frontend opens Dashboard Overview even if the browser reconstructs the route that initiated the update.
+- Follow the short `starting` and `reconnecting` monitoring states with bounded background status checks, without polling the full dashboard or hiding a genuine persistent outage.
+- Treat the immutable `channelwatch-image.json` record as the authoritative container version and use mutable environment metadata only as a compatibility fallback for historical images.
+
+### Fixed
+
+- Remove the need to click Home after a compatible in-app update.
+- Remove the need to refresh the dashboard after monitoring completes its first post-update pass.
+- Prevent a stale `CHANNELWATCH_IMAGE_VERSION` value retained by a container manager from displaying the wrong image version or launcher protocol.
+
+### Security
+
+- Fail closed when an embedded image record exists but is malformed instead of trusting a conflicting mutable environment claim.
+- Keep v1.0.8 a signed in-app update with `image_required=false`; operational v1.0.0 through v1.0.7 installations do not require a container recreation.
+
 ## [1.0.7] - 2026-08-28
 
 ### Changed

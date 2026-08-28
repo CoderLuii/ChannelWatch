@@ -1179,6 +1179,18 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
         )
+        if (
+            not path.startswith("/api/")
+            and not path.startswith("/healthz")
+            and path != "/metrics"
+            and response.headers.get("content-type", "")
+            .lower()
+            .startswith("text/html")
+        ):
+            # The static export is replaced by signed in-app updates. Require
+            # browsers to revalidate its HTML shell so a refreshed tab cannot
+            # keep bootstrapping an older frontend after activation.
+            response.headers["Cache-Control"] = "no-cache"
 
         raw_cookies = response.headers.getlist("set-cookie")
         should_secure_cookie = _should_use_secure_cookies(request)

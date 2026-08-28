@@ -654,12 +654,12 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_103_in_app_release():
+def test_release_config_declares_104_in_app_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.0.3"
+    assert config["version"] == "1.0.4"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.0.0"
@@ -670,10 +670,11 @@ def test_release_config_declares_103_in_app_release():
         "1.0.0",
         "1.0.1",
         "1.0.2",
+        "1.0.3",
     ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.0.3 - Accurate activity timeline and stream details"
+        "# ChannelWatch v1.0.4 - Clearer timeline tooltips"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -751,7 +752,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_103_in_app_release():
+def test_release_version_surfaces_use_104_in_app_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -762,21 +763,21 @@ def test_release_version_surfaces_use_103_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.0.3"
-    assert metadata["versionTag"] == "v1.0.3"
-    assert metadata["dockerTag"] == "1.0.3"
-    assert metadata["helmChartVersion"] == "1.0.3"
-    assert metadata["helmAppVersion"] == "1.0.3"
+    assert metadata["version"] == "1.0.4"
+    assert metadata["versionTag"] == "v1.0.4"
+    assert metadata["dockerTag"] == "1.0.4"
+    assert metadata["helmChartVersion"] == "1.0.4"
+    assert metadata["helmAppVersion"] == "1.0.4"
 
 
-def test_release_body_for_103_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_104_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.0.3",
-        "releaseDate": "2026-08-27",
+        "versionTag": "v1.0.4",
+        "releaseDate": "2026-08-28",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
             "Bundle release license notices.",
@@ -787,7 +788,7 @@ def test_release_body_for_103_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.0.3",
+        "dockerTag": "1.0.4",
     }
     monkeypatch.setattr(
         module,
@@ -797,23 +798,23 @@ def test_release_body_for_103_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.0.3"],
+        ["render-release-body.py", "--version", "1.0.4"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.0.3 - Accurate activity timeline and stream details\n"
+        "# ChannelWatch v1.0.4 - Clearer timeline tooltips\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.0.3-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.0.3-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.0.3-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.0.3-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.4-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.4-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.4-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.4-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.0`" in output

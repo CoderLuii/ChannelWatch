@@ -218,7 +218,7 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 Use `coderluii/channelwatch:1.0.0`, `1.0`, or `latest` for the v1.0 image milestone. Preserve `/config` when recreating the container.
 
-ChannelWatch v1.0.3 is a signed in-app update for the v1.0.0 runtime. Open **Settings > Updates** to install it. A v1.0.0 image running the v1.0.3 app bundle is fully current; no image pull or container recreation is required. v1.0.3 makes the 24-Hour Timeline use accurate 20-minute event intervals and shows recorded-media titles correctly in Active Streams. Installations still blocked by an abandoned pre-v1.0.2 scheduler lock can pull and recreate with the optional `1.0.3` image once while preserving `/config`.
+ChannelWatch v1.0.4 is a signed in-app update for the v1.0.0 runtime. Open **Settings > Updates** to install it. A v1.0.0 image running the v1.0.4 app bundle is fully current; no image pull or container recreation is required. v1.0.4 makes each 24-Hour Timeline tooltip describe one stable 20-minute interval, removes misleading zero markers, and forces the refreshed browser shell to revalidate after an in-app update. Installations still blocked by an abandoned pre-v1.0.2 scheduler lock can pull and recreate with the optional `1.0.4` image once while preserving `/config`.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 

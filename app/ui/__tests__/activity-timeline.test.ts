@@ -45,6 +45,19 @@ describe("buildActivityTimeline", () => {
     expect(points[5].streams).toBe(1)
   })
 
+  it("counts activity in the first visible interval without a leading synthetic zero", () => {
+    const empty = buildActivityTimeline([], now)
+    const firstIntervalEvent = event(
+      "first-visible-event",
+      "watching_vod",
+      new Date(empty[0].intervalStart + 1).toISOString(),
+    )
+
+    const points = buildActivityTimeline([firstIntervalEvent], now)
+
+    expect(points[0]).toMatchObject({ streams: 0, recordings: 0, vod: 1 })
+  })
+
   it("counts event records by category rather than duration or concurrency", () => {
     const empty = buildActivityTimeline([], now)
     const timestamp = new Date(empty[10].intervalStart + 1).toISOString()

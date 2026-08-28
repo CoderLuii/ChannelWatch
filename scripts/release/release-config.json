@@ -1,17 +1,18 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.0.0",
   "updater_protocol": 2,
   "recommended_image_version": "1.0.0",
-  "publication_time": "2026-08-27T11:15:00Z",
-  "automatic_install_after": "2026-08-29T11:15:00Z",
+  "publication_time": "2026-08-28T02:20:00Z",
+  "automatic_install_after": "2026-08-30T04:00:00Z",
   "automatic_install_allowed": true,
   "compatible_source_application_versions": [
     "1.0.0",
     "1.0.1",
-    "1.0.2"
+    "1.0.2",
+    "1.0.3"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -19,6 +20,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.0.3 - Accurate activity timeline and stream details",
+  "release_heading": "# ChannelWatch v1.0.4 - Clearer timeline tooltips",
   "verification_assets": true
 }

@@ -178,6 +178,25 @@ class TestCSPHeaders:
         assert "style-src 'self' 'unsafe-inline'" in csp
         assert "frame-src 'self'" in csp
 
+    def test_static_ui_html_requires_browser_revalidation(self):
+        from fastapi import FastAPI
+        from fastapi.responses import HTMLResponse
+        from ui.backend.main import SecurityMiddleware
+
+        test_app = FastAPI()
+
+        @test_app.get("/")
+        async def static_shell():
+            return HTMLResponse("<html><body>ChannelWatch</body></html>")
+
+        test_app.add_middleware(SecurityMiddleware)
+
+        with TestClient(test_app) as client:
+            resp = client.get("/")
+
+        assert resp.headers["content-type"].startswith("text/html")
+        assert resp.headers["cache-control"] == "no-cache"
+
     def test_static_ui_csp_allows_configured_report_endpoint(
         self, monkeypatch, noauth_client
     ):

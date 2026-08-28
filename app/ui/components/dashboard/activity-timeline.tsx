@@ -14,6 +14,7 @@ import {
   Tooltip as RechartsTooltip,
   Legend,
   ReferenceDot,
+  type TooltipContentProps,
 } from "recharts"
 import {
   activityTimelineTicks,
@@ -32,15 +33,67 @@ interface ActivityTimelineProps {
   onToggleVisibility: (key: keyof ChartVisibility) => void
 }
 
+interface ActivityTimelineTooltipProps extends TooltipContentProps {
+  chartVisibility: ChartVisibility
+}
+
+const formatTimelineTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], {
+  hour: "numeric",
+  minute: "2-digit",
+})
+
+function ActivityTimelineTooltip({
+  active,
+  payload,
+  chartVisibility,
+}: ActivityTimelineTooltipProps) {
+  const point = payload
+    ?.map((entry) => entry.payload as ActivityTimelinePoint | undefined)
+    .find((entry) => entry && Number.isFinite(entry.intervalStart))
+  if (!active || !point) return null
+
+  const rows = [
+    { key: "streams", label: t("timeline.liveTV"), color: "var(--chart-streams)" },
+    { key: "recordings", label: t("timeline.recordings"), color: "var(--chart-recordings)" },
+    { key: "vod", label: t("timeline.vod"), color: "var(--chart-vod)" },
+  ] as const
+
+  return (
+    <div
+      className="rounded-md border border-border bg-card px-3 py-2 text-xs shadow-md"
+      data-testid="activity-timeline-tooltip"
+    >
+      <p className="mb-1.5 font-medium text-card-foreground">
+        {formatTimelineTime(point.intervalStart)}–{formatTimelineTime(point.intervalEnd)}
+      </p>
+      <div className="space-y-1">
+        {rows.filter(({ key }) => chartVisibility[key]).map(({ key, label, color }) => {
+          const count = point[key]
+          const unit = count === 1 ? t("timeline.event") : t("timeline.events")
+          return (
+            <div
+              key={key}
+              className="flex min-w-32 items-center justify-between gap-4"
+              data-testid={`activity-timeline-tooltip-${key}`}
+            >
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+                {label}
+              </span>
+              <span className="font-medium tabular-nums text-card-foreground">{count} {unit}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisibility }: ActivityTimelineProps) {
   const timelineTicks = activityTimelineTicks(streamingData)
   const timelineStart = streamingData[0]?.intervalStart
   const timelineEnd = streamingData[streamingData.length - 1]?.intervalEnd
   const nowPoint = streamingData.find((point) => point.isNow)
-  const formatTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })
 
   return (
     <Card className="md:col-span-2">
@@ -102,25 +155,10 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
               />
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
               <RechartsTooltip
-                contentStyle={{
-                  backgroundColor: "hsl(var(--card))",
-                  borderColor: "hsl(var(--border))",
-                  fontSize: "12px",
-                }}
-                formatter={(value, name) => {
-                  const count = Number(value ?? 0)
-                  const unit = count === 1 ? t("timeline.event") : t("timeline.events")
-                  return [`${count} ${unit}`, name ?? ""]
-                }}
-                labelFormatter={(_label, payload) => {
-                  if (Array.isArray(payload) && payload.length > 0) {
-                    const point = payload[0].payload as ActivityTimelinePoint | undefined
-                    if (point) {
-                      return `${formatTime(point.intervalStart)}–${formatTime(point.intervalEnd)}`
-                    }
-                  }
-                  return t("timeline.unknownTime")
-                }}
+                isAnimationActive={false}
+                content={(props) => (
+                  <ActivityTimelineTooltip {...props} chartVisibility={chartVisibility} />
+                )}
               />
               <Legend content={() => null} />
 
@@ -133,6 +171,8 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                   fill="url(#colorStreams)"
                   strokeWidth={2}
                   dot={false}
+                  activeDot={{ r: 0, strokeWidth: 0 }}
+                  isAnimationActive={false}
                   dataKey="streams"
                 />
               )}
@@ -145,6 +185,8 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                   fill="url(#colorRecordings)"
                   strokeWidth={2}
                   dot={false}
+                  activeDot={{ r: 0, strokeWidth: 0 }}
+                  isAnimationActive={false}
                   dataKey="recordings"
                 />
               )}
@@ -157,6 +199,8 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                   fill="url(#colorVOD)"
                   strokeWidth={2}
                   dot={false}
+                  activeDot={{ r: 0, strokeWidth: 0 }}
+                  isAnimationActive={false}
                   dataKey="vod"
                 />
               )}

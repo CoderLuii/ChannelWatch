@@ -128,7 +128,10 @@ test("Recent Activity applies an exact client without changing the aggregate tim
 
 test("24-Hour Timeline tooltip matches a discrete event interval without an unnamed zero row", async ({ page }, testInfo) => {
   const bucketMs = 20 * 60 * 1000
-  const eventTime = Math.floor((Date.now() - 2 * 60 * 60 * 1000) / bucketMs) * bucketMs + 60_000
+  const currentIntervalStart = Math.floor(Date.now() / bucketMs) * bucketMs
+  const windowEnd = currentIntervalStart + bucketMs
+  const windowStart = windowEnd - 72 * bucketMs
+  const eventTime = currentIntervalStart - 2 * 60 * 60 * 1000 + 60_000
   const items = [
     ...Array.from({ length: 4 }, (_, index) => ({
       id: `recording-${index}`,
@@ -159,6 +162,7 @@ test("24-Hour Timeline tooltip matches a discrete event interval without an unna
 
   await page.goto("/#overview")
   await expect(page.getByText("Detected events in each 20-minute interval")).toBeVisible()
+  await expect(page.getByText("Recording 0", { exact: true })).toBeVisible()
 
   const chart = page.getByRole("img", { name: /24-hour activity timeline/ })
   if (testInfo.project.name === "v101-mobile-safari") {
@@ -169,31 +173,32 @@ test("24-Hour Timeline tooltip matches a discrete event interval without an unna
   }
   const box = await chart.boundingBox()
   expect(box).not.toBeNull()
-  const tooltip = page.locator(".recharts-tooltip-wrapper")
-  const currentIntervalStart = Math.floor(Date.now() / bucketMs) * bucketMs
-  const windowEnd = currentIntervalStart + bucketMs
-  const windowStart = windowEnd - 72 * bucketMs
+  const tooltip = page.getByTestId("activity-timeline-tooltip")
   const eventPoint = Math.floor(eventTime / bucketMs) * bucketMs + bucketMs / 2
   const plotLeft = 30
   const plotWidth = box!.width - plotLeft
   const targetX = box!.x + plotLeft + ((eventPoint - windowStart) / (windowEnd - windowStart)) * plotWidth
   const targetY = box!.y + box!.height / 2
-  let found = false
-  for (const offset of [0, -4, 4, -8, 8]) {
-    await page.mouse.move(targetX + offset, targetY)
-    const text = await tooltip.textContent().catch(() => "")
-    if (text?.includes("4 events") && text.includes("1 event")) {
-      found = true
-      break
-    }
-  }
+  await page.mouse.move(targetX - 100, targetY)
+  await page.mouse.move(targetX, targetY, { steps: 20 })
+  await page.locator(".recharts-wrapper").dispatchEvent("mousemove", {
+    clientX: targetX,
+    clientY: targetY,
+    bubbles: true,
+  })
 
-  expect(found).toBe(true)
-  const tooltipItems = tooltip.locator(".recharts-tooltip-item")
-  await expect(tooltipItems).toHaveCount(3)
-  await expect(tooltip).toContainText("Recordings : 4 events")
-  await expect(tooltip).toContainText("VOD : 1 event")
-  await expect(tooltip.locator(".recharts-tooltip-item-name")).toHaveText(["Live TV", "Recordings", "VOD"])
+  const activeDots = page.locator(".recharts-active-dot")
+  await expect(activeDots).toHaveCount(3)
+  expect(await activeDots.evaluateAll((nodes) => nodes.map((node) => (
+    node.getAttribute("r") ?? node.querySelector("circle")?.getAttribute("r")
+  )))).toEqual(["0", "0", "0"])
+  await expect(page.getByTestId("activity-timeline-tooltip-streams")).toContainText("Live TV")
+  await expect(page.getByTestId("activity-timeline-tooltip-streams")).toContainText("0 events")
+  await expect(page.getByTestId("activity-timeline-tooltip-recordings")).toContainText("Recordings")
+  await expect(page.getByTestId("activity-timeline-tooltip-recordings")).toContainText("4 events")
+  await expect(page.getByTestId("activity-timeline-tooltip-vod")).toContainText("VOD")
+  await expect(page.getByTestId("activity-timeline-tooltip-vod")).toContainText("1 event")
+  await expect(tooltip).not.toContainText(": 0")
   const expectedStart = new Date(Math.floor(eventTime / bucketMs) * bucketMs).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",

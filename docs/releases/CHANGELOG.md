@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.4] - 2026-08-27
+
+### Changed
+
+- Make each 24-Hour Timeline hover describe one stable 20-minute interval with explicit Live TV, Recordings, and VOD event counts.
+- Keep all three named activity rows visible in the tooltip, including honest zero counts, so the chart meaning is clear without an unnamed summary value.
+
+### Fixed
+
+- Remove the visible zero-valued hover dots that made the beginning of the timeline look like recorded activity when no event occurred there.
+- Preserve events in the first visible interval without inserting a synthetic leading zero that shifts or obscures the first real count.
+- Select the timeline interval from the actual activity payload rather than relying on Recharts payload order, keeping interval labels and counts aligned at chart boundaries.
+- Require the static HTML shell to revalidate after refresh so an activated in-app update does not leave the browser bootstrapping an older cached frontend.
+
+### Security
+
+- Preserve existing authenticated activity-history access, public-health privacy, signed catalog and bundle verification, activation quorum, backup, and rollback protections.
+- Keep v1.0.4 a signed in-app update with `image_required=false`; no container recreation is required for operational v1.0.0 through v1.0.3 installations.
+
 ## [1.0.3] - 2026-08-27
 
 ### Changed

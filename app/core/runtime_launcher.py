@@ -1268,9 +1268,12 @@ def selected_static_ui_dir(app_dir: Path) -> Path:
     # make the only recovery portal unusable.
     if app_dir.resolve() == IMAGE_APP_DIR.resolve():
         return IMAGE_STATIC_UI_DIR
-    configured = os.environ.get("CHANNELWATCH_ACTIVE_STATIC_UI_DIR", "").strip()
-    if configured:
-        return Path(configured).resolve()
+    # Bind the frontend to the same selected runtime as the Python children.
+    # Supervisor's environment is generated when the container starts, so its
+    # CHANNELWATCH_ACTIVE_STATIC_UI_DIR value can still point at the image (or
+    # a previously active bundle) after a protocol-3 in-app update. Trusting
+    # that inherited path creates a split runtime: new backend code serves an
+    # old frontend. The selected app root is the only authoritative source.
     return app_dir / "ui" / "backend" / "static_ui"
 
 

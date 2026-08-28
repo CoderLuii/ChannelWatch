@@ -1553,6 +1553,25 @@ def test_protocol_three_image_recovery_ignores_failed_bundle_static_ui(
     assert runtime_launcher.selected_static_ui_dir(image_dir) == image_static
 
 
+def test_selected_bundle_ignores_stale_supervisor_static_ui(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image"
+    image_static = image_dir / "ui" / "backend" / "static_ui"
+    bundle_dir = tmp_path / "bundle"
+    bundle_static = bundle_dir / "ui" / "backend" / "static_ui"
+    image_static.mkdir(parents=True)
+    bundle_static.mkdir(parents=True)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(runtime_launcher, "IMAGE_STATIC_UI_DIR", image_static)
+    monkeypatch.setenv("CHANNELWATCH_ACTIVE_STATIC_UI_DIR", str(image_static))
+
+    assert runtime_launcher.selected_static_ui_dir(bundle_dir) == bundle_static
+
+    runtime_launcher.prepare_import_path(bundle_dir)
+    assert os.environ["CW_STATIC_UI_DIR"] == str(bundle_static)
+
+
 def test_prepare_import_path_tracks_only_the_selected_activation(
     tmp_path: Path, monkeypatch
 ):

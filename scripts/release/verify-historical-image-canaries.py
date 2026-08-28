@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -710,6 +711,24 @@ def get_json(name: str, path: str) -> dict[str, Any]:
     return json.loads(output.splitlines()[-1])
 
 
+def http_sha256(name: str, path: str) -> str:
+    """Return the digest of bytes served by the selected UI runtime."""
+
+    code = (
+        "import hashlib,urllib.request; "
+        f"r=urllib.request.urlopen('http://127.0.0.1:8501{path}', timeout=3); "
+        "print(hashlib.sha256(r.read()).hexdigest())"
+    )
+    return exec_python(name, code)
+
+
+def bundled_static_sha256(bundle: Path, member: str) -> str:
+    """Return the expected digest for one frontend member in an app bundle."""
+
+    with zipfile.ZipFile(bundle) as archive:
+        return hashlib.sha256(archive.read(member)).hexdigest()
+
+
 def wait_for_health(name: str, timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -1151,6 +1170,15 @@ def run_supported_canary(
         raise CanaryError(
             f"{lock['version']} did not launch both children from the bundle "
             f"(modes={sorted(process_modes)}, apps={current_apps})"
+        )
+    expected_index_sha256 = bundled_static_sha256(
+        bundle, "ui/backend/static_ui/index.html"
+    )
+    served_index_sha256 = http_sha256(name, "/")
+    if served_index_sha256 != expected_index_sha256:
+        raise CanaryError(
+            f"{lock['version']} activated the target backend without serving "
+            "the target bundle frontend"
         )
     if stale:
         raise CanaryError(f"{lock['version']} left stale activation controls: {stale}")

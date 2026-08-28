@@ -1,7 +1,8 @@
 import { defineConfig, devices } from "@playwright/test"
 
 const port = 3000
-const baseURL = `http://127.0.0.1:${port}`
+const externalBaseURL = process.env.CHANNELWATCH_PLAYWRIGHT_BASE_URL?.trim()
+const baseURL = externalBaseURL || `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: "./playwright",
@@ -74,7 +75,7 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
+  webServer: externalBaseURL ? undefined : {
     command: `corepack pnpm build && corepack pnpm exec vite preview --host 127.0.0.1 --port ${port} --strictPort --outDir out`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,

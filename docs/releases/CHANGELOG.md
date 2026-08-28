@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.6] - 2026-08-28
+
+### Changed
+
+- Make every selected app bundle serve its own static frontend, even when the underlying v1.0.0 through v1.0.5 container launcher still exports an older image-owned static path.
+- Verify the actual HTML and referenced browser assets served over HTTP during minimum-image and historical-image update canaries.
+- Exercise in-app activation, UI restart, rollback, reapply, and full container restart against every compatible v1.0 image before publication.
+
+### Fixed
+
+- Prevent an in-app update from pairing the newly activated backend with an older frontend inherited from the container image.
+- Prevent the resulting Settings `Load failed` screen, apparently empty DVR configuration, clipped Update tab, and unsafe Save action after a successful update.
+- Keep the selected frontend generation aligned after Supervisor restarts either child process and after the container itself restarts.
+
+### Security
+
+- Preserve signed bundle verification, activation quorum, rollback, authentication, CSRF, and persistent `/config` protections.
+- Keep v1.0.6 a signed in-app update with `image_required=false`; operational v1.0.0 through v1.0.5 installations do not require a container recreation.
+
 ## [1.0.5] - 2026-08-27
 
 ### Changed

@@ -2,13 +2,13 @@
 
 Install ChannelWatch v1.0.0 through Docker, Unraid, Compose, or Helm while preserving `/config`. v1.0.0 is the first intentional `.0` container-image milestone and establishes the runtime used by the v1.0.1 through v1.0.9 in-app update line.
 
-ChannelWatch v1.0.5 is a signed in-app release on that line. An operational v1.0.0 through v1.0.4 installation discovers and installs it through **Settings > Updates**. After activation, `Application version` shows v1.0.5 while `Container image version` may remain v1.0.0. That combination is fully current and does not require an image refresh. The updater waits for two stable startup and Settings checks before refreshing; if Settings are temporarily unavailable, the page offers a safe retry without exposing an empty savable form.
+ChannelWatch v1.0.6 is a signed in-app release on that line. An operational v1.0.0 through v1.0.5 installation discovers and installs it through **Settings > Updates**. After activation, `Application version` shows v1.0.6 while `Container image version` may remain an earlier v1.0 image. That combination is fully current and does not require an image refresh. The selected app bundle serves its matching backend and static frontend across UI restart, rollback, reapply, and container restart. The updater still waits for stable startup and Settings checks before refreshing, and it never exposes an empty savable form while Settings are unavailable.
 
 ### Recover an abandoned pre-v1.0.2 scheduler lock
 
 Some v1.0.0 and v1.0.1 installations can repeatedly show `Another update operation is already running` even though no update is active. Refreshing or restarting only the ChannelWatch Core and UI processes may recreate the abandoned marker. Do not delete application data or repeatedly click Apply.
 
-Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.0.5`, and recreate the container once. The current image contains the v1.0.2 scheduler-lock repair, which replaces the old existence-based marker with an operating-system-held advisory lock and safely removes the abandoned legacy marker during startup. Saved DVRs, credentials, settings, history, and the application-managed encryption key remain under `/config`.
+Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.0.6`, and recreate the container once. The current image contains the v1.0.2 scheduler-lock repair, which replaces the old existence-based marker with an operating-system-held advisory lock and safely removes the abandoned legacy marker during startup. Saved DVRs, credentials, settings, history, and the application-managed encryption key remain under `/config`.
 
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
@@ -80,7 +80,7 @@ Some releases cannot be safely applied inside the current image. ChannelWatch wi
 
 Starting with v1.0.0, every `X.Y.0` release is also an intentional image milestone even when its individual changes could fit in a bundle. This keeps one known container baseline for the following `X.Y.1` through `X.Y.9` in-app releases and makes the required update method clear from the version number.
 
-Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. v1.0.5 still publishes normal AMD64/ARM64 images for fresh installations and lock-recovery cases, but operational v1.0.0 through v1.0.4 users do not need to pull them.
+Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. v1.0.6 still publishes normal AMD64/ARM64 images for fresh installations and lock-recovery cases, but operational v1.0.0 through v1.0.5 users do not need to pull them.
 
 When this appears, update the container using your normal Docker, Unraid, Compose, or Helm process. The in-app updater intentionally does not replace the Docker image.
 

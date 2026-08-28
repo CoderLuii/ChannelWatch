@@ -26,7 +26,7 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:4fcfc74eb89ec72dcd8caa7fbbf2a5f77d9fe3e2f5ac9e39192702f49c6d4d1a # v1.22.2
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:0f75798d450d0cc0ea3700c79d929ae7609fb7d0e627673c14be8a484587c9b1 # v1.22.2
   RELEASE_TAG: ${{ github.ref_name }}
   RELEASE_SHA: ${{ github.sha }}
 
@@ -412,6 +412,23 @@ jobs:
             <(cd dist/candidate-one && sha256sum ./*) \
             <(cd dist/candidate-two && sha256sum ./*)
 
+      - name: Verify app update frontend on the minimum compatible image
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+          if [ "${delivery_mode}" = "image_required" ]; then
+            echo "Skipping the app-update canary for an image-required release."
+            exit 0
+          fi
+          python scripts/release/verify-minimum-image-app-update.py \
+            --bundle "dist/candidate-one/channelwatch-app-v${version}.zip" \
+            --version "${version}" \
+            --minimum-image-version "${minimum_image_version}" \
+            --evidence-json "${RUNNER_TEMP}/channelwatch-minimum-image-app-update-v${version}.json"
+
       - name: Build exact deterministic multi-architecture image twice
         shell: bash
         run: |
@@ -783,10 +800,18 @@ jobs:
             echo "::error::A previous semantic-version release tag is required for impact classification."
             exit 1
           fi
+          minimum_image_args=()
+          if [ "${delivery_mode}" != "image_required" ]; then
+            minimum_image_args=(
+              --minimum-image-app-update-evidence "${RUNNER_TEMP}/channelwatch-minimum-image-app-update-v${version}.json"
+              --minimum-image-app-update-bundle "dist/candidate-one/channelwatch-app-${tag}.zip"
+            )
+          fi
           python scripts/release/classify-release-impact.py \
             --base-ref "${base_ref}" \
             --target-ref "${GITHUB_SHA}" \
-            "${compatibility_args[@]}"
+            "${compatibility_args[@]}" \
+            "${minimum_image_args[@]}"
           python scripts/release/verify-publication-window.py \
             --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
             --version "${version}" \
@@ -979,6 +1004,24 @@ jobs:
             --publication-time "${publication_time}" \
             --automatic-install-after "${automatic_install_after}"
 
+      - name: Reverify app update frontend on the minimum compatible image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+          if [ "${delivery_mode}" = "image_required" ]; then
+            echo "Skipping the app-update canary for an image-required release."
+            exit 0
+          fi
+          python scripts/release/verify-minimum-image-app-update.py \
+            --bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip" \
+            --version "${VERSION}" \
+            --minimum-image-version "${minimum_image_version}" \
+            --evidence-json "${RUNNER_TEMP}/channelwatch-minimum-image-app-update-${RELEASE_TAG}.json"
+
       - name: Require byte-identical approved candidate assets
         id: approved_candidate
         env:
@@ -1104,10 +1147,18 @@ jobs:
             echo "::error::A previous semantic-version release tag is required for impact classification."
             exit 1
           fi
+          minimum_image_args=()
+          if [ "${expected_delivery_mode}" != "image_required" ]; then
+            minimum_image_args=(
+              --minimum-image-app-update-evidence "${RUNNER_TEMP}/channelwatch-minimum-image-app-update-${TAG}.json"
+              --minimum-image-app-update-bundle "dist/update/channelwatch-app-${TAG}.zip"
+            )
+          fi
           python scripts/release/classify-release-impact.py \
             --base-ref "${base_ref}" \
             --target-ref "${RELEASE_SHA}" \
-            "${compatibility_args[@]}"
+            "${compatibility_args[@]}" \
+            "${minimum_image_args[@]}"
           # This tag workflow uses the real runner clock. A future signed
           # publication time must stop the job before even a draft release,
           # immutable image, public release, registry alias, or feed changes.

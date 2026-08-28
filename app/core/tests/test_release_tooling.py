@@ -654,12 +654,12 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_105_in_app_release():
+def test_release_config_declares_106_in_app_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.0.5"
+    assert config["version"] == "1.0.6"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.0.0"
@@ -672,10 +672,11 @@ def test_release_config_declares_105_in_app_release():
         "1.0.2",
         "1.0.3",
         "1.0.4",
+        "1.0.5",
     ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.0.5 - Safer in-app update recovery"
+        "# ChannelWatch v1.0.6 - Reliable in-app frontend activation"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -753,7 +754,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_105_in_app_release():
+def test_release_version_surfaces_use_106_in_app_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -764,20 +765,20 @@ def test_release_version_surfaces_use_105_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.0.5"
-    assert metadata["versionTag"] == "v1.0.5"
-    assert metadata["dockerTag"] == "1.0.5"
-    assert metadata["helmChartVersion"] == "1.0.5"
-    assert metadata["helmAppVersion"] == "1.0.5"
+    assert metadata["version"] == "1.0.6"
+    assert metadata["versionTag"] == "v1.0.6"
+    assert metadata["dockerTag"] == "1.0.6"
+    assert metadata["helmChartVersion"] == "1.0.6"
+    assert metadata["helmAppVersion"] == "1.0.6"
 
 
-def test_release_body_for_105_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_106_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.0.5",
+        "versionTag": "v1.0.6",
         "releaseDate": "2026-08-28",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -789,7 +790,7 @@ def test_release_body_for_105_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.0.5",
+        "dockerTag": "1.0.6",
     }
     monkeypatch.setattr(
         module,
@@ -799,23 +800,23 @@ def test_release_body_for_105_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.0.5"],
+        ["render-release-body.py", "--version", "1.0.6"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.0.5 - Safer in-app update recovery\n"
+        "# ChannelWatch v1.0.6 - Reliable in-app frontend activation\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.0.5-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.0.5-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.0.5-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.0.5-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.6-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.6-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.6-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.6-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.0`" in output
@@ -1088,6 +1089,91 @@ def test_release_impact_classifier_requires_image_for_runtime_launcher_changes()
     assert result.delivery_mode == "image_required"
     assert result.image_required is True
     assert result.triggering_paths == ("app/core/runtime_launcher.py",)
+
+
+def test_release_impact_classifier_accepts_exact_minimum_image_launcher_replay(
+    tmp_path,
+):
+    module = _load_script(
+        "classify_release_impact_verified_minimum_image",
+        "scripts/release/classify-release-impact.py",
+    )
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(b"exact bundle")
+    phase = {"index_matches": True, "referenced_assets_verified": 14}
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "status": "passed",
+                "source_image_version": "1.0.0",
+                "target_application_version": "1.0.6",
+                "bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+                "dynamic_activation": phase,
+                "ui_restart": phase,
+                "rollback_reapply": phase,
+                "container_restart": phase,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = module.apply_verified_minimum_image_app_update(
+        module.classify_paths(["app/core/runtime_launcher.py"]),
+        config={
+            "version": "1.0.6",
+            "minimum_image_version": "1.0.0",
+            "delivery_mode": "app_update",
+        },
+        evidence_path=evidence,
+        bundle_path=bundle,
+    )
+
+    assert result.delivery_mode == "app_update"
+    assert result.image_required is False
+    assert result.triggering_paths == ()
+
+
+def test_release_impact_classifier_rejects_minimum_image_evidence_for_other_bundle(
+    tmp_path,
+):
+    module = _load_script(
+        "classify_release_impact_wrong_minimum_image_bundle",
+        "scripts/release/classify-release-impact.py",
+    )
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(b"different bundle")
+    phase = {"index_matches": True, "referenced_assets_verified": 14}
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "status": "passed",
+                "source_image_version": "1.0.0",
+                "target_application_version": "1.0.6",
+                "bundle_sha256": "0" * 64,
+                "dynamic_activation": phase,
+                "ui_restart": phase,
+                "rollback_reapply": phase,
+                "container_restart": phase,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.ReleaseImpactMismatch, match="evidence is invalid"):
+        module.apply_verified_minimum_image_app_update(
+            module.classify_paths(["app/core/runtime_launcher.py"]),
+            config={
+                "version": "1.0.6",
+                "minimum_image_version": "1.0.0",
+                "delivery_mode": "app_update",
+            },
+            evidence_path=evidence,
+            bundle_path=bundle,
+        )
 
 
 def test_release_impact_classifier_requires_image_for_runtime_surfaces():
@@ -2083,6 +2169,8 @@ def test_release_workflow_gates_declared_impact_and_live_manifest():
         "Seal production-signed candidate for private retention"
     )
     assert "--historical-compatibility-verified" not in workflow + candidate
+    assert workflow.count("--minimum-image-app-update-evidence") == 2
+    assert workflow.count("--minimum-image-app-update-bundle") == 2
     assert "Verify live stable update manifest" in workflow
     assert "verify-live-update-manifest.py" in workflow
     assert "- sync-site" in workflow
@@ -2162,6 +2250,21 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert "actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f" in workflow
     assert "node-version: '24'" in workflow
     assert "package-manager-cache: false" in workflow
+
+    assert workflow.count("scripts/release/verify-minimum-image-app-update.py") == 2
+    assert "Verify app update frontend on the minimum compatible image" in workflow
+    assert "Reverify app update frontend on the minimum compatible image" in workflow
+    assert '--minimum-image-version "${minimum_image_version}"' in workflow
+    assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
+    assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
+    reverify_block = workflow.split(
+        "      - name: Reverify app update frontend on the minimum compatible image",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    assert "VERSION: ${{ steps.version.outputs.version }}" in reverify_block
+    assert '--version "${VERSION}"' in reverify_block
+    assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in reverify_block
+    assert "${TAG}" not in reverify_block
 
     publish_job = workflow.split("  publish-github-release:", 1)[1].split(
         "\n  verify-public-release-assets:", 1
@@ -2378,7 +2481,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
-    assert "quay.io/skopeo/stable@sha256:4fcfc74eb89ec72dcd8caa7fbbf2a5f77d9fe3e2f5ac9e39192702f49c6d4d1a" in workflow
+    assert "quay.io/skopeo/stable@sha256:0f75798d450d0cc0ea3700c79d929ae7609fb7d0e627673c14be8a484587c9b1" in workflow
     assert "Verify pinned publication helper is available" in workflow
     assert 'docker pull "${SKOPEO_IMAGE}"' in workflow
     assert 'root_index="$(cat "${OCI_LAYOUT}/index.json")"' in publish_job

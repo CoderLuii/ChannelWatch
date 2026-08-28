@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/CoderLuii/ChannelWatch/security/vex/v1.0.5-cpython-runtime",
+  "@id": "https://github.com/CoderLuii/ChannelWatch/security/vex/v1.0.6-cpython-runtime",
   "author": "ChannelWatch maintainers",
   "role": "Project Maintainer",
   "timestamp": "2026-08-26T00:00:00Z",

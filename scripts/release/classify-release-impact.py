@@ -7,8 +7,8 @@ import argparse
 import ast
 import base64
 import binascii
-import importlib.util
 import hashlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -52,6 +52,9 @@ AUDITED_RUNTIME_COMPATIBILITY_PATHS = frozenset(
         RUNTIME_LAUNCHER_COMPATIBILITY_PATH,
         LAUNCHER_PROTOCOL_COMPATIBILITY_PATH,
     }
+)
+MINIMUM_IMAGE_APP_UPDATE_COMPATIBILITY_PATHS = frozenset(
+    {RUNTIME_LAUNCHER_COMPATIBILITY_PATH}
 )
 LEGACY_BRIDGE_KIND = "legacy_update_bridge_v1"
 LEGACY_BRIDGE_VERSION = "0.9.18"
@@ -201,7 +204,9 @@ def _entrypoint_without_default_settings(
     lines = source.splitlines(keepends=True)
     start = assignment.lineno - 1
     end = assignment.end_lineno
-    normalized = "".join(lines[:start]) + "DEFAULT_SETTINGS = {}\n" + "".join(lines[end:])
+    normalized = (
+        "".join(lines[:start]) + "DEFAULT_SETTINGS = {}\n" + "".join(lines[end:])
+    )
     return normalized, defaults
 
 
@@ -446,8 +451,7 @@ def _historical_image_evidence_key(
 
 def _expected_historical_image_evidence_keys() -> set[str]:
     expected = {
-        f"{HISTORICAL_SUCCESS_SCENARIO}:{tag.lstrip('v')}"
-        for tag in LEGACY_BRIDGE_TAGS
+        f"{HISTORICAL_SUCCESS_SCENARIO}:{tag.lstrip('v')}" for tag in LEGACY_BRIDGE_TAGS
     }
     expected.update(
         f"{HISTORICAL_RECOVERY_SCENARIO}:{version}"
@@ -714,9 +718,7 @@ def verify_historical_image_evidence(
                     "recovery_image_cleared_failed_activation": True,
                 }
             )
-        recovery_mismatches = _historical_field_mismatches(
-            recovery, recovery_expected
-        )
+        recovery_mismatches = _historical_field_mismatches(recovery, recovery_expected)
         if version == "0.9.10" and recovery.get("apply_status") not in {
             "restarting",
             "connection_closed_for_restart",
@@ -791,6 +793,84 @@ def apply_verified_runtime_compatibility(
     )
 
 
+def apply_verified_minimum_image_app_update(
+    result: ReleaseImpact,
+    *,
+    config: dict[str, object],
+    evidence_path: Path | None,
+    bundle_path: Path | None,
+) -> ReleaseImpact:
+    """Allow bundle-covered launcher changes only after exact image replay."""
+
+    affected = set(result.triggering_paths) & set(
+        MINIMUM_IMAGE_APP_UPDATE_COMPATIBILITY_PATHS
+    )
+    if not affected:
+        return result
+    if evidence_path is None or bundle_path is None:
+        return result
+    version = config.get("version")
+    minimum_image = config.get("minimum_image_version")
+    delivery_mode = config.get("delivery_mode")
+    if (
+        not isinstance(version, str)
+        or not isinstance(minimum_image, str)
+        or delivery_mode not in {"app_update", "app_update_with_image_refresh"}
+        or version.split(".")[-1] == "0"
+    ):
+        raise ReleaseImpactMismatch(
+            "minimum-image app-update evidence is valid only for a non-milestone "
+            "in-app release"
+        )
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        bundle_sha256 = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseImpactMismatch(
+            "minimum-image app-update compatibility evidence could not be read"
+        ) from exc
+    if not isinstance(evidence, dict) or type(evidence.get("schema")) is not int:
+        raise ReleaseImpactMismatch(
+            "minimum-image app-update compatibility evidence header is invalid"
+        )
+    expected_header = {
+        "schema": 1,
+        "status": "passed",
+        "source_image_version": minimum_image,
+        "target_application_version": version,
+        "bundle_sha256": bundle_sha256,
+    }
+    mismatches = {
+        key: (evidence.get(key), expected)
+        for key, expected in expected_header.items()
+        if evidence.get(key) != expected
+    }
+    phases = (
+        "dynamic_activation",
+        "ui_restart",
+        "rollback_reapply",
+        "container_restart",
+    )
+    for phase in phases:
+        value = evidence.get(phase)
+        if (
+            not isinstance(value, dict)
+            or value.get("index_matches") is not True
+            or type(value.get("referenced_assets_verified")) is not int
+            or value["referenced_assets_verified"] < 1
+        ):
+            mismatches[phase] = (value, "matching index and referenced assets")
+    if mismatches:
+        raise ReleaseImpactMismatch(
+            "minimum-image app-update compatibility evidence is invalid: "
+            f"{mismatches}"
+        )
+    return _impact(
+        set(result.triggering_paths) - affected,
+        set(result.refresh_paths),
+    )
+
+
 def _normalized_package_runtime(content: str | None) -> object:
     if content is None:
         return None
@@ -844,12 +924,12 @@ def _docker_release_and_launcher_metadata(
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("ARG VERSION="):
-            versions.append(stripped.removeprefix("ARG VERSION=").strip('"\''))
+            versions.append(stripped.removeprefix("ARG VERSION=").strip("\"'"))
             normalized.append("ARG VERSION=<release-version>")
         elif stripped.startswith("ENV CHANNELWATCH_LAUNCHER_PROTOCOL="):
-            raw = stripped.removeprefix(
-                "ENV CHANNELWATCH_LAUNCHER_PROTOCOL="
-            ).strip('"\'')
+            raw = stripped.removeprefix("ENV CHANNELWATCH_LAUNCHER_PROTOCOL=").strip(
+                "\"'"
+            )
             try:
                 protocols.append(int(raw))
             except ValueError:
@@ -1015,6 +1095,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--compatibility-manifest", type=Path)
     parser.add_argument("--compatibility-bundle", type=Path)
     parser.add_argument("--historical-image-evidence", type=Path)
+    parser.add_argument("--minimum-image-app-update-evidence", type=Path)
+    parser.add_argument("--minimum-image-app-update-bundle", type=Path)
     parser.add_argument(
         "--public-key",
         action="append",
@@ -1088,6 +1170,12 @@ def main(argv: list[str] | None = None) -> int:
         historical_image_evidence=args.historical_image_evidence,
         public_keys=public_keys,
         audited_change_paths=audited_runtime_change_paths(before, after),
+    )
+    result = apply_verified_minimum_image_app_update(
+        result,
+        config=config,
+        evidence_path=args.minimum_image_app_update_evidence,
+        bundle_path=args.minimum_image_app_update_bundle,
     )
     result = apply_release_version_policy(result, version_policy)
     verify_declared_impact(

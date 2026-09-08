@@ -21,25 +21,21 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 async function expectCompactMobileHeader(page: Page) {
   const sidebar = page.getByRole("dialog", { name: "Primary navigation", includeHidden: true })
-  await expect(sidebar).toHaveAttribute("aria-hidden", "true")
+  await expect(sidebar).toHaveCount(0)
 
   const metrics = await page.evaluate(() => {
     const primary = document.querySelector<HTMLElement>('[data-testid="header-primary-controls"]')
     const utility = document.querySelector<HTMLElement>('[data-testid="header-utility-controls"]')
-    const aside = document.querySelector<HTMLElement>("aside")
-    if (!primary || !utility || !aside) throw new Error("Mobile header controls are unavailable")
+    if (!primary || !utility) throw new Error("Mobile header controls are unavailable")
     const primaryBox = primary.getBoundingClientRect()
     const utilityBox = utility.getBoundingClientRect()
-    const asideBox = aside.getBoundingClientRect()
     return {
       primaryRight: primaryBox.right,
       utilityLeft: utilityBox.left,
-      asideRight: asideBox.right,
     }
   })
 
   expect(metrics.primaryRight).toBeLessThanOrEqual(metrics.utilityLeft)
-  expect(metrics.asideRight).toBeLessThanOrEqual(0)
 }
 
 for (const viewport of viewports) {

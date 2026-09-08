@@ -6,7 +6,7 @@ import signal
 import stat
 import ipaddress
 import socket
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from email.utils import format_datetime
 from fastapi import APIRouter as _APIRouter
@@ -832,9 +832,13 @@ def _require_persistent_config_writable() -> None:
 
 
 class InMemoryRateLimiter:
-    def __init__(self, window_seconds: int):
+    def __init__(self, window_seconds: int, *, max_clients: int = 10_000):
+        if max_clients < 1:
+            raise ValueError("Rate limiter capacity must be positive.")
         self.window_seconds = window_seconds
-        self._requests: Dict[str, deque[float]] = {}
+        self.max_clients = max_clients
+        # Ordered by the latest accepted request, not by rejected attempts.
+        self._requests: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def allow_request(self, key: str, limit: int) -> bool:
@@ -842,8 +846,21 @@ class InMemoryRateLimiter:
         cutoff = now - self.window_seconds
 
         with self._lock:
+            # Bound maintenance work on each request. Never evict an active
+            # limit to make room for a new identity.
+            for _ in range(64):
+                if not self._requests:
+                    break
+                oldest_key = next(iter(self._requests))
+                oldest = self._requests[oldest_key]
+                if oldest and oldest[-1] > cutoff:
+                    break
+                del self._requests[oldest_key]
+
             request_times = self._requests.get(key)
             if request_times is None:
+                if len(self._requests) >= self.max_clients:
+                    return False
                 request_times = deque()
                 self._requests[key] = request_times
 
@@ -854,6 +871,7 @@ class InMemoryRateLimiter:
                 return False
 
             request_times.append(now)
+            self._requests.move_to_end(key)
             return True
 
 

@@ -45,6 +45,12 @@ Compose and env can start the container and seed an empty config, but the UI rem
 
 ---
 
+## Review data before sharing
+
+GitHub issues and Discussions are public. Logs, compose/settings snippets, screenshots, and even sanitized debug bundles can retain DVR and client names, watched or recorded content, hostnames, IP addresses, and other network metadata. Review and de-identify each item; removing passwords, API keys, tokens, and webhook URLs alone is not enough. Never post backups or encryption keys.
+
+Public reports should use a minimal reproduction and optional, short, reviewed examples. For diagnostic attachments, open **Diagnostics → Report a Problem**, review the public preview and attachments, and use the configured private support path. If that path is unavailable, ask the maintainer for a private channel without attaching sensitive data to the public request. The [privacy guide](../docs/project/PRIVACY.md#in-app-support-reports-and-feedback) explains which report details are public and which use the private intake path.
+
 ## Step 2: Search Discussions
 
 [GitHub Discussions](https://github.com/CoderLuii/ChannelWatch/discussions) is the right place for:
@@ -66,7 +72,7 @@ Before opening a bug report:
 
 1. Confirm you're on the latest version (`docker pull coderluii/channelwatch:latest`)
 2. Check that the issue isn't already reported
-3. Collect your logs and compose snippet
+3. Prepare a minimal reproduction and review any optional excerpts before sharing
 
 Use the matching issue template so the report includes the right fields:
 

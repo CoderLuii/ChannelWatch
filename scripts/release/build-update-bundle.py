@@ -25,6 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from release_version_policy import validate_release_config
+from render_release_legal import render_files
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_ABI = "channelwatch-runtime-v1"
@@ -156,6 +157,29 @@ def load_catalog_history(
         reverse=True,
     )
     return retained
+
+
+def require_previous_catalog_release(
+    current_version: str, history: list[dict[str, object]], published_tags: list[str]
+) -> None:
+    """Do not publish a new feed that silently drops its immediate predecessor."""
+    previous = []
+    for tag in published_tags:
+        if not tag.startswith("v"):
+            continue
+        try:
+            parsed = _release_version(tag)
+        except ValueError:
+            continue
+        if INITIAL_V2_BRIDGE_VERSION <= parsed < _release_version(current_version):
+            previous.append(parsed)
+    if not previous:
+        if _release_version(current_version) > INITIAL_V2_BRIDGE_VERSION:
+            raise ValueError("Cannot verify catalog predecessor; fetch the complete release tags.")
+        return
+    version = ".".join(map(str, max(previous)))
+    if not any(release.get("version") == version for release in history):
+        raise ValueError(f"Signed-catalog history must retain the previous release {version}.")
 
 
 def run_git(*args: str) -> str:
@@ -326,7 +350,7 @@ def write_zip(source: Path, destination: Path, *, source_date_epoch: int) -> Non
             zf.writestr(info, path.read_bytes())
 
 
-def copy_release_legal_files(destination: Path) -> None:
+def copy_release_legal_files(destination: Path, *, version: str) -> None:
     for source_name, target_name in LEGAL_RELEASE_FILES.items():
         source = ROOT / source_name
         if not source.is_file():
@@ -334,6 +358,7 @@ def copy_release_legal_files(destination: Path) -> None:
         target = destination / target_name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    render_files(ROOT / "docs/legal", destination / "core/release_legal", version)
 
 
 def copy_copyleft_release_files(destination: Path) -> None:
@@ -344,7 +369,7 @@ def copy_copyleft_release_files(destination: Path) -> None:
             "--output-dir",
             str(destination / "core" / "release_legal" / "copyleft"),
             "--source-map",
-            str(ROOT / "docs" / "legal" / "CORRESPONDING_SOURCE.md"),
+            str(destination / "core" / "release_legal" / "CORRESPONDING_SOURCE.md"),
         ],
         cwd=ROOT,
         check=True,
@@ -518,11 +543,12 @@ def main() -> int:
         )
     )
     catalog_history = load_catalog_history(version, path=args.catalog_history)
+    require_previous_catalog_release(version, catalog_history, run_git("tag", "--merged", "HEAD", "--list").splitlines())
 
     with tempfile.TemporaryDirectory() as temp:
         staging = Path(temp) / "bundle"
         staging.mkdir()
-        copy_release_legal_files(staging)
+        copy_release_legal_files(staging, version=version)
         copy_copyleft_release_files(staging)
         copy_tree(ROOT / "app" / "core", staging / "core")
         copy_tree(ROOT / "app" / "ui" / "backend", staging / "ui" / "backend")

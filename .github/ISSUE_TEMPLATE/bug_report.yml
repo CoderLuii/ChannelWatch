@@ -12,6 +12,10 @@ body:
 
         **Before opening:** check [Discussions](https://github.com/CoderLuii/ChannelWatch/discussions) and existing issues to see if this has already been reported.
 
+        **This is a public issue.** Before posting, review every snippet and screenshot. Even sanitized debug bundles can contain DVR and client names, watched or recorded content, hostnames, IP addresses, and other network metadata. Remove identifying details as well as passwords, API keys, tokens, and webhook URLs. Never post backups or encryption keys.
+
+        For diagnostic attachments, use **Diagnostics → Report a Problem**, review its public preview and attachments, and use the configured private support path. If unavailable, ask the maintainer for a private channel without attaching the data here. See the [privacy guide](https://github.com/CoderLuii/ChannelWatch/blob/main/docs/project/PRIVACY.md).
+
   - type: input
     id: cw_version
     attributes:
@@ -62,10 +66,10 @@ body:
     id: compose_snippet
     attributes:
       label: docker-compose.yml snippet
-      description: Paste the relevant portion of your compose file. Remove passwords and API keys.
+      description: Optionally paste only a minimal example you have reviewed and de-identified. Follow the privacy warning above.
       render: yaml
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: steps
@@ -100,8 +104,8 @@ body:
     attributes:
       label: Logs
       description: |
-        Paste output from `docker logs channelwatch 2>&1 | tail -100` or the full debug bundle from `channelwatch doctor debug bundle`.
-        Wrap long output in a `<details>` block if needed.
+        Include only a short, relevant excerpt you have reviewed and de-identified.
+        Do not attach a full debug bundle here; use the private support path described above.
       render: text
     validations:
       required: false
@@ -110,6 +114,6 @@ body:
     id: additional
     attributes:
       label: Additional context
-      description: Screenshots, related issues, anything else that might help.
+      description: Related issues or reviewed screenshots with names, content, addresses, and credentials removed.
     validations:
       required: false

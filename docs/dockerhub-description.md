@@ -14,7 +14,7 @@ Recommended tags:
 - `latest` for the newest stable image
 - `0.9` for the current compatible v0.9 release
 - `1.0.0` for the v1.0 image milestone
-- `1.0.8` for a fresh install containing the current v1.0.8 app; existing operational v1.0.0 through v1.0.7 installations update in-app
+- `1.1.0` for the current container-image milestone; upgrading from the 1.0.x line requires this image
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Open `http://localhost:8501` after the container starts.
 
 Use v1.0.0, `1.0`, or `latest` for the current v1.0 image milestone. Preserve `/config` when recreating the container; ChannelWatch continues managing credential protection automatically.
 
-Existing operational v1.0.0 through v1.0.7 installations install v1.0.8 through **Settings > Updates**. A compatible v1.0 container running the signed v1.0.8 bundle is fully current and does not need to be recreated. After activation, v1.0.8 opens Dashboard Overview and follows monitoring startup automatically until it becomes healthy or reaches a real degraded state. It also reads immutable image metadata instead of a stale container environment value when displaying image version and launcher compatibility. If an older Update Center is already trapped by an abandoned scheduler lock, preserve `/config` and recreate with `coderluii/channelwatch:1.0.8` once; no settings or credentials need to be re-entered.
+ChannelWatch v1.1.0 is a container-image milestone and requires the matching v1.1.0 image. Preserve your existing configuration volume and storage key when recreating the container. It bounds rate-limiter storage, adds accessible timeline counts, fixes mobile navigation focus, restores release gates and signed catalog history, generates accurate legal release identities, retains browser failure diagnostics, stabilizes uptime accessibility checks, and clarifies public support privacy and the supported security release line.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

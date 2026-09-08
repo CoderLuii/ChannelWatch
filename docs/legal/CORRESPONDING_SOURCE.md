@@ -1,9 +1,9 @@
-# ChannelWatch v0.9.18 Corresponding Source and Rebuild Map
+# ChannelWatch Corresponding Source and Rebuild Map
 
 <!-- cspell:ignore libgcc libstdc zstd -->
 
 This document maps the copyleft-licensed packages identified in the exact
-ChannelWatch v0.9.18 container SBOMs to their source and build recipes. The
+ChannelWatch container SBOMs to their source and build recipes. The
 published amd64 and arm64 SBOMs remain the authoritative package inventory.
 
 ChannelWatch does not modify these upstream packages. The final image is built
@@ -42,12 +42,13 @@ revision.
 Checkout the exact ChannelWatch release tag and run:
 
 ```sh
+version="$(python3 -c 'import json; print(json.load(open("scripts/release/release-config.json"))["version"])')"
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --file deploy/docker/Dockerfile \
-  --build-arg VERSION=0.9.18 \
+  --build-arg VERSION="${version}" \
   --build-arg GIT_SHA="$(git rev-parse HEAD)" \
-  --output type=oci,dest=channelwatch-v0.9.18.oci \
+  --output "type=oci,dest=channelwatch-v${version}.oci" \
   .
 ```
 
@@ -57,6 +58,6 @@ available to `pip`, and rebuild the image with the same Dockerfile. ChannelWatch
 imports `zeroconf` dynamically from the Python environment and does not prevent
 replacement with a modified compatible version.
 
-For source-availability questions about the v0.9.18 distribution, open a GitHub
+For source-availability questions about this distribution, open a GitHub
 Discussion or issue in the ChannelWatch repository and identify the release tag,
 image registry, architecture, package name, and SBOM package version.

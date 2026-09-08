@@ -247,7 +247,7 @@ export function Header() {
               variant="ghost"
               size="icon"
               className="min-h-11 min-w-11 shrink-0 md:hidden"
-              onClick={() => window.dispatchEvent(new CustomEvent("toggle-mobile-sidebar"))}
+              onClick={(event) => window.dispatchEvent(new CustomEvent("toggle-mobile-sidebar", { detail: event.currentTarget }))}
               aria-label={t("header.toggleMenu")}
             >
               <Menu className="h-5 w-5" aria-hidden="true" />

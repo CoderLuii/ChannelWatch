@@ -19,6 +19,10 @@ body:
 
         If you've done all three and still need help, fill in the form below. Questions with no activity for 30 days are automatically closed.
 
+        **This is a public issue.** Before posting, review every snippet and screenshot. Even sanitized debug bundles can contain DVR and client names, watched or recorded content, hostnames, IP addresses, and other network metadata. Remove identifying details as well as passwords, API keys, tokens, and webhook URLs. Never post backups or encryption keys.
+
+        For diagnostic attachments, use **Diagnostics → Report a Problem**, review its public preview and attachments, and use the configured private support path. If unavailable, ask the maintainer for a private channel without attaching the data here. See the [privacy guide](https://github.com/CoderLuii/ChannelWatch/blob/main/docs/project/PRIVACY.md).
+
   - type: input
     id: cw_version
     attributes:
@@ -55,7 +59,7 @@ body:
     id: config_snippet
     attributes:
       label: Relevant configuration (optional)
-      description: Paste your docker-compose.yml or settings snippet if relevant. Remove passwords and API keys.
+      description: Optionally paste only a minimal compose or settings example you have reviewed and de-identified. Follow the privacy warning above.
       render: yaml
     validations:
       required: false

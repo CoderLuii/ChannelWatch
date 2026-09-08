@@ -94,6 +94,15 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
   const timelineStart = streamingData[0]?.intervalStart
   const timelineEnd = streamingData[streamingData.length - 1]?.intervalEnd
   const nowPoint = streamingData.find((point) => point.isNow)
+  const visibleSeries = (["streams", "recordings", "vod"] as const)
+    .filter(key => chartVisibility[key])
+  const nonzeroPoints = streamingData.filter(point => visibleSeries.some(key => point[key] > 0))
+  const seriesLabels = {
+    streams: t("timeline.liveTV"), recordings: t("timeline.recordings"), vod: t("timeline.vod"),
+  }
+  const intervalLabel = (timestamp: number) => new Date(timestamp).toLocaleString([], {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  })
 
   return (
     <Card className="md:col-span-2">
@@ -257,6 +266,39 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             <span>{t("timeline.vod")}</span>
           </button>
         </div>
+        <details className="mx-3 mb-3 rounded-md border border-border px-3 py-2 text-sm">
+          <summary className="cursor-pointer rounded-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {t("timeline.viewData")}
+          </summary>
+          {visibleSeries.length === 0 ? (
+            <p className="mt-2 text-muted-foreground">{t("timeline.noSeries")}</p>
+          ) : nonzeroPoints.length === 0 ? (
+            <p className="mt-2 text-muted-foreground">{t("timeline.noSelectedEvents")}</p>
+          ) : (
+            <>
+              <p className="my-2 text-xs text-muted-foreground">{t("timeline.zeroIntervals")}</p>
+              <div className="max-h-64 overflow-auto">
+                <table className="w-full text-left text-xs">
+                  <caption className="pb-2 text-left font-medium">{t("timeline.dataCaption")}</caption>
+                  <thead><tr>
+                    <th scope="col" className="p-2">{t("timeline.interval")}</th>
+                    {visibleSeries.map(key => <th key={key} scope="col" className="p-2 text-right">{seriesLabels[key]}</th>)}
+                  </tr></thead>
+                  <tbody>{nonzeroPoints.map(point => (
+                    <tr key={point.intervalStart} className="border-t border-border">
+                      <th scope="row" className="p-2 font-normal">
+                        <time dateTime={new Date(point.intervalStart).toISOString()}>{intervalLabel(point.intervalStart)}</time>
+                        {" – "}
+                        <time dateTime={new Date(point.intervalEnd).toISOString()}>{intervalLabel(point.intervalEnd)}</time>
+                      </th>
+                      {visibleSeries.map(key => <td key={key} className="p-2 text-right tabular-nums">{point[key]}</td>)}
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </details>
       </CardContent>
     </Card>
   )

@@ -97,10 +97,10 @@ def test_official_image_bundles_project_and_third_party_legal_notices():
 
     assert "COPY LICENSE /licenses/channelwatch/LICENSE" in dockerfile
     assert "COPY docs/legal/NOTICE /licenses/channelwatch/NOTICE" in dockerfile
-    assert (
-        "COPY docs/legal/THIRD_PARTY_LICENSES.md "
-        "/licenses/channelwatch/THIRD_PARTY_LICENSES.md"
-    ) in dockerfile
+    assert "COPY scripts/release/render_release_legal.py /tmp/render_release_legal.py" in dockerfile
+    assert "COPY docs/legal/CORRESPONDING_SOURCE.md docs/legal/THIRD_PARTY_LICENSES.md /tmp/legal-source/" in dockerfile
+    assert '"--output-dir", "/licenses/channelwatch"' in dockerfile
+    assert '"--copyleft-source-map", "/licenses/channelwatch/copyleft/CORRESPONDING_SOURCE.md"' in dockerfile
     assert "!docs/legal/THIRD_PARTY_LICENSES.md" in dockerignore
     assert "COPY scripts/release/copyleft_licenses.py" in dockerfile
     assert "COPY docs/legal/CORRESPONDING_SOURCE.md" in dockerfile

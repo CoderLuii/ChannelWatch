@@ -67,17 +67,30 @@ test("axe: feature request dialog has no accessibility violations", async ({ pag
   expect(results.violations).toEqual([])
 })
 
-test("axe: DVR uptime dialog has no accessibility violations", async ({ page }) => {
+for (const theme of ["light", "dark"] as const) {
+for (const reducedMotion of ["no-preference", "reduce"] as const) {
+test(`axe: settled DVR uptime dialog ${theme} ${reducedMotion}`, async ({ page }) => {
+  await page.addInitScript(value => localStorage.setItem("theme", value), theme)
+  await page.emulateMedia({ reducedMotion })
   await page.goto("/#overview")
   await page.getByRole("button", { name: /DVR uptime/ }).click()
-  await expect(page.getByRole("dialog", { name: "DVR uptime" })).toBeVisible()
-
+  const dialog = page.getByRole("dialog", { name: "DVR uptime" })
+  await expect(dialog).toBeVisible()
+  // Visibility starts at the first animation frame. Measure final composited
+  // colors only after the dialog and its overlay finish their finite motion.
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations()
+      .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
+      .map(animation => animation.finished.catch(() => undefined)))
+  })
+  await expect(dialog).toHaveCSS("opacity", "1")
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze()
-
   expect(results.violations).toEqual([])
 })
+}
+}
 
 test("axe: authenticated legacy recovery has no accessibility violations", async ({ page }) => {
   await page.route("**/api/v1/runtime/key-recovery/status", (route) => route.fulfill({

@@ -218,7 +218,7 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 Use `coderluii/channelwatch:1.0.0`, `1.0`, or `latest` for the v1.0 image milestone. Preserve `/config` when recreating the container.
 
-ChannelWatch v1.0.9 is a signed in-app update for the v1.0.0 runtime. Open **Settings > Updates** to install it; no image pull or container recreation is required for an installation already on the 1.0.x image line. This release fixes activity retry after storage failure, preserves unreadable recovery data during targeted deletion, retries pending health and recording outcomes, and makes permanent DVR deletion recoverable across settings and storage failures. It also fixes Settings navigation, keyboard disclosures, notification labels and contrast, restart focus behavior, and dashboard stale-data warnings.
+ChannelWatch v1.1.0 is a container-image milestone and requires the matching v1.1.0 image. Preserve your existing configuration volume and storage key when recreating the container. It bounds rate-limiter storage, adds accessible timeline counts, fixes mobile navigation focus, restores release gates and signed catalog history, generates accurate legal release identities, retains browser failure diagnostics, stabilizes uptime accessibility checks, and clarifies public support privacy and the supported security release line.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 

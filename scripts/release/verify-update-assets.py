@@ -13,6 +13,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from render_release_legal import render_document
+
 ROOT = Path(__file__).resolve().parents[2]
 APP_ROOT = ROOT / "app"
 if str(APP_ROOT) not in sys.path:
@@ -54,6 +59,12 @@ CRITICAL_SOURCE_MEMBERS = {
         "docs/legal/THIRD_PARTY_LICENSES.md"
     ),
     "ui/backend/main.py": Path("app/ui/backend/main.py"),
+}
+
+GENERATED_LEGAL_SOURCE_MEMBERS = {
+    "core/release_legal/THIRD_PARTY_LICENSES.md": Path("docs/legal/THIRD_PARTY_LICENSES.md"),
+    "core/release_legal/CORRESPONDING_SOURCE.md": Path("docs/legal/CORRESPONDING_SOURCE.md"),
+    "core/release_legal/copyleft/CORRESPONDING_SOURCE.md": Path("docs/legal/CORRESPONDING_SOURCE.md"),
 }
 
 
@@ -232,7 +243,9 @@ def verify_update_assets(
         except zipfile.BadZipFile as exc:
             raise UpdateBundleError("Update bundle is not a valid zip file.") from exc
         with archive:
-            for member, relative_source in CRITICAL_SOURCE_MEMBERS.items():
+            # Earlier immutable releases copied legal documents verbatim.
+            generated_legal = GENERATED_LEGAL_SOURCE_MEMBERS if tuple(map(int, version.split("."))) >= (1, 1, 0) else {}
+            for member, relative_source in {**CRITICAL_SOURCE_MEMBERS, **generated_legal}.items():
                 source_path = source_root / relative_source
                 try:
                     source_bytes = source_path.read_bytes()
@@ -268,6 +281,8 @@ def verify_update_assets(
                     raise UpdateBundleError(
                         f"Update bundle is missing critical source member: {member}."
                     ) from exc
+                if member in generated_legal:
+                    source_bytes = render_document(source_bytes.decode("utf-8"), version).encode("utf-8")
                 if bundled_bytes != source_bytes:
                     raise UpdateBundleError(
                         f"Update bundle member {member} does not match exact release source."

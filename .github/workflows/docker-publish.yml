@@ -96,14 +96,26 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - name: Run browser, responsive, visual, keyboard, and accessibility checks
         run: pnpm exec playwright test
+      - name: Retain browser diagnostics, including first failed attempts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-browser-${{ github.sha }}
+          path: |
+            app/ui/playwright-report/
+            app/ui/test-results/
+          retention-days: 7
+          if-no-files-found: warn
 
   docs-config:
     name: Docs and config
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
@@ -119,11 +131,13 @@ jobs:
 
   helm:
     name: Helm
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
       - name: Lint and render managed-local mode
@@ -159,11 +173,13 @@ jobs:
 
   security:
     name: Security
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Install Trivy
@@ -257,6 +273,7 @@ jobs:
           )
           PY
   signed-candidate:
+    needs: [docs-config, helm, security]
     name: Build and verify private signed candidate
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -374,6 +391,18 @@ jobs:
           pnpm build
           pnpm exec playwright install --with-deps chromium firefox webkit
           pnpm exec playwright test
+
+      # Browser checks use disposable API fixtures and run before signing secrets.
+      - name: Retain browser diagnostics, including first failed attempts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-browser-${{ github.sha }}
+          path: |
+            app/ui/playwright-report/
+            app/ui/test-results/
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Build deterministic signed candidate twice
         env:
@@ -1474,13 +1503,14 @@ jobs:
 
           cp LICENSE "${release_dir}/channelwatch-${TAG}-LICENSE.txt"
           cp docs/legal/NOTICE "${release_dir}/channelwatch-${TAG}-NOTICE.txt"
-          cp docs/legal/THIRD_PARTY_LICENSES.md \
+          python scripts/release/render_release_legal.py --version "${VERSION}" --source-dir docs/legal --output-dir dist/generated-legal
+          cp dist/generated-legal/THIRD_PARTY_LICENSES.md \
             "${release_dir}/channelwatch-${TAG}-THIRD-PARTY-LICENSES.md"
-          cp docs/legal/CORRESPONDING_SOURCE.md \
+          cp dist/generated-legal/CORRESPONDING_SOURCE.md \
             "${release_dir}/channelwatch-${TAG}-CORRESPONDING-SOURCE.md"
           python scripts/release/copyleft_licenses.py \
             --output-dir "${RUNNER_TEMP}/channelwatch-copyleft-licenses" \
-            --source-map docs/legal/CORRESPONDING_SOURCE.md \
+            --source-map dist/generated-legal/CORRESPONDING_SOURCE.md \
             --archive "${release_dir}/channelwatch-${TAG}-COPYLEFT-LICENSES.zip"
 
           for required_asset in \

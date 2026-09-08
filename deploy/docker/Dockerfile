@@ -51,7 +51,7 @@ FROM cgr.dev/chainguard/python:latest@sha256:1f6779775c9f466890da563e411cb677045
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.0.9
+ARG VERSION=1.1.0
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1
@@ -90,8 +90,10 @@ COPY app/bin/channelwatch /usr/local/bin/channelwatch
 COPY deploy/config/supervisor/supervisord.conf.template /etc/supervisor/conf.d/supervisord.conf.template
 COPY LICENSE /licenses/channelwatch/LICENSE
 COPY docs/legal/NOTICE /licenses/channelwatch/NOTICE
-COPY docs/legal/THIRD_PARTY_LICENSES.md /licenses/channelwatch/THIRD_PARTY_LICENSES.md
+COPY scripts/release/render_release_legal.py /tmp/render_release_legal.py
+COPY docs/legal/CORRESPONDING_SOURCE.md docs/legal/THIRD_PARTY_LICENSES.md /tmp/legal-source/
 COPY --from=python-deps /release-licenses/copyleft /licenses/channelwatch/copyleft
+RUN ["/usr/bin/python", "/tmp/render_release_legal.py", "--source-dir", "/tmp/legal-source", "--output-dir", "/licenses/channelwatch", "--copyleft-source-map", "/licenses/channelwatch/copyleft/CORRESPONDING_SOURCE.md"]
 COPY --from=ui-builder /src/out /app/ui/backend/static_ui/
 COPY app/ui/public/images /app/ui/backend/static/images/
 

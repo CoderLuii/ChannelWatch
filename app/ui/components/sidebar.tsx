@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState, type ComponentType } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
 import {
   Bell,
   ChevronRight,
@@ -48,6 +49,8 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
   const [isMobile, setIsMobile] = useState(propIsMobile || false)
   const [isOpen, setIsOpen] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(true)
+  const [dialogElement, setDialogElement] = useState<HTMLElement | null>(null)
+  const previousFocus = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     if (propIsMobile !== undefined) {
@@ -61,23 +64,29 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
   }, [propIsMobile])
 
   useEffect(() => {
-    const handler = () => setIsOpen((current) => !current)
+    const handler = (event: Event) => {
+      if (!isOpen) {
+        const trigger = (event as CustomEvent<HTMLElement>).detail
+        previousFocus.current = trigger instanceof HTMLElement ? trigger : document.activeElement as HTMLElement
+      }
+      setIsOpen(current => !current)
+    }
     window.addEventListener("toggle-mobile-sidebar", handler)
     return () => window.removeEventListener("toggle-mobile-sidebar", handler)
-  }, [])
+  }, [isOpen])
 
   useEffect(() => {
-    if (isMobile) setIsOpen(false)
+    setIsOpen(false)
   }, [activeView, isMobile])
 
-  useEffect(() => {
-    if (!isMobile || !isOpen) return
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false)
-    }
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [isMobile, isOpen])
+  useLayoutEffect(() => {
+    if (!isMobile || !isOpen || !dialogElement) return
+    const background = Array.from(document.body.children)
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && !element.contains(dialogElement) && !element.hasAttribute("data-radix-focus-guard"))
+      .map(element => ({ element, inert: element.inert }))
+    background.forEach(({ element }) => { element.inert = true })
+    return () => { background.forEach(({ element, inert }) => { element.inert = inert }) }
+  }, [dialogElement, isMobile, isOpen])
 
   const renderNavigationItem = (item: NavigationItem) => {
     const selected = item.matches ? item.matches(activeView) : activeView === item.view
@@ -132,9 +141,9 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
     </Button>
   )
 
-  return (
-    <TooltipProvider delayDuration={300}>
+  const sidebar = (
       <aside
+        ref={isMobile ? setDialogElement : undefined}
         className={cn(
           "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border bg-background",
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
@@ -147,6 +156,7 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
         aria-hidden={isMobile && !isOpen ? true : undefined}
         inert={isMobile && !isOpen}
       >
+        {isMobile ? <DialogPrimitive.Title className="sr-only">{t("sidebar.navigation")}</DialogPrimitive.Title> : null}
         <div className={cn(
           "flex min-h-14 shrink-0 items-center border-b p-2",
           !isMobile && isCollapsed ? "justify-center" : "justify-between gap-2 px-4",
@@ -182,16 +192,34 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
           </div>
         ) : null}
       </aside>
+  )
 
-      {isMobile && isOpen ? (
-        <button
-          type="button"
-          className="fixed inset-0 z-30 bg-background/80 backdrop-blur-sm"
-          onClick={() => setIsOpen(false)}
-          aria-label={t("sidebar.closeSidebar")}
-        />
-      ) : null}
-
+  return (
+    <TooltipProvider delayDuration={300}>
+      {isMobile ? (
+        <DialogPrimitive.Root open={isOpen} onOpenChange={setIsOpen}>
+          <DialogPrimitive.Portal>
+            <div>
+              <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm" />
+              <DialogPrimitive.Content
+                asChild
+                aria-modal="true"
+                aria-describedby={undefined}
+                onCloseAutoFocus={event => {
+                  event.preventDefault()
+                  requestAnimationFrame(() => {
+                    const trigger = previousFocus.current
+                    if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
+                    else document.querySelector<HTMLElement>('aside button[aria-current="page"]')?.focus()
+                  })
+                }}
+              >
+                {sidebar}
+              </DialogPrimitive.Content>
+            </div>
+          </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
+      ) : sidebar}
       {!isMobile ? <div className={cn("transition-all duration-200 ease-in-out motion-reduce:transition-none", isCollapsed ? "ml-[60px]" : "ml-64")} /> : null}
     </TooltipProvider>
   )

@@ -8,6 +8,29 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.1.0] - 2026-09-08
+
+### Important
+
+- Container-image milestone: v1.1.0 requires the matching image. Preserve the existing configuration volume and storage key when recreating the container. Later 1.1.1 through 1.1.9 releases use the signed in-app path on this image line.
+
+### Fixed
+
+- Expire inactive API rate-limiter clients and cap retained identities without evicting active rate limits.
+- Provide keyboard-accessible timeline counts by local time interval, including repeated daylight-saving hours and selected chart series.
+- Contain mobile navigation focus, make its background inert, and restore focus after close or route changes.
+- Require the existing documentation/configuration, Helm and source-security gates for tag publication.
+- Retain authentic signed catalog entries for every published 1.0 release and reject a catalog missing its immediate predecessor.
+- Generate legal asset and rebuild version identity from release metadata across app bundles and container images, preserving historical license/source evidence.
+- Retain browser reports and first-attempt traces on both success and failure with seven-day retention.
+- Wait for finite uptime-dialog transitions before checking accessibility in both themes and motion preferences.
+- Explain public diagnostic-data privacy risks and direct reviewed attachments through the existing private support path.
+- Align the security support table with the active 1.1 release line.
+
+### Security
+
+- Update the transitive Browserslist build dependency to 4.28.7, which fixes [two](https://github.com/browserslist/browserslist/security/advisories/GHSA-73wf-gq98-2v4g) [upstream advisories](https://github.com/browserslist/browserslist/security/advisories/GHSA-c83g-rgw3-j3cx) reported by the restored source-security gate.
+
 ## [1.0.9] - 2026-09-08
 
 ### Fixed

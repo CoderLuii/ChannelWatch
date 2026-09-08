@@ -68,6 +68,422 @@
       "publication_time": "2026-08-26T01:25:00Z"
     },
     {
+      "version": "1.0.0",
+      "version_tag": "v1.0.0",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": true,
+      "delivery_mode": "image_required",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": false,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.0",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.0/channelwatch-app-v1.0.0.zip",
+      "bundle_sha256": "882fd6d04a163a8b83b75f7137c09446a02036059c347a76ea1e01c340d80525",
+      "bundle_signature": "9wMRfmBl1kPQKH+WFtlX5aMEre16REb1pQCxODmBxynNaBVOTPFOF8mRZKARB0QFOtNnNH/thqPhJZvL3IqSBw==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-26T19:45:00Z",
+      "highlights": [
+        "Establish v1.0.0 as the first intentional container-image milestone. Preserve `/config`, pull or recreate with the `1.0.0` image once, and use the in-app Update Center for v1.0.1 through v1.0.9.",
+        "Enforce the post-v1 release cadence in release tooling: every `X.Y.0` release requires the matching container image, `X.Y.1` through `X.Y.9` remain in-app releases, and patch numbers above 9 are rejected in favor of the next minor milestone.",
+        "Show that an update check is already in progress while retaining the last trustworthy application, image, runtime, and release status.",
+        "Prevent a concurrent scheduled and manual update check from replacing every Update Center version field with `Unknown`.",
+        "Validate release delivery metadata against the version milestone before signing or publication, preventing an in-app patch release from accidentally requiring a newer container image.",
+        "Treat v1.0.0 as an explicit image refresh that establishes the base for the v1.0.x in-app update line.",
+        "Keep the signed v2 catalog as the source for update availability while leaving the legacy v1 bridge pinned to v0.9.18."
+      ],
+      "automatic_install_after": "2026-08-28T19:45:00Z",
+      "compatible_source_application_versions": [
+        "0.9.18",
+        "0.9.19"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-26T19:45:00Z"
+    },
+    {
+      "version": "1.0.1",
+      "version_tag": "v1.0.1",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.1",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.1/channelwatch-app-v1.0.1.zip",
+      "bundle_sha256": "1125333c7683fc95a7eda56a230780844754fdaf5d7f55afb4be08eb70f69703",
+      "bundle_signature": "tTXffuwTjoo4fybTnkds9Qq+ywMCJJohGo4icqUlxkJBlpEe97n6EZ0iCNE3gFlpWrR5Ms1rlfBO2BkYqllkDw==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-27T07:25:00Z",
+      "highlights": [
+        "Add Alert policy presets for Monitor Only, Important Only, Balanced, and Everything while keeping Save Settings as the only persistence action and preserving every existing installation's choices and per-DVR overrides.",
+        "Add deterministic recording failed, skipped, missed, interrupted, cancelled, started, and completed outcomes, plus one DVR-unreachable alert and its corresponding recovery alert per confirmed outage.",
+        "Add exact Channels client filtering to Recent Activity, Watch History, per-DVR history, and existing activity exports without changing the aggregate 24-Hour Timeline.",
+        "Add Core and UI uptime definitions plus a compact, accessible DVR uptime dialog for every configured DVR.",
+        "Add a permanent Help & Feedback page with the existing secure problem-report flow, a lightweight feature/change request form that omits diagnostics, and external help links.",
+        "Use Important Only for fresh installations. Upgrades preserve all existing notification choices and initialize new operational delivery switches off until the administrator deliberately changes them.",
+        "Reorganize Alerts so DVR health and recording problems appear before routine viewing notifications, with semantic disclosure buttons, mobile-safe one-column controls, and clear global or per-DVR scope.",
+        "Rename System Uptime to ChannelWatch Uptime and identify Core as the primary monitoring process while showing UI uptime separately.",
+        "Keep feature-request text and optional screenshots only in page memory until success or explicit discard; no DVR inventory, logs, credentials, or debug bundle is attached.",
+        "Keep v1.0.1 as a signed in-app update for the v1.0.0 image. No image pull or container recreation is required.",
+        "Prevent stale v0.9.19 cache and completed jobs from appearing as an applicable update or an active operation on v1.0.0 and newer installations.",
+        "Prevent duplicate manual and scheduled update checks from blanking trusted version information or creating misleading busy state.",
+        "Deduplicate operational recording outcomes across event-stream and reconciled job state, defer missed/interrupted decisions while a DVR is unreachable, and preserve pending decisions across restart.",
+        "Keep one DVR's outage, recording job identifiers, client facets, and alert delivery state isolated from every other DVR.",
+        "Keep public health probes free of DVR uptime, client, recording, alert, and update-operation details; these remain authenticated interfaces.",
+        "Keep feature-request diagnostics excluded by construction and preserve the existing proof, attachment, origin, CSRF, rate-limit, and private-contact boundaries.",
+        "Continue requiring signed, compatible app bundles and the v1.0.0 runtime baseline while keeping `image_required=false` for v1.0.1."
+      ],
+      "automatic_install_after": "2026-08-29T07:25:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-27T07:25:00Z"
+    },
+    {
+      "version": "1.0.2",
+      "version_tag": "v1.0.2",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.2",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.2/channelwatch-app-v1.0.2.zip",
+      "bundle_sha256": "e5be49a2fdcbebcdf7a800a04002fc133b15f943750c65bf6a616f54214984d6",
+      "bundle_signature": "F2p96yqnPMqLdMVnDG5oDcW6WQg1BoBKAoFVd/xD+x14eroKtEnm9xVFknrKRLbEcTEjqDq/JGwj6qjjjcV4Cw==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-27T08:48:00Z",
+      "highlights": [
+        "Operational v1.0.0 and v1.0.1 installations update normally through **Settings > Updates**. An installation already trapped by a persistent `Another update operation is already running` error can preserve `/config` and recreate with the optional v1.0.2 image once; saved DVRs, credentials, settings, and history remain intact.",
+        "Serialize scheduler-state reads and writes with an operating-system-held advisory lock. A lock is busy only while another process genuinely owns it, rather than whenever a marker file exists.",
+        "Keep v1.0.2 a signed in-app update for the v1.0.0 runtime with `image_required=false`, while publishing the normal multi-architecture image as a recovery and fresh-install option.",
+        "Recover automatically from the abandoned `update-scheduler.lock` marker that could make Check, Apply, policy loading, and automatic updates return `ERR_UPDATE_LOCKED` indefinitely even when no update was running.",
+        "Prevent Core/UI restarts, same-process ownership metadata, PID reuse, exceptions, and leftover lock files from permanently blocking later Update Center operations.",
+        "Preserve fail-closed handling for symlinked, hard-linked, special, or otherwise unsafe scheduler lock paths while allowing verified legacy markers to be retired safely.",
+        "Continue requiring signed compatible bundles, exact digest verification, pre-update backup, activation quorum, and rollback while changing only scheduler-state serialization."
+      ],
+      "automatic_install_after": "2026-08-29T08:48:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-27T08:48:00Z"
+    },
+    {
+      "version": "1.0.3",
+      "version_tag": "v1.0.3",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.3",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.3/channelwatch-app-v1.0.3.zip",
+      "bundle_sha256": "b8a5ac5efe266f38a305460661a3ca8c2aa4484f8072d0dc1676af7834e1b774",
+      "bundle_signature": "XYM3HBafabOzqkLIXRiQMWwUssvOkJvyVJ3q0aHjrmswQHqISDxNJQG1b9Y+0pHEdVzYNipA+13Rsy/7VzD7Dg==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-27T11:15:00Z",
+      "highlights": [
+        "Define the 24-Hour Timeline as detected activity-event counts grouped into 20-minute intervals. The chart does not represent simultaneous streams, viewing duration, or stream-hours.",
+        "Use discrete step geometry, real timestamp ticks, and exact interval labels so the graph, cursor position, tooltip time, and event counts describe the same interval.",
+        "Load the complete 24-hour timeline through bounded pagination while keeping longer Recent Activity views capped at 250 records.",
+        "Prevent smoothed chart interpolation from drawing activity peaks over intervals whose tooltip correctly contained zero events.",
+        "Remove the unnamed zero-valued tooltip row that was created by the previous current-time marker.",
+        "Keep selected-DVR timeline requests within the backend's supported 100-row page limit instead of returning HTTP 422, and deduplicate activity UUIDs across pages.",
+        "Show the actual title and clean Channels client name for recorded and VOD playback in Active Streams instead of displaying `Unknown` or including playback progress in the client label.",
+        "Make the legacy and v1 stream-detail endpoints use the same metadata parser without changing their response contracts.",
+        "Preserve existing authentication, activity-history privacy, DVR destination validation, signed-update verification, and v1.0.0 runtime compatibility boundaries.",
+        "Keep v1.0.3 a signed in-app update with `image_required=false`; no container recreation is required for operational v1.0.0 through v1.0.2 installations.",
+        "Make the early-SIGHUP Linux release test consume the complete buffered startup stream, preventing a healthy Core process from being mistaken for a startup timeout under CI load."
+      ],
+      "automatic_install_after": "2026-08-29T11:15:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1",
+        "1.0.2"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-27T11:15:00Z"
+    },
+    {
+      "version": "1.0.4",
+      "version_tag": "v1.0.4",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.4",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.4/channelwatch-app-v1.0.4.zip",
+      "bundle_sha256": "feec617fe9bd8632e43a38e1175b4410d1e164c65c362e2b8690138dc7555e82",
+      "bundle_signature": "0ntF57/G4UlNwKYIUSPz5RQsLI18/jV8ysYS6vCToiXO3PN2VatsktS2a+hIebPfJPmhxYYErO5mzNoUHHA+CQ==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-28T02:20:00Z",
+      "highlights": [
+        "Make each 24-Hour Timeline hover describe one stable 20-minute interval with explicit Live TV, Recordings, and VOD event counts.",
+        "Keep all three named activity rows visible in the tooltip, including honest zero counts, so the chart meaning is clear without an unnamed summary value.",
+        "Remove the visible zero-valued hover dots that made the beginning of the timeline look like recorded activity when no event occurred there.",
+        "Preserve events in the first visible interval without inserting a synthetic leading zero that shifts or obscures the first real count.",
+        "Select the timeline interval from the actual activity payload rather than relying on Recharts payload order, keeping interval labels and counts aligned at chart boundaries.",
+        "Require the static HTML shell to revalidate after refresh so an activated in-app update does not leave the browser bootstrapping an older cached frontend.",
+        "Preserve existing authenticated activity-history access, public-health privacy, signed catalog and bundle verification, activation quorum, backup, and rollback protections.",
+        "Keep v1.0.4 a signed in-app update with `image_required=false`; no container recreation is required for operational v1.0.0 through v1.0.3 installations."
+      ],
+      "automatic_install_after": "2026-08-30T04:00:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.0.3"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-28T02:20:00Z"
+    },
+    {
+      "version": "1.0.5",
+      "version_tag": "v1.0.5",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.5",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.5/channelwatch-app-v1.0.5.zip",
+      "bundle_sha256": "46558ff9fa479b1d0552e01a81e53ba3d88bd125a51f77476ec313eb314871a2",
+      "bundle_signature": "HKWR8jH9vVk+1JFMRtTcN4Df/2pWQNvTSo2wWdMANj7SyUVsy5PrnHeaSz8qwrWuFMTFPDFRarFKVR3WBPnUDQ==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-28T03:30:00Z",
+      "highlights": [
+        "Wait for two consecutive healthy post-update checks before refreshing the browser, including successful startup and authenticated Settings reads.",
+        "Show a focused retry screen while Settings are temporarily unavailable during a restart instead of rendering an empty configuration form.",
+        "Prevent an in-app update from refreshing during a short-lived UI startup window and producing Safari's generic `Load failed` message.",
+        "Prevent a temporary Settings request failure from making saved DVRs, timezone, and other values appear missing.",
+        "Remove Save and Discard actions until the real settings have loaded, preventing an empty form from replacing preserved configuration.",
+        "Let the Settings page recover in place after the restarted backend is stable without requiring a container restart.",
+        "Preserve signed bundle verification, activation quorum, rollback, authentication, CSRF, and persistent `/config` protections.",
+        "Keep v1.0.5 a signed in-app update with `image_required=false`; no container recreation is required for operational v1.0.0 through v1.0.4 installations."
+      ],
+      "automatic_install_after": "2026-08-30T04:00:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.0.3",
+        "1.0.4"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-28T03:30:00Z"
+    },
+    {
+      "version": "1.0.6",
+      "version_tag": "v1.0.6",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.6",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.6/channelwatch-app-v1.0.6.zip",
+      "bundle_sha256": "0555cee0c9bce0209772db4dc7ccd6a4bb13673b63d73b44a8e7a0c2d75ce449",
+      "bundle_signature": "pKDOOrPyRBpQPe1CxPVQLIb+f0TN6q98zT4JyQdOcSfr3nV25kN/rEILYxswbgNAPV8lUxzkCigNjMTQUCA/Cw==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-28T07:00:00Z",
+      "highlights": [
+        "Make every selected app bundle serve its own static frontend, even when the underlying v1.0.0 through v1.0.5 container launcher still exports an older image-owned static path.",
+        "Verify the actual HTML and referenced browser assets served over HTTP during minimum-image and historical-image update canaries.",
+        "Exercise in-app activation, UI restart, rollback, reapply, and full container restart against every compatible v1.0 image before publication.",
+        "Prevent an in-app update from pairing the newly activated backend with an older frontend inherited from the container image.",
+        "Prevent the resulting Settings `Load failed` screen, apparently empty DVR configuration, clipped Update tab, and unsafe Save action after a successful update.",
+        "Keep the selected frontend generation aligned after Supervisor restarts either child process and after the container itself restarts.",
+        "Preserve signed bundle verification, activation quorum, rollback, authentication, CSRF, and persistent `/config` protections.",
+        "Keep v1.0.6 a signed in-app update with `image_required=false`; operational v1.0.0 through v1.0.5 installations do not require a container recreation."
+      ],
+      "automatic_install_after": "2026-08-30T07:00:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.0.3",
+        "1.0.4",
+        "1.0.5"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-28T07:00:00Z"
+    },
+    {
+      "version": "1.0.7",
+      "version_tag": "v1.0.7",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.7",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.7/channelwatch-app-v1.0.7.zip",
+      "bundle_sha256": "a357e26985aa83d4f1b6cf4223475d59c02ff9372d8c43b10a8afe2a4c3bc253",
+      "bundle_signature": "o+lOBo+CzpDkg2NhepxvJbyLF+6W5vlSaFRzu9LI+bCfGMcJAp4pcyzJXBtA+gRBlr7bEDKQ4nIhaCes89SvCw==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-08-28T16:00:00Z",
+      "highlights": [
+        "After a verified in-app update, hard-refresh the activated frontend directly onto Dashboard Overview instead of reopening the Settings page that initiated the update.",
+        "Present the first bounded monitoring pass after Core restarts as `Monitoring starting` until the monitor publishes freshness.",
+        "Apply the same dashboard handoff to successful official recovery updates while leaving rejected, failed, and timed-out updates on their current recovery screen.",
+        "Prevent a normal post-update monitor initialization window from being shown as the alarming `Monitoring stopped` state.",
+        "Prevent a successful Update Center apply from preserving the `#settings:updates` route across the required browser refresh.",
+        "Refresh successful no-restart update completions once so the browser cannot keep stale application state.",
+        "Preserve signed bundle verification, two-check startup verification, activation quorum, rollback, authentication, CSRF, and persistent `/config` protections.",
+        "Keep v1.0.7 a signed in-app update with `image_required=false`; operational v1.0.0 through v1.0.6 installations do not require a container recreation."
+      ],
+      "automatic_install_after": "2026-08-30T16:00:00Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.0.3",
+        "1.0.4",
+        "1.0.5",
+        "1.0.6"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-08-28T16:00:00Z"
+    },
+    {
       "version": "1.0.8",
       "version_tag": "v1.0.8",
       "channel": "stable",
@@ -121,6 +537,65 @@
       ],
       "revocation_state": "active",
       "publication_time": "2026-08-28T17:18:00Z"
+    },
+    {
+      "version": "1.0.9",
+      "version_tag": "v1.0.9",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.0.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.0.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.0.9",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.0.9/channelwatch-app-v1.0.9.zip",
+      "bundle_sha256": "c6a718c53fc99507eb621da83fc9523ce0467326d9a6b8b0f90582cacf8b1b80",
+      "bundle_signature": "7cQeomdLg4mUh65PgWkKagAB8TctGGvvpeTU+CLLyrqs2jNYxzZ0jGjbGuvYnGuTUictpOIVcQbbZ++3OrP5CA==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-09-08T16:13:54Z",
+      "highlights": [
+        "Release activity cooldowns when durable storage rejects an event, allowing immediate retry without duplicating accepted events.",
+        "Preserve unreadable recovery-journal bytes and database rows when targeted DVR deletion cannot safely filter the journal.",
+        "Keep health transitions and recording outcomes pending until activity storage and eligible notification queues accept them; replay pending work after restart with stable event IDs.",
+        "Make permanent DVR deletion recoverable across settings and storage failures, and report purge failures instead of silently claiming success.",
+        "Keep the visible Settings tab synchronized with hash navigation and browser history while preserving unsaved values.",
+        "Make all six General and Advanced Settings disclosures operable by keyboard and expose their expanded state.",
+        "Name notification provider, webhook, credential and reset controls for assistive technology.",
+        "Correct notification text contrast in light and dark provider, template and destination states.",
+        "Give the restart overlay dialog semantics, contained focus and an inert background; restore focus after its page reload.",
+        "Show dashboard stale-data warnings when system, recording or activity requests fail, and clear each warning after that data recovers.",
+        "Signed in-app update for the existing v1.0.0 image line. A newer container image is not required."
+      ],
+      "automatic_install_after": "2026-09-10T16:13:54Z",
+      "compatible_source_application_versions": [
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.0.3",
+        "1.0.4",
+        "1.0.5",
+        "1.0.6",
+        "1.0.7",
+        "1.0.8"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-09-08T16:13:54Z"
     }
   ]
 }

@@ -12,9 +12,9 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `0.9` for the current compatible v0.9 release
-- `1.0.0` for the v1.0 image milestone
-- `1.1.0` for the current container-image milestone; upgrading from the 1.0.x line requires this image
+- `1.1` for the newest image on the current minor line
+- `1.1.0` for the current container-image milestone
+- `1.1.1` for a fresh image containing the current app; existing v1.1.0 installations can update in-app
 
 ## Quick Start
 
@@ -38,13 +38,13 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.0.0, `1.0`, or `latest` for the current v1.0 image milestone. Preserve `/config` when recreating the container; ChannelWatch continues managing credential protection automatically.
+Use v1.1.0 for the current image milestone, or `1.1`/`latest` for the newest image on that line. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.1.0 is a container-image milestone and requires the matching v1.1.0 image. Preserve your existing configuration volume and storage key when recreating the container. It bounds rate-limiter storage, adds accessible timeline counts, fixes mobile navigation focus, restores release gates and signed catalog history, generates accurate legal release identities, retains browser failure diagnostics, stabilizes uptime accessibility checks, and clarifies public support privacy and the supported security release line.
+ChannelWatch v1.1.1 is a signed in-app update for the v1.1.0 image line. Open **Settings > Updates** to install it; an operational v1.1.0 installation does not need a newer image. This release corrects update and version guidance, restores complete changelog links, aligns public issue labels, makes label maintenance failures explicit, and removes six unused UI modules without changing runtime behavior.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.0.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.1.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
 
 An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v1.0.0, or provide the correct old key for one migration restart.
 

@@ -2,7 +2,7 @@
 name: Documentation Improvement
 about: Help us improve ChannelWatch documentation
 title: "[DOCS]"
-labels: documentation
+labels: type/docs
 assignees: CoderLuii
 
 ---

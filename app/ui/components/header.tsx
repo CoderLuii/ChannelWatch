@@ -58,7 +58,7 @@ export function Header() {
     const dialog = restartDialog
     if (!overlayOpen || !dialog) return
     const background = Array.from(document.body.children)
-      .filter((element): element is HTMLElement => element instanceof HTMLElement && !element.contains(dialog))
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && !element.contains(dialog) && !element.hasAttribute("data-radix-focus-guard"))
       .map(element => ({ element, wasInert: element.inert }))
     background.forEach(({ element }) => { element.inert = true })
     return () => { background.forEach(({ element, wasInert }) => { element.inert = wasInert }) }

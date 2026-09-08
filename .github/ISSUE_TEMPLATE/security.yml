@@ -1,7 +1,7 @@
-name: Security Vulnerability
-description: Report a security vulnerability (private disclosure only)
+name: Security Question
+description: Ask a non-sensitive security question; report vulnerabilities privately
 title: "[Security]: "
-labels: ["type/security", "priority/critical"]
+labels: ["type/security"]
 assignees:
   - CoderLuii
 body:

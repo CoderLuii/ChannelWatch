@@ -8,6 +8,22 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.1.1] - 2026-09-08
+
+### Important
+
+- Signed in-app update for the v1.1.0 image line. Existing operational v1.1.0 installations do not require a newer image; older image lines first need the v1.1.0 milestone.
+
+### Fixed
+
+- Preserve restart-dialog focus guards after a timeout so Safari keyboard focus stays within the recovery controls. This completes the timeout path of the v1.0.9 restart accessibility fix.
+- Correct update-guide heading order, current version examples, and the distinction between application and container image versions. Restore every release comparison link and the current Unreleased comparison.
+- Align documentation and security-question forms with canonical labels, reserve critical priority for maintainer triage, and make missing parser dependencies, empty label input and failed label updates return an error.
+
+### Changed
+
+- Remove six unused UI modules with no tracked import consumers. This maintenance cleanup does not change application behavior.
+
 ## [1.1.0] - 2026-09-08
 
 ### Important
@@ -740,7 +756,17 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.9...v1.1.0
+[1.0.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.8...v1.0.9
+[1.0.8]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.7...v1.0.8
+[1.0.7]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.6...v1.0.7
+[1.0.6]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.5...v1.0.6
+[1.0.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.4...v1.0.5
+[1.0.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.19...v1.0.0
 [0.9.19]: https://github.com/CoderLuii/ChannelWatch/compare/v0.9.18...v0.9.19
@@ -765,5 +791,3 @@ All notable changes to this project will be documented in this file. The format 
 [0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.0
 [0.8.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.8
 [0.7.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.7
-
-[1.0.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.8...v1.0.9

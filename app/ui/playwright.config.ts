@@ -53,7 +53,7 @@ export default defineConfig({
     },
     {
       name: "v101-webkit",
-      testMatch: /.*(?:v101|remediation-mobile)-smoke\.spec\.ts/,
+      testMatch: /.*(?:v101|remediation-mobile|remediation-restart)-smoke\.spec\.ts/,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1440, height: 1080 },
@@ -61,7 +61,7 @@ export default defineConfig({
     },
     {
       name: "v101-mobile-safari",
-      testMatch: /.*(?:v101|remediation-mobile)-smoke\.spec\.ts/,
+      testMatch: /.*(?:v101|remediation-mobile|remediation-restart)-smoke\.spec\.ts/,
       use: {
         ...devices["iPhone 13"],
         viewport: { width: 375, height: 812 },

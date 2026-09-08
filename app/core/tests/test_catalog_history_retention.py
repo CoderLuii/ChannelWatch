@@ -25,7 +25,8 @@ def test_predecessor_is_required_and_missing_tag_inventory_fails_closed():
 
 @pytest.mark.parametrize('unavailable', ['revoked', 'incompatible'])
 def test_retained_catalog_falls_back_to_highest_compatible_release(unavailable):
-    history=builder().load_catalog_history('1.1.0')
+    current=json.loads((ROOT/'scripts/release/release-config.json').read_text())['version']
+    history=builder().load_catalog_history(current)
     assert {e['version'] for e in history} >= {'0.9.18', *[f'1.0.{i}' for i in range(10)]}
     history=copy.deepcopy(history)
     if unavailable=='revoked':
@@ -33,4 +34,4 @@ def test_retained_catalog_falls_back_to_highest_compatible_release(unavailable):
     else:
         history[0]['compatible_launcher_protocols']=[]
     selection=select_catalog_release({'payload':{'releases':history}},current_version='1.0.0',runtime_abi='channelwatch-runtime-v1',settings_schema_version=7,launcher_protocol=3)
-    assert selection.release['version']=='1.0.8'
+    assert selection.release['version']=='1.0.9'

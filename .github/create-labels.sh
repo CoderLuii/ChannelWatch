@@ -21,72 +21,54 @@ if ! command -v python3 &>/dev/null; then
   exit 1
 fi
 
+# Requires PyYAML: python3 -m pip install PyYAML
 python3 - "$REPO" "$LABELS_FILE" <<'PYEOF'
-import sys, subprocess, json
-
-repo = sys.argv[1]
-labels_file = sys.argv[2]
+import re
+import subprocess
+import sys
 
 try:
     import yaml
-    with open(labels_file) as f:
-        labels = yaml.safe_load(f)
 except ImportError:
-    import re, ast
-    print("Warning: PyYAML not available; using basic parser")
-    with open(labels_file) as f:
-        content = f.read()
-    labels = []
-    for block in re.split(r'\n- name:', content):
-        if not block.strip():
-            continue
-        if not block.startswith('"') and not block.startswith("'"):
-            block = "- name:" + block
-        try:
-            parsed = yaml.safe_load(block)
-            if isinstance(parsed, list):
-                labels.extend(parsed)
-        except Exception:
-            pass
-
-created = 0
-updated = 0
-errors = 0
-
-for label in labels:
-    name = label['name']
-    color = label.get('color', 'ededed')
-    description = label.get('description', '')
-
-    result = subprocess.run(
-        ['gh', 'label', 'create', name,
-         '--repo', repo,
-         '--color', color,
-         '--description', description,
-         '--force'],
-        capture_output=True, text=True
-    )
-
-    if result.returncode == 0:
-        print(f"  OK  {name}")
-        created += 1
-    else:
-        stderr = result.stderr.strip()
-        if 'already exists' in stderr.lower():
-            subprocess.run(
-                ['gh', 'label', 'edit', name,
-                 '--repo', repo,
-                 '--color', color,
-                 '--description', description],
-                capture_output=True
-            )
-            print(f"  UP  {name}")
-            updated += 1
-        else:
-            print(f"  ERR {name}: {stderr}", file=sys.stderr)
-            errors += 1
-
-print(f"\nDone: {created} created, {updated} updated, {errors} errors")
-if errors:
+    print("Error: PyYAML is required. Install with: python3 -m pip install PyYAML", file=sys.stderr)
     sys.exit(1)
+
+repo, labels_file = sys.argv[1:]
+try:
+    with open(labels_file, encoding="utf-8") as source:
+        labels = yaml.safe_load(source)
+    if not isinstance(labels, list) or not labels:
+        raise ValueError("labels.yml must contain a non-empty list")
+    names = set()
+    for label in labels:
+        if not isinstance(label, dict) or not isinstance(label.get("name"), str) or not label["name"].strip():
+            raise ValueError("every label needs a non-empty name")
+        if label["name"] in names:
+            raise ValueError("label names must be unique")
+        names.add(label["name"])
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", str(label.get("color", "ededed"))):
+            raise ValueError("label colors must be six hexadecimal digits")
+        if not isinstance(label.get("description", ""), str):
+            raise ValueError("label descriptions must be text")
+except (OSError, ValueError, yaml.YAMLError) as exc:
+    print(f"Error: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+applied = errors = 0
+for label in labels:
+    result = subprocess.run(
+        ["gh", "label", "create", label["name"], "--repo", repo,
+         "--color", str(label.get("color", "ededed")),
+         "--description", label.get("description", ""), "--force"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"  OK  {label['name']}")
+        applied += 1
+    else:
+        print(f"  ERR {label['name']}: {result.stderr.strip()}", file=sys.stderr)
+        errors += 1
+
+print(f"\nDone: {applied} applied, {errors} errors")
+sys.exit(1 if errors else 0)
 PYEOF

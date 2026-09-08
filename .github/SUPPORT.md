@@ -70,7 +70,7 @@ The issue tracker is for **confirmed bugs and feature requests**. It's not a sup
 
 Before opening a bug report:
 
-1. Confirm you're on the latest version (`docker pull coderluii/channelwatch:latest`)
+1. In **Settings > Updates**, read **Application version** and check for updates. Include **Container image version** for update problems; an image tag alone does not identify an active in-app bundle.
 2. Check that the issue isn't already reported
 3. Prepare a minimal reproduction and review any optional excerpts before sharing
 

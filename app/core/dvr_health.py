@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import threading
@@ -47,6 +48,7 @@ class DvrHealthTracker:
         self._lock = threading.RLock()
         self._load_blocked = False
         self._state = self._load()
+        self._saved_state = copy.deepcopy(self._state)
 
     def _empty(self) -> dict[str, Any]:
         return {
@@ -86,7 +88,12 @@ class DvrHealthTracker:
             raise RuntimeError(
                 "Existing DVR health state needs recovery before it can be replaced."
             )
-        atomic_write_private_json(self.path, self._state, sort_keys=True)
+        try:
+            atomic_write_private_json(self.path, self._state, sort_keys=True)
+        except Exception:
+            self._state = copy.deepcopy(self._saved_state)
+            raise
+        self._saved_state = copy.deepcopy(self._state)
 
     def evaluate(
         self,
@@ -97,6 +104,9 @@ class DvrHealthTracker:
         current = self.now()
         delay = max(30, int(delay_seconds or 120))
         with self._lock:
+            pending = self._state.get("pending_transition")
+            if isinstance(pending, dict):
+                return DvrHealthTransition(**pending)
             if healthy:
                 if self._state.get("outage_alerted"):
                     outage_id = str(self._state.get("outage_id") or "unknown")
@@ -113,10 +123,10 @@ class DvrHealthTracker:
                             "startup_outage": False,
                         }
                     )
+                    transition = DvrHealthTransition("recovered", outage_id, notification_armed)
+                    self._state["pending_transition"] = transition.__dict__
                     self._save()
-                    return DvrHealthTransition(
-                        "recovered", outage_id, notification_armed
-                    )
+                    return transition
                 if self._state.get("unavailable_since") is not None:
                     self._state["unavailable_since"] = None
                     self._state["outage_id"] = None
@@ -166,8 +176,25 @@ class DvrHealthTracker:
             self._state["outage_alerted"] = True
             self._state["outage_id"] = outage_id
             self._state["notification_armed"] = False
+            transition = DvrHealthTransition("unreachable", outage_id)
+            self._state["pending_transition"] = transition.__dict__
             self._save()
-            return DvrHealthTransition("unreachable", outage_id)
+            return transition
+
+    def acknowledge(self, transition: DvrHealthTransition, *, notification_armed: bool) -> None:
+        """Clear only the transition accepted by activity storage and delivery."""
+        with self._lock:
+            if self._state.get("pending_transition") != transition.__dict__:
+                return
+            before = copy.deepcopy(self._state)
+            self._state.pop("pending_transition", None)
+            if transition.event == "unreachable":
+                self._state["notification_armed"] = bool(notification_armed)
+            try:
+                self._save()
+            except Exception:
+                self._state = before
+                raise
 
     def set_notification_armed(self, outage_id: str, armed: bool) -> None:
         """Record whether the unreachable notification entered delivery.

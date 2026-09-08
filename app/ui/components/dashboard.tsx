@@ -391,7 +391,7 @@ export function Dashboard() {
       case "notification-log":
         return <NotificationLog />
       case "settings":
-        return <SettingsForm settings={settings} onSettingsSaved={handleSettingsSaved} initialTab={settingsTab} />
+        return <SettingsForm settings={settings} onSettingsSaved={handleSettingsSaved} activeTab={settingsTab} onTabChange={(tab) => navigate(`settings:${tab}`)} />
       case "diagnostics":
         return <DiagnosticsPanel />
       case "help-feedback":

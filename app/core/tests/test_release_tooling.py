@@ -654,12 +654,12 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_108_in_app_release():
+def test_release_config_declares_109_in_app_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.0.8"
+    assert config["version"] == "1.0.9"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.0.0"
@@ -675,10 +675,11 @@ def test_release_config_declares_108_in_app_release():
         "1.0.5",
         "1.0.6",
         "1.0.7",
+        "1.0.8",
     ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.0.8 - Reliable update handoff and image detection"
+        "# ChannelWatch v1.0.9 - Reliable activity and accessible controls"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -756,7 +757,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_107_in_app_release():
+def test_release_version_surfaces_use_109_in_app_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -767,20 +768,20 @@ def test_release_version_surfaces_use_107_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.0.8"
-    assert metadata["versionTag"] == "v1.0.8"
-    assert metadata["dockerTag"] == "1.0.8"
-    assert metadata["helmChartVersion"] == "1.0.8"
-    assert metadata["helmAppVersion"] == "1.0.8"
+    assert metadata["version"] == "1.0.9"
+    assert metadata["versionTag"] == "v1.0.9"
+    assert metadata["dockerTag"] == "1.0.9"
+    assert metadata["helmChartVersion"] == "1.0.9"
+    assert metadata["helmAppVersion"] == "1.0.9"
 
 
-def test_release_body_for_107_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_109_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.0.8",
+        "versionTag": "v1.0.9",
         "releaseDate": "2026-08-28",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -792,7 +793,7 @@ def test_release_body_for_107_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.0.8",
+        "dockerTag": "1.0.9",
     }
     monkeypatch.setattr(
         module,
@@ -802,23 +803,23 @@ def test_release_body_for_107_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.0.8"],
+        ["render-release-body.py", "--version", "1.0.9"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.0.8 - Reliable update handoff and image detection\n"
+        "# ChannelWatch v1.0.9 - Reliable activity and accessible controls\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.0.8-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.0.8-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.0.8-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.0.8-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.0.9-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.0.9-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.0.9-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.0.9-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.0`" in output
@@ -2483,7 +2484,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
-    assert "quay.io/skopeo/stable@sha256:0f75798d450d0cc0ea3700c79d929ae7609fb7d0e627673c14be8a484587c9b1" in workflow
+    assert "quay.io/skopeo/stable@sha256:db4108427c05acbadd1447316caa9b5f097a9a737d897d2297443baedff37ded" in workflow
     assert "Verify pinned publication helper is available" in workflow
     assert 'docker pull "${SKOPEO_IMAGE}"' in workflow
     assert 'root_index="$(cat "${OCI_LAYOUT}/index.json")"' in publish_job

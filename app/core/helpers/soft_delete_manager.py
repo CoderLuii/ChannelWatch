@@ -1,10 +1,12 @@
 import json
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
-from core.storage.activity_store import delete_dvr_activity
+from core.storage.activity_store import delete_dvr_activity, validate_activity_deletion
+from .atomic_io import atomic_write_private_json, read_regular_file_bytes, fsync_directory
 
 SOFT_DELETE_RETENTION_DAYS = 30
 
@@ -34,40 +36,71 @@ def restore_dvr(dvr_servers: List[Dict[str, Any]], dvr_id: str) -> bool:
 
 
 def _remove_dvr_state_files(config_dir: Path, dvr_id: str) -> None:
-    for path in [config_dir / f"session_state_{dvr_id}.json"]:
-        if path.is_file():
-            try:
-                path.unlink()
-                log(f"Removed state file: {path.name}", level=LOG_STANDARD)
-            except OSError as e:
-                log(f"Could not remove {path.name}: {e}", level=LOG_VERBOSE)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", dvr_id):
+        raise ValueError("Invalid DVR identifier for deletion.")
+    path = config_dir / f"session_state_{dvr_id}.json"
+    path.unlink(missing_ok=True)
+    fsync_directory(config_dir)
 
 
 def _remove_dvr_history_rows(config_dir: Path, dvr_id: str) -> int:
+    return delete_dvr_activity(dvr_id, config_dir=config_dir)
+
+
+def prepare_dvr_deletions(config_dir: Path, dvr_ids: list[str]) -> None:
+    """Write intent before settings commit; do not destroy product data here."""
+    if not dvr_ids:
+        return
+    if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", item) for item in dvr_ids):
+        raise ValueError("Invalid DVR identifier for deletion.")
+    validate_activity_deletion(config_dir)
+    atomic_write_private_json(
+        config_dir / "pending-dvr-deletions.json", {"version": 1, "dvr_ids": dvr_ids}
+    )
+
+
+def complete_pending_dvr_deletions(config_dir: Path, servers: List[Dict[str, Any]]) -> None:
+    """Replay intent against durable settings while the settings lock is held.
+
+    A still-configured DVR means settings did not commit: cancel that intent.
+    An absent DVR must finish its purge before this record can be removed.
+    """
+    path = config_dir / "pending-dvr-deletions.json"
     try:
-        removed = delete_dvr_activity(dvr_id, config_dir=config_dir)
-        if removed > 0:
-            log(f"Removed {removed} history rows for DVR {dvr_id}", level=LOG_STANDARD)
-        return removed
-    except (OSError, RuntimeError, ValueError) as e:
-        log(f"Could not purge history rows for DVR {dvr_id}: {e}", level=LOG_VERBOSE)
-        return 0
+        record = json.loads(read_regular_file_bytes(path, max_bytes=128 * 1024))
+    except FileNotFoundError:
+        return
+    if (not isinstance(record, dict) or record.get("version") != 1
+            or not isinstance(record.get("dvr_ids"), list)
+            or any(not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", item)
+                   for item in record["dvr_ids"])):
+        raise ValueError("Pending DVR deletion record needs recovery.")
+    configured = {server.get("id") for server in servers if isinstance(server, dict)}
+    for dvr_id in record["dvr_ids"]:
+        if dvr_id not in configured:
+            _remove_dvr_history_rows(config_dir, dvr_id)
+            _remove_dvr_state_files(config_dir, dvr_id)
+    path.unlink()
+    fsync_directory(config_dir)
 
 
 def hard_delete_dvr(
     config_dir: Path,
     dvr_servers: List[Dict[str, Any]],
     dvr_id: str,
+    *,
+    defer_data_purge: bool = False,
 ) -> bool:
     """Remove DVR from settings list, its state files, and history rows. Mutates dvr_servers in-place."""
-    original_len = len(dvr_servers)
-    dvr_servers[:] = [
-        s for s in dvr_servers if not (isinstance(s, dict) and s.get("id") == dvr_id)
-    ]
-    if len(dvr_servers) == original_len:
+    if not any(isinstance(server, dict) and server.get("id") == dvr_id for server in dvr_servers):
         return False
-    _remove_dvr_state_files(config_dir, dvr_id)
-    _remove_dvr_history_rows(config_dir, dvr_id)
+    if not defer_data_purge:
+        _remove_dvr_history_rows(config_dir, dvr_id)
+        _remove_dvr_state_files(config_dir, dvr_id)
+    dvr_servers[:] = [
+        server for server in dvr_servers
+        if not (isinstance(server, dict) and server.get("id") == dvr_id)
+    ]
     log(f"Hard-deleted DVR {dvr_id}", level=LOG_STANDARD)
     return True
 
@@ -76,6 +109,8 @@ def purge_expired_dvrs(
     config_dir: Path,
     dvr_servers: List[Dict[str, Any]],
     retention_days: int = SOFT_DELETE_RETENTION_DAYS,
+    *,
+    defer_data_purge: bool = False,
 ) -> List[str]:
     """Hard-delete soft-deleted DVRs older than retention_days. Mutates dvr_servers in-place."""
     now = datetime.now(timezone.utc)
@@ -102,7 +137,7 @@ def purge_expired_dvrs(
 
     purged: List[str] = []
     for dvr_id in to_purge:
-        if hard_delete_dvr(config_dir, dvr_servers, dvr_id):
+        if hard_delete_dvr(config_dir, dvr_servers, dvr_id, defer_data_purge=defer_data_purge):
             purged.append(dvr_id)
             log(
                 f"Auto-purged DVR {dvr_id} (deleted >{retention_days}d ago)",

@@ -32,16 +32,16 @@ const MASKED_SENTINEL = "****"
 interface SettingsFormProps {
   settings?: AppSettings | null
   onSettingsSaved?: (settings: AppSettings) => void
-  initialTab?: string
+  activeTab?: string
+  onTabChange: (tab: string) => void
 }
 
-export function SettingsForm({ settings: initialSettings, onSettingsSaved, initialTab }: SettingsFormProps) {
+export function SettingsForm({ settings: initialSettings, onSettingsSaved, activeTab = "general", onTabChange }: SettingsFormProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [activeTab, setActiveTab] = useState(initialTab || "general")
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [bannerDismissing, setBannerDismissing] = useState(false)
   const [enabledProviders, setEnabledProviders] = useState({
@@ -422,7 +422,7 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, initi
 
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className="flex flex-col gap-8 pb-32">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
               <div className="border-b">
                 <div className="flex overflow-x-auto">
                   <TabsList className="inline-flex h-10 items-center justify-center rounded-none bg-transparent p-0">

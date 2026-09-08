@@ -194,7 +194,7 @@ async def _emit_dvr_health_transition(
         if unreachable
         else f"ChannelWatch is connected to {dvr_name} again."
     )
-    await asyncio.to_thread(
+    stored = await asyncio.to_thread(
         record_activity,
         activity_type="dvr_unreachable" if unreachable else "dvr_recovered",
         title=title,
@@ -202,7 +202,11 @@ async def _emit_dvr_health_transition(
         dvr_id=dvr_id,
         dvr_name=dvr_name,
         extra={"outcome": transition.event},
+        activity_event_id=f"dvr-health:{dvr_id}:{transition.outage_id}:{transition.event}",
     )
+
+    if not stored:
+        raise RuntimeError("Health activity was not accepted by durable storage.")
 
     effective = _effective_dvr_settings(settings, dvr)
     if not getattr(effective, "alert_dvr_health", False):
@@ -226,7 +230,7 @@ async def _emit_dvr_health_transition(
         return False
     enqueue = getattr(manager, "enqueue_notification", None)
     if callable(enqueue):
-        return bool(
+        accepted = bool(
             enqueue(
                 title,
                 message,
@@ -237,6 +241,9 @@ async def _emit_dvr_health_transition(
                 ),
             )
         )
+        if not accepted:
+            raise RuntimeError("Health notification queue did not accept the transition.")
+        return True
     return False
 
 
@@ -266,24 +273,18 @@ async def _evaluate_dvr_health(*, test_mode: bool) -> None:
             )
             continue
         if transition is not None:
-            accepted = await _emit_dvr_health_transition(
-                dvr,
-                settings,
-                transition,
-                test_mode=test_mode,
-            )
-            if transition.event == "unreachable":
-                try:
-                    await asyncio.to_thread(
-                        tracker.set_notification_armed,
-                        transition.outage_id,
-                        accepted,
-                    )
-                except Exception:
-                    log(
-                        "DVR health notification state could not be persisted.",
-                        extra={"dvr_id": dvr_id},
-                    )
+            try:
+                accepted = await _emit_dvr_health_transition(
+                    dvr, settings, transition, test_mode=test_mode,
+                )
+                await asyncio.to_thread(
+                    tracker.acknowledge, transition, notification_armed=accepted,
+                )
+            except Exception:
+                log(
+                    "DVR health transition remains pending for retry.",
+                    extra={"dvr_id": dvr_id},
+                )
 
 
 async def _run_dvr(monitor) -> None:

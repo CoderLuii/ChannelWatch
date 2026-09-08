@@ -51,7 +51,7 @@ export function DvrTabBar({ cardId, helpers }: DvrTabBarProps) {
           "min-h-11 px-3 py-1 rounded-md text-xs font-medium transition-colors shrink-0",
           active === "global"
             ? "bg-blue-600 text-white"
-            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            : "text-slate-600 dark:text-muted-foreground hover:text-foreground hover:bg-muted/50"
         )}
         onClick={() => setDvrTab((prev) => ({ ...prev, [cardId]: "global" }))}
       >
@@ -67,12 +67,12 @@ export function DvrTabBar({ cardId, helpers }: DvrTabBarProps) {
               "min-h-11 px-3 py-1 rounded-md text-xs font-medium transition-colors truncate max-w-[140px] shrink-0",
               active === server.id
                 ? "bg-blue-600 text-white"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                : "text-slate-600 dark:text-muted-foreground hover:text-foreground hover:bg-muted/50"
             )}
             onClick={() => setDvrTab((prev) => ({ ...prev, [cardId]: server.id }))}
           >
             {server.name || server.host || t("dvr.serverFallback")}
-            {overrideCount > 0 && <span className="ml-1 opacity-70">({overrideCount})</span>}
+            {overrideCount > 0 && <span className="ml-1">({overrideCount})</span>}
           </button>
         )
       })}

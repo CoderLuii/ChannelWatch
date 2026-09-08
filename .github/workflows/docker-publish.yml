@@ -26,7 +26,7 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:0f75798d450d0cc0ea3700c79d929ae7609fb7d0e627673c14be8a484587c9b1 # v1.22.2
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:db4108427c05acbadd1447316caa9b5f097a9a737d897d2297443baedff37ded # v1.22.2
   RELEASE_TAG: ${{ github.ref_name }}
   RELEASE_SHA: ${{ github.sha }}
 

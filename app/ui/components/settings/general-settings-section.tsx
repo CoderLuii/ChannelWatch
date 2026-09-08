@@ -256,20 +256,20 @@ export function GeneralSettingsSection({
       </Card>
 
       <Card className="border-blue-400/20 overflow-hidden">
-        <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleAlert("display")}>
-          <div className="flex gap-3 items-center">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.display} aria-controls="settings-display-content" onClick={() => toggleAlert("display")}>
+          <span className="flex gap-3 items-center">
+            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
               <Tv className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-base font-medium">{t("settings.general.bgImages")}</p>
-              <p className="text-sm text-muted-foreground">{t("settings.general.bgImagesDesc")}</p>
-            </div>
-          </div>
+            </span>
+            <span>
+              <span className="block text-base font-medium">{t("settings.general.bgImages")}</span>
+              <span className="block text-sm text-muted-foreground">{t("settings.general.bgImagesDesc")}</span>
+            </span>
+          </span>
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.display && "rotate-180")} />
-        </div>
+        </button>
         {expandedAlerts.display && (
-          <CardContent className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4">
+          <CardContent id="settings-display-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4">
             <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
               <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                 <Label>

@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect, useRef, useContext, createContext } from "react"
+import { useState, useEffect, useLayoutEffect, useRef, useContext, createContext, type MouseEvent } from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/base/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
@@ -45,10 +46,37 @@ export function Header() {
   const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null)
   const [whoAmI, setWhoAmI] = useState<WhoAmIResponse | null>(null)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [restartDialog, setRestartDialog] = useState<HTMLDivElement | null>(null)
+  const overlayOpen = overlayState !== "idle"
+  const restartFocusRef = useRef<HTMLElement | null>(null)
   const cancelPollRef = useRef<(() => void) | null>(null)
   const { toast } = useToast()
   const { setActiveView } = useContext(HeaderContext)
   const { selectedDvr, setSelectedDvr, availableDvrs } = useDvrSelection()
+
+  useLayoutEffect(() => {
+    const dialog = restartDialog
+    if (!overlayOpen || !dialog) return
+    const background = Array.from(document.body.children)
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && !element.contains(dialog))
+      .map(element => ({ element, wasInert: element.inert }))
+    background.forEach(({ element }) => { element.inert = true })
+    return () => { background.forEach(({ element, wasInert }) => { element.inert = wasInert }) }
+  }, [overlayOpen, restartDialog])
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("channelwatch-restart-focus") !== "restore") return
+      sessionStorage.removeItem("channelwatch-restart-focus")
+      requestAnimationFrame(() => {
+        const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-restart-trigger]"))
+          .find(button => button.getClientRects().length > 0)
+        trigger?.focus()
+      })
+    } catch {
+      // Session storage can be unavailable in restricted browser contexts.
+    }
+  }, [])
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -107,12 +135,14 @@ export function Header() {
     }
   }
 
-  const handleRestart = async () => {
+  const handleRestart = async (event: MouseEvent<HTMLButtonElement>) => {
+    const trigger = event.currentTarget
     try {
       if (!confirm(t("header.restartConfirm"))) {
         return
       }
 
+      restartFocusRef.current = trigger
       setIsRestarting(true)
       setOverlayState("restarting")
       setElapsed(0)
@@ -203,7 +233,8 @@ export function Header() {
   const handleDismissOverlay = () => {
     setOverlayState("idle")
     setIsRestarting(false)
-    // Reload the page to get fresh state
+    // Keep the existing fresh-page recovery while restoring keyboard context.
+    try { sessionStorage.setItem("channelwatch-restart-focus", "restore") } catch {}
     window.location.reload()
   }
 
@@ -262,6 +293,7 @@ export function Header() {
                     variant="outline"
                     size="sm"
                     className="hidden md:flex items-center gap-1"
+                    data-restart-trigger
                     onClick={handleRestart}
                     disabled={isRestarting}
                   >
@@ -283,6 +315,7 @@ export function Header() {
                     variant="outline"
                     size="sm"
                     className="flex min-h-11 min-w-11 items-center gap-1 px-0 md:hidden"
+                    data-restart-trigger
                     onClick={handleRestart}
                     disabled={isRestarting}
                     aria-label={t("header.restart")}
@@ -333,6 +366,10 @@ export function Header() {
 
       {/* Restart Overlay */}
       {overlayState !== "idle" && (
+        <DialogPrimitive.Root open onOpenChange={(open) => {
+          if (!open && overlayState !== "restarting") handleDismissOverlay()
+        }}>
+        <DialogPrimitive.Portal>
         <div
           className={`fixed inset-0 z-50 flex items-center justify-center ${
             overlayState === "dismissing" ? "animate-overlay-out" : "animate-overlay-in"
@@ -347,11 +384,24 @@ export function Header() {
           <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
 
           {/* Card */}
-          <div
+          <DialogPrimitive.Content
+            ref={setRestartDialog}
+            aria-modal="true"
+            aria-describedby={undefined}
+            onPointerDownOutside={(event) => event.preventDefault()}
+            onEscapeKeyDown={(event) => {
+              if (overlayState === "restarting") event.preventDefault()
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault()
+              requestAnimationFrame(() => restartFocusRef.current?.focus())
+            }}
             className={`relative z-10 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4 text-center ${
               overlayState === "dismissing" ? "animate-overlay-card-out" : "animate-overlay-card-in"
             }`}
           >
+            <DialogPrimitive.Title className="sr-only">{t("header.restart")}</DialogPrimitive.Title>
+            <div role="status" aria-live="polite" aria-atomic="true">
             {/* Restarting State */}
             {overlayState === "restarting" && (
               <>
@@ -440,8 +490,11 @@ export function Header() {
                 </div>
               </>
             )}
-          </div>
+            </div>
+          </DialogPrimitive.Content>
         </div>
+        </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
       )}
     </>
   )

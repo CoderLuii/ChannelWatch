@@ -73,6 +73,7 @@ def test_missed_requires_two_reachable_confirmations_at_least_30_seconds_apart(
     assert [(item.job_id, item.outcome) for item in outcomes] == [
         ("job-a", "missed")
     ]
+    tracker.acknowledge(outcomes[0])
     assert tracker.reconcile([], reachable=True) == []
 
 
@@ -110,6 +111,7 @@ def test_started_job_requires_successful_recording_lookups_before_interruption(
     assert [(item.job_id, item.outcome) for item in outcomes] == [
         ("job-a", "interrupted")
     ]
+    tracker.acknowledge(outcomes[0])
     assert tracker.reconcile([], recordings=[]) == []
 
 
@@ -140,6 +142,7 @@ def test_explicit_outcomes_are_deduplicated_across_restart(tmp_path: Path):
     failed_job = _job("job-a", 1, failed=True)
 
     first = tracker.reconcile([failed_job])
+    tracker.acknowledge(first[0])
     restarted = RecordingOutcomeTracker(config_dir=tmp_path, dvr_id="dvr-a")
     second = restarted.reconcile([failed_job])
 

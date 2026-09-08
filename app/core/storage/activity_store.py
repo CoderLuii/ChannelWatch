@@ -388,6 +388,13 @@ def clear_activity_storage(config_dir: str | Path | None = None) -> None:
         _set_status("healthy", reconciled=True)
 
 
+def validate_activity_deletion(config_dir: str | Path | None = None) -> None:
+    """Reject an unreadable journal before a settings deletion commits."""
+    _database_path, journal_path, _lock_path = _paths(config_dir)
+    with activity_storage_lock(config_dir):
+        _read_journal(journal_path)
+
+
 def delete_dvr_activity(
     dvr_id: str,
     *,
@@ -396,6 +403,9 @@ def delete_dvr_activity(
     database_path, journal_path, _lock_path = _paths(config_dir)
     removed = 0
     with activity_storage_lock(config_dir):
+        # Validate before any destructive change. An unreadable journal cannot
+        # safely be filtered by DVR; leave its bytes and database rows intact.
+        journal_rows = _read_journal(journal_path)
         if database_path.exists():
             engine = _open_engine(database_path)
             try:
@@ -409,10 +419,6 @@ def delete_dvr_activity(
                     session.commit()
             finally:
                 engine.dispose()
-        try:
-            journal_rows = _read_journal(journal_path)
-        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-            journal_rows = []
         kept = [row for row in journal_rows if row.get("dvr_id") != dvr_id]
         removed += len(journal_rows) - len(kept)
         _write_journal(journal_path, kept)

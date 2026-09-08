@@ -1,6 +1,7 @@
 """Manages and alerts on DVR recording events including scheduling, starting, completion, and cancellation."""
 
 import asyncio
+from functools import wraps
 import os
 import time
 from typing import Dict, Any, Optional, Union
@@ -23,6 +24,14 @@ from .recording_outcomes import (
     RecordingOutcomeTracker,
     classify_recording_payload,
 )
+
+
+def _serialize_outcome_publication(method):
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        async with self._outcome_publication_lock:
+            return await method(self, *args, **kwargs)
+    return wrapped
 
 
 class RecordingEventsAlert(BaseAlert, CleanupMixin):
@@ -151,6 +160,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             dvr_id=dvr_id,
         )
         self._outcome_persistence_error: str | None = None
+        self._outcome_publication_lock = asyncio.Lock()
 
         self.configure_cleanup(enabled=True, interval=3600, auto_cleanup=True)
 
@@ -203,6 +213,8 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 await asyncio.sleep(30)
                 jobs = await asyncio.to_thread(self.job_provider.fetch_jobs_snapshot)
                 if jobs is None:
+                    for outcome in await asyncio.to_thread(self.outcome_tracker.pending_outcomes):
+                        await self._process_reconciled_outcome(outcome)
                     # A failed read must never be interpreted as no jobs.
                     continue
                 recordings = None
@@ -256,7 +268,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
         return True
 
     async def _claim_terminal_outcome(
-        self, job_id: str, outcome: str
+        self, job_id: str, outcome: str, *, job: dict[str, Any] | None = None
     ) -> bool | None:
         """Claim one outcome across the event and reconciliation paths.
 
@@ -270,6 +282,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 self.outcome_tracker.mark_terminal,
                 job_id,
                 outcome,
+                job=job,
             )
         except Exception as exc:
             self._outcome_persistence_error = type(exc).__name__
@@ -281,6 +294,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
         self._outcome_persistence_error = None
         return bool(claimed)
 
+    @_serialize_outcome_publication
     async def _process_reconciled_outcome(self, outcome: RecordingOutcome) -> bool:
         """Record one durable operational outcome and optionally deliver it."""
 
@@ -295,6 +309,10 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
         label = labels.get(outcome.outcome)
         if label is None:
             return False
+        if outcome.event_id:
+            pending = await asyncio.to_thread(self.outcome_tracker.pending_outcome, outcome.job_id)
+            if pending is None or pending.event_id != outcome.event_id:
+                return True
         snapshot = outcome.snapshot
         title = str(snapshot.get("name") or "Unknown recording")
         channel_number = str(snapshot.get("channel") or "")
@@ -308,7 +326,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
 
         dvr_id = str(getattr(self.dvr, "id", "") or "")
         dvr_name = str(getattr(self.dvr, "name", "") or "")
-        await asyncio.to_thread(
+        stored = await asyncio.to_thread(
             record_recording_event,
             event_type=label,
             program_name=title,
@@ -318,18 +336,24 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             dvr_id=dvr_id,
             dvr_name=dvr_name,
             notification_history=self._notification_history,
+            activity_event_id=outcome.event_id or None,
         )
+
+        if not stored:
+            return False
 
         if not (
             getattr(self.settings, "alert_recording_events", True)
             and self._outcome_delivery_enabled(outcome.outcome)
         ):
+            await asyncio.to_thread(self.outcome_tracker.acknowledge, outcome)
             return True
 
         notification_key = f"recording-{outcome.outcome}-{outcome.job_id}"
         if not await self.alert_formatter.should_send_notification(
             self.session_manager, notification_key, self.alert_cooldown
         ):
+            await asyncio.to_thread(self.outcome_tracker.acknowledge, outcome)
             return True
 
         plain_message = f"{label}: {title} on {channel_name}"
@@ -350,9 +374,11 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             formatted["title"],
             formatted["message"],
             formatted.get("image_url"),
+            notification_dedupe_key=outcome.event_id or None,
         )
         if delivered:
             await self.session_manager.record_notification(notification_key)
+            await asyncio.to_thread(self.outcome_tracker.acknowledge, outcome)
         return self._processed_delivery_result(delivered)
 
     async def _async_watchdog_loop(self):
@@ -1451,6 +1477,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             file_id, recording, event_data, current_count
         )
 
+    @_serialize_outcome_publication
     async def _handle_recording_deleted(
         self, event_data: Dict[str, Any], job_details: Optional[Dict[str, Any]]
     ) -> bool:
@@ -1484,7 +1511,8 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             )
 
             notification_key = f"recording-cancelled-{job_id}"
-            claim = await self._claim_terminal_outcome(job_id, "cancelled")
+            claim = await self._claim_terminal_outcome(job_id, "cancelled", job=job)
+            pending_outcome = await asyncio.to_thread(self.outcome_tracker.pending_outcome, job_id)
             if claim is False:
                 return True
 
@@ -1530,7 +1558,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 level=LOG_STANDARD,
             )
 
-            await asyncio.to_thread(
+            stored = await asyncio.to_thread(
                 record_recording_event,
                 event_type="Cancelled",
                 program_name=recording_title,
@@ -1545,15 +1573,21 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 dvr_id=self.activity_dvr_id,
                 dvr_name=self.activity_dvr_name,
                 notification_history=self._notification_history,
+                activity_event_id=pending_outcome.event_id if pending_outcome else None,
             )
 
+            if not stored:
+                return False
+
             notification_sent = False
+            publication_accepted = False
             if self.recording_cancelled_enabled and getattr(
                 self.settings, "alert_recording_events", True
             ):
                 should_send = await self.alert_formatter.should_send_notification(
                     self.session_manager, notification_key, self.alert_cooldown
                 )
+                publication_accepted = not should_send
                 if should_send:
                     message_parts = {
                         "status": f"{self.STATUS_EMOJI['cancelled']} Cancelled",
@@ -1617,6 +1651,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                             formatted_alert["title"],
                             formatted_alert["message"],
                             formatted_alert.get("image_url"),
+                            notification_dedupe_key=pending_outcome.event_id if pending_outcome else None,
                         )
                     except Exception as send_err:
                         log(
@@ -1626,6 +1661,11 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                     if notification_sent:
                         await self.session_manager.record_notification(notification_key)
 
+            publication_accepted = publication_accepted or notification_sent or not (
+                self.recording_cancelled_enabled and getattr(self.settings, "alert_recording_events", True)
+            )
+            if stored and publication_accepted and pending_outcome:
+                await asyncio.to_thread(self.outcome_tracker.acknowledge, pending_outcome)
             return self._processed_delivery_result(notification_sent)
 
         elif job_details:
@@ -1800,6 +1840,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
 
         return self._processed_delivery_result(notification_sent)
 
+    @_serialize_outcome_publication
     async def _process_completed_recording(
         self,
         file_id: str,
@@ -1845,8 +1886,16 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             completion_event=True,
         ) or "completed"
         notification_key = f"recording-{status_type}-{job_id or file_id}"
+        pending_outcome = None
         if job_id:
-            claim = await self._claim_terminal_outcome(job_id, status_type)
+            claim = await self._claim_terminal_outcome(job_id, status_type, job={
+                "name": str(recording.get("title") or "Unknown recording")
+                    + (f" - {recording['episode_title']}" if recording.get("episode_title") else ""),
+                "channels": [recording["channel"]] if recording.get("channel") else [],
+                "duration": recording.get("duration", 0),
+                "item": {"image_url": recording.get("image_url", "")},
+            })
+            pending_outcome = await asyncio.to_thread(self.outcome_tracker.pending_outcome, job_id)
             if claim is False:
                 async with self._event_lock:
                     self.active_recordings.pop(job_id, None)
@@ -1978,7 +2027,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             level=LOG_STANDARD,
         )
 
-        await asyncio.to_thread(
+        stored = await asyncio.to_thread(
             record_recording_event,
             event_type=status_name,
             program_name=recording_title,
@@ -1990,6 +2039,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             dvr_id=self.activity_dvr_id,
             dvr_name=self.activity_dvr_name,
             notification_history=self._notification_history,
+            activity_event_id=pending_outcome.event_id if pending_outcome else None,
         )
 
         if self.stream_count_enabled:
@@ -2000,7 +2050,11 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             )
             log(f"Total Streams: {current_count}", level=LOG_STANDARD)
 
+        if not stored:
+            return False
+
         notification_sent = False
+        publication_accepted = False
         if self._outcome_delivery_enabled(status_type) and getattr(
             self.settings, "alert_recording_events", True
         ):
@@ -2012,6 +2066,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                         formatted_alert["title"],
                         formatted_alert["message"],
                         formatted_alert.get("image_url"),
+                        notification_dedupe_key=pending_outcome.event_id if pending_outcome else None,
                     )
                 except Exception as send_err:
                     log(
@@ -2021,6 +2076,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 if notification_sent:
                     await self.session_manager.record_notification(notification_key)
             else:
+                publication_accepted = True
                 log(
                     f"Cooldown active for {notification_key}. Skipping notification delivery after recording activity.",
                     level=LOG_VERBOSE,
@@ -2031,6 +2087,11 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             async with self._event_lock:
                 self.active_recordings.pop(job_id, None)
 
+        publication_accepted = publication_accepted or notification_sent or not (
+            self._outcome_delivery_enabled(status_type) and getattr(self.settings, "alert_recording_events", True)
+        )
+        if stored and publication_accepted and pending_outcome:
+            await asyncio.to_thread(self.outcome_tracker.acknowledge, pending_outcome)
         return self._processed_delivery_result(notification_sent)
 
     async def run_cleanup(self) -> None:

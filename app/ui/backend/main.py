@@ -63,6 +63,8 @@ from core.notifications.routing import (
 )
 from core.helpers.soft_delete_manager import (
     hard_delete_dvr as _hard_delete_dvr,
+    prepare_dvr_deletions,
+    complete_pending_dvr_deletions,
     purge_expired_dvrs as _purge_expired_dvrs,
     restore_dvr as _restore_dvr,
     soft_delete_dvr as _soft_delete_dvr,
@@ -2521,15 +2523,14 @@ async def hard_delete_dvr_endpoint(dvr_id: str):
 
     def _hard_delete(settings: AppSettings) -> None:
         servers = list(getattr(settings, "dvr_servers", None) or [])
-        found = _hard_delete_dvr(_CORE_CONFIG_DIR, servers, dvr_id)
+        found = _hard_delete_dvr(_CORE_CONFIG_DIR, servers, dvr_id, defer_data_purge=True)
         if not found:
             raise structured_error(
                 ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
             )
         settings.dvr_servers = servers
 
-    await asyncio.to_thread(_mutate_current_settings_locked, _hard_delete)
-    await asyncio.to_thread(_signal_core_hot_reload)
+    await asyncio.to_thread(_mutate_current_settings_locked, _hard_delete, purge_removed_dvrs=True)
     return {"message": f"DVR {dvr_id!r} permanently deleted"}
 
 
@@ -3404,11 +3405,11 @@ def _dvr_purge_loop():
         try:
             def _purge(_settings: AppSettings):
                 servers = list(getattr(_settings, "dvr_servers", None) or [])
-                purged_ids = _purge_expired_dvrs(_CORE_CONFIG_DIR, servers)
+                purged_ids = _purge_expired_dvrs(_CORE_CONFIG_DIR, servers, defer_data_purge=True)
                 _settings.dvr_servers = servers
                 return purged_ids
 
-            _, purged = _mutate_current_settings_locked(_purge)
+            _, purged = _mutate_current_settings_locked(_purge, purge_removed_dvrs=True)
             if purged:
                 _signal_core_hot_reload()
                 print(
@@ -3458,6 +3459,12 @@ def run_startup_initialization():
             raise
 
     settings = load_settings()
+    pending_deletions = backend_config.CONFIG_DIR / "pending-dvr-deletions.json"
+    if not _config_is_read_only() and (pending_deletions.exists() or pending_deletions.is_symlink()):
+        from core.helpers.maintenance_transaction import configuration_maintenance_lock
+        with configuration_maintenance_lock(backend_config.CONFIG_DIR):
+            settings = backend_config._load_settings_locked()
+            complete_pending_dvr_deletions(backend_config.CONFIG_DIR, settings.dvr_servers or [])
     explicit_mode = _explicit_auth_mode(settings)
     if explicit_mode == "api_key" and not settings.api_key:
         def _generate_api_key(current: AppSettings) -> bool:
@@ -5890,7 +5897,7 @@ def _signal_core_hot_reload() -> bool:
         return False
 
 
-def _mutate_current_settings_locked(mutate):
+def _mutate_current_settings_locked(mutate, *, purge_removed_dvrs=False):
     """Apply an internal mutation to the latest locked settings generation.
 
     Loading settings and then saving after releasing the maintenance lock can
@@ -5912,8 +5919,17 @@ def _mutate_current_settings_locked(mutate):
 
     with configuration_maintenance_lock(backend_config.CONFIG_DIR):
         settings = backend_config._load_settings_locked()
+        complete_pending_dvr_deletions(backend_config.CONFIG_DIR, settings.dvr_servers or [])
+        previous_ids = {server.get("id") for server in settings.dvr_servers or [] if isinstance(server, dict)}
         result = mutate(settings)
+        if purge_removed_dvrs:
+            remaining_ids = {server.get("id") for server in settings.dvr_servers or [] if isinstance(server, dict)}
+            prepare_dvr_deletions(backend_config.CONFIG_DIR, sorted(previous_ids - remaining_ids))
         backend_config.save_settings(settings, lock_already_held=True)
+        if purge_removed_dvrs:
+            # Settings are authoritative before any destructive purge begins.
+            _signal_core_hot_reload()
+            complete_pending_dvr_deletions(backend_config.CONFIG_DIR, settings.dvr_servers or [])
         return settings, result
 
 

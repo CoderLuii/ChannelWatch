@@ -11,9 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import copy
+import uuid
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -143,6 +144,7 @@ class RecordingOutcome:
     job_id: str
     outcome: str
     snapshot: dict[str, Any]
+    event_id: str = field(default="", compare=False)
 
 
 class RecordingOutcomeTracker:
@@ -227,6 +229,8 @@ class RecordingOutcomeTracker:
                     "started": False,
                     "terminal_outcome": None,
                     "terminal_at": None,
+                    "publication_pending": False,
+                    "publication_id": None,
                     "missing_confirmations": 0,
                     "last_negative_at": None,
                 }
@@ -277,11 +281,13 @@ class RecordingOutcomeTracker:
             return False
         entry["terminal_outcome"] = outcome
         entry["terminal_at"] = now
+        entry["publication_pending"] = True
+        entry["publication_id"] = str(uuid.uuid4())
         entry["missing_confirmations"] = 0
         entry["last_negative_at"] = None
         return True
 
-    def mark_terminal(self, job_id: str, outcome: str) -> bool:
+    def mark_terminal(self, job_id: str, outcome: str, *, job: dict[str, Any] | None = None) -> bool:
         """Atomically claim a terminal result.
 
         ``True`` means the caller owns publication of this result.  ``False``
@@ -305,6 +311,12 @@ class RecordingOutcomeTracker:
                     "last_negative_at": None,
                 },
             )
+            if job is not None:
+                snapshot = _job_snapshot(job)
+                entry["snapshot"] = {
+                    **entry.get("snapshot", {}),
+                    **{key: value for key, value in snapshot.items() if value},
+                }
             claimed = self._set_terminal(entry, outcome, self.now())
             if not claimed:
                 return False
@@ -314,6 +326,34 @@ class RecordingOutcomeTracker:
                 self._state = before
                 raise
             return True
+
+    def pending_outcomes(self) -> list[RecordingOutcome]:
+        with self._lock:
+            return [
+                RecordingOutcome(job_id, entry["terminal_outcome"],
+                                 dict(entry.get("snapshot") or {}),
+                                 str(entry.get("publication_id") or ""))
+                for job_id, entry in self._state["jobs"].items()
+                if isinstance(entry, dict) and entry.get("publication_pending")
+            ]
+
+    def acknowledge(self, outcome: RecordingOutcome) -> None:
+        with self._lock:
+            entry = self._state["jobs"].get(outcome.job_id)
+            if not isinstance(entry, dict) or not entry.get("publication_pending"):
+                return
+            if str(entry.get("publication_id") or "") != outcome.event_id:
+                return
+            before = copy.deepcopy(self._state)
+            entry["publication_pending"] = False
+            try:
+                self._save()
+            except Exception:
+                self._state = before
+                raise
+
+    def pending_outcome(self, job_id: str) -> RecordingOutcome | None:
+        return next((item for item in self.pending_outcomes() if item.job_id == job_id), None)
 
     def started_jobs_missing(self, jobs: Iterable[dict[str, Any]]) -> bool:
         """Return whether a fresh recordings lookup is needed.
@@ -401,7 +441,7 @@ class RecordingOutcomeTracker:
                     continue
                 terminal_at = _number(entry.get("terminal_at"))
                 if entry.get("terminal_outcome"):
-                    if terminal_at and now - terminal_at > TERMINAL_RETENTION_SECONDS:
+                    if not entry.get("publication_pending") and terminal_at and now - terminal_at > TERMINAL_RETENTION_SECONDS:
                         del self._state["jobs"][job_id]
                         changed = True
                     continue
@@ -476,4 +516,4 @@ class RecordingOutcomeTracker:
                 except Exception:
                     self._state = before
                     raise
-        return outcomes
+        return self.pending_outcomes()

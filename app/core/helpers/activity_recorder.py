@@ -17,6 +17,7 @@ from core.storage.activity_store import persist_activity_event
 CONFIG_DIR = os.getenv("CONFIG_PATH", "/config")
 HISTORY_FILE = os.path.join(CONFIG_DIR, "activity_history.json")
 _history_file_lock = threading.Lock()
+_activity_acceptance_lock = threading.Lock()
 
 # Activity rows represent the start of a viewing session, not each telemetry
 # refresh emitted while that session is active.  Match the normal alert
@@ -145,6 +146,34 @@ def cleanup_notification_history(
         )
 
 
+def _persist_with_cooldown(
+    activity: Dict[str, Any], tracking_key: str, history: Dict[str, float]
+) -> bool:
+    """Commit the cooldown only when durable storage accepts the event.
+
+    Serialize reservation and acknowledgement so a concurrent caller cannot
+    mistake an in-flight failed write for a successfully recorded duplicate.
+    """
+    with _activity_acceptance_lock:
+        if len(history) > 100:
+            cleanup_notification_history(history)
+        previous = history.get(tracking_key)
+        if not should_record_activity(tracking_key, history):
+            return True
+        saved = False
+        try:
+            saved = persist_activity_event(
+                activity, config_dir=Path(_history_file_path()).parent
+            )
+            return saved
+        finally:
+            if not saved:
+                if previous is None:
+                    history.pop(tracking_key, None)
+                else:
+                    history[tracking_key] = previous
+
+
 # ACTIVITY RECORDING
 def record_activity(
     activity_type: str,
@@ -161,6 +190,7 @@ def record_activity(
     dvr_id: Optional[str] = None,
     dvr_name: Optional[str] = None,
     notification_history: Optional[Dict[str, float]] = None,
+    activity_event_id: Optional[str] = None,
 ) -> bool:
     """Records an activity directly to the activity history file."""
     try:
@@ -180,14 +210,7 @@ def record_activity(
         else:
             tracking_key = f"{dvr_key}-{activity_type}-{device_identifier}"
 
-        if len(_history) > 100:
-            cleanup_notification_history(_history)
-
-        if not should_record_activity(tracking_key, _history):
-            log(f"Skipping duplicate activity for {tracking_key}", level=LOG_VERBOSE)
-            return True
-
-        activity_id = str(uuid.uuid4())
+        activity_id = activity_event_id or str(uuid.uuid4())
 
         new_activity = {
             "id": activity_id,
@@ -208,10 +231,7 @@ def record_activity(
             "dvr_name": dvr_name or "",
         }
 
-        saved = persist_activity_event(
-            new_activity,
-            config_dir=Path(_history_file_path()).parent,
-        )
+        saved = _persist_with_cooldown(new_activity, activity_event_id or tracking_key, _history)
 
         if saved:
             log(
@@ -237,6 +257,7 @@ def record_vod_watching(
     dvr_id: Optional[str] = None,
     dvr_name: Optional[str] = None,
     notification_history: Optional[Dict[str, float]] = None,
+    activity_event_id: Optional[str] = None,
 ) -> bool:
     """Specialized function to record VOD watching activities."""
     try:
@@ -263,6 +284,7 @@ def record_vod_watching(
             dvr_id=dvr_id,
             dvr_name=dvr_name,
             notification_history=notification_history,
+            activity_event_id=activity_event_id,
         )
     except Exception as e:
         log(f"Error recording VOD watching activity: {e}", level=LOG_STANDARD)
@@ -299,6 +321,7 @@ def record_recording_event(
     dvr_id: Optional[str] = None,
     dvr_name: Optional[str] = None,
     notification_history: Optional[Dict[str, float]] = None,
+    activity_event_id: Optional[str] = None,
 ) -> bool:
     """Specialized function to record recording events."""
     try:
@@ -321,13 +344,7 @@ def record_recording_event(
             f"{dvr_key}-recording_event-{event_type}-{program_name}-{channel_name}"
         )
 
-        activity_id = str(uuid.uuid4())
-
-        if not should_record_activity(tracking_key, _history):
-            log(
-                f"Skipping duplicate recording event: {tracking_key}", level=LOG_VERBOSE
-            )
-            return True
+        activity_id = activity_event_id or str(uuid.uuid4())
 
         new_activity = {
             "id": activity_id,
@@ -344,10 +361,7 @@ def record_recording_event(
             "extra": extra or {},
         }
 
-        saved = persist_activity_event(
-            new_activity,
-            config_dir=Path(_history_file_path()).parent,
-        )
+        saved = _persist_with_cooldown(new_activity, activity_event_id or tracking_key, _history)
 
         if saved:
             log(f"Recording event recorded: {activity_message}", level=LOG_VERBOSE)
@@ -372,6 +386,7 @@ def record_disk_status(
     dvr_name: Optional[str] = None,
     is_test: bool = False,
     notification_history: Optional[Dict[str, float]] = None,
+    activity_event_id: Optional[str] = None,
 ) -> bool:
     """Specialized function to record disk space alerts."""
     try:
@@ -391,14 +406,7 @@ def record_disk_status(
             f"disk_alert-{dvr_identifier}-{activity_title}-{free_percentage:.1f}"
         )
 
-        activity_id = str(uuid.uuid4())
-
-        if not should_record_activity(tracking_key, _history):
-            log(
-                f"Skipping duplicate disk status alert: {tracking_key}",
-                level=LOG_VERBOSE,
-            )
-            return True
+        activity_id = activity_event_id or str(uuid.uuid4())
 
         new_activity: Dict[str, Any] = {
             "id": activity_id,
@@ -415,10 +423,7 @@ def record_disk_status(
         if is_test:
             new_activity["is_test"] = True
 
-        saved = persist_activity_event(
-            new_activity,
-            config_dir=Path(_history_file_path()).parent,
-        )
+        saved = _persist_with_cooldown(new_activity, activity_event_id or tracking_key, _history)
 
         if saved:
             log(f"Disk status alert recorded: {activity_message}", level=LOG_VERBOSE)

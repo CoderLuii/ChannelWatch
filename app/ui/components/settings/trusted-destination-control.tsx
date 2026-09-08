@@ -87,7 +87,7 @@ export function TrustedDestinationControl({
   }, [source, trimmedUrl])
 
   if (!trimmedUrl || !preview || preview.status === "unsupported" || preview.status === "public_safe") {
-    return error ? <p className="text-xs text-destructive">{error}</p> : null
+    return error ? <p className="text-xs text-red-700 dark:text-red-300">{error}</p> : null
   }
 
   const addDestination = () => {
@@ -136,7 +136,7 @@ export function TrustedDestinationControl({
 
   if (!preview.trustable) {
     return (
-      <Alert variant="destructive" className={compact ? "py-3" : undefined}>
+      <Alert variant="destructive" className={`text-red-700 dark:text-red-300 ${compact ? "py-3" : ""}`}>
         <ShieldAlert className="h-4 w-4" />
         <AlertTitle>{t("notifications.trusted.blockedTitle")}</AlertTitle>
         <AlertDescription>{preview.message}</AlertDescription>

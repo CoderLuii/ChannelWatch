@@ -68,8 +68,10 @@ def test_one_outage_and_one_corresponding_recovery_are_emitted(tmp_path: Path):
     clock[0] += 30
 
     outage = tracker.evaluate(healthy=False, delay_seconds=30)
+    tracker.acknowledge(outage, notification_armed=False)
     duplicate = tracker.evaluate(healthy=False, delay_seconds=30)
     recovery = tracker.evaluate(healthy=True, delay_seconds=30)
+    tracker.acknowledge(recovery, notification_armed=False)
     healthy_duplicate = tracker.evaluate(healthy=True, delay_seconds=30)
 
     assert outage is not None and outage.event == "unreachable"
@@ -94,7 +96,7 @@ def test_recovery_notification_is_paired_with_accepted_outage_delivery(
     outage = tracker.evaluate(healthy=False, delay_seconds=30)
     assert outage is not None
 
-    tracker.set_notification_armed(outage.outage_id, True)
+    tracker.acknowledge(outage, notification_armed=True)
     recovery = tracker.evaluate(healthy=True, delay_seconds=30)
 
     assert recovery is not None
@@ -116,7 +118,7 @@ def test_recovery_is_not_notification_armed_when_outage_was_not_accepted(
     outage = tracker.evaluate(healthy=False, delay_seconds=30)
     assert outage is not None
 
-    tracker.set_notification_armed(outage.outage_id, False)
+    tracker.acknowledge(outage, notification_armed=False)
     recovery = tracker.evaluate(healthy=True, delay_seconds=30)
 
     assert recovery is not None
@@ -136,6 +138,7 @@ def test_outage_state_survives_restart_without_duplicate(tmp_path: Path):
     outage = tracker.evaluate(healthy=False, delay_seconds=30)
     assert outage is not None
 
+    tracker.acknowledge(outage, notification_armed=False)
     restarted = DvrHealthTracker(
         config_dir=tmp_path,
         dvr_id="dvr-a",
@@ -458,8 +461,8 @@ async def test_health_evaluation_cleans_removed_dvr_and_arms_accepted_outage(
         healthy=False, delay_seconds=120
     )
     emit.assert_awaited_once()
-    current_tracker.set_notification_armed.assert_called_once_with(
-        "outage-1", True
+    current_tracker.acknowledge.assert_called_once_with(
+        current_tracker.evaluate.return_value, notification_armed=True
     )
 
 
@@ -473,7 +476,7 @@ async def test_health_evaluation_isolates_tracker_and_arming_failures(monkeypatc
     arming_tracker.evaluate.return_value = DvrHealthTransition(
         "unreachable", "outage-2"
     )
-    arming_tracker.set_notification_armed.side_effect = RuntimeError("disk full")
+    arming_tracker.acknowledge.side_effect = RuntimeError("disk full")
     dvrs = [
         SimpleNamespace(id="dvr-a", overrides={}),
         SimpleNamespace(id="dvr-b", overrides={}),
@@ -493,6 +496,6 @@ async def test_health_evaluation_isolates_tracker_and_arming_failures(monkeypatc
     await main._evaluate_dvr_health(test_mode=True)
 
     emit.assert_awaited_once()
-    arming_tracker.set_notification_armed.assert_called_once_with(
-        "outage-2", True
+    arming_tracker.acknowledge.assert_called_once_with(
+        arming_tracker.evaluate.return_value, notification_armed=True
     )

@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.0.9] - 2026-09-08
+
+### Fixed
+
+- Release activity cooldowns when durable storage rejects an event, allowing immediate retry without duplicating accepted events.
+- Preserve unreadable recovery-journal bytes and database rows when targeted DVR deletion cannot safely filter the journal.
+- Keep health transitions and recording outcomes pending until activity storage and eligible notification queues accept them; replay pending work after restart with stable event IDs.
+- Make permanent DVR deletion recoverable across settings and storage failures, and report purge failures instead of silently claiming success.
+- Keep the visible Settings tab synchronized with hash navigation and browser history while preserving unsaved values.
+- Make all six General and Advanced Settings disclosures operable by keyboard and expose their expanded state.
+- Name notification provider, webhook, credential and reset controls for assistive technology.
+- Correct notification text contrast in light and dark provider, template and destination states.
+- Give the restart overlay dialog semantics, contained focus and an inert background; restore focus after its page reload.
+- Show dashboard stale-data warnings when system, recording or activity requests fail, and clear each warning after that data recovers.
+
+### Update method
+
+- Signed in-app update for the existing v1.0.0 image line. A newer container image is not required.
+
 ## [1.0.8] - 2026-08-28
 
 ### Changed
@@ -723,3 +742,5 @@ All notable changes to this project will be documented in this file. The format 
 [0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.0
 [0.8.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.8
 [0.7.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.7
+
+[1.0.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.8...v1.0.9

@@ -747,6 +747,8 @@
   "dvr.globalTab": "Global",
   "dvr.usingGlobal": "Using global default",
   "dvr.overriddenForDvr": "Overridden for this DVR",
+  "notifications.showCredential": "Show {name} credential",
+  "notifications.hideCredential": "Hide {name} credential",
   "dvr.resetToGlobal": "Reset to global default",
   "dvr.usingGlobalValue": "Using global value",
   "provider.pushover.name": "Pushover",

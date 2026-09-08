@@ -160,6 +160,16 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     }
   };
 
+  const markFetchFailure = (family: string, failed: boolean) => {
+    setFailedFetches((previous) => {
+      if (previous.has(family) === failed) return previous;
+      const next = new Set(previous);
+      if (failed) next.add(family);
+      else next.delete(family);
+      return next;
+    });
+  };
+
   const fetchSystemData = async (): Promise<DVRStatusInfo[] | null> => {
     try {
       const systemInfo = await fetchSystemInfo(
@@ -212,6 +222,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         );
         setDvrStatusList(nextDvrStatuses);
       }
+      markFetchFailure("system", false);
       return nextDvrStatuses;
     } catch (error) {
       setDiskServerSeverity(undefined);
@@ -220,6 +231,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         loading: false,
         error: t("statusOverview.diskError"),
       }));
+      markFetchFailure("system", true);
       console.error("Error fetching system info:", error);
       return null;
     }
@@ -246,7 +258,9 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         setStreamSubtitle(streamData.subtitle);
         setStreamImage(streamData.image || "");
       }
+      markFetchFailure("recordings", false);
     } catch (error) {
+      markFetchFailure("recordings", true);
       console.error("Error fetching recordings info:", error);
     }
   };
@@ -282,8 +296,10 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       setRecentActivity(recent);
       const chartData = buildActivityTimeline(timelineActivity);
       setStreamingData(chartData);
+      markFetchFailure("activity", false);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
+      markFetchFailure("activity", true);
       console.error("Error fetching recent activity:", error);
     } finally {
       if (aggregateActivityRequestRef.current === controller) {
@@ -297,6 +313,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     if (!selectedClient) {
       setClientActivity(null);
       setClientActivityLoading(false);
+      markFetchFailure("clientActivity", false);
       return;
     }
     const controller = new AbortController();
@@ -304,9 +321,13 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     setClientActivityLoading(true);
     try {
       const activity = await loadActivity(controller, selectedClient, 250);
-      if (!controller.signal.aborted) setClientActivity(activity);
+      if (!controller.signal.aborted) {
+        setClientActivity(activity);
+        markFetchFailure("clientActivity", false);
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
+      markFetchFailure("clientActivity", true);
       console.error("Error fetching client activity:", error);
     } finally {
       if (clientActivityRequestRef.current === controller) {
@@ -534,14 +555,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           fetchSystemData(),
           fetchRecordingsInfo(),
           fetchActivityData(),
-        ]).then((results) => {
-          const labels = ["system", "recordings", "activity"];
-          const failed = new Set(
-            results
-              .map((r, i) => (r.status === "rejected" ? labels[i] : null))
-              .filter(Boolean) as string[],
-          );
-          setFailedFetches(failed);
+        ]).then(() => {
           setDataLoaded(true);
           setLastUpdated(new Date());
         });
@@ -558,14 +572,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           fetchSystemData(),
           fetchRecordingsInfo(),
           fetchActivityData(),
-        ]).then((results) => {
-          const labels = ["system", "recordings", "activity"];
-          const failed = new Set(
-            results
-              .map((r, i) => (r.status === "rejected" ? labels[i] : null))
-              .filter(Boolean) as string[],
-          );
-          setFailedFetches(failed);
+        ]).then(() => {
           setDataLoaded(true);
           setLastUpdated(new Date());
         });
@@ -583,19 +590,12 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     try {
       setIsRefreshing(true);
 
-      const labels = ["system", "recordings", "activity"];
-      const results = await Promise.allSettled([
+      await Promise.allSettled([
         fetchSystemData(),
         fetchRecordingsInfo(),
         fetchActivityData(),
       ]);
 
-      const failed = new Set(
-        results
-          .map((r, i) => (r.status === "rejected" ? labels[i] : null))
-          .filter(Boolean) as string[],
-      );
-      setFailedFetches(failed);
       setDataLoaded(true);
     } catch (error) {
       setFailedFetches(new Set(["system", "recordings", "activity"]));
@@ -847,7 +847,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           onChangeHours={setActivityHours}
           activityLoading={activityLoading || clientActivityLoading}
           dataLoaded={dataLoaded}
-          hasError={failedFetches.has("activity")}
+          hasError={failedFetches.has("activity") || failedFetches.has("clientActivity")}
           onRetry={fetchActivityData}
           getFilterDisplayName={getFilterDisplayName}
           clients={clientFacets}

@@ -43,20 +43,20 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
   return (
     <TabsContent value="advanced" className="space-y-4">
       <Card className="border-blue-400/20 overflow-hidden">
-        <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleAlert("cache")}>
-          <div className="flex gap-3 items-center">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.cache} aria-controls="settings-cache-content" onClick={() => toggleAlert("cache")}>
+          <span className="flex gap-3 items-center">
+            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
               <Database className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-base font-medium">{t("advanced.cache.title")}</p>
-              <p className="text-sm text-muted-foreground">{t("advanced.cache.desc")}</p>
-            </div>
-          </div>
+            </span>
+            <span>
+              <span className="block text-base font-medium">{t("advanced.cache.title")}</span>
+              <span className="block text-sm text-muted-foreground">{t("advanced.cache.desc")}</span>
+            </span>
+          </span>
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.cache && "rotate-180")} />
-        </div>
+        </button>
         {expandedAlerts.cache && (
-          <CardContent className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-cache-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
             <DvrTabBar cardId="cache" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("cache") === "global" ? (
               <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
@@ -89,20 +89,20 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
       </Card>
 
       <Card className="border-blue-400/20 overflow-hidden">
-        <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleAlert("rate")}>
-          <div className="flex gap-3 items-center">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.rate} aria-controls="settings-rate-content" onClick={() => toggleAlert("rate")}>
+          <span className="flex gap-3 items-center">
+            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
               <Gauge className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-base font-medium">{t("advanced.rate.title")}</p>
-              <p className="text-sm text-muted-foreground">{t("advanced.rate.desc")}</p>
-            </div>
-          </div>
+            </span>
+            <span>
+              <span className="block text-base font-medium">{t("advanced.rate.title")}</span>
+              <span className="block text-sm text-muted-foreground">{t("advanced.rate.desc")}</span>
+            </span>
+          </span>
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.rate && "rotate-180")} />
-        </div>
+        </button>
         {expandedAlerts.rate && (
-          <CardContent className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-rate-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
             <DvrTabBar cardId="rate" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("rate") === "global" ? (
               <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
@@ -150,20 +150,20 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
       </Card>
 
       <Card className="border-blue-400/20 overflow-hidden">
-        <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleAlert("timing")}>
-          <div className="flex gap-3 items-center">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.timing} aria-controls="settings-timing-content" onClick={() => toggleAlert("timing")}>
+          <span className="flex gap-3 items-center">
+            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
               <Clock className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-base font-medium">{t("advanced.timing.title")}</p>
-              <p className="text-sm text-muted-foreground">{t("advanced.timing.desc")}</p>
-            </div>
-          </div>
+            </span>
+            <span>
+              <span className="block text-base font-medium">{t("advanced.timing.title")}</span>
+              <span className="block text-sm text-muted-foreground">{t("advanced.timing.desc")}</span>
+            </span>
+          </span>
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.timing && "rotate-180")} />
-        </div>
+        </button>
         {expandedAlerts.timing && (
-          <CardContent className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-timing-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
             <DvrTabBar cardId="timing" helpers={dvrHelpers} />
             <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
               {dvrHelpers.getDvrTab("timing") === "global" ? (
@@ -202,20 +202,20 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
       </Card>
 
       <Card className="border-blue-400/20 overflow-hidden">
-        <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleAlert("diskAdvanced")}>
-          <div className="flex gap-3 items-center">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.diskAdvanced} aria-controls="settings-diskAdvanced-content" onClick={() => toggleAlert("diskAdvanced")}>
+          <span className="flex gap-3 items-center">
+            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
               <HardDrive className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-base font-medium">{t("advanced.diskControls.title")}</p>
-              <p className="text-sm text-muted-foreground">{t("advanced.diskControls.desc")}</p>
-            </div>
-          </div>
+            </span>
+            <span>
+              <span className="block text-base font-medium">{t("advanced.diskControls.title")}</span>
+              <span className="block text-sm text-muted-foreground">{t("advanced.diskControls.desc")}</span>
+            </span>
+          </span>
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.diskAdvanced && "rotate-180")} />
-        </div>
+        </button>
         {expandedAlerts.diskAdvanced && (
-          <CardContent className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4">
+          <CardContent id="settings-diskAdvanced-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4">
             <DvrTabBar cardId="disk" helpers={dvrHelpers} />
             <div className="flex items-start gap-2 rounded-lg border border-blue-400/10 bg-blue-500/5 p-3">
               <Info className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
@@ -309,20 +309,20 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
         )}
       </Card>
       <Card className="border-blue-400/20 overflow-hidden">
-        <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleAlert("errorReporting")}>
-          <div className="flex gap-3 items-center">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.errorReporting} aria-controls="settings-errorReporting-content" onClick={() => toggleAlert("errorReporting")}>
+          <span className="flex gap-3 items-center">
+            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
               <Bug className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-base font-medium">{t("advanced.errorReporting.title")}</p>
-              <p className="text-sm text-muted-foreground">{t("advanced.errorReporting.desc")}</p>
-            </div>
-          </div>
+            </span>
+            <span>
+              <span className="block text-base font-medium">{t("advanced.errorReporting.title")}</span>
+              <span className="block text-sm text-muted-foreground">{t("advanced.errorReporting.desc")}</span>
+            </span>
+          </span>
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.errorReporting && "rotate-180")} />
-        </div>
+        </button>
         {expandedAlerts.errorReporting && (
-          <CardContent className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-errorReporting-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
             <div className="rounded-xl p-3 border border-blue-400/10 bg-background/50">
               <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                 <Label htmlFor="error_reporting_dsn">

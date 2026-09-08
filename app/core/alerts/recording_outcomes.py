@@ -114,7 +114,7 @@ def _job_identifier(job: dict[str, Any]) -> str:
     ).strip()
 
 
-def _recording_job_identifier(recording: dict[str, Any]) -> str:
+def recording_job_identifier(recording: dict[str, Any]) -> str:
     identifier = _value(recording, "job_id", "JobID", "JobId", "jobId")
     if identifier:
         return str(identifier).strip()
@@ -407,7 +407,7 @@ class RecordingOutcomeTracker:
                 identifier: recording
                 for recording in recordings
                 if isinstance(recording, dict)
-                and (identifier := _recording_job_identifier(recording))
+                and (identifier := recording_job_identifier(recording))
             }
 
         with self._lock:

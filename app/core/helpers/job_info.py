@@ -4,6 +4,8 @@ import time
 import threading
 import json
 import httpx
+from urllib.parse import quote
+from core.alerts.recording_outcomes import recording_job_identifier
 from typing import Dict, Any, List, Optional
 
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
@@ -111,9 +113,7 @@ class JobInfoProvider:
             if not isinstance(jobs, list):
                 return None
             valid_jobs = [job for job in jobs if isinstance(job, dict)]
-            new_cache = {
-                str(job["id"]): job for job in valid_jobs if job.get("id")
-            }
+            new_cache = {str(job["id"]): job for job in valid_jobs if job.get("id")}
             with self._lock:
                 self._jobs_cache = new_cache
                 self._jobs_cache_time = time.time()
@@ -226,6 +226,26 @@ class JobInfoProvider:
             return None
 
     # RECORDING RETRIEVAL
+    def _with_recording_job_id(
+        self, recording: Dict[str, Any], file_id: str
+    ) -> Dict[str, Any]:
+        """Attach only an exact file-to-job identity; never guess by title/time."""
+        if recording_job_identifier(recording):
+            return recording
+        if str(recording.get("id") or recording.get("ID") or "") != str(file_id):
+            raise ValueError("Recording response did not match the requested file")
+        response = self._get(f"/dvr/files/{quote(str(file_id), safe='')}", timeout=15)
+        response.raise_for_status()
+        raw = response.json()
+        if not isinstance(raw, dict) or str(
+            raw.get("ID") or raw.get("id") or ""
+        ) != str(file_id):
+            raise ValueError("DVR recording identity did not match the requested file")
+        job_id = recording_job_identifier(raw)
+        if not job_id:
+            raise ValueError("DVR recording metadata has no job identity")
+        return {**recording, "job_id": job_id}
+
     def get_recording_by_id(self, file_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve completed recording by file ID with fallback to alternative endpoint."""
         try:
@@ -233,7 +253,10 @@ class JobInfoProvider:
             response = self._get(f"/api/v1/recordings/{file_id}", timeout=15)
 
             if response.status_code == 200:
-                return response.json()
+                recording = response.json()
+                if not isinstance(recording, dict):
+                    return None
+                return self._with_recording_job_id(recording, file_id)
             elif response.status_code != 404:
                 log(
                     f"HTTP {response.status_code} fetching recording {file_id}",
@@ -246,7 +269,18 @@ class JobInfoProvider:
 
             data = response.json()
             if data and len(data) > 0:
-                return data[0]
+                matching = next(
+                    (
+                        item
+                        for item in data
+                        if isinstance(item, dict)
+                        and str(item.get("id") or item.get("ID") or "") == str(file_id)
+                    ),
+                    None,
+                )
+                return (
+                    self._with_recording_job_id(matching, file_id) if matching else None
+                )
             else:
                 return None
 
@@ -329,7 +363,34 @@ class JobInfoProvider:
             recordings = response.json()
             if not isinstance(recordings, list):
                 return None
-            return [item for item in recordings if isinstance(item, dict)]
+            if any(not isinstance(item, dict) for item in recordings):
+                return None
+            if all(recording_job_identifier(item) for item in recordings):
+                return recordings
+            # One additional fresh read for the whole snapshot, not one per file.
+            response = self._get("/dvr/files", timeout=30)
+            response.raise_for_status()
+            raw_files = response.json()
+            if not isinstance(raw_files, list) or any(
+                not isinstance(item, dict) for item in raw_files
+            ):
+                return None
+            by_id = {
+                str(item.get("ID") or item.get("id") or ""): item for item in raw_files
+            }
+            resolved = []
+            for item in recordings:
+                if recording_job_identifier(item):
+                    resolved.append(item)
+                    continue
+                file_id = str(item.get("id") or item.get("ID") or "")
+                raw = by_id.get(file_id) if file_id else None
+                job_id = recording_job_identifier(raw) if raw else ""
+                if not job_id:
+                    # Incomplete identity cannot establish a missing recording.
+                    return None
+                resolved.append({**item, "job_id": job_id})
+            return resolved
         except (
             httpx.TimeoutException,
             httpx.RequestError,

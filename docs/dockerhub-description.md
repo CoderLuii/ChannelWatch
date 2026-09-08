@@ -14,7 +14,7 @@ Recommended tags:
 - `latest` for the newest stable image
 - `1.1` for the newest image on the current minor line
 - `1.1.0` for the current container-image milestone
-- `1.1.1` for a fresh image containing the current app; existing v1.1.0 installations can update in-app
+- `1.1.2` for a fresh image containing the current app; existing v1.1.0 installations can update in-app
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Open `http://localhost:8501` after the container starts.
 
 Use v1.1.0 for the current image milestone, or `1.1`/`latest` for the newest image on that line. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.1.1 is a signed in-app update for the v1.1.0 image line. Open **Settings > Updates** to install it; an operational v1.1.0 installation does not need a newer image. This release corrects update and version guidance, restores complete changelog links, aligns public issue labels, makes label maintenance failures explicit, and removes six unused UI modules without changing runtime behavior.
+ChannelWatch v1.1.2 is a signed in-app update for the v1.1.0 image line. Open **Settings > Updates** to install it; an operational v1.1.0 installation does not need a newer image. This release prevents a successful recording from also being reported as interrupted when the DVR recording response omits its job identity. Recording completion and reconciliation now recover that identity from matching DVR file metadata.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

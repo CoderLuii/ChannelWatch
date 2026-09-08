@@ -660,17 +660,17 @@ def test_release_config_declares_111_in_app_release():
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.1.1"
+    assert config["version"] == "1.1.2"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.1.0"
     assert config["updater_protocol"] == 2
     assert config["recommended_image_version"] == "1.1.0"
     assert config["automatic_install_allowed"] is True
-    assert config["compatible_source_application_versions"] == ["1.1.0"]
+    assert config["compatible_source_application_versions"] == ["1.1.0", "1.1.1"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.1.1 - Clear update guidance and issue reporting"
+        "# ChannelWatch v1.1.2 - Correct recording completion identity"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -759,11 +759,11 @@ def test_release_version_surfaces_use_111_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.1.1"
-    assert metadata["versionTag"] == "v1.1.1"
-    assert metadata["dockerTag"] == "1.1.1"
-    assert metadata["helmChartVersion"] == "1.1.1"
-    assert metadata["helmAppVersion"] == "1.1.1"
+    assert metadata["version"] == "1.1.2"
+    assert metadata["versionTag"] == "v1.1.2"
+    assert metadata["dockerTag"] == "1.1.2"
+    assert metadata["helmChartVersion"] == "1.1.2"
+    assert metadata["helmAppVersion"] == "1.1.2"
 
 
 def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys):
@@ -772,7 +772,7 @@ def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys)
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.1.1",
+        "versionTag": "v1.1.2",
         "releaseDate": "2026-08-28",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -784,7 +784,7 @@ def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.1.1",
+        "dockerTag": "1.1.2",
     }
     monkeypatch.setattr(
         module,
@@ -794,23 +794,23 @@ def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.1.1"],
+        ["render-release-body.py", "--version", "1.1.2"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.1.1 - Clear update guidance and issue reporting\n"
+        "# ChannelWatch v1.1.2 - Correct recording completion identity\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.1.1-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.1.1-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.1.1-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.1.1-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.1.2-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.1.2-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.1.2-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.1.2-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
     assert "`coderluii/channelwatch:1.1`" in output

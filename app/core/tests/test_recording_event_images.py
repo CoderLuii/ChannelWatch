@@ -512,3 +512,71 @@ async def test_recording_diagnostics_propagate_delivery_failure(diagnostic_name)
 
     assert result is False
     alert.notification_manager.send_notification_async.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_has_job_id", [True, False])
+async def test_completed_api_recording_cannot_later_be_reported_interrupted(
+    tmp_path, monkeypatch, api_has_job_id
+):
+    """The public recording representation can omit the raw DVR job identity."""
+    import httpx
+    from core.alerts.recording_outcomes import RecordingOutcomeTracker
+
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    monkeypatch.setattr("core.alerts.common.stream_tracker.CONFIG_PATH", str(tmp_path))
+    alert = _build_alert()
+    clock = [1_000_000.0]
+    alert.outcome_tracker = RecordingOutcomeTracker(
+        config_dir=tmp_path, dvr_id="dvr_test01", now=lambda: clock[0]
+    )
+    alert.outcome_tracker.observe_started(
+        {
+            "id": "job-1",
+            "name": "Evening News",
+            "start_time": 998200,
+        }
+    )
+    alert.active_recordings["job-1"] = {"id": "job-1"}
+    alert.recording_completed_enabled = False
+    alert.recording_interrupted_enabled = False
+    recording = {
+        "id": "file-1",
+        "title": "Evening News",
+        "processed": True,
+        "completed": True,
+        "cancelled": False,
+        "duration": 1800,
+        **({"job_id": "job-1"} if api_has_job_id else {}),
+    }
+    raw = {"ID": "file-1", "JobID": "job-1", "Completed": True}
+
+    def get(path, *, timeout):
+        payloads = {
+            "/api/v1/recordings/file-1": recording,
+            "/api/v1/recordings": [recording],
+            "/dvr/files/file-1": raw,
+            "/dvr/files": [raw],
+        }
+        assert path in payloads, path
+        return httpx.Response(
+            200,
+            json=payloads[path],
+            request=httpx.Request("GET", "http://fixture" + path),
+        )
+
+    monkeypatch.setattr(alert.job_provider, "_get", get)
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ) as stored:
+        details = alert.job_provider.get_recording_by_id("file-1")
+        await alert._handle_recording_completed({"Value": "recorded-file-1"}, details)
+        for _ in range(2):
+            clock[0] += 30
+            snapshot = alert.job_provider.fetch_recordings_snapshot()
+            for outcome in alert.outcome_tracker.reconcile([], recordings=snapshot):
+                await alert._process_reconciled_outcome(outcome)
+    assert [call.kwargs["event_type"] for call in stored.call_args_list] == [
+        "Completed"
+    ]
+    assert not alert.outcome_tracker.started_jobs_missing([])

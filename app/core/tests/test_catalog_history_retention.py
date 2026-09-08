@@ -34,4 +34,4 @@ def test_retained_catalog_falls_back_to_highest_compatible_release(unavailable):
     else:
         history[0]['compatible_launcher_protocols']=[]
     selection=select_catalog_release({'payload':{'releases':history}},current_version='1.0.0',runtime_abi='channelwatch-runtime-v1',settings_schema_version=7,launcher_protocol=3)
-    assert selection.release['version']=='1.0.9'
+    assert selection.release['version']=='1.1.0'

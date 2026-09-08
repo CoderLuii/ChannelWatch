@@ -170,3 +170,90 @@ def test_legacy_recording_provider_warns_only_when_instantiated():
     assert isinstance(provider, JobInfoProvider)
     assert provider.host == "192.168.1.10"
     assert provider.port == 9
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"ID": "file-1", "JobID": "job-1"},
+        {"id": "file-1", "JobId": "job-1"},
+        {"id": "file-1", "job": {"id": "job-1"}},
+    ],
+)
+def test_recording_identity_is_recovered_by_exact_file_id(monkeypatch, raw):
+    provider = JobInfoProvider(host="192.168.1.10", port=9)
+    normalized = {"id": "file-1", "title": "News", "processed": True}
+    paths = []
+
+    def get(path, **kwargs):
+        paths.append(path)
+        return _JobsResponse(normalized if path.startswith("/api/") else raw)
+
+    monkeypatch.setattr(provider, "_get", get)
+    assert provider.get_recording_by_id("file-1") == {**normalized, "job_id": "job-1"}
+    assert paths == ["/api/v1/recordings/file-1", "/dvr/files/file-1"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"ID": "different-file", "JobID": "job-1"},
+        {"ID": "file-1"},
+        None,
+        [],
+        "invalid",
+    ],
+)
+def test_unresolved_recording_identity_is_not_a_completion(monkeypatch, raw):
+    provider = JobInfoProvider(host="192.168.1.10", port=9)
+
+    def get(path, **kwargs):
+        return _JobsResponse(
+            {"id": "file-1", "processed": True} if path.startswith("/api/") else raw
+        )
+
+    monkeypatch.setattr(provider, "_get", get)
+    assert provider.get_recording_by_id("file-1") is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        {},
+        ["invalid"],
+        [],
+        [{"ID": "file-1"}],
+        [{"ID": "other", "JobID": "job-1"}],
+    ],
+)
+def test_unresolved_snapshot_cannot_prove_a_recording_is_missing(monkeypatch, raw):
+    provider = JobInfoProvider(host="192.168.1.10", port=9)
+
+    def get(path, **kwargs):
+        return _JobsResponse(
+            [{"id": "file-1", "completed": True}] if path.startswith("/api/") else raw
+        )
+
+    monkeypatch.setattr(provider, "_get", get)
+    assert provider.fetch_recordings_snapshot() is None
+
+
+def test_snapshot_recovers_multiple_identities_in_one_read(monkeypatch):
+    provider = JobInfoProvider(host="192.168.1.10", port=9)
+    paths = []
+
+    def get(path, **kwargs):
+        paths.append(path)
+        return _JobsResponse(
+            [{"id": "a", "completed": True}, {"id": "b", "failed": True}]
+            if path.startswith("/api/")
+            else [{"ID": "b", "JobID": "job-b"}, {"ID": "a", "JobID": "job-a"}]
+        )
+
+    monkeypatch.setattr(provider, "_get", get)
+    assert provider.fetch_recordings_snapshot() == [
+        {"id": "a", "completed": True, "job_id": "job-a"},
+        {"id": "b", "failed": True, "job_id": "job-b"},
+    ]
+    assert paths == ["/api/v1/recordings", "/dvr/files"]

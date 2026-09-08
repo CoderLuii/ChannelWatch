@@ -20,6 +20,7 @@ from ..helpers.channel_info import ChannelInfoProvider
 from ..helpers.job_info import JobInfoProvider
 from ..helpers.activity_recorder import record_recording_event
 from .recording_outcomes import (
+    recording_job_identifier,
     RecordingOutcome,
     RecordingOutcomeTracker,
     classify_recording_payload,
@@ -1868,12 +1869,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             elif isinstance(recording["Delayed"], str):
                 is_delayed = recording["Delayed"].lower() == "true"
 
-        job_id = str(
-            recording.get("job_id")
-            or recording.get("JobID")
-            or recording.get("jobId")
-            or ""
-        )
+        job_id = recording_job_identifier(recording)
         previously_started = bool(job_id and job_id in self.active_recordings)
         if job_id and not previously_started:
             previously_started = await asyncio.to_thread(
@@ -2082,7 +2078,6 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                     level=LOG_VERBOSE,
                 )
 
-        job_id = recording.get("job_id")
         if job_id:
             async with self._event_lock:
                 self.active_recordings.pop(job_id, None)

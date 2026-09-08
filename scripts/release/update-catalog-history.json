@@ -658,6 +658,51 @@
       ],
       "revocation_state": "active",
       "publication_time": "2026-09-08T17:28:06Z"
+    },
+    {
+      "version": "1.1.1",
+      "version_tag": "v1.1.1",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.1.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.1.0",
+      "automatic_install_allowed": true,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.1.1",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.1.1/channelwatch-app-v1.1.1.zip",
+      "bundle_sha256": "315e495a971dfe1e91226b2d85048fa48f5d7b7c55349df99ad3549f520e1c50",
+      "bundle_signature": "/wHTQKaSQ22m7AzIFVQbhFCbiZOgsbMt25aH+FtNkWF6mkjzO7eVOZ8jyByviGK9cXhobosg6woN02Nwg0F0Bw==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-09-08T18:34:19Z",
+      "highlights": [
+        "Signed in-app update for the v1.1.0 image line. Existing operational v1.1.0 installations do not require a newer image; older image lines first need the v1.1.0 milestone.",
+        "Preserve restart-dialog focus guards after a timeout so Safari keyboard focus stays within the recovery controls. This completes the timeout path of the v1.0.9 restart accessibility fix.",
+        "Correct update-guide heading order, current version examples, and the distinction between application and container image versions. Restore every release comparison link and the current Unreleased comparison.",
+        "Align documentation and security-question forms with canonical labels, reserve critical priority for maintainer triage, and make missing parser dependencies, empty label input and failed label updates return an error.",
+        "Remove six unused UI modules with no tracked import consumers. This maintenance cleanup does not change application behavior."
+      ],
+      "automatic_install_after": "2026-09-10T18:34:19Z",
+      "compatible_source_application_versions": [
+        "1.1.0"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-09-08T18:34:19Z"
     }
   ]
 }

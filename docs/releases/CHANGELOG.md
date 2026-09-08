@@ -8,6 +8,17 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.1.2] - 2026-09-08
+
+### Important
+
+- Signed in-app update for the v1.1.0 image line. An operational v1.1.0 or v1.1.1 installation does not need a newer image.
+
+### Fixed
+
+- Prevent completed recordings from later being reported as interrupted when the public recording response omits the job ID. Resolve the exact file-to-job identity from DVR metadata for completion and periodic reconciliation, without matching by title or time. Addresses #15 and duplicate #17.
+- Keep failed, malformed or unmatched identity lookups unknown instead of treating them as proof that an active recording disappeared. Use one additional file-list read for a reconciliation snapshot and retain explicit failure/cancellation handling.
+
 ## [1.1.1] - 2026-09-08
 
 ### Important
@@ -756,7 +767,7 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.2...HEAD
 [1.1.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.9...v1.1.0
 [1.0.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.8...v1.0.9
@@ -791,3 +802,5 @@ All notable changes to this project will be documented in this file. The format 
 [0.9.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.9.0
 [0.8.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.8
 [0.7.0]: https://github.com/CoderLuii/ChannelWatch/releases/tag/v0.7
+
+[1.1.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.1...v1.1.2

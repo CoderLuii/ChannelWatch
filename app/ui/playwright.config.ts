@@ -12,8 +12,10 @@ export default defineConfig({
   // each platform instead of weakening the visual-diff threshold.
   snapshotPathTemplate: "{testDir}/__screenshots__/{projectName}/{platform}/{arg}{ext}",
   fullyParallel: true,
+  workers: process.env.CI ? 1 : undefined,
+  globalTimeout: process.env.CI ? 20 * 60 * 1000 : undefined,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
+  reporter: process.env.CI ? [["github"], ["list"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL,
     trace: "retain-on-failure",

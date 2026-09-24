@@ -94,6 +94,7 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm build
       - name: Run browser, responsive, visual, keyboard, and accessibility checks
         run: pnpm exec playwright test
       - name: Retain browser diagnostics, including first failed attempts

@@ -113,6 +113,7 @@ DEFAULT_SETTINGS = {
     "dvr_health_alert_delay_seconds": 120,
     "notification_preferences_version": 1,
     "rd_program_name": True,
+    "rd_image": True,
     "rd_program_desc": True,
     "rd_duration": True,
     "rd_channel_name": True,

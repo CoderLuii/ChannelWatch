@@ -136,6 +136,7 @@ class CoreSettings:
     dvr_health_alert_delay_seconds: int = 120
     notification_preferences_version: int = 0
     rd_program_name: bool = True
+    rd_image: bool = True
     rd_program_desc: bool = True
     rd_duration: bool = True
     rd_channel_name: bool = True

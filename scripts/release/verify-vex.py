@@ -47,6 +47,12 @@ def validate_vex(document: dict[str, Any], *, expected_version: str) -> None:
     statements = document.get("statements")
     if not isinstance(statements, list):
         raise VexValidationError("OpenVEX statements must be an array")
+    if expected_version == "1.2.0":
+        if statements:
+            raise VexValidationError(
+                "v1.2.0 has no reviewed runtime findings; stale VEX statements are forbidden"
+            )
+        return
     names = [
         str(statement.get("vulnerability", {}).get("name") or "")
         for statement in statements

@@ -1,8 +1,8 @@
 # Update ChannelWatch
 
-ChannelWatch v1.1.2 is a signed in-app update for the v1.1.0 image line. On that image, open **Settings > Updates** to install it. **Application version** then shows v1.1.2 while **Container image version** can remain v1.1.0; that combination is current and needs no image refresh.
+ChannelWatch v1.2.0 requires its matching container image. Pull `coderluii/channelwatch:1.2.0` (or `ghcr.io/coderluii/channelwatch:1.2.0`) and recreate the container with the same `/config` volume. **Settings > Updates** will show that an image update is required; it cannot install v1.2.0 in-app.
 
-If you are on a 1.0.x or older image, first install the v1.1.0 container-image milestone through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume and any external storage key configuration when recreating the container. Then install v1.1.2 through Update Center. Do not re-enter saved DVRs or credentials merely to update.
+From any older image, update directly to v1.2.0 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume and any external storage key configuration when recreating the container. Do not re-enter saved DVRs or credentials merely to update.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. The dashboard follows monitoring startup automatically. Application and immutable container image versions are reported separately.
 
@@ -84,7 +84,7 @@ Some releases cannot be safely applied inside the current image. ChannelWatch wi
 
 Starting with v1.0.0, every `X.Y.0` release is also an intentional image milestone even when its individual changes could fit in a bundle. This keeps one known container baseline for the following `X.Y.1` through `X.Y.9` in-app releases and makes the required update method clear from the version number.
 
-Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. v1.1.2 still publishes normal AMD64/ARM64 images for fresh installations, but operational v1.1.0 installations can update in-app without pulling them.
+Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. v1.2.0 changes container dependencies and therefore requires its matching image on AMD64 or ARM64.
 
 When this appears, update the container using your normal Docker, Unraid, Compose, or Helm process. The in-app updater intentionally does not replace the Docker image.
 

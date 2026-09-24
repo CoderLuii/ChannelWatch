@@ -640,37 +640,37 @@ def test_corresponding_source_map_pins_exact_release_sources():
     )
 
     for required in (
-        "8190a1652f4534ad3feebd3b48066514f0f4375f",
-        "gdbm 1.26-r5",
-        "glibc-2.43 2.43-r15",
-        "libgcc 16.2.0-r0",
-        "libuuid 2.42.2-r3",
-        "libzstd1 1.5.7-r8",
-        "readline 8.3-r2",
-        "xz 5.8.3-r2",
-        "zeroconf 0.150.0",
-        "a5fe7feab1de6ef5e541e0a3d07e534fd91629b813fc27281593584100f63164",
+        "d971acc66388fb920398dc3b980726d8cf12fd94",
+        "gdbm 1.26-r6",
+        "glibc-2.44 2.44-r6",
+        "libgcc 16.2.0-r1",
+        "libuuid 2.42.3-r4",
+        "libzstd1 1.5.7-r10",
+        "readline 8.3-r3",
+        "xz 5.8.4-r0",
+        "zeroconf 0.151.3",
+        "ce6c548e665759b6150cef4db9ab9d7bdd89857e90c513abd6b7340bdd7dbd6a",
         "5bf6d9610255540bfbee6890765a616042bf1e11",
     ):
         assert required in source_map
 
 
-def test_release_config_declares_111_in_app_release():
+def test_release_config_declares_120_image_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.1.2"
-    assert config["image_required"] is False
-    assert config["delivery_mode"] == "app_update"
-    assert config["minimum_image_version"] == "1.1.0"
+    assert config["version"] == "1.2.0"
+    assert config["image_required"] is True
+    assert config["delivery_mode"] == "image_required"
+    assert config["minimum_image_version"] == "1.2.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.1.0"
-    assert config["automatic_install_allowed"] is True
-    assert config["compatible_source_application_versions"] == ["1.1.0", "1.1.1"]
+    assert config["recommended_image_version"] == "1.2.0"
+    assert config["automatic_install_allowed"] is False
+    assert config["compatible_source_application_versions"] == ["1.1.0", "1.1.1", "1.1.2"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.1.2 - Correct recording completion identity"
+        "# ChannelWatch v1.2.0 - More reliable recording alerts"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -748,7 +748,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_111_in_app_release():
+def test_release_version_surfaces_use_120_image_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -759,20 +759,20 @@ def test_release_version_surfaces_use_111_in_app_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.1.2"
-    assert metadata["versionTag"] == "v1.1.2"
-    assert metadata["dockerTag"] == "1.1.2"
-    assert metadata["helmChartVersion"] == "1.1.2"
-    assert metadata["helmAppVersion"] == "1.1.2"
+    assert metadata["version"] == "1.2.0"
+    assert metadata["versionTag"] == "v1.2.0"
+    assert metadata["dockerTag"] == "1.2.0"
+    assert metadata["helmChartVersion"] == "1.2.0"
+    assert metadata["helmAppVersion"] == "1.2.0"
 
 
-def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_120_links_license_and_sbom_assets(monkeypatch, capsys):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
     )
     metadata = {
-        "versionTag": "v1.1.2",
+        "versionTag": "v1.2.0",
         "releaseDate": "2026-08-28",
         "changelogHighlights": [
             "v0.9.9 needs one image pull while preserving /config.",
@@ -784,7 +784,7 @@ def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys)
             ],
             "Security": ["Bundle release license notices."],
         },
-        "dockerTag": "1.1.2",
+        "dockerTag": "1.2.0",
     }
     monkeypatch.setattr(
         module,
@@ -794,27 +794,27 @@ def test_release_body_for_111_links_license_and_sbom_assets(monkeypatch, capsys)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["render-release-body.py", "--version", "1.1.2"],
+        ["render-release-body.py", "--version", "1.2.0"],
     )
 
     assert module.main() == 0
 
     output = capsys.readouterr().out
     assert output.startswith(
-        "# ChannelWatch v1.1.2 - Correct recording completion identity\n"
+        "# ChannelWatch v1.2.0 - More reliable recording alerts\n"
     )
     assert "## Important" in output
     assert "v0.9.9 needs one image pull while preserving /config." in output
     assert output.index("## Important") < output.index("## Security")
     assert "## License and verification" in output
-    assert "channelwatch-v1.1.2-THIRD-PARTY-LICENSES.md" in output
-    assert "channelwatch-v1.1.2-CORRESPONDING-SOURCE.md" in output
-    assert "channelwatch-v1.1.2-COPYLEFT-LICENSES.zip" in output
-    assert "channelwatch-v1.1.2-SHA256SUMS.txt" in output
+    assert "channelwatch-v1.2.0-THIRD-PARTY-LICENSES.md" in output
+    assert "channelwatch-v1.2.0-CORRESPONDING-SOURCE.md" in output
+    assert "channelwatch-v1.2.0-COPYLEFT-LICENSES.zip" in output
+    assert "channelwatch-v1.2.0-SHA256SUMS.txt" in output
     assert "Exact amd64 and arm64 SPDX and CycloneDX SBOMs" in output
     assert "every other attached asset is covered" in output
-    assert "`coderluii/channelwatch:1.1`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.1`" in output
+    assert "`coderluii/channelwatch:1.2`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.2`" in output
 
 
 def test_release_workflow_uses_explicit_config_and_python_gate():
@@ -2239,9 +2239,9 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '.draft and .tag_name == \\"${TAG}\\"' in workflow
     assert '.tag_name == \\"${TAG}\\" or' not in workflow
     assert '--target "${RELEASE_SHA}"' in workflow
-    assert "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c" in workflow
+    assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
     assert "python-version: '3.12'" in workflow
-    assert "actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f" in workflow
+    assert "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" in workflow
     assert "node-version: '24'" in workflow
     assert "package-manager-cache: false" in workflow
 
@@ -2415,7 +2415,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "describe-oci-image.py" in image_job
     assert 'tar -xf "${archive}"' in image_job
     assert 'cmp --silent "${descriptor}"' in image_job
-    assert "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514" in image_job
+    assert "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567" in image_job
     assert "--scanners vuln,secret,misconfig" in image_job
     assert "--severity CRITICAL,HIGH" in image_job
     assert "--exit-code 1" in image_job
@@ -2442,7 +2442,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert attach_assets_index < docker_login_index
     assert (
         "anchore/sbom-action/download-syft@"
-        "e22c389904149dbc22b58101806040fa8d37a610"
+        "006b7ce8314066bdf1765b4500370d40fa6917a3"
     ) in image_job
     assert "syft-version: v1.51.0" in image_job
     assert '"oci-dir:${OCI_LAYOUT}"' in image_job
@@ -2475,7 +2475,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
-    assert "quay.io/skopeo/stable@sha256:db4108427c05acbadd1447316caa9b5f097a9a737d897d2297443baedff37ded" in workflow
+    assert "quay.io/skopeo/stable@sha256:6cc6b5002dc40f2adf2b3b32e775c9d50c3cf63e15100f15581be6971ab0c9e5" in workflow
     assert "Verify pinned publication helper is available" in workflow
     assert 'docker pull "${SKOPEO_IMAGE}"' in workflow
     assert 'root_index="$(cat "${OCI_LAYOUT}/index.json")"' in publish_job
@@ -2746,7 +2746,7 @@ def test_ci_trivy_scan_renders_helm_and_fails_if_chart_targets_are_skipped():
     )
     security_job = workflow.split("  security:", 1)[1]
 
-    assert "aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514" in security_job
+    assert "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567" in security_job
     assert "--ignorefile .trivyignore.yaml" in security_job
     assert "--skip-files deploy/docker/Dockerfile.dockerignore" in security_job
     assert "--helm-set-string secretConfig.secretStorageKey=" not in security_job

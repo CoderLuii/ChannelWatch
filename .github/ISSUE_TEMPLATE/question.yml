@@ -28,7 +28,7 @@ body:
     attributes:
       label: ChannelWatch version
       description: In Settings > Updates, copy Application version. Include Container image version if the problem involves updating.
-      placeholder: "e.g. 1.1.2"
+      placeholder: "e.g. 1.2.0"
     validations:
       required: true
 

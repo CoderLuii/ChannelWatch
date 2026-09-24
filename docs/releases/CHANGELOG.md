@@ -8,6 +8,24 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.2.0] - 2026-09-24
+
+### Important
+
+- This release requires the v1.2.0 container image. Preserve the existing `/config` volume and any external storage key when recreating the container; the Update Center cannot install this image update in-app.
+
+### Fixed
+
+- Check completed DVR recordings before declaring that a recording never started when its start event was missed. This prevents a recording that started and finished normally from producing a false missed-start alert while retaining alerts for genuinely missed recordings. Addresses #20.
+
+### Added
+
+- Add a **Program image** switch for Recording Outcomes alerts, including a per-DVR override. Turning it off removes artwork from delivered recording notifications while leaving dashboard artwork unchanged. Addresses #19.
+
+### Changed
+
+- Refresh compatible application, container, and website dependencies and build tools, including security fixes.
+
 ## [1.1.2] - 2026-09-08
 
 ### Important
@@ -767,7 +785,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.2...v1.2.0
 [1.1.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.9...v1.1.0
 [1.0.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.8...v1.0.9

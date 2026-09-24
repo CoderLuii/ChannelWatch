@@ -1,7 +1,7 @@
 #-----------------------------------------------------------------------------
 # Stage 1: UI Build
 #-----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS ui-builder
+FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS ui-builder
 
 ARG GIT_SHA=unknown
 ENV CHANNELWATCH_BUILD_ID="${GIT_SHA}"
@@ -18,7 +18,7 @@ RUN pnpm build
 #-----------------------------------------------------------------------------
 # Stage 2: Python Dependencies
 #-----------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev@sha256:4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef AS python-deps
+FROM cgr.dev/chainguard/python:latest-dev@sha256:e55c66e1405ff03cf60c56c8c11bba46a272796ace158cd913dad5998caaf58a AS python-deps
 
 # This build-only stage installs dependencies and is not the shipped runtime.
 # hadolint ignore=DL3002,DL3066
@@ -30,7 +30,7 @@ WORKDIR /deps
 
 COPY deploy/requirements/runtime.txt ./requirements.txt
 COPY deploy/requirements/runtime.constraints.txt ./constraints.txt
-RUN apk add --no-cache tzdata=2026c-r0 \
+RUN apk add --no-cache tzdata=2026d-r0 \
     && python -m venv /venv \
     && /venv/bin/pip install --no-cache-dir -c constraints.txt -r requirements.txt \
     && /venv/bin/pip uninstall --yes pip setuptools
@@ -42,7 +42,7 @@ RUN ["/usr/bin/python", "/tmp/copyleft_licenses.py", "--output-dir", "/release-l
 #-----------------------------------------------------------------------------
 # Stage 3: Application
 #-----------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest@sha256:1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c
+FROM cgr.dev/chainguard/python:latest@sha256:f23c2b7cd3d6b18aed6ad6e1099d79668ff62ba49078e81bb558e5a1c7581fd8
 
 # The entrypoint needs root only to repair /config ownership for configurable
 # PUID/PGID, then verifies a fail-closed UID/GID and group drop before exec.
@@ -51,7 +51,7 @@ FROM cgr.dev/chainguard/python:latest@sha256:1f6779775c9f466890da563e411cb677045
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.1.2
+ARG VERSION=1.2.0
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

@@ -2,7 +2,7 @@
 
 ChannelWatch supports third-party notification providers through a Python file-based plugin loader.
 
-Alert-source plugins are not part of the v0.9 runtime plugin system. A stable `AlertSource` interface preview now ships for plugin authors targeting v1.1, but there is no dynamic loading, registration, or runtime integration for alert-source plugins yet.
+Alert-source plugins are not part of the runtime plugin system. An `AlertSource` interface preview ships for plugin authors, but there is no dynamic loading, registration, or runtime integration for alert-source plugins yet.
 
 If you drop a valid provider module into `/config/plugins/notifications/`, ChannelWatch will try to import it during startup and register it alongside the built-in providers.
 
@@ -30,7 +30,7 @@ They cannot:
 |---|---|
 | `/config/plugins/notifications/*.py` | Runtime plugin directory |
 | `app/core/notifications/providers/base.py` | `NotificationProvider` abstract base class |
-| `app/core/notifications/providers/base.py` | `AlertSource` v1.1 stable preview interface |
+| `app/core/notifications/providers/base.py` | `AlertSource` preview interface |
 | `app/core/notifications/providers/plugin_loader.py` | Loader implementation |
 | `app/core/notifications/providers/examples/console_provider.py` | Shipped reference plugin |
 | `app/core/notifications/providers/examples/custom_alert_source.py` | Shipped alert-source preview example |
@@ -101,11 +101,11 @@ class MyProvider(NotificationProvider):
 | `is_configured()` | Yes | Runtime readiness check |
 | `send_notification()` | Yes | Delivery method |
 
-## Alert-source preview for v1.1
+## Alert-source preview
 
-ChannelWatch v0.9 does not load alert-source plugins at runtime.
+ChannelWatch does not load alert-source plugins at runtime.
 
-The `AlertSource` abstract base class in `app/core/notifications/providers/base.py` is a stable interface preview for the planned v1.1 alert-source plugin API. You can prototype against this contract now, but ChannelWatch will not auto-discover or execute alert-source plugins until that future release work lands.
+The `AlertSource` abstract base class in `app/core/notifications/providers/base.py` is a preview interface for alert-source plugins. You can prototype against this contract now, but ChannelWatch does not auto-discover or execute alert-source plugins.
 
 ```py
 from typing import Any

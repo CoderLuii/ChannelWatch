@@ -12,6 +12,9 @@ from core.alerts.recording_events import RecordingEventsAlert
 from core.alerts.recording_outcomes import RecordingOutcome
 from core.diagnostics.alerts import recording_events as recording_diagnostics
 from core.helpers.job_info import JobInfoProvider
+from core.helpers.config import CoreSettings
+from core.helpers.migration import defaults_merge, get_dataclass_defaults
+from ui.backend.schemas import AppSettings
 
 
 class _Settings:
@@ -99,6 +102,25 @@ def test_recording_image_returns_empty_when_no_art_exists():
     assert recording["artwork_fallback_exhausted"] is True
 
 
+def test_recording_notification_image_setting_defaults_on_for_existing_settings():
+    merged = defaults_merge({"rd_program_name": True}, get_dataclass_defaults(CoreSettings))
+    assert merged["rd_image"] is True
+    assert AppSettings.model_validate({}).rd_image is True
+    assert AppSettings.model_validate({"rd_image": False}).rd_image is False
+
+
+def test_recording_notification_image_setting_removes_artwork_from_formatted_alert():
+    alert = _build_alert()
+    alert.settings.rd_image = False
+    formatted = alert._format_recording_alert(
+        default_message="Started: Example",
+        image_url="https://example.test/program.jpg",
+        context={"image_url": "https://example.test/program.jpg"},
+    )
+    assert not formatted.get("image_url")
+    assert "https://example.test/program.jpg" not in formatted.get("message", "")
+
+
 @pytest.mark.asyncio
 async def test_recording_outcome_state_helpers_preserve_live_event_processing():
     alert = _build_alert()
@@ -126,11 +148,13 @@ async def test_recording_outcome_state_helpers_preserve_live_event_processing():
     assert alert._outcome_persistence_error == "PermissionError"
 
 
+@pytest.mark.parametrize("image_enabled", [True, False])
 @pytest.mark.asyncio
 async def test_reconciled_recording_outcome_records_activity_and_awaits_delivery(
-    monkeypatch,
+    monkeypatch, image_enabled,
 ):
     alert = _build_alert()
+    alert.settings.rd_image = image_enabled
     alert.recording_failed_enabled = True
     alert.channel_provider.get_channel_info = MagicMock(
         return_value={"name": "Synthetic Channel"}
@@ -156,7 +180,9 @@ async def test_reconciled_recording_outcome_records_activity_and_awaits_delivery
     record_activity.assert_called_once()
     assert record_activity.call_args.kwargs["event_type"] == "Failed"
     assert record_activity.call_args.kwargs["channel_name"] == "Synthetic Channel"
+    assert record_activity.call_args.kwargs["image_url"] == "https://example.test/image.jpg"
     alert.send_alert_async.assert_awaited_once()
+    assert bool(alert.send_alert_async.await_args.args[2]) is image_enabled
     alert.session_manager.record_notification.assert_awaited_once_with(
         "recording-failed-job-a"
     )

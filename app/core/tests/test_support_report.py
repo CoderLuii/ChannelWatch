@@ -290,7 +290,7 @@ def _schema2_code(payload, **overrides):
     envelope = {
         "schema": 2,
         "report_id": "00010203-0405-4607-8809-0a0b0c0d0e0f",
-        "created_at": "2026-08-13T00:00:00Z",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "report": payload,
         "client": {"channelwatch_version": payload["diagnostics"].get("channelwatch_version") or "unknown", "submission_source": "in-app"},
     }
@@ -1130,11 +1130,12 @@ def test_support_report_offline_package_contains_validated_private_files():
         kind="debug_bundle",
     )
 
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     expected_support_code = "CW-REPORT-v2-" + base64.urlsafe_b64encode(
         json.dumps({
             "schema": 2,
             "report_id": "00010203-0405-4607-8809-0a0b0c0d0e0f",
-            "created_at": "2026-08-13T00:00:00Z",
+            "created_at": created_at,
             "report": payload.model_dump(),
             "client": {"channelwatch_version": "0.9.3", "submission_source": "in-app"},
         }, separators=(",", ":")).encode()

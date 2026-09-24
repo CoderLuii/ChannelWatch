@@ -168,6 +168,7 @@ class AppSettings(BaseModel):
         0, ge=0, le=1, description="Alert-policy review version"
     )
     rd_program_name: bool = BoolTrue()
+    rd_image: bool = BoolTrue()
     rd_program_desc: bool = BoolTrue()
     rd_duration: bool = BoolTrue()
     rd_channel_name: bool = BoolTrue()

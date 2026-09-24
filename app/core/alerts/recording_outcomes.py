@@ -355,13 +355,8 @@ class RecordingOutcomeTracker:
     def pending_outcome(self, job_id: str) -> RecordingOutcome | None:
         return next((item for item in self.pending_outcomes() if item.job_id == job_id), None)
 
-    def started_jobs_missing(self, jobs: Iterable[dict[str, Any]]) -> bool:
-        """Return whether a fresh recordings lookup is needed.
-
-        A missing active job alone is not enough to infer interruption.  The
-        caller performs a separate fresh completed-recordings read only when
-        this method reports that one is needed.
-        """
+    def terminal_evidence_needed(self, jobs: Iterable[dict[str, Any]]) -> bool:
+        """Return whether missing jobs require a fresh recordings lookup."""
 
         observed = {
             identifier
@@ -369,14 +364,28 @@ class RecordingOutcomeTracker:
             if isinstance(job, dict)
             and (identifier := _job_identifier(job))
         }
+        now = self.now()
         with self._lock:
             return any(
                 isinstance(entry, dict)
-                and entry.get("started")
                 and not entry.get("terminal_outcome")
                 and job_id not in observed
+                and (
+                    entry.get("started")
+                    or (
+                        (start_time := _number(
+                            (entry.get("snapshot") or {}).get("start_time")
+                        ))
+                        and now >= start_time + MISSED_GRACE_SECONDS
+                    )
+                )
                 for job_id, entry in self._state["jobs"].items()
             )
+
+    def started_jobs_missing(self, jobs: Iterable[dict[str, Any]]) -> bool:
+        """Compatibility wrapper for the former lookup predicate."""
+
+        return self.terminal_evidence_needed(jobs)
 
     def was_started(self, job_id: str) -> bool:
         """Return whether this lifecycle was durably observed as started."""
@@ -496,6 +505,25 @@ class RecordingOutcomeTracker:
 
                 start_time = _number(snapshot.get("start_time"))
                 if not start_time or now < start_time + MISSED_GRACE_SECONDS:
+                    continue
+                # A missing job is not proof that it failed to start. Channels
+                # removes successfully completed jobs from the jobs snapshot,
+                # and the start event can be missed during a reconnect or
+                # restart. Require a successful recordings read before a
+                # missed outcome, and prefer exact completed-recording evidence.
+                if recordings is None:
+                    continue
+                recording = recordings_by_job.get(job_id)
+                if recording is not None:
+                    outcome = classify_recording_payload(
+                        recording,
+                        completion_event=True,
+                    )
+                    if outcome and self._set_terminal(entry, outcome, now):
+                        changed = True
+                        outcomes.append(
+                            RecordingOutcome(job_id, outcome, dict(snapshot))
+                        )
                     continue
                 last_negative = _number(entry.get("last_negative_at"))
                 confirmations = int(entry.get("missing_confirmations") or 0)

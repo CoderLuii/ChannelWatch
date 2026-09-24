@@ -3,24 +3,24 @@ setuptools>=84.0.0
 pip>=26.2.1
 requests>=2.34.2
 httpx>=0.28.1
-pytz>=2026.3.post1
-pydantic>=2.13.4
+pytz>=2026.4
+pydantic>=2.13.5
 
 # Storage and auth
-sqlmodel>=0.0.39
+sqlmodel>=0.0.47
 bcrypt>=5.0.0
-cryptography>=50.0.0
+cryptography>=50.0.1
 
 # Notifications
-apprise>=1.12.0
+apprise>=1.13.1
 
 # Web
 fastapi>=0.141.1
-uvicorn[standard]>=0.52.1
+uvicorn[standard]>=0.53.0
 python-multipart>=0.0.32
 
 # Discovery
-zeroconf>=0.150.0
+zeroconf>=0.151.3
 
 # Management
 supervisor>=4.3.0

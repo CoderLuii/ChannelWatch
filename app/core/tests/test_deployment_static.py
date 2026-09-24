@@ -38,7 +38,7 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     )
 
     assert "corepack enable" in dockerfile
-    assert '"packageManager": "pnpm@11.21.0+' in package_json
+    assert '"packageManager": "pnpm@11.27.1+' in package_json
     assert "pnpm install --frozen-lockfile" in dockerfile
     assert "/venv/bin/pip uninstall --yes pip setuptools" in dockerfile
 
@@ -50,13 +50,13 @@ def test_dockerfile_pins_reviewed_python_bases_and_timezone_package():
 
     assert (
         "cgr.dev/chainguard/python:latest-dev@sha256:"
-        "4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef"
+        "e55c66e1405ff03cf60c56c8c11bba46a272796ace158cd913dad5998caaf58a"
     ) in dockerfile
     assert (
         "cgr.dev/chainguard/python:latest@sha256:"
-        "1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c"
+        "f23c2b7cd3d6b18aed6ad6e1099d79668ff62ba49078e81bb558e5a1c7581fd8"
     ) in dockerfile
-    assert "apk add --no-cache tzdata=2026c-r0" in dockerfile
+    assert "apk add --no-cache tzdata=2026d-r0" in dockerfile
     assert "apk add --no-cache tzdata \\" not in dockerfile
 
 
@@ -67,7 +67,7 @@ def test_dockerfile_builds_static_ui_on_native_build_platform():
 
     assert (
         "FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:"
-        "d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 "
+        "ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 "
         "AS ui-builder"
     ) in dockerfile
     assert "FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/python" not in dockerfile

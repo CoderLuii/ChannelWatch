@@ -1,0 +1,9 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/CoderLuii/ChannelWatch/security/vex/v1.2.0-runtime",
+  "author": "ChannelWatch maintainers",
+  "role": "Project Maintainer",
+  "timestamp": "2026-09-24T17:53:00Z",
+  "version": 1,
+  "statements": []
+}

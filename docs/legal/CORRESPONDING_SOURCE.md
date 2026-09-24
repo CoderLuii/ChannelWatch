@@ -12,22 +12,22 @@ from the public ChannelWatch repository and pinned Chainguard/Wolfi inputs in
 
 ## Exact container inputs
 
-- Runtime image index: `cgr.dev/chainguard/python:latest@sha256:1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c`
-- Build image index: `cgr.dev/chainguard/python:latest-dev@sha256:4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef`
-- Reviewed Wolfi recipe tree: [`wolfi-dev/os@8190a1652f4534ad3feebd3b48066514f0f4375f`](https://github.com/wolfi-dev/os/tree/8190a1652f4534ad3feebd3b48066514f0f4375f)
+- Runtime image index: `cgr.dev/chainguard/python:latest@sha256:f23c2b7cd3d6b18aed6ad6e1099d79668ff62ba49078e81bb558e5a1c7581fd8`
+- Build image index: `cgr.dev/chainguard/python:latest-dev@sha256:e55c66e1405ff03cf60c56c8c11bba46a272796ace158cd913dad5998caaf58a`
+- Reviewed Wolfi recipe tree: [`wolfi-dev/os@d971acc66388fb920398dc3b980726d8cf12fd94`](https://github.com/wolfi-dev/os/tree/d971acc66388fb920398dc3b980726d8cf12fd94)
 
 ## Package-to-source mapping
 
 | Image package | Declared license | Exact source and packaging recipe |
 |---|---|---|
-| `gdbm 1.26-r5` | GPL-3.0-or-later | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/gdbm.yaml); upstream [`gdbm-1.26.tar.gz`](https://ftp.gnu.org/gnu/gdbm/gdbm-1.26.tar.gz), SHA-256 `6a24504a14de4a744103dcb936be976df6fbe88ccff26065e54c1c47946f4a5e` |
-| `glibc-2.43 2.43-r15`, `glibc-2.43-locale-posix 2.43-r15`, `ld-linux-2.43 2.43-r15` | LGPL-2.1-or-later | [Wolfi recipe and patches](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/glibc-2.43.yaml); upstream [`glibc` commit `dae425b554207f7c4599c7fac707ad4c08545674`](https://gitlab.com/gnutools/glibc/-/commit/dae425b554207f7c4599c7fac707ad4c08545674) |
-| `libgcc 16.2.0-r0`, `libstdc++ 16.2.0-r0` | GPL-3.0-or-later WITH GCC-exception-3.1 | [Wolfi recipe and patch](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/gcc.yaml); upstream [`gcc` commit `78d4ac73dd391005b895a6148cd9831e28e1208b`](https://gitlab.com/gnutools/gcc/-/commit/78d4ac73dd391005b895a6148cd9831e28e1208b) |
-| `libuuid 2.42.2-r3` | Mixed GPL/LGPL/BSD/MIT/CC-PDDC metadata | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/util-linux.yaml); [upstream `util-linux-2.42.2.tar.xz`](https://www.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-2.42.2.tar.xz), SHA-256 `03a05d3adf9602ef128f2da05b84b3205ce60c351e5737c0370f74000679ce8a` |
-| `libzstd1 1.5.7-r8` | BSD-2-Clause AND GPL-2.0-only | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/zstd.yaml); upstream [`zstd` commit `f8745da6ff1ad1e7bab384bd1f9d742439278e99`](https://github.com/facebook/zstd/commit/f8745da6ff1ad1e7bab384bd1f9d742439278e99) |
-| `readline 8.3-r2` | GPL-3.0-or-later | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/readline.yaml); upstream [`readline-8.3.tar.gz`](https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz), SHA-256 `fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc` |
-| `xz 5.8.3-r2` | GPL-3.0-or-later | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/8190a1652f4534ad3feebd3b48066514f0f4375f/xz.yaml); upstream [`xz` commit `4b73f2ec19a99ef465282fbce633e8deb33691b3`](https://github.com/tukaani-project/xz/commit/4b73f2ec19a99ef465282fbce633e8deb33691b3) |
-| `zeroconf 0.150.0` | LGPL-2.1-or-later | [PyPI source archive](https://files.pythonhosted.org/packages/09/ea/34bb185645ecaa18d34e5883bffea71aa9bffbbb994634884e8b2f3ad0c4/zeroconf-0.150.0.tar.gz), SHA-256 `a5fe7feab1de6ef5e541e0a3d07e534fd91629b813fc27281593584100f63164`; [project source](https://github.com/python-zeroconf/python-zeroconf/tree/0.150.0) |
+| `gdbm 1.26-r6` | GPL-3.0-or-later | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/gdbm.yaml); upstream [`gdbm` commit `8ca8f03ab6cc125139a395ec2d522aebb15f8060`](https://git.savannah.gnu.org/cgit/gdbm.git/commit/?id=8ca8f03ab6cc125139a395ec2d522aebb15f8060) |
+| `glibc-2.44 2.44-r6`, `glibc-2.44-locale-posix 2.44-r6`, `ld-linux-2.44 2.44-r6` | LGPL-2.1-or-later | [Wolfi recipe and patches](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/glibc-2.44.yaml); upstream [`glibc` commit `b4f51887c48ac82acfdb13f96d9eab5d120cb2b7`](https://sourceware.org/git/?p=glibc.git;a=commit;h=b4f51887c48ac82acfdb13f96d9eab5d120cb2b7) |
+| `libgcc 16.2.0-r1`, `libstdc++ 16.2.0-r1` | GPL-3.0-or-later WITH GCC-exception-3.1 | [Wolfi recipe and patch](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/gcc.yaml); upstream [`gcc` commit `78d4ac73dd391005b895a6148cd9831e28e1208b`](https://gitlab.com/gnutools/gcc/-/commit/78d4ac73dd391005b895a6148cd9831e28e1208b) |
+| `libuuid 2.42.3-r4` | Mixed GPL/LGPL/BSD/MIT/CC-PDDC metadata | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/util-linux.yaml); upstream [`util-linux` commit `6f20a5defcf9066d4d2af372424a1576bd3d495d`](https://github.com/util-linux/util-linux/commit/6f20a5defcf9066d4d2af372424a1576bd3d495d) |
+| `libzstd1 1.5.7-r10` | BSD-2-Clause AND GPL-2.0-only | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/zstd.yaml); upstream [`zstd` commit `f8745da6ff1ad1e7bab384bd1f9d742439278e99`](https://github.com/facebook/zstd/commit/f8745da6ff1ad1e7bab384bd1f9d742439278e99) |
+| `readline 8.3-r3` | GPL-3.0-or-later | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/readline.yaml); upstream [`readline` commit `447b8290b3e2e2d117dc8e9cdb83b0dc6448a638`](https://git.savannah.gnu.org/cgit/readline.git/commit/?id=447b8290b3e2e2d117dc8e9cdb83b0dc6448a638) |
+| `xz 5.8.4-r0` | GPL-3.0-or-later | [Wolfi recipe](https://github.com/wolfi-dev/os/blob/d971acc66388fb920398dc3b980726d8cf12fd94/xz.yaml); upstream [`xz` commit `d3e650e63c110e830fd5391e7f8b45df0b91d3da`](https://github.com/tukaani-project/xz/commit/d3e650e63c110e830fd5391e7f8b45df0b91d3da) |
+| `zeroconf 0.151.3` | LGPL-2.1-or-later | [PyPI source archive](https://files.pythonhosted.org/packages/2b/7f/bb22975bbbc04765920b766e433410422794568053bff0ab5b3f0bf0197c/zeroconf-0.151.3.tar.gz), SHA-256 `ce6c548e665759b6150cef4db9ab9d7bdd89857e90c513abd6b7340bdd7dbd6a`; [project source](https://github.com/python-zeroconf/python-zeroconf/tree/0.151.3) |
 
 The Wolfi recipes above contain the exact package version, revision (`epoch`),
 upstream commit or archive digest, patches, configuration, build steps, and

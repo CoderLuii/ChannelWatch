@@ -1,16 +1,17 @@
 {
-  "version": "1.1.2",
-  "image_required": false,
-  "delivery_mode": "app_update",
-  "minimum_image_version": "1.1.0",
+  "version": "1.2.0",
+  "image_required": true,
+  "delivery_mode": "image_required",
+  "minimum_image_version": "1.2.0",
   "updater_protocol": 2,
-  "recommended_image_version": "1.1.0",
-  "publication_time": "2026-09-08T19:47:39Z",
-  "automatic_install_after": "2026-09-10T19:47:39Z",
-  "automatic_install_allowed": true,
+  "recommended_image_version": "1.2.0",
+  "publication_time": "2026-09-24T18:30:00Z",
+  "automatic_install_after": "2026-09-27T18:30:00Z",
+  "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.1.0",
-    "1.1.1"
+    "1.1.1",
+    "1.1.2"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -18,6 +19,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.1.2 - Correct recording completion identity",
+  "release_heading": "# ChannelWatch v1.2.0 - More reliable recording alerts",
   "verification_assets": true
 }

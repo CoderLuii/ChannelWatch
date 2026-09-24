@@ -27,6 +27,19 @@ def test_release_vex_covers_exact_runtime_findings_and_architectures():
     _module().validate_vex(_document(), expected_version="1.0.8")
 
 
+def test_current_release_vex_has_no_stale_runtime_dispositions():
+    document = json.loads(
+        (ROOT / "deploy/security/channelwatch-v1.2.0.openvex.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    module = _module()
+    module.validate_vex(document, expected_version="1.2.0")
+    document["statements"] = copy.deepcopy(_document()["statements"])
+    with pytest.raises(module.VexValidationError, match="stale VEX statements"):
+        module.validate_vex(document, expected_version="1.2.0")
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

@@ -869,6 +869,8 @@
   "alerts.rec.cancelledDesc": "Recording was stopped or removed",
   "alerts.rec.programName": "Program Name",
   "alerts.rec.programNameDesc": "What's being recorded",
+  "alerts.rec.image": "Program Image",
+  "alerts.rec.imageDesc": "Include artwork in recording notifications",
   "alerts.rec.description": "Description",
   "alerts.rec.descriptionDesc": "Program summary",
   "alerts.rec.duration": "Duration",

@@ -41,6 +41,7 @@ type BooleanSettingKey =
   | "rd_alert_missed"
   | "rd_alert_interrupted"
   | "rd_program_name"
+  | "rd_image"
   | "rd_program_desc"
   | "rd_duration"
   | "rd_channel_name"
@@ -392,6 +393,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
                     <div className="grid grid-cols-1 gap-2 rounded-lg border border-blue-400/10 bg-background/50 p-3 sm:grid-cols-2">
                        {[
                          { id: "rd_program_name", label: t("alerts.rec.programName"), desc: t("alerts.rec.programNameDesc") },
+                         { id: "rd_image", label: t("alerts.rec.image"), desc: t("alerts.rec.imageDesc") },
                          { id: "rd_program_desc", label: t("alerts.rec.description"), desc: t("alerts.rec.descriptionDesc") },
                          { id: "rd_duration", label: t("alerts.rec.duration"), desc: t("alerts.rec.durationDesc") },
                          { id: "rd_channel_name", label: t("alerts.rec.channelName"), desc: t("alerts.rec.channelNameDesc") },
@@ -436,6 +438,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
                      <div className="grid grid-cols-1 gap-2 rounded-lg border border-blue-400/10 bg-background/50 p-3 sm:grid-cols-2">
                        {[
                          { id: "rd_program_name", label: t("alerts.rec.programName"), desc: t("alerts.rec.programNameDesc") },
+                         { id: "rd_image", label: t("alerts.rec.image"), desc: t("alerts.rec.imageDesc") },
                          { id: "rd_program_desc", label: t("alerts.rec.description"), desc: t("alerts.rec.descriptionDesc") },
                          { id: "rd_duration", label: t("alerts.rec.duration"), desc: t("alerts.rec.durationDesc") },
                          { id: "rd_channel_name", label: t("alerts.rec.channelName"), desc: t("alerts.rec.channelNameDesc") },

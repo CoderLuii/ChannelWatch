@@ -12,16 +12,16 @@ ChannelWatch is built on open-source software. This file lists the major runtime
 | [pip](https://pip.pypa.io/) | >=26.2.1 | MIT | Package installer |
 | [requests](https://requests.readthedocs.io/) | >=2.34.2 | Apache 2.0 | HTTP client |
 | [httpx](https://www.python-httpx.org/) | >=0.28.1 | BSD 3-Clause | Async HTTP client |
-| [pytz](https://pythonhosted.org/pytz/) | >=2026.3.post1 | MIT | Timezone support |
-| [pydantic](https://docs.pydantic.dev/) | >=2.13.4 | MIT | Data validation and settings |
-| [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.39 | MIT | SQLite models and persistence |
+| [pytz](https://pythonhosted.org/pytz/) | >=2026.4 | MIT | Timezone support |
+| [pydantic](https://docs.pydantic.dev/) | >=2.13.5 | MIT | Data validation and settings |
+| [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.47 | MIT | SQLite models and persistence |
 | [bcrypt](https://github.com/pyca/bcrypt/) | >=5.0.0 | Apache 2.0 | Password hashing |
-| [cryptography](https://cryptography.io/) | >=50.0.0 | Apache 2.0 / BSD | Per-DVR API-key encryption and TLS helpers |
-| [apprise](https://github.com/caronc/apprise) | >=1.12.0 | MIT | Multi-provider notification delivery |
+| [cryptography](https://cryptography.io/) | >=50.0.1 | Apache 2.0 / BSD | Per-DVR API-key encryption and TLS helpers |
+| [apprise](https://github.com/caronc/apprise) | >=1.13.1 | MIT | Multi-provider notification delivery |
 | [fastapi](https://fastapi.tiangolo.com/) | >=0.141.1 | MIT | Web API framework |
-| [uvicorn](https://uvicorn.dev/) | >=0.52.1 | BSD 3-Clause | ASGI server |
+| [uvicorn](https://uvicorn.dev/) | >=0.53.0 | BSD 3-Clause | ASGI server |
 | [python-multipart](https://github.com/Kludex/python-multipart) | >=0.0.32 | Apache 2.0 | Multipart form parsing for FastAPI uploads |
-| [zeroconf](https://github.com/python-zeroconf/python-zeroconf) | >=0.150.0 | LGPL 2.1 | mDNS/Bonjour DVR discovery |
+| [zeroconf](https://github.com/python-zeroconf/python-zeroconf) | >=0.151.3 | LGPL 2.1 | mDNS/Bonjour DVR discovery |
 | [supervisor](http://supervisord.org/) | >=4.3.0 | BSD-derived (Repoze) | Process manager inside container |
 
 ### Transitive dependencies (selected)
@@ -72,7 +72,7 @@ No modifications have been made to the `zeroconf` library itself.
 
 The published image also contains unmodified operating-system packages from the pinned Chainguard Python base image. The release SBOMs and license scans identify GPL or LGPL metadata for `gdbm`, `glibc`, `ld-linux`, `libuuid`, `libzstd`, `readline`, and `xz`. These packages are not copied into the ChannelWatch source tree, and their package metadata remains in the image.
 
-The pinned container inputs are the multi-architecture Chainguard Python runtime index `sha256:1f6779775c9f466890da563e411cb677045a6c20b6a65160eefad1deffb5012c`, the build-only Python development index `sha256:4bf7e945777010672b8ccd5d2ae2c41c91ad6d3478878347c731ae536d506bef`, and Wolfi package `tzdata=2026c-r0`. The Dockerfile pins each value so the final image can be reproduced and its package sources traced through the SBOM package identifiers and Chainguard package repositories.
+The pinned container inputs are the multi-architecture Chainguard Python runtime index `sha256:f23c2b7cd3d6b18aed6ad6e1099d79668ff62ba49078e81bb558e5a1c7581fd8`, the build-only Python development index `sha256:e55c66e1405ff03cf60c56c8c11bba46a272796ace158cd913dad5998caaf58a`, and Wolfi package `tzdata=2026d-r0`. The Dockerfile pins each value so the final image can be reproduced and its package sources traced through the SBOM package identifiers and Chainguard package repositories.
 
 The image and app-update archive include the complete GPL 1.0, GPL 2.0,
 GPL 3.0, LGPL 2.1, and GCC Runtime Library Exception 3.1 texts identified by
@@ -108,4 +108,4 @@ Dependencies with one of these licenses need to be replaced or reviewed before t
 
 ---
 
-Historical inventory review: 2026-08-24 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the candidate image SBOM available at that time. The release-specific heading does not change this historical review date.
+Inventory review: 2026-09-24 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the refreshed runtime package inventory. Release SBOMs remain the authoritative exact inventory.

@@ -21,6 +21,7 @@ type BrowserCall = {
 }
 
 const uiRoot = path.resolve(import.meta.dirname, "..")
+const sourcePath = (absolute: string) => path.relative(uiRoot, absolute).replaceAll("\\", "/")
 const contracts = JSON.parse(
   fs.readFileSync(path.join(uiRoot, "api-contracts.json"), "utf8"),
 ) as Contract[]
@@ -168,7 +169,7 @@ function discoverDirectBrowserCalls(): BrowserCall[] {
           calls.push({
             method: requestMethod(node),
             path: apiPath,
-            source: path.relative(uiRoot, absolute),
+            source: sourcePath(absolute),
           })
         }
       }
@@ -201,7 +202,7 @@ function discoverIndirectSameOriginCalls(): BrowserCall[] {
             calls.push({
               method: "POST",
               path: candidate.text.split("?", 1)[0],
-              source: path.relative(uiRoot, absolute),
+              source: sourcePath(absolute),
             })
           }
           ts.forEachChild(candidate, visitEndpoint)
@@ -235,7 +236,7 @@ function discoverDynamicBrowserFetches(): string[] {
         && !browserApiPath(node.arguments[0], initializers)
       ) {
         fetches.push(
-          `${path.relative(uiRoot, absolute)}:${node.arguments[0].getText(sourceFile)}`,
+          `${sourcePath(absolute)}:${node.arguments[0].getText(sourceFile)}`,
         )
       }
       ts.forEachChild(node, visit)

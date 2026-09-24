@@ -646,6 +646,9 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
     def _format_recording_alert(
         self, *, default_message: str, image_url: Optional[str], context: Dict[str, Any]
     ) -> Dict[str, Any]:
+        if not getattr(self.settings, "rd_image", True):
+            image_url = None
+            context = {**context, "image_url": ""}
         return self.alert_formatter.format_templated_alert(
             alert_type="recording_events",
             default_title=self.ALERT_TITLE,

@@ -62,19 +62,52 @@ def test_missed_requires_two_reachable_confirmations_at_least_30_seconds_apart(
     tracker.observe_scheduled(_job("job-a", start))
 
     assert tracker.reconcile([], reachable=False) == []
-    first = tracker.reconcile([], reachable=True)
+    first = tracker.reconcile([], reachable=True, recordings=[])
     assert first == []
     clock[0] += NEGATIVE_CONFIRMATION_SECONDS - 1
-    assert tracker.reconcile([], reachable=True) == []
+    assert tracker.reconcile([], reachable=True, recordings=[]) == []
     clock[0] += 1
 
-    outcomes = tracker.reconcile([], reachable=True)
+    outcomes = tracker.reconcile([], reachable=True, recordings=[])
 
     assert [(item.job_id, item.outcome) for item in outcomes] == [
         ("job-a", "missed")
     ]
     tracker.acknowledge(outcomes[0])
-    assert tracker.reconcile([], reachable=True) == []
+    assert tracker.reconcile([], reachable=True, recordings=[]) == []
+
+
+def test_completed_recording_prevents_false_missed_after_start_event_gap_and_restart(
+    tmp_path: Path,
+):
+    clock = [1_790_132_370.0]
+    job = _job("1790125170-53", 1_790_125_170.0)
+    tracker = RecordingOutcomeTracker(
+        config_dir=tmp_path, dvr_id="dvr-a", now=lambda: clock[0]
+    )
+    tracker.observe_scheduled(job)
+
+    restarted = RecordingOutcomeTracker(
+        config_dir=tmp_path, dvr_id="dvr-a", now=lambda: clock[0]
+    )
+    assert restarted.terminal_evidence_needed([]) is True
+    assert restarted.reconcile([], recordings=None) == []
+
+    outcomes = restarted.reconcile(
+        [],
+        recordings=[
+            {
+                "ID": "file-11138",
+                "JobID": "1790125170-53",
+                "Completed": True,
+                "Processed": True,
+            }
+        ],
+    )
+
+    assert [(item.job_id, item.outcome) for item in outcomes] == [
+        ("1790125170-53", "completed")
+    ]
 
 
 def test_started_job_is_never_inferred_missed_from_disappearance(tmp_path: Path):

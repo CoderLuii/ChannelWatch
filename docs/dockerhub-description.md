@@ -12,9 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `1.1` for the newest image on the current minor line
-- `1.1.0` for the current container-image milestone
-- `1.1.2` for a fresh image containing the current app; existing v1.1.0 installations can update in-app
+- `1.2.0` for the current container-image milestone
 
 ## Quick Start
 
@@ -38,13 +36,13 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.1.0 for the current image milestone, or `1.1`/`latest` for the newest image on that line. Preserve `/config` and any external storage key configuration when recreating the container.
+Use v1.2.0 for the current image milestone, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.1.2 is a signed in-app update for the v1.1.0 image line. Open **Settings > Updates** to install it; an operational v1.1.0 installation does not need a newer image. This release prevents a successful recording from also being reported as interrupted when the DVR recording response omits its job identity. Recording completion and reconciliation now recover that identity from matching DVR file metadata.
+ChannelWatch v1.2.0 requires a container image update. Pull the new image and recreate the container with the same `/config` volume. It prevents false missed-start alerts for recordings that completed normally, adds a Program image switch for Recording Outcomes alerts, and refreshes compatible dependencies. **Settings > Updates** will identify this as an image update rather than installing it in-app.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.1.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.2.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
 
 An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v1.0.0, or provide the correct old key for one migration restart.
 

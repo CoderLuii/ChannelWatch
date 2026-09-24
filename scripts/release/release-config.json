@@ -5,8 +5,8 @@
   "minimum_image_version": "1.2.0",
   "updater_protocol": 2,
   "recommended_image_version": "1.2.0",
-  "publication_time": "2026-09-24T21:15:00Z",
-  "automatic_install_after": "2026-09-27T21:15:00Z",
+  "publication_time": "2026-09-25T06:00:00Z",
+  "automatic_install_after": "2026-09-28T06:00:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.1.0",

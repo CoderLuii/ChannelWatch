@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 __app_name__ = "ChannelWatch"
 
 

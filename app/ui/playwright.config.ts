@@ -12,8 +12,10 @@ export default defineConfig({
   // each platform instead of weakening the visual-diff threshold.
   snapshotPathTemplate: "{testDir}/__screenshots__/{projectName}/{platform}/{arg}{ext}",
   fullyParallel: true,
+  workers: process.env.CI ? 1 : undefined,
+  globalTimeout: process.env.CI ? 20 * 60 * 1000 : undefined,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
+  reporter: process.env.CI ? [["github"], ["list"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL,
     trace: "retain-on-failure",
@@ -76,7 +78,7 @@ export default defineConfig({
     },
   ],
   webServer: externalBaseURL ? undefined : {
-    command: `corepack pnpm build && corepack pnpm exec vite preview --host 127.0.0.1 --port ${port} --strictPort --outDir out`,
+    command: `node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port ${port} --strictPort --outDir out`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120000,

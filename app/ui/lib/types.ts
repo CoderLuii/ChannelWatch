@@ -102,6 +102,7 @@ export interface AppSettings {
   dvr_health_alert_delay_seconds: number
   notification_preferences_version: number
   rd_program_name: boolean
+  rd_image: boolean
   rd_program_desc: boolean
   rd_duration: boolean
   rd_channel_name: boolean

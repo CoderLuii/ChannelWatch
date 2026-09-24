@@ -12,6 +12,31 @@ test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
 })
 
+test("Recording Outcomes program image can be disabled globally and per DVR", async ({ page }) => {
+  let savedSettings: Record<string, unknown> | null = null
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "POST") {
+      savedSettings = route.request().postDataJSON() as Record<string, unknown>
+      return fulfillJson(route, { message: "Settings saved successfully" })
+    }
+    return fulfillJson(route, mockSettings)
+  })
+
+  await page.goto("/#settings:alerts")
+  await page.getByRole("button", { name: /Recording Outcomes/ }).click()
+  await expect(page.locator("#rd_image")).toHaveAttribute("data-state", "checked")
+  await page.locator("#alert-section-rec").getByRole("button", { name: "Main DVR" }).click()
+  await expect(page.locator("#rec_rd_image")).toBeVisible()
+  await page.locator("#rec_rd_image").click()
+  await page.locator("#alert-section-rec").getByRole("button", { name: "Global", exact: true }).click()
+  await page.locator("#rd_image").click()
+  await expect(page.locator("#rd_image")).toHaveAttribute("data-state", "unchecked")
+  await page.getByRole("button", { name: "Save Settings" }).click()
+  await expect.poll(() => savedSettings).not.toBeNull()
+  expect((savedSettings as unknown as Record<string, unknown>).rd_image).toBe(false)
+  expect((savedSettings as unknown as { dvr_servers: Array<{ overrides?: { rd_image?: boolean } }> }).dvr_servers[0].overrides?.rd_image).toBe(false)
+})
+
 test("temporary restart failures never expose an empty savable Settings form", async ({ page }) => {
   let settingsAvailable = false
   await page.route("**/api/v1/security/status", (route) => fulfillJson(route, {

@@ -123,6 +123,7 @@ export const mockSettings = {
   dvr_health_alert_delay_seconds: 120,
   notification_preferences_version: 0,
   rd_program_name: true,
+  rd_image: true,
   rd_program_desc: true,
   rd_duration: true,
   rd_channel_name: true,

@@ -26,7 +26,7 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:db4108427c05acbadd1447316caa9b5f097a9a737d897d2297443baedff37ded # v1.22.2
+  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:6cc6b5002dc40f2adf2b3b32e775c9d50c3cf63e15100f15581be6971ab0c9e5 # v1.22.3
   RELEASE_TAG: ${{ github.ref_name }}
   RELEASE_SHA: ${{ github.sha }}
 
@@ -94,6 +94,7 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm build
       - name: Run browser, responsive, visual, keyboard, and accessibility checks
         run: pnpm exec playwright test
       - name: Retain browser diagnostics, including first failed attempts

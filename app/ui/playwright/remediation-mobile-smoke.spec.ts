@@ -35,6 +35,7 @@ test("mobile navigation closes for routes, backdrop and desktop resize", async (
   await expect(page.getByRole("dialog",{name:"Primary navigation",exact:true})).toHaveCount(0)
   await expect(trigger).toBeFocused()
   await trigger.click()
+  await expect(page.getByRole("dialog",{name:"Primary navigation",exact:true})).toBeVisible()
   await page.mouse.click(375,400)
   await expect(page.getByRole("dialog",{name:"Primary navigation",exact:true})).toHaveCount(0)
   await trigger.click()

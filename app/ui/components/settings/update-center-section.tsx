@@ -251,12 +251,43 @@ export function UpdateCenterSection() {
   }
 
   const handleRetry = async () => {
+    // The backend retries the currently trusted catalog target, which may be
+    // newer than the failed job. Only reconnect against the matching target
+    // the administrator reviewed in this view.
+    const targetVersion = latest?.version
     setBusy("retrying")
     setError(null)
+    setRemediation(null)
     try {
-      const nextJob = await retryUpdate()
-      setJob(nextJob)
-      setBusy(isPendingUpdateJob(nextJob) ? "polling" : "idle")
+      const nextJob = targetVersion
+        ? await applyUpdateAndReconnect(targetVersion, {
+            apply: async () => {
+              const startedJob = await retryUpdate()
+              if (requiresUpdateReconnect(startedJob)) {
+                setBusy("polling")
+              } else {
+                setJob(startedJob)
+              }
+              return startedJob
+            },
+            fetchStatus: fetchUpdateStatus,
+            verifyReady: async () => {
+              const [, settings] = await Promise.all([verifyStartupReady(), fetchSettings()])
+              if (!Array.isArray(settings.dvr_servers)) {
+                throw new Error("ChannelWatch settings are not ready yet.")
+              }
+            },
+            reload: reloadUpdatedDashboard,
+            isRejectedUpdate: (err) => err instanceof ApiError,
+          })
+        : await retryUpdate()
+      if (nextJob && !requiresUpdateReconnect(nextJob)) {
+        setJob(nextJob)
+        setBusy("idle")
+      } else if (nextJob) {
+        setJob(nextJob)
+        setBusy("polling")
+      }
     } catch (err) {
       setError(updateErrorMessage(err))
       setRemediation(updateErrorRemediation(err))

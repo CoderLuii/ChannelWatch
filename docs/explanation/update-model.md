@@ -13,7 +13,7 @@ From v1.0.0 forward, every minor line begins with one deliberate image milestone
 - `X.Y.1` through `X.Y.9` use the signed in-app Update Center;
 - after `X.Y.9`, the next version is `X.(Y+1).0`, never `X.Y.10`.
 
-For example, v1.0.0 establishes the container runtime for v1.0.1 through v1.0.9. The next planned image refresh is v1.1.0. Release tooling rejects a `.0` release that is not image-required, rejects a `.1` through `.9` release that is image-required, and rejects patch numbers above 9. A separately documented emergency may require a new minor `.0` milestone sooner, but an existing published version is never reclassified or replaced.
+For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9. Release tooling rejects a `.0` release that is not image-required, rejects a `.1` through `.9` release that is image-required, and rejects patch numbers above 9. A separately documented emergency may require a new minor `.0` milestone sooner, but an existing published version is never reclassified or replaced.
 
 The default policy installs verified compatible updates during the local 03:00–05:00 maintenance window. Administrators can choose notify-only, apply immediately, postpone for 24 hours or 7 days, retry a failed attempt, or roll back. This keeps routine updates simple without pretending that a running container can safely replace its own base image, Python runtime, system packages, or launcher contract.
 

@@ -219,6 +219,13 @@ def test_core_stays_alive_but_does_not_initialize_when_setup_is_required():
         callbacks.append(callback)
 
     async def exercise():
+        waiting_for_key = asyncio.Event()
+
+        async def wait_until_shutdown(shutdown_event, *_args, **_kwargs):
+            waiting_for_key.set()
+            await shutdown_event.wait()
+            return None
+
         with (
             patch("core.main.sys.argv", ["channelwatch"]),
             patch(
@@ -235,6 +242,10 @@ def test_core_stays_alive_but_does_not_initialize_when_setup_is_required():
                 return_value={"allowed": True},
             ),
             patch("core.main.recover_maintenance_transactions"),
+            patch(
+                "core.main.wait_for_managed_key_ready",
+                side_effect=wait_until_shutdown,
+            ) as wait_for_key,
             patch("core.main.bootstrap_encryption_key") as bootstrap,
             patch("core.main.get_settings") as get_settings,
             patch("core.main.log") as runtime_log,
@@ -242,10 +253,11 @@ def test_core_stays_alive_but_does_not_initialize_when_setup_is_required():
             task = asyncio.create_task(
                 __import__("core.main", fromlist=["main"]).main()
             )
-            await asyncio.sleep(0)
+            await asyncio.wait_for(waiting_for_key.wait(), timeout=1)
             assert not task.done()
             callbacks[0]()
             await asyncio.wait_for(task, timeout=1)
+            wait_for_key.assert_awaited_once()
             bootstrap.assert_not_called()
             get_settings.assert_not_called()
             assert runtime_log.called

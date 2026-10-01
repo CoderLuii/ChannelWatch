@@ -173,6 +173,28 @@ describe("applyUpdateAndReconnect", () => {
     expect(fetchStatus).toHaveBeenCalledTimes(2)
   })
 
+  it("follows the version selected by a retry response when the catalog target changed", async () => {
+    const fetchStatus = vi.fn().mockResolvedValue(status("0.9.17"))
+    const reload = vi.fn()
+
+    await expect(applyUpdateAndReconnect("0.9.16", {
+      apply: vi.fn().mockResolvedValue({
+        job_id: "retry-new-target",
+        version: "0.9.17",
+        status: "restarting",
+        restart_required: true,
+      }),
+      fetchStatus,
+      wait: vi.fn().mockResolvedValue(undefined),
+      maxAttempts: 1,
+      reload,
+      requiredStableChecks: 1,
+    })).resolves.toMatchObject({ version: "0.9.17" })
+
+    expect(fetchStatus).toHaveBeenCalledTimes(1)
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
   it("recovers when the apply request disconnects during the restart", async () => {
     const apply = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
     const fetchStatus = vi.fn().mockResolvedValue(status("0.9.16"))

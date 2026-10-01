@@ -1,17 +1,18 @@
 {
-  "version": "1.1.3",
-  "image_required": false,
-  "delivery_mode": "app_update_with_image_refresh",
-  "minimum_image_version": "1.1.0",
+  "version": "1.2.0",
+  "image_required": true,
+  "delivery_mode": "image_required",
+  "minimum_image_version": "1.2.0",
   "updater_protocol": 2,
-  "recommended_image_version": "1.1.3",
-  "publication_time": "2026-09-25T01:10:00Z",
-  "automatic_install_after": "2026-09-28T01:10:00Z",
-  "automatic_install_allowed": true,
+  "recommended_image_version": "1.2.0",
+  "publication_time": "2026-10-01T17:16:30Z",
+  "automatic_install_after": "2026-10-08T17:16:30Z",
+  "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.1.0",
     "1.1.1",
-    "1.1.2"
+    "1.1.2",
+    "1.1.3"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -19,6 +20,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.1.3 - More reliable recording alerts",
+  "release_heading": "# ChannelWatch v1.2.0 - Updated container dependencies",
   "verification_assets": true
 }

@@ -44,7 +44,6 @@ def main() -> int:
         requested_tag if requested_tag == "v0.9.10" else None,
     )
     version_tag = metadata["versionTag"]
-    compatible_image_tag = ".".join(str(metadata["dockerTag"]).split(".")[:2])
     highlights = metadata.get("changelogHighlights") or []
     if version_tag == "v0.9.10":
         body = [
@@ -106,12 +105,10 @@ def main() -> int:
             "",
             "Docker Hub:",
             f"`coderluii/channelwatch:{metadata['dockerTag']}`",
-            f"`coderluii/channelwatch:{compatible_image_tag}`",
             "`coderluii/channelwatch:latest`",
             "",
             "GHCR:",
             f"`ghcr.io/coderluii/channelwatch:{metadata['dockerTag']}`",
-            f"`ghcr.io/coderluii/channelwatch:{compatible_image_tag}`",
             "`ghcr.io/coderluii/channelwatch:latest`",
         ]
     )

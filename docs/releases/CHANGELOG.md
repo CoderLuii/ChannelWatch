@@ -8,6 +8,20 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.2.0] - 2026-10-01
+
+### Important
+
+- This release updates the container runtime and requires the v1.2.0 image. Preserve the existing `/config` volume and any external storage key when recreating the container; the Update Center cannot install this image update in-app.
+
+### Changed
+
+- Update Next.js to 16.3.8 for the September security fixes, and refresh compatible application, container, and build dependencies. The recording-alert fixes and Program image setting from v1.1.3 remain available.
+
+### Fixed
+
+- Check the restarted application's version and readiness after retrying an update, instead of showing a network error when the restart disconnects the dashboard. The initial restart failure reported in #22 is still under investigation.
+
 ## [1.1.3] - 2026-09-24
 
 ### Important
@@ -785,7 +799,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.2...v1.1.3
 [1.1.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.0.9...v1.1.0

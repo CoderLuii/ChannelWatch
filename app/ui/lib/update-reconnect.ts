@@ -12,7 +12,11 @@ type ReconnectOptions<T extends RuntimeStatus> = {
   requiredStableChecks?: number
 }
 
-type RestartJob = { restart_required?: boolean; status?: string | null }
+type RestartJob = {
+  restart_required?: boolean
+  status?: string | null
+  version?: string | null
+}
 
 const PENDING_UPDATE_JOB_STATUSES = new Set([
   "backing_up",
@@ -154,7 +158,8 @@ export async function applyUpdateAndReconnect<
   }
 
   try {
-    await waitForUpdatedRuntime(targetVersion, options)
+    const selectedVersion = job?.version?.trim() || targetVersion
+    await waitForUpdatedRuntime(selectedVersion, options)
   } catch (error) {
     if (restartDisconnect && error instanceof Error) {
       throw new Error(error.message, { cause: restartDisconnect })

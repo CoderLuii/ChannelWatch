@@ -705,6 +705,76 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
   await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
 })
 
+test("a retry restart disconnect follows the activated runtime instead of showing an error", async ({ page }) => {
+  let retryStarted = false
+  const targetStatus = {
+    current_version: "1.1.3",
+    image_version: "1.1.0",
+    runtime_abi: "channelwatch-runtime-v1",
+    launcher_protocol: 3,
+    runtime_source: "app_bundle",
+    delivery_mode: "app_update_with_image_refresh",
+    image_refresh_recommended: true,
+    settings_schema_version: 7,
+    active_bundle: { version: "1.1.3", path: "/config/releases/v1.1.3" },
+    catalog_state: "current",
+    catalog_checked_at: "2026-09-26T01:00:00Z",
+    trusted_target: null,
+    cached_release_stale: false,
+    operation_state: "idle",
+    operation_busy: false,
+    latest: null,
+    update_available: false,
+    image_required: false,
+    last_job: {
+      job_id: "retry-success",
+      operation: "apply",
+      status: "success",
+      version: "1.1.3",
+      message: "Update activated and ChannelWatch started successfully.",
+      restart_required: false,
+    },
+    rollback_available: true,
+    auth_disabled_warning: false,
+  }
+  await page.route("**/api/v1/update/status", (route) => fulfillJson(route, retryStarted ? targetStatus : {
+    ...targetStatus,
+    current_version: "1.1.2",
+    active_bundle: { version: "1.1.2", path: "/config/releases/v1.1.2" },
+    catalog_state: "update_available",
+    trusted_target: {
+      version: "1.1.3",
+      version_tag: "v1.1.3",
+      image_required: false,
+      delivery_mode: "app_update_with_image_refresh",
+      runtime_abi: "channelwatch-runtime-v1",
+      settings_schema_version: 7,
+      highlights: [],
+    },
+    update_available: true,
+    last_job: {
+      job_id: "failed-restart",
+      operation: "apply",
+      status: "failed",
+      version: "1.1.3",
+      message: "Update restart could not be started. The previous runtime remains selected.",
+      restart_required: true,
+    },
+    rollback_available: false,
+  }))
+  await page.route("**/api/v1/update/retry", async (route) => {
+    retryStarted = true
+    await route.abort("connectionreset")
+  })
+
+  await page.goto("/#settings:updates")
+  await page.getByRole("button", { name: "Retry now" }).click()
+
+  await expect(page).toHaveURL(/#overview$/, { timeout: 10_000 })
+  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByText("Failed to fetch")).toHaveCount(0)
+})
+
 test("Update Center follows an operation started in another tab", async ({ page }) => {
   let statusRequests = 0
   const baseStatus = {

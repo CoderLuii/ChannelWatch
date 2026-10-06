@@ -587,21 +587,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          OCI_LAYOUT="${RUNNER_TEMP}/channelwatch-candidate-one.oci"
+          tag="v${CANDIDATE_VERSION}"
+          descriptor="dist/candidate-one/channelwatch-image-${tag}.json"
           for platform in linux/amd64 linux/arm64; do
+            arch="${platform#linux/}"
+            scan_archive="${RUNNER_TEMP}/channelwatch-scan-${arch}.tar"
+            docker run --rm --pull=never \
+              --volume "${OCI_LAYOUT}:/work/channelwatch.oci:ro" \
+              --volume "${RUNNER_TEMP}:/output" \
+              "${SKOPEO_IMAGE}" copy \
+              --override-os linux \
+              --override-arch "${arch}" \
+              oci:/work/channelwatch.oci:release-candidate \
+              "docker-archive:/output/channelwatch-scan-${arch}.tar:channelwatch-scan-${arch}:exact"
+            expected_config_digest="$(jq -er --arg platform "${platform}" \
+              '.platforms[] | select(.platform == $platform) | .config.digest' \
+              "${descriptor}")"
+            config_member="$(tar -xOf "${scan_archive}" manifest.json | jq -er \
+              'if type == "array" and length == 1 and .[0].Config then .[0].Config else error("expected one archive manifest entry") end')"
+            actual_config_digest="sha256:$(tar -xOf "${scan_archive}" "${config_member}" | sha256sum | awk '{print $1}')"
+            config_architecture="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.architecture')"
+            config_os="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.os')"
+            if [ "${config_os}" != "linux" ] || [ "${config_architecture}" != "${arch}" ]; then
+              echo "::error::Exported scan archive platform does not match ${platform}."
+              exit 1
+            fi
+            if [ "${actual_config_digest}" != "${expected_config_digest}" ]; then
+              echo "::error::Exported scan archive config does not match ${platform}."
+              exit 1
+            fi
             trivy image \
-              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners vuln \
               --severity CRITICAL,HIGH,MEDIUM,LOW \
               --exit-code 0 \
               --format json \
-              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${platform#linux/}.json"
+              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${arch}.json"
             trivy image \
-              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners secret,misconfig \
               --severity CRITICAL,HIGH \
               --exit-code 1
+            rm -f "${scan_archive}"
           done
 
       - name: Retain accepted upstream image vulnerabilities
@@ -1449,21 +1477,49 @@ jobs:
         env:
           OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
         run: |
+          set -euo pipefail
+          descriptor="${RUNNER_TEMP}/release-image.json"
+          docker pull "${SKOPEO_IMAGE}"
           for platform in linux/amd64 linux/arm64; do
+            arch="${platform#linux/}"
+            scan_archive="${RUNNER_TEMP}/channelwatch-scan-${arch}.tar"
+            docker run --rm --pull=never \
+              --volume "${OCI_LAYOUT}:/work/channelwatch.oci:ro" \
+              --volume "${RUNNER_TEMP}:/output" \
+              "${SKOPEO_IMAGE}" copy \
+              --override-os linux \
+              --override-arch "${arch}" \
+              oci:/work/channelwatch.oci:release-candidate \
+              "docker-archive:/output/channelwatch-scan-${arch}.tar:channelwatch-scan-${arch}:exact"
+            expected_config_digest="$(jq -er --arg platform "${platform}" \
+              '.platforms[] | select(.platform == $platform) | .config.digest' \
+              "${descriptor}")"
+            config_member="$(tar -xOf "${scan_archive}" manifest.json | jq -er \
+              'if type == "array" and length == 1 and .[0].Config then .[0].Config else error("expected one archive manifest entry") end')"
+            actual_config_digest="sha256:$(tar -xOf "${scan_archive}" "${config_member}" | sha256sum | awk '{print $1}')"
+            config_architecture="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.architecture')"
+            config_os="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.os')"
+            if [ "${config_os}" != "linux" ] || [ "${config_architecture}" != "${arch}" ]; then
+              echo "::error::Exported scan archive platform does not match ${platform}."
+              exit 1
+            fi
+            if [ "${actual_config_digest}" != "${expected_config_digest}" ]; then
+              echo "::error::Exported scan archive config does not match ${platform}."
+              exit 1
+            fi
             trivy image \
-              --input "${OCI_LAYOUT}" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners vuln \
               --severity CRITICAL,HIGH,MEDIUM,LOW \
               --exit-code 0 \
               --format json \
-              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${platform#linux/}.json"
+              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${arch}.json"
             trivy image \
-              --input "${OCI_LAYOUT}" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners secret,misconfig \
               --severity CRITICAL,HIGH \
               --exit-code 1
+            rm -f "${scan_archive}"
           done
 
       - name: Retain accepted upstream image vulnerabilities

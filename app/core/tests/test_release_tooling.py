@@ -2544,6 +2544,50 @@ def test_release_runs_the_complete_backend_suite_without_retry():
     assert "||" not in gate
 
 
+def test_release_workflow_scans_verified_single_platform_archives():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    candidate_scan = workflow.split(
+        "      - name: Scan exact nonpublishing candidate image", 1
+    )[1].split(
+        "\n      - name: Retain accepted upstream image vulnerabilities", 1
+    )[0]
+    release_scan = workflow.split(
+        "      - name: Scan exact release candidate images", 1
+    )[1].split(
+        "\n      - name: Retain accepted upstream image vulnerabilities", 1
+    )[0]
+
+    for scan, descriptor in (
+        (
+            candidate_scan,
+            'descriptor="dist/candidate-one/channelwatch-image-${tag}.json"',
+        ),
+        (release_scan, 'descriptor="${RUNNER_TEMP}/release-image.json"'),
+    ):
+        assert descriptor in scan
+        assert 'arch="${platform#linux/}"' in scan
+        assert "docker run --rm --pull=never" in scan
+        assert '"${SKOPEO_IMAGE}" copy' in scan
+        assert '--override-arch "${arch}"' in scan
+        assert "oci:/work/channelwatch.oci:release-candidate" in scan
+        assert 'docker-archive:/output/channelwatch-scan-${arch}.tar:' in scan
+        assert "expected_config_digest=" in scan
+        assert ".config.digest" in scan
+        assert "actual_config_digest=" in scan
+        assert 'config_architecture="$(tar -xOf' in scan
+        assert 'config_os="$(tar -xOf' in scan
+        assert '"${config_architecture}" != "${arch}"' in scan
+        assert '"${config_os}" != "linux"' in scan
+        assert '"${actual_config_digest}" != "${expected_config_digest}"' in scan
+        assert scan.count('--input "${scan_archive}"') == 2
+        assert '--input "${OCI_LAYOUT}"' not in scan
+        assert '--platform "${platform}"' not in scan
+
+    assert 'docker pull "${SKOPEO_IMAGE}"' in release_scan
+
+
 def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
@@ -2622,8 +2666,9 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "--severity CRITICAL,HIGH" in enforced_scan
     assert "--exit-code 1" in enforced_scan
     assert "Retain accepted upstream image vulnerabilities" in image_job
-    assert '--input "${OCI_LAYOUT}"' in image_job
-    assert '--platform "${platform}"' in image_job
+    assert scan_block.count('--input "${scan_archive}"') == 2
+    assert '--input "${OCI_LAYOUT}"' not in scan_block
+    assert '--platform "${platform}"' not in scan_block
 
     syft_index = image_job.index("      - name: Install pinned Syft")
     download_assets_index = image_job.index(

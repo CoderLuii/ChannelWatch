@@ -3,7 +3,7 @@ setuptools>=84.0.0
 pip>=26.2.1
 requests>=2.34.2
 httpx>=0.28.1
-pytz>=2026.4
+pytz>=2026.5
 pydantic>=2.13.5
 
 # Storage and auth
@@ -12,7 +12,7 @@ bcrypt>=5.0.0
 cryptography>=50.0.2
 
 # Notifications
-apprise>=1.13.1
+apprise>=1.13.1,<2
 oauthlib>=4.0.0
 
 # Web

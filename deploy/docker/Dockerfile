@@ -18,7 +18,7 @@ RUN pnpm build
 #-----------------------------------------------------------------------------
 # Stage 2: Python Dependencies
 #-----------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest-dev@sha256:83933e374c3c3250e5b1b5dcde789a2d4a7314b771618b5548adab01c54066a0 AS python-deps
+FROM python:3.14-slim-bookworm@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88 AS python-deps
 
 # This build-only stage installs dependencies and is not the shipped runtime.
 # hadolint ignore=DL3002,DL3066
@@ -30,19 +30,18 @@ WORKDIR /deps
 
 COPY deploy/requirements/runtime.txt ./requirements.txt
 COPY deploy/requirements/runtime.constraints.txt ./constraints.txt
-RUN apk add --no-cache tzdata=2026d-r0 \
-    && python -m venv /venv \
+RUN /usr/local/bin/python -m venv /venv \
     && /venv/bin/python -m pip install --no-cache-dir -c constraints.txt -r requirements.txt \
     && /venv/bin/python -m pip uninstall --yes pip setuptools
 
 COPY scripts/release/copyleft_licenses.py /tmp/copyleft_licenses.py
 COPY docs/legal/CORRESPONDING_SOURCE.md /tmp/CORRESPONDING_SOURCE.md
-RUN ["/usr/bin/python", "/tmp/copyleft_licenses.py", "--output-dir", "/release-licenses/copyleft", "--source-map", "/tmp/CORRESPONDING_SOURCE.md"]
+RUN ["/usr/local/bin/python", "/tmp/copyleft_licenses.py", "--output-dir", "/release-licenses/copyleft", "--source-map", "/tmp/CORRESPONDING_SOURCE.md"]
 
 #-----------------------------------------------------------------------------
 # Stage 3: Application
 #-----------------------------------------------------------------------------
-FROM cgr.dev/chainguard/python:latest@sha256:38ba1cbf71702bacc5f5be22ea41e3d4ad1bfb2565413b0caf4bafde38e831f2
+FROM python:3.14-slim-bookworm@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88
 
 # The entrypoint needs root only to repair /config ownership for configurable
 # PUID/PGID, then verifies a fail-closed UID/GID and group drop before exec.
@@ -51,7 +50,7 @@ FROM cgr.dev/chainguard/python:latest@sha256:38ba1cbf71702bacc5f5be22ea41e3d4ad1
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.2.1
+ARG VERSION=1.3.0
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1
@@ -77,12 +76,11 @@ ENV CHANNELWATCH_REPORT_MODE="live"
 ENV CHANNELWATCH_REPORT_ENDPOINT="https://channelwatch.coderluii.dev/api/reports"
 ENV CHANNELWATCH_REPORT_PORTAL_URL="https://channelwatch.coderluii.dev/report"
 
-RUN ["/usr/bin/python", "-c", "from pathlib import Path; [Path(path).mkdir(parents=True, exist_ok=True) for path in ('/app/core', '/app/ui/backend/static_ui', '/app/ui/backend/static/images', '/config', '/etc/supervisor/conf.d')]"]
+RUN ["/usr/local/bin/python", "-c", "from pathlib import Path; [Path(path).mkdir(parents=True, exist_ok=True) for path in ('/app/core', '/app/ui/backend/static_ui', '/app/ui/backend/static/images', '/config', '/etc/supervisor/conf.d')]"]
 
 WORKDIR /app
 
 COPY --from=python-deps /venv /venv
-COPY --from=python-deps /usr/share/zoneinfo /usr/share/zoneinfo
 
 COPY app/core/ /app/core/
 COPY app/ui/backend/ /app/ui/backend/
@@ -93,17 +91,17 @@ COPY docs/legal/NOTICE /licenses/channelwatch/NOTICE
 COPY scripts/release/render_release_legal.py /tmp/render_release_legal.py
 COPY docs/legal/CORRESPONDING_SOURCE.md docs/legal/THIRD_PARTY_LICENSES.md /tmp/legal-source/
 COPY --from=python-deps /release-licenses/copyleft /licenses/channelwatch/copyleft
-RUN ["/usr/bin/python", "/tmp/render_release_legal.py", "--source-dir", "/tmp/legal-source", "--output-dir", "/licenses/channelwatch", "--copyleft-source-map", "/licenses/channelwatch/copyleft/CORRESPONDING_SOURCE.md"]
+RUN ["/usr/local/bin/python", "/tmp/render_release_legal.py", "--source-dir", "/tmp/legal-source", "--output-dir", "/licenses/channelwatch", "--copyleft-source-map", "/licenses/channelwatch/copyleft/CORRESPONDING_SOURCE.md"]
 COPY --from=ui-builder /src/out /app/ui/backend/static_ui/
 COPY app/ui/public/images /app/ui/backend/static/images/
 
-RUN ["/usr/bin/python", "-c", "import json, os; from pathlib import Path; Path('/app/channelwatch-image.json').write_text(json.dumps({'version': os.environ.get('CHANNELWATCH_IMAGE_VERSION', 'unknown'), 'runtime_abi': os.environ.get('CHANNELWATCH_RUNTIME_ABI', 'channelwatch-runtime-v1'), 'settings_schema_version': 7}, indent=2) + '\\n'); os.chmod('/usr/local/bin/channelwatch', 0o755)"]
+RUN ["/usr/local/bin/python", "-c", "import json, os; from pathlib import Path; Path('/app/channelwatch-image.json').write_text(json.dumps({'version': os.environ.get('CHANNELWATCH_IMAGE_VERSION', 'unknown'), 'runtime_abi': os.environ.get('CHANNELWATCH_RUNTIME_ABI', 'channelwatch-runtime-v1'), 'settings_schema_version': 7}, indent=2) + '\\n'); os.chmod('/usr/local/bin/channelwatch', 0o755)"]
 
 VOLUME /config
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/usr/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/healthz/live', timeout=3).read()"]
+    CMD ["/usr/local/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/healthz/live', timeout=3).read()"]
 
 ENTRYPOINT ["/venv/bin/python", "/app/core/docker-entrypoint.py"]
 CMD ["/venv/bin/python", "-m", "supervisor.supervisord", "-c", "/tmp/supervisord.conf"]

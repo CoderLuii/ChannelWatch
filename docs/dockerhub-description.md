@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `1.2.1` for the current release
+- `1.3.0` for the current release
 
 ## Quick Start
 
@@ -36,13 +36,13 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.2.1 for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use v1.3.0 for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.2.1 is a signed in-app update for the v1.2.0 image. Install it from **Settings > Updates** to keep scheduled recordings labeled correctly and collect a safe failure category if an update restart fails. If you are still on an older image line, pull the current image and recreate the container with the same `/config` volume first.
+ChannelWatch v1.3.0 is a container-image milestone. Pull the v1.3.0 image and recreate the container with the same `/config` volume and any external storage key configuration. **Settings > Updates** identifies this as an image update and does not replace the container image in-app.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.2.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.3.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
 
 An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v1.0.0, or provide the correct old key for one migration restart.
 

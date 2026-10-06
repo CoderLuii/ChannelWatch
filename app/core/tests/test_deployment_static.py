@@ -43,21 +43,31 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     assert "/venv/bin/python -m pip uninstall --yes pip setuptools" in dockerfile
 
 
-def test_dockerfile_pins_reviewed_python_bases_and_timezone_package():
+def test_dockerfile_pins_reviewed_official_python_base_for_both_python_stages():
     dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
         encoding="utf-8"
     )
 
-    assert (
-        "cgr.dev/chainguard/python:latest-dev@sha256:"
-        "83933e374c3c3250e5b1b5dcde789a2d4a7314b771618b5548adab01c54066a0"
-    ) in dockerfile
-    assert (
-        "cgr.dev/chainguard/python:latest@sha256:"
-        "38ba1cbf71702bacc5f5be22ea41e3d4ad1bfb2565413b0caf4bafde38e831f2"
-    ) in dockerfile
-    assert "apk add --no-cache tzdata=2026d-r0" in dockerfile
-    assert "apk add --no-cache tzdata \\" not in dockerfile
+    pinned_base = (
+        "python:3.14-slim-bookworm@sha256:"
+        "c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88"
+    )
+    assert dockerfile.count(f"FROM {pinned_base}") == 2
+    assert f"FROM {pinned_base} AS python-deps" in dockerfile
+    assert "/usr/local/bin/python -m venv /venv" in dockerfile
+    assert 'RUN ["/usr/local/bin/python", "/tmp/copyleft_licenses.py"' in dockerfile
+    assert 'RUN ["/usr/local/bin/python", "/tmp/render_release_legal.py"' in dockerfile
+    assert 'CMD ["/usr/local/bin/python", "-c"' in dockerfile
+    assert "apk add" not in dockerfile
+    assert "COPY --from=python-deps /usr/share/zoneinfo" not in dockerfile
+
+
+def test_container_helper_uses_the_shipped_virtual_environment():
+    helper = (_REPO_DIR / "app" / "bin" / "channelwatch").read_text(
+        encoding="utf-8"
+    )
+
+    assert helper.startswith("#!/venv/bin/python\n")
 
 
 def test_dockerfile_builds_static_ui_on_native_build_platform():

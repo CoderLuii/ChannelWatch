@@ -192,7 +192,16 @@ test("setup shell can apply only a confirmed official signed recovery update", a
   await confirmation.fill("INSTALL OFFICIAL UPDATE")
   await actions.getByRole("button", { name: "Apply signed v0.9.18 update" }).click()
   await expect(page).toHaveURL(/#overview$/)
-  expect(await page.evaluate(() => sessionStorage.getItem("recovery_bootstrap_csrf"))).toBeNull()
+  await expect.poll(async () => {
+    try {
+      return await page.evaluate(() => sessionStorage.getItem("recovery_bootstrap_csrf"))
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Execution context was destroyed")) {
+        return "navigation-in-progress"
+      }
+      throw error
+    }
+  }).toBeNull()
 })
 
 test("Update Center defaults to automatic signed updates in the 03:00–05:00 window", async ({ page }) => {

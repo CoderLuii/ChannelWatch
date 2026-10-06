@@ -45,7 +45,14 @@ test("axe: report problem dialog has no accessibility violations", async ({ page
   await page.goto("/#diagnostics")
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
-  await expect(page.getByRole("dialog", { name: "Report a Problem" })).toBeVisible()
+  const dialog = page.getByRole("dialog", { name: "Report a Problem" })
+  await expect(dialog).toBeVisible()
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations()
+      .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
+      .map(animation => animation.finished.catch(() => undefined)))
+  })
+  await expect(dialog).toHaveCSS("opacity", "1")
 
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
@@ -58,7 +65,14 @@ test("axe: feature request dialog has no accessibility violations", async ({ pag
   await page.goto("/#help-feedback")
   await expect(page.getByRole("heading", { name: "Help & Feedback" })).toBeVisible()
   await page.getByTestId("help-request-feature").click()
-  await expect(page.getByRole("dialog", { name: "Request a feature or change" })).toBeVisible()
+  const dialog = page.getByRole("dialog", { name: "Request a feature or change" })
+  await expect(dialog).toBeVisible()
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations()
+      .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
+      .map(animation => animation.finished.catch(() => undefined)))
+  })
+  await expect(dialog).toHaveCSS("opacity", "1")
 
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

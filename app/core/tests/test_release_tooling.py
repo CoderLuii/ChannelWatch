@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -595,9 +596,20 @@ def test_copyleft_license_manifest_is_pinned_and_complete():
         "GPL-1.0-only.txt",
         "GPL-2.0-only.txt",
         "GPL-3.0-only.txt",
+        "LGPL-2.0-only.txt",
         "LGPL-2.1-only.txt",
+        "LGPL-3.0-only.txt",
         "GCC-exception-3.1.txt",
     }
+    expected_digests = {
+        artifact.filename: artifact.sha256 for artifact in module.COPYLEFT_LICENSES
+    }
+    assert expected_digests["LGPL-2.0-only.txt"] == (
+        "86dc99d7e5060915ab1dfc1378b7dd351c62088bfa74067e8aa1868c6fdba7d8"
+    )
+    assert expected_digests["LGPL-3.0-only.txt"] == (
+        "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"
+    )
     assert all(
         len(artifact.sha256) == 64
         and artifact.url.startswith(
@@ -606,6 +618,96 @@ def test_copyleft_license_manifest_is_pinned_and_complete():
         )
         for artifact in module.COPYLEFT_LICENSES
     )
+
+
+def test_copyleft_license_download_retries_transport_errors(monkeypatch):
+    module = _load_script(
+        "copyleft_license_transport_retry", "scripts/release/copyleft_licenses.py"
+    )
+    payload = b"license text\n"
+    artifact = module.LicenseArtifact("GPL-3.0-only.txt", hashlib.sha256(payload).hexdigest())
+    calls = []
+    sleeps = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        if len(calls) < 3:
+            raise urllib.error.URLError(ConnectionResetError("connection reset"))
+        response = io.BytesIO(payload)
+        response.geturl = lambda: artifact.url
+        return response
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    assert module._download(artifact) == payload
+    assert calls == [artifact.url] * 3
+    assert sleeps == [1, 2]
+
+
+def test_copyleft_license_download_transport_retry_is_bounded(monkeypatch):
+    module = _load_script(
+        "copyleft_license_transport_bound", "scripts/release/copyleft_licenses.py"
+    )
+    calls = []
+    sleeps = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        raise urllib.error.URLError(ConnectionResetError("connection reset"))
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(urllib.error.URLError):
+        module._download(module.COPYLEFT_LICENSES[0])
+    assert len(calls) == 3
+    assert sleeps == [1, 2]
+
+
+@pytest.mark.parametrize("invalid", ["digest", "redirect"])
+def test_copyleft_license_download_does_not_retry_untrusted_content(monkeypatch, invalid):
+    module = _load_script(
+        "copyleft_license_content_boundary", "scripts/release/copyleft_licenses.py"
+    )
+    payload = b"license text\n"
+    digest = hashlib.sha256(payload).hexdigest() if invalid == "redirect" else "0" * 64
+    artifact = module.LicenseArtifact("GPL-3.0-only.txt", digest)
+    calls = []
+    sleeps = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        response = io.BytesIO(payload)
+        response.geturl = lambda: (
+            "https://example.com/license.txt" if invalid == "redirect" else artifact.url
+        )
+        return response
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(ValueError):
+        module._download(artifact)
+    assert calls == [artifact.url]
+    assert sleeps == []
+
+
+def test_copyleft_license_download_does_not_retry_http_errors(monkeypatch):
+    module = _load_script(
+        "copyleft_license_http_boundary", "scripts/release/copyleft_licenses.py"
+    )
+    calls = []
+    sleeps = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(request.full_url, 404, "not found", {}, None)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(urllib.error.HTTPError):
+        module._download(module.COPYLEFT_LICENSES[0])
+    assert len(calls) == 1
+    assert sleeps == []
 
 
 def test_copyleft_license_archive_is_deterministic(tmp_path):
@@ -634,44 +736,115 @@ def test_copyleft_license_archive_is_deterministic(tmp_path):
         ]
 
 
+def test_copyleft_archive_includes_exact_image_license_material(tmp_path):
+    module = _load_script(
+        "copyleft_exact_image_licenses",
+        "scripts/release/copyleft_licenses.py",
+    )
+    output = tmp_path / "licenses"
+    output.mkdir()
+    for architecture, marker in (("amd64", "amd64"), ("arm64", "arm64")):
+        image_root = tmp_path / architecture
+        common = image_root / "usr/share/common-licenses"
+        package_doc = image_root / "usr/share/doc/libexample"
+        common.mkdir(parents=True)
+        package_doc.mkdir(parents=True)
+        (common / "MPL-2.0").write_text("MPL full text\n", encoding="utf-8")
+        (package_doc / "copyright").write_text(
+            f"Debian copyright {marker}\n", encoding="utf-8"
+        )
+        (package_doc / "README.Debian").write_text(
+            "not license material\n", encoding="utf-8"
+        )
+
+        module.copy_image_license_material(image_root, output, architecture)
+
+    archive_path = tmp_path / "licenses.zip"
+    module.write_deterministic_archive(output, archive_path)
+    with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+        assert names == sorted(names)
+        assert (
+            "image-licenses/amd64/usr/share/common-licenses/MPL-2.0" in names
+        )
+        assert (
+            "image-licenses/arm64/usr/share/common-licenses/MPL-2.0" in names
+        )
+        assert "image-licenses/amd64/usr/share/doc/libexample/copyright" in names
+        assert "image-licenses/arm64/usr/share/doc/libexample/copyright" in names
+        assert not any(name.endswith("README.Debian") for name in names)
+        assert archive.read(
+            "image-licenses/amd64/usr/share/doc/libexample/copyright"
+        ) != archive.read(
+            "image-licenses/arm64/usr/share/doc/libexample/copyright"
+        )
+
+
+def test_image_license_copy_rejects_symlinks_outside_exported_root(tmp_path):
+    module = _load_script(
+        "copyleft_image_license_boundary",
+        "scripts/release/copyleft_licenses.py",
+    )
+    image_root = tmp_path / "image"
+    common = image_root / "usr/share/common-licenses"
+    package_doc = image_root / "usr/share/doc/libexample"
+    common.mkdir(parents=True)
+    package_doc.mkdir(parents=True)
+    (package_doc / "copyright").write_text("package notice\n", encoding="utf-8")
+    outside = tmp_path / "outside-license"
+    outside.write_text("host content\n", encoding="utf-8")
+    try:
+        (common / "escaped").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    with pytest.raises(ValueError, match="escapes image root"):
+        module.copy_image_license_material(image_root, tmp_path / "out", "amd64")
+
+
 def test_corresponding_source_map_pins_exact_release_sources():
     source_map = (ROOT / "docs/legal/CORRESPONDING_SOURCE.md").read_text(
         encoding="utf-8"
     )
 
     for required in (
-        "9ba86882d6884d680d27a9ac3b3c5a66a83e1c25",
-        "gdbm 1.26-r6",
-        "glibc-2.44 2.44-r7",
-        "libgcc 16.2.0-r1",
-        "libuuid 2.42.4-r0",
-        "d76cbf8f13e65ff657344f7f6a90042cf755ba59",
-        "libzstd1 1.5.7-r10",
-        "readline 8.3-r3",
-        "xz 5.8.4-r0",
+        "c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88",
+        "d1e795fbdab8a4744432467f32f348c6baa99f07abc05ffde710913f65c8261d",
+        "6e1f3bd1526e54623c48ea9f79f91fe354f8c5a0430473db89528c9846951585",
+        "7cc547b3ff8d45d540cd23144227af126a79d60c",
+        "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73",
+        "glibc/2.36-9+deb12u14",
+        "gcc-12/12.2.0-14+deb12u1",
+        "gmp/2%3A6.2.1+dfsg1-1.1",
+        "gnutls28/3.7.9-2+deb12u7",
+        "util-linux/2.38.1-5+deb12u3",
+        "libunistring/1.0-2",
+        "openssl/3.0.22-1~deb12u1",
         "zeroconf 0.151.5",
         "28c2ec9d772007eedf11b41a9c9fd3d5c684c17b00721ff8f1ee31b20ad286a1",
         "5bf6d9610255540bfbee6890765a616042bf1e11",
+        "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1",
+        "86dc99d7e5060915ab1dfc1378b7dd351c62088bfa74067e8aa1868c6fdba7d8",
     ):
         assert required in source_map
 
 
-def test_release_config_declares_121_in_app_release_on_120_image():
+def test_release_config_declares_130_image_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.2.1"
-    assert config["image_required"] is False
-    assert config["delivery_mode"] == "app_update"
-    assert config["minimum_image_version"] == "1.2.0"
+    assert config["version"] == "1.3.0"
+    assert config["image_required"] is True
+    assert config["delivery_mode"] == "image_required"
+    assert config["minimum_image_version"] == "1.3.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.2.1"
-    assert config["automatic_install_allowed"] is True
-    assert config["compatible_source_application_versions"] == ["1.2.0"]
+    assert config["recommended_image_version"] == "1.3.0"
+    assert config["automatic_install_allowed"] is False
+    assert config["compatible_source_application_versions"] == ["1.2.0", "1.2.1"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.2.1 - Scheduled recording alerts and update diagnostics"
+        "# ChannelWatch v1.3.0 - Container compatibility and dependency updates"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -749,7 +922,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_121_release():
+def test_release_version_surfaces_use_130_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -760,11 +933,11 @@ def test_release_version_surfaces_use_121_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.2.1"
-    assert metadata["versionTag"] == "v1.2.1"
-    assert metadata["dockerTag"] == "1.2.1"
-    assert metadata["helmChartVersion"] == "1.2.1"
-    assert metadata["helmAppVersion"] == "1.2.1"
+    assert metadata["version"] == "1.3.0"
+    assert metadata["versionTag"] == "v1.3.0"
+    assert metadata["dockerTag"] == "1.3.0"
+    assert metadata["helmChartVersion"] == "1.3.0"
+    assert metadata["helmAppVersion"] == "1.3.0"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -902,7 +1075,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
     output_path = tmp_path / "github-output"
     parse_env = {
         **os.environ,
-        "RELEASE_TAG": "v1.2.1",
+        "RELEASE_TAG": "v1.3.0",
         "GITHUB_OUTPUT": str(output_path),
     }
 
@@ -920,7 +1093,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         line.split("=", 1)
         for line in output_path.read_text(encoding="utf-8").splitlines()
     )
-    assert output_values == {"version": "1.2.1"}
+    assert output_values == {"version": "1.3.0"}
     assert "VERSION: ${{ steps.version.outputs.version }}" in verify_block
     assert 'version_re="${VERSION//' in verify_shell
     assert 'version_re="${version//' not in verify_shell
@@ -930,7 +1103,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         cwd=ROOT,
         env={
             **os.environ,
-            "RELEASE_TAG": "v1.2.1",
+            "RELEASE_TAG": "v1.3.0",
             "VERSION": output_values["version"],
         },
         capture_output=True,
@@ -2472,7 +2645,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert attach_assets_index < docker_login_index
     assert (
         "anchore/sbom-action/download-syft@"
-        "3ad7283483fc7af8ff2b4ea19663c2d5ca935e26"
+        "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c"
     ) in image_job
     assert "syft-version: v1.51.0" in image_job
     assert '"oci-dir:${OCI_LAYOUT}"' in image_job
@@ -2487,6 +2660,13 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "channelwatch-${TAG}-COPYLEFT-LICENSES.zip" in image_job
     assert "channelwatch-${TAG}-SHA256SUMS.txt" in image_job
     assert "scripts/release/copyleft_licenses.py" in image_job
+    assert "--image-license-root" in image_job
+    assert '--platform "linux/${arch}"' in image_job
+    assert '"channelwatch-legal-${arch}:release")' in image_job
+    assert 'docker cp -L "${container_id}:/usr/share/doc/."' in image_job
+    assert 'docker cp -L "${container_id}:/usr/share/common-licenses/."' in image_job
+    assert '--override-arch "${arch}"' in image_job
+    assert "docker-archive:/output/channelwatch-legal-${arch}.tar" in image_job
     assert "Release checksum manifest must cover all 13 non-checksum assets" in image_job
     for existing_asset in (
         "channelwatch-app-${TAG}.zip",
@@ -2813,6 +2993,29 @@ def test_ci_python_job_disables_cross_trust_dependency_caching():
     assert "fetch-depth: 0" in python_job
     assert "cache: pip" not in python_job
     assert "cache-dependency-path:" not in python_job
+
+
+def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
+    workflow_path = ROOT / ".github" / "workflows" / "docker-publish.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    expected = (
+        "${{ github.event_name == 'push' && "
+        "startsWith(github.ref, 'refs/tags/v') && "
+        "github.actor == 'CoderLuii' && "
+        "vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}"
+    )
+
+    assert workflow["jobs"]
+    assert all(job["runs-on"] == expected for job in workflow["jobs"].values())
+    assert "runs-on: self-hosted" not in workflow_text
+    assert "runs-on: [self-hosted" not in workflow_text
+    cleanup = next(
+        step
+        for step in workflow["jobs"]["build-and-push"]["steps"]
+        if step.get("name") == "Free up disk space"
+    )
+    assert cleanup["if"] == "runner.environment == 'github-hosted'"
 
 
 def test_trivy_root_entrypoint_exception_is_narrow_and_expires():

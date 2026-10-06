@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.3.0] - 2026-10-06
+
+### Important
+
+- Container image update required. Pull v1.3.0 and recreate the container with the same `/config` volume and existing external storage key configuration.
+
+### Changed
+
+- Use the official Python 3.14.8 Debian Bookworm image in both Python stages. This restores the x86-64-v1 CPU baseline for older AMD64 hosts.
+- Refresh compatible timezone data, UI libraries, PostCSS, and release scanning tools. Keep Apprise on its supported 1.x notification interface.
+- Update the container source map and license archive for the Debian base.
+- Allow a configured repository runner to handle trusted maintainer tag releases. Pull requests keep using GitHub-hosted runners.
+
+### Fixed
+
+- Keep `channelwatch doctor` working with the container's Python environment.
+- Update the frontend's compatible `source-map-js` dependency to address its indexed-source-map denial-of-service advisory.
+- Retry temporary connection failures while fetching pinned release license texts.
+
 ## [1.2.1] - 2026-10-05
 
 ### Important
@@ -813,7 +832,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.2...v1.1.3

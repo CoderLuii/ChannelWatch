@@ -6,8 +6,8 @@ Security fixes are provided for the current stable release line.
 
 | Version line | Supported |
 |---|---|
-| 1.2.x | Yes |
-| 1.1.x and earlier | No |
+| 1.3.x | Yes |
+| 1.2.x and earlier | No |
 
 If you are still on an older build, upgrade before reporting a security issue unless the issue itself blocks upgrade.
 
@@ -245,14 +245,10 @@ Current release posture:
 
 - images are built and published through GitHub Actions
 - tagged Docker releases publish build provenance attestations
+- releases include SPDX and CycloneDX SBOMs for AMD64 and ARM64 images, plus checksums
 - dependency updates are tracked in the repository
 
-Not yet claimed as complete here:
-
-- cosign image signing
-- SBOM publication as a finished shipped requirement
-
-Those remain follow-up hardening work, not a v0.9 claim.
+Cosign image signing remains follow-up hardening work.
 
 ## Disclosure policy
 

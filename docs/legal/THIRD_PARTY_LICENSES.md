@@ -12,12 +12,12 @@ ChannelWatch is built on open-source software. This file lists the major runtime
 | [pip](https://pip.pypa.io/) | >=26.2.1 | MIT | Package installer |
 | [requests](https://requests.readthedocs.io/) | >=2.34.2 | Apache 2.0 | HTTP client |
 | [httpx](https://www.python-httpx.org/) | >=0.28.1 | BSD 3-Clause | Async HTTP client |
-| [pytz](https://pythonhosted.org/pytz/) | >=2026.4 | MIT | Timezone support |
+| [pytz](https://pythonhosted.org/pytz/) | >=2026.5 | MIT | Timezone support |
 | [pydantic](https://docs.pydantic.dev/) | >=2.13.5 | MIT | Data validation and settings |
 | [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.47 | MIT | SQLite models and persistence |
 | [bcrypt](https://github.com/pyca/bcrypt/) | >=5.0.0 | Apache 2.0 | Password hashing |
 | [cryptography](https://cryptography.io/) | >=50.0.2 | Apache 2.0 / BSD | Per-DVR API-key encryption and TLS helpers |
-| [apprise](https://github.com/caronc/apprise) | >=1.13.1 | MIT | Multi-provider notification delivery |
+| [apprise](https://github.com/caronc/apprise) | >=1.13.1, <2 | MIT | Multi-provider notification delivery |
 | [oauthlib](https://github.com/oauthlib/oauthlib) | >=4.0.0 | BSD 3-Clause | OAuth request signing used by notification providers |
 | [fastapi](https://fastapi.tiangolo.com/) | >=0.142.2 | MIT | Web API framework |
 | [uvicorn](https://uvicorn.dev/) | >=0.54.0 | BSD 3-Clause | ASGI server |
@@ -70,16 +70,15 @@ No modifications have been made to the `zeroconf` library itself.
 
 ## Container base packages
 
-The published image also contains unmodified operating-system packages from the pinned Chainguard Python base image. The release SBOMs and license scans identify GPL or LGPL metadata for `gdbm`, `glibc`, `ld-linux`, `libuuid`, `libzstd`, `readline`, and `xz`. These packages are not copied into the ChannelWatch source tree, and their package metadata remains in the image.
-
-The pinned container inputs are the multi-architecture Chainguard Python runtime index `sha256:38ba1cbf71702bacc5f5be22ea41e3d4ad1bfb2565413b0caf4bafde38e831f2`, the build-only Python development index `sha256:83933e374c3c3250e5b1b5dcde789a2d4a7314b771618b5548adab01c54066a0`, and Wolfi package `tzdata=2026d-r0`. The Dockerfile pins each value so the final image can be reproduced and its package sources traced through the SBOM package identifiers and Chainguard package repositories.
+The published image contains unmodified Debian Bookworm packages from the official Python 3.14.8 image. Both Python stages use image index `sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88`. The image retains Debian package copyright files under `/usr/share/doc` and full common-license texts under `/usr/share/common-licenses`.
 
 The image and app-update archive include the complete GPL 1.0, GPL 2.0,
-GPL 3.0, LGPL 2.1, and GCC Runtime Library Exception 3.1 texts identified by
-the release SBOMs under `licenses/copyleft`. The matching GitHub Release also
-attaches those texts in a single archive. Exact upstream commits, source
-archive digests, Wolfi recipes and patches, and rebuild/replacement guidance
-are recorded in `docs/legal/CORRESPONDING_SOURCE.md`.
+GPL 3.0, LGPL 2.0, LGPL 2.1, LGPL 3.0, and GCC Runtime Library Exception 3.1
+texts under `licenses/copyleft`. The GitHub Release copyleft archive also
+includes the final container's Debian notices and common-license texts.
+Exact Debian source versions, the official Python build recipe and source
+archive checksum, and rebuild/replacement guidance are recorded in
+`docs/legal/CORRESPONDING_SOURCE.md`.
 
 Release maintainers must preserve the applicable notices and source-availability obligations when distributing the container. The SPDX and CycloneDX SBOMs generated from the final image are the authoritative release-specific package inventory; this hand-maintained file is an explanatory summary rather than a substitute for those artifacts.
 
@@ -108,4 +107,4 @@ Dependencies with one of these licenses need to be replaced or reviewed before t
 
 ---
 
-Inventory review: 2026-10-01 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the refreshed runtime package inventory. Release SBOMs remain the authoritative exact inventory.
+Inventory review: 2026-10-05 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the refreshed runtime package inventory. Release SBOMs remain the authoritative exact inventory.

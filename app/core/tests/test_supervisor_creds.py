@@ -1516,15 +1516,30 @@ class TestRestartControlEndpoints:
 
         restart.assert_called_once_with()
 
-    def test_update_restart_adapter_reports_validated_signal_failure(self):
+    def test_update_restart_adapter_reports_validated_signal_failure(self, capsys):
         import ui.backend.main as ui_main
 
         with patch(
             "core.runtime_launcher.request_container_restart",
-            side_effect=RuntimeError("supervisor unavailable"),
+            side_effect=RuntimeError("private /runtime/path"),
         ) as restart:
             assert ui_main._schedule_container_restart_for_update() is False
 
+        assert "private" not in capsys.readouterr().out.lower()
+        restart.assert_called_once_with()
+
+    def test_update_restart_adapter_preserves_sanitized_failure_category(self):
+        import ui.backend.main as ui_main
+        from core.runtime_launcher import RestartRequestError
+
+        with patch(
+            "core.runtime_launcher.request_container_restart",
+            side_effect=RestartRequestError("restart_supervisor_unavailable"),
+        ) as restart:
+            result = ui_main._schedule_container_restart_for_update()
+
+        assert not result
+        assert result.diagnostic == "restart_supervisor_unavailable"
         restart.assert_called_once_with()
 
     def test_restart_container_uses_truthful_validated_restart(self, tmp_path):

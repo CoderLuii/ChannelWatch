@@ -92,6 +92,24 @@ PROTOCOL_THREE_STOP_BARRIER_TIMEOUT_SECONDS = 10.0
 PROTOCOL_THREE_STOP_BARRIER_INTERVAL_SECONDS = 0.05
 RUNTIME_CONTROL_MAX_BYTES = 256 * 1024
 RECOVERY_MODE_ENV = "CHANNELWATCH_OFFICIAL_RECOVERY_MODE"
+RESTART_FAILURE_DIAGNOSTICS = frozenset(
+    {
+        "restart_helper_spawn_failed",
+        "restart_helper_ack_timeout",
+        "restart_helper_rejected",
+        "restart_supervisor_unavailable",
+    }
+)
+
+
+class RestartRequestError(RuntimeError):
+    """A coordinated restart failure safe to expose as a category only."""
+
+    def __init__(self, diagnostic: str):
+        if diagnostic not in RESTART_FAILURE_DIAGNOSTICS:
+            raise ValueError("Unsupported restart failure diagnostic.")
+        self.diagnostic = diagnostic
+        super().__init__("Coordinated restart request failed.")
 
 
 def utc_now() -> str:
@@ -1814,7 +1832,7 @@ def _spawn_protocol_three_restart_helper() -> None:
     except Exception:
         os.close(read_fd)
         os.close(write_fd)
-        raise
+        raise RestartRequestError("restart_helper_spawn_failed") from None
     os.close(write_fd)
     try:
         ready, _, _ = select.select(
@@ -1823,8 +1841,10 @@ def _spawn_protocol_three_restart_helper() -> None:
         response = os.read(read_fd, 64) if ready else b""
     finally:
         os.close(read_fd)
+    if not ready:
+        raise RestartRequestError("restart_helper_ack_timeout")
     if response != b"ready\n":
-        raise RuntimeError("Image-owned Supervisor restart helper was not accepted.")
+        raise RestartRequestError("restart_helper_rejected")
 
 
 def request_container_restart() -> None:
@@ -1841,10 +1861,11 @@ def request_container_restart() -> None:
 
     supervisor_pid = _supervisor_parent_pid()
     if supervisor_pid is None:
-        raise RuntimeError(
-            "Coordinated container restart requires supervisord as the direct parent."
-        )
-    os.kill(supervisor_pid, signal.SIGTERM)
+        raise RestartRequestError("restart_supervisor_unavailable")
+    try:
+        os.kill(supervisor_pid, signal.SIGTERM)
+    except OSError:
+        raise RestartRequestError("restart_supervisor_unavailable") from None
 
 
 def handoff_required_restart_before_launch() -> bool:

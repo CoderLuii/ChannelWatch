@@ -222,6 +222,37 @@ class UpdateRestartError(UpdateCenterError):
     """Raised when a required coordinated container restart cannot be started."""
 
 
+RESTART_FAILURE_DIAGNOSTICS = frozenset(
+    {
+        "restart_helper_spawn_failed",
+        "restart_helper_ack_timeout",
+        "restart_helper_rejected",
+        "restart_supervisor_unavailable",
+    }
+)
+
+
+@dataclass(frozen=True)
+class RestartRequestOutcome:
+    """Truth-compatible restart result with an optional safe failure category."""
+
+    accepted: bool
+    diagnostic: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.accepted
+
+
+def _safe_restart_failure_diagnostic(value: Any) -> str | None:
+    try:
+        diagnostic = getattr(value, "diagnostic", None)
+    except Exception:
+        return None
+    if not isinstance(diagnostic, str):
+        return None
+    return diagnostic if diagnostic in RESTART_FAILURE_DIAGNOSTICS else None
+
+
 def launcher_compatibility_status(
     *, image_version: str | None = None, running_app_dir: str | None = None
 ) -> dict[str, Any]:
@@ -2569,8 +2600,10 @@ class UpdateManager:
                 fsync_directory(self.runtime_dir)
                 if self.restart_callable is not None:
                     restart_error: Exception | None = None
+                    restart_outcome: Any = None
                     try:
-                        restart_started = bool(self.restart_callable())
+                        restart_outcome = self.restart_callable()
+                        restart_started = bool(restart_outcome)
                     except Exception as exc:
                         restart_started = False
                         restart_error = exc
@@ -2598,9 +2631,8 @@ class UpdateManager:
                                 ),
                                 "rollback_applied": True,
                                 "error": (
-                                    str(restart_error)[:2000]
-                                    if restart_error is not None
-                                    else None
+                                    _safe_restart_failure_diagnostic(restart_outcome)
+                                    or _safe_restart_failure_diagnostic(restart_error)
                                 ),
                             }
                         )
@@ -2624,8 +2656,10 @@ class UpdateManager:
 
             if self.restart_callable is not None:
                 restart_error: Exception | None = None
+                restart_outcome: Any = None
                 try:
-                    restart_started = bool(self.restart_callable())
+                    restart_outcome = self.restart_callable()
+                    restart_started = bool(restart_outcome)
                 except Exception as exc:
                     restart_started = False
                     restart_error = exc
@@ -2646,9 +2680,8 @@ class UpdateManager:
                             ),
                             "rollback_applied": True,
                             "error": (
-                                str(restart_error)[:2000]
-                                if restart_error is not None
-                                else None
+                                _safe_restart_failure_diagnostic(restart_outcome)
+                                or _safe_restart_failure_diagnostic(restart_error)
                             ),
                         }
                     )
@@ -2752,8 +2785,10 @@ class UpdateManager:
                 fsync_directory(self.runtime_dir)
                 if self.restart_callable is not None:
                     restart_error: Exception | None = None
+                    restart_outcome: Any = None
                     try:
-                        restart_started = bool(self.restart_callable())
+                        restart_outcome = self.restart_callable()
+                        restart_started = bool(restart_outcome)
                     except Exception as exc:
                         restart_started = False
                         restart_error = exc
@@ -2778,9 +2813,8 @@ class UpdateManager:
                                 ),
                                 "rollback_applied": False,
                                 "error": (
-                                    str(restart_error)[:2000]
-                                    if restart_error is not None
-                                    else None
+                                    _safe_restart_failure_diagnostic(restart_outcome)
+                                    or _safe_restart_failure_diagnostic(restart_error)
                                 ),
                             }
                         )
@@ -2798,8 +2832,10 @@ class UpdateManager:
 
             if self.restart_callable is not None:
                 restart_error: Exception | None = None
+                restart_outcome: Any = None
                 try:
-                    restart_started = bool(self.restart_callable())
+                    restart_outcome = self.restart_callable()
+                    restart_started = bool(restart_outcome)
                 except Exception as exc:
                     restart_started = False
                     restart_error = exc
@@ -2820,9 +2856,8 @@ class UpdateManager:
                             ),
                             "rollback_applied": False,
                             "error": (
-                                str(restart_error)[:2000]
-                                if restart_error is not None
-                                else None
+                                _safe_restart_failure_diagnostic(restart_outcome)
+                                or _safe_restart_failure_diagnostic(restart_error)
                             ),
                         }
                     )
@@ -3634,8 +3669,10 @@ class UpdateManager:
                     "Activation rollback did not retain journal ownership."
                 )
             restart_error: Exception | None = None
+            restart_outcome: Any = None
             try:
-                restart_started = bool(self.restart_callable())
+                restart_outcome = self.restart_callable()
+                restart_started = bool(restart_outcome)
             except Exception as exc:
                 restart_started = False
                 restart_error = exc
@@ -3657,13 +3694,13 @@ class UpdateManager:
                 )
                 if not isinstance(existing_job, dict):
                     existing_job = {}
-                restart_detail = (
-                    str(restart_error).strip()[:2000]
-                    if restart_error is not None
-                    else "The coordinated restart callback did not accept the request."
-                )
-                if not restart_detail and restart_error is not None:
-                    restart_detail = restart_error.__class__.__name__
+                restart_detail = _safe_restart_failure_diagnostic(
+                    restart_outcome
+                ) or _safe_restart_failure_diagnostic(restart_error)
+                if restart_detail is None and restart_error is None:
+                    restart_detail = (
+                        "The coordinated restart callback did not accept the request."
+                    )
                 failed_job = self._prepare_job(
                     {
                         **existing_job,

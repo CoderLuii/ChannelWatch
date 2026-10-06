@@ -24,10 +24,59 @@ PRODUCT_PATTERN = re.compile(
     r"^pkg:apk/wolfi/python-3\.14@(?P<version>[^?]+)\?"
     r"arch=(?P<arch>aarch64|x86_64)&distro=wolfi-20230201$"
 )
+FUTURE_VEX_BASELINE = (1, 2, 0)
 
 
 class VexValidationError(ValueError):
     """Raised when the release VEX contract is incomplete or inconsistent."""
+
+
+def _release_version(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
+    if match is None:
+        raise VexValidationError("Expected release version must use X.Y.Z")
+    major, minor, patch = (int(part) for part in match.groups())
+    return major, minor, patch
+
+
+def _validate_reviewed_future_statements(statements: list[Any]) -> None:
+    vulnerability_names: set[str] = set()
+    for statement in statements:
+        if not isinstance(statement, dict):
+            raise VexValidationError("OpenVEX statements must be objects")
+        vulnerability = statement.get("vulnerability")
+        if not isinstance(vulnerability, dict):
+            raise VexValidationError("OpenVEX vulnerability must be an object")
+        name = str(vulnerability.get("name") or "").strip()
+        identifier = str(vulnerability.get("@id") or "").strip()
+        if not name or not identifier:
+            raise VexValidationError("OpenVEX vulnerability identity is required")
+        if name in vulnerability_names:
+            raise VexValidationError(f"{name} must be dispositioned at most once")
+        vulnerability_names.add(name)
+
+        if statement.get("status") != "affected":
+            raise VexValidationError(
+                "stale VEX statements using not_affected are forbidden"
+            )
+        if not str(statement.get("action_statement") or "").strip():
+            raise VexValidationError(
+                f"{name} affected status requires an action statement"
+            )
+
+        products = statement.get("products")
+        if not isinstance(products, list) or not products:
+            raise VexValidationError(f"{name} must identify at least one affected product")
+        product_ids = [
+            str(product.get("@id") or "").strip()
+            if isinstance(product, dict)
+            else ""
+            for product in products
+        ]
+        if any(not product_id for product_id in product_ids):
+            raise VexValidationError(f"{name} has an invalid product identifier")
+        if len(set(product_ids)) != len(product_ids):
+            raise VexValidationError(f"{name} has duplicate product identifiers")
 
 
 def validate_vex(document: dict[str, Any], *, expected_version: str) -> None:
@@ -47,11 +96,8 @@ def validate_vex(document: dict[str, Any], *, expected_version: str) -> None:
     statements = document.get("statements")
     if not isinstance(statements, list):
         raise VexValidationError("OpenVEX statements must be an array")
-    if expected_version == "1.2.0":
-        if statements:
-            raise VexValidationError(
-                "v1.2.0 has no reviewed runtime findings; stale VEX statements are forbidden"
-            )
+    if _release_version(expected_version) >= FUTURE_VEX_BASELINE:
+        _validate_reviewed_future_statements(statements)
         return
     names = [
         str(statement.get("vulnerability", {}).get("name") or "")

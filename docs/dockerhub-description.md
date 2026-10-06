@@ -12,7 +12,7 @@ It watches DVR activity, recording events, VOD playback, disk space, and service
 Recommended tags:
 
 - `latest` for the newest stable image
-- `1.2.0` for the current container-image milestone
+- `1.2.1` for the current release
 
 ## Quick Start
 
@@ -36,9 +36,9 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.2.0 for the current image milestone, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use v1.2.1 for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.2.0 requires a container image update. Pull the new image and recreate the container with the same `/config` volume. It refreshes the container runtime and compatible dependencies while retaining the recording-alert fixes and Program image setting released in v1.1.3. **Settings > Updates** will identify this as an image update rather than installing it in-app.
+ChannelWatch v1.2.1 is a signed in-app update for the v1.2.0 image. Install it from **Settings > Updates** to keep scheduled recordings labeled correctly and collect a safe failure category if an update restart fails. If you are still on an older image line, pull the current image and recreate the container with the same `/config` volume first.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

@@ -33,6 +33,15 @@ class _SimulatedPowerLoss(BaseException):
     pass
 
 
+class _FalseRestartOutcomeWithRaisingDiagnostic:
+    def __bool__(self) -> bool:
+        return False
+
+    @property
+    def diagnostic(self):
+        raise RuntimeError("private diagnostic accessor failure")
+
+
 _RESTART_REPLAY_PHASES = (
     "journal",
     "activation-state-removed",
@@ -875,11 +884,82 @@ def test_apply_restart_exception_restores_previous_runtime_selection(tmp_path: P
     job = manager.apply()
 
     assert job["status"] == "failed"
-    assert "offline" in job["error"]
+    assert "offline" not in str(job)
+    assert job["error"] is None
     assert not (tmp_path / "channelwatch-runtime" / "active.json").exists()
 
 
+@pytest.mark.parametrize(
+    "restart_outcome",
+    [
+        pytest.param([], id="list"),
+        pytest.param({}, id="dict"),
+        pytest.param(
+            _FalseRestartOutcomeWithRaisingDiagnostic(),
+            id="raising-diagnostic-property",
+        ),
+    ],
+)
+def test_apply_false_restart_outcome_restores_previous_runtime_safely(
+    tmp_path: Path, restart_outcome
+):
+    private, public = _key_pair()
+    bundle = _bundle()
+    manifest = _manifest(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.9",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        restart_callable=lambda: restart_outcome,
+    )
+
+    manager.check()
+    job = manager.apply()
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    assert job["status"] == "failed"
+    assert job["rollback_applied"] is True
+    assert job["error"] is None
+    assert not (runtime_dir / "active.json").exists()
+    assert not (runtime_dir / "activation-pending.json").exists()
+
+
 def test_apply_production_restart_adapter_restores_previous_runtime_selection(
+    tmp_path: Path, monkeypatch, capsys
+):
+    import ui.backend.main as ui_main
+    from core import runtime_launcher
+
+    private, public = _key_pair()
+    bundle = _bundle()
+    manifest = _manifest(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.9",
+        public_keys=public,
+        fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
+        restart_callable=ui_main._schedule_container_restart_for_update,
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: (_ for _ in ()).throw(RuntimeError("private /runtime/path")),
+    )
+
+    manager.check()
+    job = manager.apply()
+
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    assert job["status"] == "failed"
+    assert job["rollback_applied"] is True
+    assert "private" not in str(job).lower()
+    assert "private" not in capsys.readouterr().out.lower()
+    assert not (runtime_dir / "active.json").exists()
+    assert not (runtime_dir / "activation-pending.json").exists()
+
+
+def test_apply_records_sanitized_restart_category_and_restores_previous_runtime(
     tmp_path: Path, monkeypatch
 ):
     import ui.backend.main as ui_main
@@ -898,7 +978,9 @@ def test_apply_production_restart_adapter_restores_previous_runtime_selection(
     monkeypatch.setattr(
         runtime_launcher,
         "request_container_restart",
-        lambda: (_ for _ in ()).throw(RuntimeError("supervisor unavailable")),
+        lambda: (_ for _ in ()).throw(
+            runtime_launcher.RestartRequestError("restart_helper_ack_timeout")
+        ),
     )
 
     manager.check()
@@ -907,7 +989,7 @@ def test_apply_production_restart_adapter_restores_previous_runtime_selection(
     runtime_dir = tmp_path / "channelwatch-runtime"
     assert job["status"] == "failed"
     assert job["rollback_applied"] is True
-    assert "supervisor unavailable" not in str(job)
+    assert job["error"] == "restart_helper_ack_timeout"
     assert not (runtime_dir / "active.json").exists()
     assert not (runtime_dir / "activation-pending.json").exists()
 
@@ -1460,6 +1542,7 @@ def test_rollback_production_restart_adapter_restores_current_runtime_selection(
     assert job["status"] == "failed"
     assert job["rollback_applied"] is False
     assert "supervisor unavailable" not in str(job)
+    assert job["error"] is None
     assert active["version"] == "0.9.10"
     assert not (runtime_dir / "activation-pending.json").exists()
 
@@ -2383,8 +2466,8 @@ def test_activation_rollback_records_and_raises_when_restart_callback_raises(
     assert job["rollback_applied"] is True
     assert job["restart_required"] is True
     assert job["restart_started"] is False
-    assert job["restart_error"] == restart_failure[:2000]
-    assert len(job["restart_error"]) == 2000
+    assert job["restart_error"] is None
+    assert restart_failure not in str(job)
     assert not (runtime_dir / "active.json").exists()
     assert (runtime_dir / "restart-required.json").is_file()
 

@@ -2196,7 +2196,6 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                     break
                 scheduled_jobs_checked += 1
 
-                info = scheduled_snapshot[job_id]
                 is_active = True
                 try:
                     start_time = time.time()
@@ -2226,13 +2225,6 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                     )
                     stale_scheduled.append(job_id)
                     continue
-
-                if current_time - info.get("created_at", 0) > 86400:
-                    log(
-                        f"Scheduled job {job_id} was created over 24 hours ago, marking as stale",
-                        level=LOG_VERBOSE,
-                    )
-                    stale_scheduled.append(job_id)
 
             if stale_scheduled:
                 async with self._event_lock:

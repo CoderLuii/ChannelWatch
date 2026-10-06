@@ -22,6 +22,7 @@ from core.update_catalog import (
 )
 from core.update_center import (
     RUNTIME_ABI,
+    RestartRequestOutcome,
     UpdateLockedError,
     UpdateManager,
     UpdateManifestError,
@@ -2116,8 +2117,31 @@ def test_protocol_one_healthcheck_failure_uses_direct_restart(
     ] is True
 
 
+@pytest.mark.parametrize(
+    ("restart_callable", "expected_error"),
+    [
+        pytest.param(
+            lambda: False,
+            "The coordinated restart callback did not accept the request.",
+            id="false",
+        ),
+        pytest.param(
+            lambda: (_ for _ in ()).throw(RuntimeError("private restart failure")),
+            None,
+            id="raw-exception",
+        ),
+        pytest.param(
+            lambda: RestartRequestOutcome(False, "restart_helper_rejected"),
+            "restart_helper_rejected",
+            id="sanitized-category",
+        ),
+    ],
+)
 def test_protocol_one_rejected_restart_preserves_exact_failed_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restart_callable,
+    expected_error,
 ):
     digest = "e" * 64
     runtime, release = _write_protocol_one_pending_failure_state(
@@ -2129,7 +2153,7 @@ def test_protocol_one_rejected_restart_preserves_exact_failed_identity(
         current_version="0.9.18",
         image_version="0.9.15",
         launcher_protocol=1,
-        restart_callable=lambda: False,
+        restart_callable=restart_callable,
     )
 
     with pytest.raises(UpdateRestartError, match="legacy container restart"):
@@ -2146,6 +2170,8 @@ def test_protocol_one_rejected_restart_preserves_exact_failed_identity(
     assert failed["scheduler_attempt_id"] == "activation@legacy-job"
     assert failed["restart_required"] is True
     assert failed["restart_started"] is False
+    assert failed["restart_error"] == expected_error
+    assert "private restart failure" not in str(failed)
 
 
 def test_image_refresh_recovery_requires_healthy_core_and_ui_quorum(tmp_path: Path):
@@ -2268,8 +2294,65 @@ def test_protocol_one_future_apply_avoids_unreadable_schema_two_journal(tmp_path
     assert manager.activation_pending_path.is_file()
 
 
+@pytest.mark.parametrize(
+    ("restart_callable", "expected_error"),
+    [
+        pytest.param(
+            lambda: (_ for _ in ()).throw(RuntimeError("private restart failure")),
+            None,
+            id="raw-exception",
+        ),
+        pytest.param(
+            lambda: RestartRequestOutcome(False, "restart_supervisor_unavailable"),
+            "restart_supervisor_unavailable",
+            id="sanitized-category",
+        ),
+    ],
+)
+def test_protocol_one_apply_sanitizes_restart_failure(
+    tmp_path: Path, restart_callable, expected_error
+):
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    manifest = _manifest(private, bundle, "0.9.19")
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        image_version="0.9.15",
+        launcher_protocol=1,
+        public_keys=public,
+        fetcher=lambda url, _limit: bundle if url.endswith(".zip") else manifest,
+        restart_callable=restart_callable,
+    )
+
+    manager.check()
+    job = manager.apply()
+
+    assert job["status"] == "failed"
+    assert job["rollback_applied"] is True
+    assert job["error"] == expected_error
+    assert "private restart failure" not in str(job)
+    assert not manager.active_path.exists()
+    assert not manager.activation_pending_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("restart_callable", "expected_error"),
+    [
+        pytest.param(
+            lambda: (_ for _ in ()).throw(RuntimeError("private restart failure")),
+            None,
+            id="raw-exception",
+        ),
+        pytest.param(
+            lambda: RestartRequestOutcome(False, "restart_helper_spawn_failed"),
+            "restart_helper_spawn_failed",
+            id="sanitized-category",
+        ),
+    ],
+)
 def test_protocol_one_manual_rollback_restores_selection_when_restart_fails(
-    tmp_path: Path,
+    tmp_path: Path, restart_callable, expected_error
 ):
     private, public = _key_pair()
     bundle = _bundle("0.9.19")
@@ -2293,12 +2376,14 @@ def test_protocol_one_manual_rollback_restores_selection_when_restart_fails(
             healthy=True,
         )
     selected_before = json.loads(manager.active_path.read_text(encoding="utf-8"))
-    manager.restart_callable = lambda: False
+    manager.restart_callable = restart_callable
 
     job = manager.rollback()
 
     assert job["status"] == "failed"
     assert job["rollback_applied"] is False
+    assert job["error"] == expected_error
+    assert "private restart failure" not in str(job)
     assert json.loads(manager.active_path.read_text(encoding="utf-8")) == selected_before
     assert not manager.restart_required_path.exists()
     assert not manager.activation_pending_path.exists()

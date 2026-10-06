@@ -5951,7 +5951,7 @@ def _mutate_current_settings_locked(mutate, *, purge_removed_dvrs=False):
         return settings, result
 
 
-def _schedule_container_restart_for_update() -> bool:
+def _schedule_container_restart_for_update() -> Any:
     """Synchronously hand a coordinated restart to verified Supervisor.
 
     UpdateManager snapshots runtime selection before invoking this callback and
@@ -5962,9 +5962,26 @@ def _schedule_container_restart_for_update() -> bool:
     """
 
     try:
-        from core.runtime_launcher import request_container_restart
+        from core.runtime_launcher import (
+            RestartRequestError,
+            request_container_restart,
+        )
+        from core.update_center import RestartRequestOutcome
+    except Exception:
+        print(
+            "[WebUI API] ERROR: Failed to load the coordinated ChannelWatch "
+            "restart integration."
+        )
+        return False
 
+    try:
         request_container_restart()
+    except RestartRequestError as exc:
+        print(
+            "[WebUI API] ERROR: Failed to request the coordinated ChannelWatch "
+            f"restart ({exc.diagnostic})."
+        )
+        return RestartRequestOutcome(False, exc.diagnostic)
     except Exception as exc:
         print(
             "[WebUI API] ERROR: Failed to request the coordinated ChannelWatch "

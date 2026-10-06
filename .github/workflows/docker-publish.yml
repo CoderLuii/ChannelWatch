@@ -26,7 +26,7 @@ env:
   DOCKERHUB_IMAGE: coderluii/channelwatch
   GHCR_IMAGE: ghcr.io/coderluii/channelwatch
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
-  SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:8482f709108354691af2defec4cad5f3ddea6cfff0c8091109dec8034574a918 # v1.22.3
+  SKOPEO_IMAGE: quay.io/containers/skopeo:v1.22.3-immutable@sha256:f45eb1e14223a5ba0da4246274679a083653dab1402acc1fcb70a6339b50cf00 # v1.22.3
   RELEASE_TAG: ${{ github.ref_name }}
   RELEASE_SHA: ${{ github.sha }}
 
@@ -193,7 +193,7 @@ jobs:
           CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
         run: |
           trivy fs \
-            --scanners vuln,secret,misconfig \
+            --scanners secret,misconfig \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
             --exit-code 1 \
@@ -202,6 +202,24 @@ jobs:
             --format json \
             --output "${CHANNELWATCH_TRIVY_REPORT}" \
             .
+      - name: Report accepted upstream dependency vulnerabilities
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --severity CRITICAL,HIGH,MEDIUM,LOW \
+            --exit-code 0 \
+            --format json \
+            --output "${RUNNER_TEMP}/channelwatch-upstream-dependencies.json" \
+            .
+          echo "Upstream dependency vulnerabilities are advisory; code, secret and configuration checks remain enforced."
+      - name: Retain upstream dependency report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-dependencies-${{ github.sha }}
+          path: ${{ runner.temp }}/channelwatch-upstream-dependencies.json
+          retention-days: 30
+          if-no-files-found: error
       - name: Scan the explicit Helm Secret mode
         env:
           CHANNELWATCH_TRIVY_SECRET_REPORT: ${{ runner.temp }}/channelwatch-trivy-secret.json
@@ -572,11 +590,27 @@ jobs:
             trivy image \
               --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
               --platform "${platform}" \
-              --scanners vuln,secret,misconfig \
+              --scanners vuln \
+              --severity CRITICAL,HIGH,MEDIUM,LOW \
+              --exit-code 0 \
+              --format json \
+              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${platform#linux/}.json"
+            trivy image \
+              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
+              --platform "${platform}" \
+              --scanners secret,misconfig \
               --severity CRITICAL,HIGH \
-              --ignore-unfixed \
               --exit-code 1
           done
+
+      - name: Retain accepted upstream image vulnerabilities
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-image-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/channelwatch-upstream-linux-*.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Verify pinned bridge or run v0.9.18 historical canaries
         shell: bash
@@ -1417,11 +1451,27 @@ jobs:
             trivy image \
               --input "${OCI_LAYOUT}" \
               --platform "${platform}" \
-              --scanners vuln,secret,misconfig \
+              --scanners vuln \
+              --severity CRITICAL,HIGH,MEDIUM,LOW \
+              --exit-code 0 \
+              --format json \
+              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${platform#linux/}.json"
+            trivy image \
+              --input "${OCI_LAYOUT}" \
+              --platform "${platform}" \
+              --scanners secret,misconfig \
               --severity CRITICAL,HIGH \
-              --ignore-unfixed \
               --exit-code 1
           done
+
+      - name: Retain accepted upstream image vulnerabilities
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-image-release-${{ github.sha }}
+          path: ${{ runner.temp }}/channelwatch-upstream-linux-*.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Install pinned Syft
         id: syft

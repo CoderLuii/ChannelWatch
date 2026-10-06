@@ -1689,12 +1689,14 @@ def test_prepare_import_path_evicts_image_package_before_selected_bundle_import(
         sys.path[:] = original_path
 
 
-def test_coordinated_restart_rejects_unsupported_or_invalid_supervisor(
-    monkeypatch,
-):
+def test_coordinated_restart_rejects_unsupported_or_invalid_supervisor(monkeypatch):
+    monkeypatch.setattr(runtime_launcher, "image_launcher_protocol", lambda: 1)
     monkeypatch.setattr(runtime_launcher, "_supervisor_parent_pid", lambda: None)
-    with pytest.raises(RuntimeError, match="requires supervisord as the direct parent"):
+    with pytest.raises(runtime_launcher.RestartRequestError) as exc_info:
         runtime_launcher.request_container_restart()
+
+    assert exc_info.value.diagnostic == "restart_supervisor_unavailable"
+    assert "supervisor" not in str(exc_info.value).lower()
 
 
 def test_coordinated_restart_signals_supervisor(monkeypatch):
@@ -1710,6 +1712,7 @@ def test_coordinated_restart_signals_supervisor(monkeypatch):
 
 
 def test_coordinated_restart_propagates_supervisor_signal_failure(monkeypatch):
+    monkeypatch.setattr(runtime_launcher, "image_launcher_protocol", lambda: 1)
     monkeypatch.setattr(runtime_launcher, "_supervisor_parent_pid", lambda: 73)
     monkeypatch.setattr(
         runtime_launcher.os,
@@ -1717,8 +1720,44 @@ def test_coordinated_restart_propagates_supervisor_signal_failure(monkeypatch):
         lambda _pid, _sig: (_ for _ in ()).throw(PermissionError("denied")),
     )
 
-    with pytest.raises(PermissionError, match="denied"):
+    with pytest.raises(runtime_launcher.RestartRequestError) as exc_info:
         runtime_launcher.request_container_restart()
+
+    assert exc_info.value.diagnostic == "restart_supervisor_unavailable"
+    assert "denied" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("popen_error", "ready", "response", "expected_diagnostic"),
+    [
+        (OSError("private /runtime/path"), True, b"ready\n", "restart_helper_spawn_failed"),
+        (None, False, b"", "restart_helper_ack_timeout"),
+        (None, True, b"error:PrivateFailure\n", "restart_helper_rejected"),
+    ],
+)
+def test_protocol_three_restart_reports_sanitized_failure_category(
+    monkeypatch, popen_error, ready, response, expected_diagnostic
+):
+    monkeypatch.setattr(runtime_launcher, "image_launcher_protocol", lambda: 3)
+
+    def spawn(*_args, **_kwargs):
+        if popen_error is not None:
+            raise popen_error
+        return object()
+
+    monkeypatch.setattr(runtime_launcher.subprocess, "Popen", spawn)
+    monkeypatch.setattr(
+        runtime_launcher.select,
+        "select",
+        lambda *_args: ([object()], [], []) if ready else ([], [], []),
+    )
+    monkeypatch.setattr(runtime_launcher.os, "read", lambda *_args: response)
+
+    with pytest.raises(runtime_launcher.RestartRequestError) as exc_info:
+        runtime_launcher.request_container_restart()
+
+    assert exc_info.value.diagnostic == expected_diagnostic
+    assert "private" not in str(exc_info.value).lower()
 
 
 def test_protocol_three_restart_uses_image_owned_helper(monkeypatch):

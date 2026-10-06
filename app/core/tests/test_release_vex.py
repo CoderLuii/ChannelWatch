@@ -40,6 +40,60 @@ def test_current_release_vex_has_no_stale_runtime_dispositions():
         module.validate_vex(document, expected_version="1.2.0")
 
 
+@pytest.mark.parametrize("version", ["1.2.1", "1.3.0"])
+def test_future_release_vex_accepts_empty_reviewed_statements(version):
+    document = json.loads(
+        (ROOT / "deploy/security/channelwatch-v1.2.0.openvex.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    document["@id"] = document["@id"].replace("v1.2.0", f"v{version}")
+
+    _module().validate_vex(document, expected_version=version)
+
+
+def test_future_release_vex_rejects_stale_historical_not_affected_statements():
+    document = json.loads(
+        (ROOT / "deploy/security/channelwatch-v1.2.0.openvex.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    document["@id"] = document["@id"].replace("v1.2.0", "v1.3.0")
+    document["statements"] = copy.deepcopy(_document()["statements"])
+    module = _module()
+
+    with pytest.raises(module.VexValidationError, match="not_affected"):
+        module.validate_vex(document, expected_version="1.3.0")
+
+
+def test_future_release_vex_accepts_reviewed_affected_statement():
+    document = json.loads(
+        (ROOT / "deploy/security/channelwatch-v1.2.0.openvex.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    document["@id"] = document["@id"].replace("v1.2.0", "v1.3.0")
+    document["statements"] = [
+        {
+            "vulnerability": {
+                "@id": "https://www.cve.org/CVERecord?id=CVE-2099-0001",
+                "name": "CVE-2099-0001",
+            },
+            "products": [
+                {"@id": "pkg:oci/channelwatch@1.3.0?arch=amd64"},
+                {"@id": "pkg:oci/channelwatch@1.3.0?arch=arm64"},
+            ],
+            "status": "affected",
+            "action_statement": (
+                "Track the accepted upstream fix and rebuild both release "
+                "architectures."
+            ),
+        }
+    ]
+
+    _module().validate_vex(document, expected_version="1.3.0")
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

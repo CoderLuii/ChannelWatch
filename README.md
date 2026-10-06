@@ -216,9 +216,9 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:1.2.0` for the current image milestone, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use `coderluii/channelwatch:1.2.1` for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.2.0 requires a container image update. Pull the new image and recreate the container with the same `/config` volume. It refreshes the container runtime and compatible dependencies while retaining the recording-alert fixes and Program image setting released in v1.1.3. **Settings > Updates** will identify this as an image update rather than installing it in-app.
+ChannelWatch v1.2.1 is a signed in-app update for the v1.2.0 image. Install it from **Settings > Updates** to keep scheduled recordings labeled correctly and collect a safe failure category if an update restart fails. If you are still on an older image line, pull the current image and recreate the container with the same `/config` volume first.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 

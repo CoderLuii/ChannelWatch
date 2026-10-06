@@ -8,6 +8,20 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.2.1] - 2026-10-05
+
+### Important
+
+- Signed in-app update for the v1.2.0 image. You can install it from **Settings > Updates** without recreating the container.
+
+### Fixed
+
+- Keep active scheduled recordings in tracking even when they were scheduled more than a day ago. Their start notifications stay Scheduled instead of being mislabeled Manual. Addresses #23.
+
+### Changed
+
+- Record a safe failure category when an update restart cannot start, while preserving the previous runtime. The original restart failure in #22 remains under investigation.
+
 ## [1.2.0] - 2026-10-01
 
 ### Important
@@ -799,7 +813,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.2...v1.1.3
 [1.1.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.0...v1.1.1

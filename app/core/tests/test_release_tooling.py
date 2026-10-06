@@ -656,27 +656,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_120_image_release():
+def test_release_config_declares_121_in_app_release_on_120_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.2.0"
-    assert config["image_required"] is True
-    assert config["delivery_mode"] == "image_required"
+    assert config["version"] == "1.2.1"
+    assert config["image_required"] is False
+    assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.2.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.2.0"
-    assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == [
-        "1.1.0",
-        "1.1.1",
-        "1.1.2",
-        "1.1.3",
-    ]
+    assert config["recommended_image_version"] == "1.2.1"
+    assert config["automatic_install_allowed"] is True
+    assert config["compatible_source_application_versions"] == ["1.2.0"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.2.0 - Updated container dependencies"
+        "# ChannelWatch v1.2.1 - Scheduled recording alerts and update diagnostics"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -754,7 +749,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_120_image_release():
+def test_release_version_surfaces_use_121_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -765,14 +760,16 @@ def test_release_version_surfaces_use_120_image_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.2.0"
-    assert metadata["versionTag"] == "v1.2.0"
-    assert metadata["dockerTag"] == "1.2.0"
-    assert metadata["helmChartVersion"] == "1.2.0"
-    assert metadata["helmAppVersion"] == "1.2.0"
+    assert metadata["version"] == "1.2.1"
+    assert metadata["versionTag"] == "v1.2.1"
+    assert metadata["dockerTag"] == "1.2.1"
+    assert metadata["helmChartVersion"] == "1.2.1"
+    assert metadata["helmAppVersion"] == "1.2.1"
 
 
-def test_release_body_for_120_links_license_and_sbom_assets(monkeypatch, capsys):
+def test_release_body_for_120_links_license_and_sbom_assets(
+    monkeypatch, capsys, tmp_path
+):
     module = _load_script(
         "render_release_body_100_legal_assets",
         "scripts/release/render-release-body.py",
@@ -797,6 +794,20 @@ def test_release_body_for_120_links_license_and_sbom_assets(monkeypatch, capsys)
         "load_exporter",
         lambda: SimpleNamespace(collect_metadata=lambda *args: metadata),
     )
+    release_config = tmp_path / "release-config.json"
+    release_config.write_text(
+        json.dumps(
+            {
+                "version": "1.2.0",
+                "release_heading": (
+                    "# ChannelWatch v1.2.0 - Updated container dependencies"
+                ),
+                "verification_assets": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "RELEASE_CONFIG", release_config)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -891,7 +902,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
     output_path = tmp_path / "github-output"
     parse_env = {
         **os.environ,
-        "RELEASE_TAG": "v0.9.17",
+        "RELEASE_TAG": "v1.2.1",
         "GITHUB_OUTPUT": str(output_path),
     }
 
@@ -909,7 +920,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         line.split("=", 1)
         for line in output_path.read_text(encoding="utf-8").splitlines()
     )
-    assert output_values == {"version": "0.9.17"}
+    assert output_values == {"version": "1.2.1"}
     assert "VERSION: ${{ steps.version.outputs.version }}" in verify_block
     assert 'version_re="${VERSION//' in verify_shell
     assert 'version_re="${version//' not in verify_shell
@@ -919,7 +930,7 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         cwd=ROOT,
         env={
             **os.environ,
-            "RELEASE_TAG": "v0.9.17",
+            "RELEASE_TAG": "v1.2.1",
             "VERSION": output_values["version"],
         },
         capture_output=True,
@@ -2424,9 +2435,20 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert 'tar -xf "${archive}"' in image_job
     assert 'cmp --silent "${descriptor}"' in image_job
     assert "aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567" in image_job
-    assert "--scanners vuln,secret,misconfig" in image_job
-    assert "--severity CRITICAL,HIGH" in image_job
-    assert "--exit-code 1" in image_job
+    scan_block = image_job.split(
+        "      - name: Scan exact release candidate images", 1
+    )[1].split("\n      - name: Retain accepted upstream image vulnerabilities", 1)[0]
+    scan_commands = scan_block.split("            trivy image", 1)[1]
+    vulnerability_scan, enforced_scan = scan_commands.split(
+        "            trivy image", 1
+    )
+    assert "--scanners vuln" in vulnerability_scan
+    assert "--severity CRITICAL,HIGH,MEDIUM,LOW" in vulnerability_scan
+    assert "--exit-code 0" in vulnerability_scan
+    assert "--scanners secret,misconfig" in enforced_scan
+    assert "--severity CRITICAL,HIGH" in enforced_scan
+    assert "--exit-code 1" in enforced_scan
+    assert "Retain accepted upstream image vulnerabilities" in image_job
     assert '--input "${OCI_LAYOUT}"' in image_job
     assert '--platform "${platform}"' in image_job
 
@@ -2483,7 +2505,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "Draft release target does not match ${RELEASE_SHA}" in image_job
 
     publish_job = image_job[publish_index:]
-    assert "quay.io/skopeo/stable@sha256:8482f709108354691af2defec4cad5f3ddea6cfff0c8091109dec8034574a918" in workflow
+    assert "quay.io/containers/skopeo:v1.22.3-immutable@sha256:f45eb1e14223a5ba0da4246274679a083653dab1402acc1fcb70a6339b50cf00" in workflow
     assert "Verify pinned publication helper is available" in workflow
     assert 'docker pull "${SKOPEO_IMAGE}"' in workflow
     assert 'root_index="$(cat "${OCI_LAYOUT}/index.json")"' in publish_job

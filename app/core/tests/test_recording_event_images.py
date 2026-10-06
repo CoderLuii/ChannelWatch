@@ -297,6 +297,72 @@ async def test_cleanup_offloads_blocking_job_provider_work_from_event_loop():
 
 
 @pytest.mark.asyncio
+async def test_old_active_scheduled_job_is_retained_and_starts_as_scheduled():
+    alert = _build_alert()
+    alert.session_manager.cleanup = AsyncMock()
+    job = {
+        "id": "scheduled-old",
+        "name": "Late Movie",
+        "start_time": int(time.time()) - 10,
+        "duration": 3600,
+        "channels": [],
+        "item": {},
+    }
+    alert.scheduled_recordings = {
+        job["id"]: {"job": job, "created_at": time.time() - 90000}
+    }
+    alert.job_provider.is_job_active = MagicMock(return_value=True)
+    alert.job_provider.cache_jobs = MagicMock(return_value=1)
+    alert.recording_started_enabled = False
+
+    await alert.run_cleanup()
+
+    assert job["id"] in alert.scheduled_recordings
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ) as mock_record:
+        await alert._handle_recording_started({}, job_details=job)
+
+    assert mock_record.call_args.kwargs["extra"]["recording_type"] == "(Scheduled)"
+
+
+@pytest.mark.asyncio
+async def test_old_inactive_scheduled_job_is_removed():
+    alert = _build_alert()
+    alert.session_manager.cleanup = AsyncMock()
+    alert.scheduled_recordings = {
+        "scheduled-old": {"created_at": time.time() - 90000}
+    }
+    alert.job_provider.is_job_active = MagicMock(return_value=False)
+    alert.job_provider.cache_jobs = MagicMock(return_value=0)
+
+    await alert.run_cleanup()
+
+    assert alert.scheduled_recordings == {}
+
+
+@pytest.mark.asyncio
+async def test_started_job_without_scheduled_marker_remains_manual():
+    alert = _build_alert()
+    alert.recording_started_enabled = False
+    job = {
+        "id": "manual-job",
+        "name": "Manual Recording",
+        "start_time": int(time.time()) - 10,
+        "duration": 1800,
+        "channels": [],
+        "item": {},
+    }
+
+    with patch.object(
+        recording_events_module, "record_recording_event", return_value=True
+    ) as mock_record:
+        await alert._handle_recording_started({}, job_details=job)
+
+    assert mock_record.call_args.kwargs["extra"]["recording_type"] == "(Manual)"
+
+
+@pytest.mark.asyncio
 async def test_event_processing_does_not_hold_busy_lock_across_handler_work():
     alert = _build_alert()
     alert.job_provider.get_job_by_id = MagicMock(

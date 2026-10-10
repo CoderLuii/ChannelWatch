@@ -31,6 +31,7 @@ This docs tree is the home for ChannelWatch user, operator, reference, and archi
 - [project/PRIVACY.md](project/PRIVACY.md) - Local storage, debug bundles, in-app support reports, and sharing boundaries.
 - [multi-dvr.md](reference/multi-dvr.md) - Detailed multi-DVR configuration, identity, lifecycle, and limits.
 - [disk-monitoring.md](reference/disk-monitoring.md) - Disk polling, thresholds, severity, metrics, and alert behavior.
+- [maintenance-windows.md](reference/maintenance-windows.md) - Recording-schedule gaps, filters, per-DVR results, and conservative safety limits.
 - [plugins.md](reference/plugins.md) - Notification provider plugin locations, loader behavior, and safety rules.
 
 ## Explanation

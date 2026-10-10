@@ -8,6 +8,24 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.4.0] - 2026-10-10
+
+### Important
+
+- Container image update required. Pull v1.4.0 and recreate the container with the same `/config` volume and existing external storage key configuration.
+
+### Added
+
+- Show potential maintenance windows for each DVR, with minimum duration, day, and time filters. Recording gaps use the configured timezone and exclude active and scheduled recordings. Unreachable, incomplete, and unobserved schedule periods stay marked as unknown.
+
+### Fixed
+
+- Show an available compatible app update separately from a newer container image recommendation. Signed-update checks, downgrade protection, and rollback behavior stay in place. Previously installed clients need an image update to receive the new selection behavior.
+
+### Changed
+
+- Refresh compatible Python and UI dependencies, the pinned official Python image, and release tools. Keep Apprise on its supported 1.x notification interface.
+
 ## [1.3.0] - 2026-10-06
 
 ### Important
@@ -832,7 +850,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.1.3...v1.2.0

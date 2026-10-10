@@ -703,6 +703,32 @@ Example response:
 [{"id":"rec-1","title":"Example Show","start_time":1770000000,"end_time":0,"channel":"NBC","scheduled_time":"Today at 08:00 PM","image":"","dvr_id":"main","dvr_name":"Main DVR"}]
 ```
 
+### `GET /api/v1/maintenance-windows`
+
+| Field | Value |
+| --- | --- |
+| Function | `get_maintenance_windows_v1` |
+| Auth requirement | api_key or RBAC session |
+| RBAC role required | viewer |
+| Request body schema | `none` |
+| Response body schema | `MaintenanceWindowsResponse` |
+| Status codes | 200, 401, 404, 422, 429 |
+| Rate limit applies | yes |
+
+Example request:
+
+```sh
+curl -sS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/maintenance-windows?minimum_minutes=60&days=7&weekdays=0,1,2,3,4&start_hour=22&end_hour=6&dvr_id=main"
+```
+
+Example response:
+
+```json
+{"timezone":"America/New_York","minimum_minutes":60,"days":7,"start_hour":22,"end_hour":6,"weekdays":[0,1,2,3,4],"dvrs":[{"dvr_id":"main","dvr_name":"Main DVR","status":"truncated","coverage_end":"2026-10-12T01:00:00+00:00","windows":[{"start":"2026-10-11T03:00:00+00:00","end":"2026-10-11T06:00:00+00:00","duration_minutes":180}],"message":"Later time was not assessed because the known schedule ends before the requested range."}]}
+```
+
+The endpoint never treats an unreachable, empty, malformed, or unobserved part of a schedule as free time. See [maintenance-windows.md](maintenance-windows.md) for filter and status details.
+
 ### `GET /api/recordings/active`
 
 | Field | Value |

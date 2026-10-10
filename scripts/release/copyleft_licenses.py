@@ -143,6 +143,13 @@ def copy_image_license_material(
             raise ValueError(f"Image license path is not a file: {path}")
         sources.append((path, resolved_path))
     for package in sorted(package_docs.iterdir()):
+        resolved_package = resolve_image_path(package)
+        if not resolved_package.is_dir():
+            raise ValueError(
+                f"Image package documentation path is not a directory: {package}"
+            )
+        if next(resolved_package.iterdir(), None) is None:
+            continue
         copyright_path = package / "copyright"
         resolved_copyright = resolve_image_path(copyright_path)
         if not resolved_copyright.is_file():

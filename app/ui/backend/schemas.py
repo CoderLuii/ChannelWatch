@@ -401,6 +401,31 @@ class NotificationDestinationSafetyResponse(BaseModel):
     trusted: bool
 
 
+class MaintenanceWindow(BaseModel):
+    start: str
+    end: str
+    duration_minutes: int
+
+
+class DvrMaintenanceWindows(BaseModel):
+    dvr_id: str
+    dvr_name: str
+    status: Literal["available", "truncated", "unknown", "offline"]
+    coverage_end: Optional[str] = None
+    windows: list[MaintenanceWindow] = Field(default_factory=list)
+    message: str
+
+
+class MaintenanceWindowsResponse(BaseModel):
+    timezone: str
+    minimum_minutes: int
+    days: int
+    start_hour: int
+    end_hour: int
+    weekdays: list[int] = Field(default_factory=list)
+    dvrs: list[DvrMaintenanceWindows] = Field(default_factory=list)
+
+
 class AuthStateContract(BaseModel):
     persisted_mode: Optional[AuthMode] = None
     configured_mode: Optional[EffectiveAuthMode] = None

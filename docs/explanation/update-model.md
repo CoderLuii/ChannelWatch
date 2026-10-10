@@ -17,6 +17,8 @@ For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9.
 
 The default policy installs verified compatible updates during the local 03:00–05:00 maintenance window. Administrators can choose notify-only, apply immediately, postpone for 24 hours or 7 days, retry a failed attempt, or roll back. This keeps routine updates simple without pretending that a running container can safely replace its own base image, Python runtime, system packages, or launcher contract.
 
+The signed catalog can contain both a newer image milestone and an older app release that the installed image can still run. In that case, Update Center offers the highest compatible forward app release and shows the newer container image as a separate recommendation. It never downgrades the application, skips signature checks, or treats an incompatible bundle as installable. After the app update, the newer image milestone remains visible until the container is refreshed.
+
 When legacy credential recovery prevents normal administrator navigation, a separate recovery surface can use only the compiled-in official signed stable channel. It is active only during that recovery state and requires normal administrator CSRF or a short-lived same-origin bootstrap CSRF plus exact typed confirmation. It does not accept alternate catalogs, URLs, uploads, signing keys, or downgrades.
 
 ## App bundle updates

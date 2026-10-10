@@ -105,8 +105,17 @@ test("setup shell can apply only a confirmed official signed recovery update", a
     settings_schema_version: 7,
     active_bundle: null,
     latest,
+    recommended_release: {
+      version: "1.0.0",
+      version_tag: "v1.0.0",
+      image_required: true,
+      delivery_mode: "image_required",
+      recommended_image_version: "1.0.0",
+    },
     update_available: true,
     image_required: false,
+    image_update_available: true,
+    recommended_image_version: "1.0.0",
     last_job: null,
     rollback_available: false,
     auth_disabled_warning: false,
@@ -188,6 +197,7 @@ test("setup shell can apply only a confirmed official signed recovery update", a
   const actions = page.getByTestId("official-recovery-update-actions")
   await expect(actions).toBeVisible()
   await actions.getByRole("button", { name: "Check official channel" }).click()
+  await expect(actions).toContainText("Signed app update v0.9.18 can be installed here. Container image v1.0.0 remains the separate latest recommendation.")
   const confirmation = page.getByLabel(/INSTALL OFFICIAL UPDATE/)
   await confirmation.fill("INSTALL OFFICIAL UPDATE")
   await actions.getByRole("button", { name: "Apply signed v0.9.18 update" }).click()

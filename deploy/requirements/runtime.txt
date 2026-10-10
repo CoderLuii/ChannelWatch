@@ -4,10 +4,10 @@ pip>=26.2.1
 requests>=2.34.2
 httpx>=0.28.1
 pytz>=2026.5
-pydantic>=2.13.5
+pydantic>=2.14.0
 
 # Storage and auth
-sqlmodel>=0.0.47
+sqlmodel>=0.0.48
 bcrypt>=5.0.0
 cryptography>=50.0.2
 
@@ -16,7 +16,7 @@ apprise>=1.13.1,<2
 oauthlib>=4.0.0
 
 # Web
-fastapi>=0.142.2
+fastapi>=0.143.0
 uvicorn[standard]>=0.54.0
 python-multipart>=0.0.32
 

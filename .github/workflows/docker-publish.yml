@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
@@ -99,7 +99,7 @@ jobs:
         run: pnpm exec playwright test
       - name: Retain browser diagnostics, including first failed attempts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-browser-${{ github.sha }}
           path: |
@@ -118,7 +118,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
@@ -215,7 +215,7 @@ jobs:
           echo "Upstream dependency vulnerabilities are advisory; code, secret and configuration checks remain enforced."
       - name: Retain upstream dependency report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: upstream-dependencies-${{ github.sha }}
           path: ${{ runner.temp }}/channelwatch-upstream-dependencies.json
@@ -366,7 +366,7 @@ jobs:
           python-version: '3.14'
 
       - name: Set up pinned Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
@@ -415,7 +415,7 @@ jobs:
       # Browser checks use disposable API fixtures and run before signing secrets.
       - name: Retain browser diagnostics, including first failed attempts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-browser-${{ github.sha }}
           path: |
@@ -587,26 +587,54 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          OCI_LAYOUT="${RUNNER_TEMP}/channelwatch-candidate-one.oci"
+          tag="v${CANDIDATE_VERSION}"
+          descriptor="dist/candidate-one/channelwatch-image-${tag}.json"
           for platform in linux/amd64 linux/arm64; do
+            arch="${platform#linux/}"
+            scan_archive="${RUNNER_TEMP}/channelwatch-scan-${arch}.tar"
+            docker run --rm --pull=never \
+              --volume "${OCI_LAYOUT}:/work/channelwatch.oci:ro" \
+              --volume "${RUNNER_TEMP}:/output" \
+              "${SKOPEO_IMAGE}" copy \
+              --override-os linux \
+              --override-arch "${arch}" \
+              oci:/work/channelwatch.oci:release-candidate \
+              "docker-archive:/output/channelwatch-scan-${arch}.tar:channelwatch-scan-${arch}:exact"
+            expected_config_digest="$(jq -er --arg platform "${platform}" \
+              '.platforms[] | select(.platform == $platform) | .config.digest' \
+              "${descriptor}")"
+            config_member="$(tar -xOf "${scan_archive}" manifest.json | jq -er \
+              'if type == "array" and length == 1 and .[0].Config then .[0].Config else error("expected one archive manifest entry") end')"
+            actual_config_digest="sha256:$(tar -xOf "${scan_archive}" "${config_member}" | sha256sum | awk '{print $1}')"
+            config_architecture="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.architecture')"
+            config_os="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.os')"
+            if [ "${config_os}" != "linux" ] || [ "${config_architecture}" != "${arch}" ]; then
+              echo "::error::Exported scan archive platform does not match ${platform}."
+              exit 1
+            fi
+            if [ "${actual_config_digest}" != "${expected_config_digest}" ]; then
+              echo "::error::Exported scan archive config does not match ${platform}."
+              exit 1
+            fi
             trivy image \
-              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners vuln \
               --severity CRITICAL,HIGH,MEDIUM,LOW \
               --exit-code 0 \
               --format json \
-              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${platform#linux/}.json"
+              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${arch}.json"
             trivy image \
-              --input "${RUNNER_TEMP}/channelwatch-candidate-one.oci" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners secret,misconfig \
               --severity CRITICAL,HIGH \
               --exit-code 1
+            rm -f "${scan_archive}"
           done
 
       - name: Retain accepted upstream image vulnerabilities
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: upstream-image-candidate-${{ github.sha }}
           path: ${{ runner.temp }}/channelwatch-upstream-linux-*.json
@@ -913,7 +941,7 @@ jobs:
 
       - name: Retain sealed nonpublishing candidate evidence
         id: candidate_upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: channelwatch-release-candidate-${{ github.sha }}
           path: dist/candidate-sealed/*.sealed
@@ -954,7 +982,7 @@ jobs:
           python-version: '3.14'
 
       - name: Set up pinned Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
@@ -1332,6 +1360,8 @@ jobs:
     name: Build and push Docker image
     runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
     needs: build-update-bundle-and-release
+    env:
+      APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
     outputs:
       dockerhub_digest: ${{ steps.publish.outputs.dockerhub_digest }}
       ghcr_digest: ${{ steps.publish.outputs.ghcr_digest }}
@@ -1449,26 +1479,54 @@ jobs:
         env:
           OCI_LAYOUT: ${{ runner.temp }}/channelwatch-release.oci
         run: |
+          set -euo pipefail
+          descriptor="${RUNNER_TEMP}/release-image.json"
+          docker pull "${SKOPEO_IMAGE}"
           for platform in linux/amd64 linux/arm64; do
+            arch="${platform#linux/}"
+            scan_archive="${RUNNER_TEMP}/channelwatch-scan-${arch}.tar"
+            docker run --rm --pull=never \
+              --volume "${OCI_LAYOUT}:/work/channelwatch.oci:ro" \
+              --volume "${RUNNER_TEMP}:/output" \
+              "${SKOPEO_IMAGE}" copy \
+              --override-os linux \
+              --override-arch "${arch}" \
+              oci:/work/channelwatch.oci:release-candidate \
+              "docker-archive:/output/channelwatch-scan-${arch}.tar:channelwatch-scan-${arch}:exact"
+            expected_config_digest="$(jq -er --arg platform "${platform}" \
+              '.platforms[] | select(.platform == $platform) | .config.digest' \
+              "${descriptor}")"
+            config_member="$(tar -xOf "${scan_archive}" manifest.json | jq -er \
+              'if type == "array" and length == 1 and .[0].Config then .[0].Config else error("expected one archive manifest entry") end')"
+            actual_config_digest="sha256:$(tar -xOf "${scan_archive}" "${config_member}" | sha256sum | awk '{print $1}')"
+            config_architecture="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.architecture')"
+            config_os="$(tar -xOf "${scan_archive}" "${config_member}" | jq -er '.os')"
+            if [ "${config_os}" != "linux" ] || [ "${config_architecture}" != "${arch}" ]; then
+              echo "::error::Exported scan archive platform does not match ${platform}."
+              exit 1
+            fi
+            if [ "${actual_config_digest}" != "${expected_config_digest}" ]; then
+              echo "::error::Exported scan archive config does not match ${platform}."
+              exit 1
+            fi
             trivy image \
-              --input "${OCI_LAYOUT}" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners vuln \
               --severity CRITICAL,HIGH,MEDIUM,LOW \
               --exit-code 0 \
               --format json \
-              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${platform#linux/}.json"
+              --output "${RUNNER_TEMP}/channelwatch-upstream-linux-${arch}.json"
             trivy image \
-              --input "${OCI_LAYOUT}" \
-              --platform "${platform}" \
+              --input "${scan_archive}" \
               --scanners secret,misconfig \
               --severity CRITICAL,HIGH \
               --exit-code 1
+            rm -f "${scan_archive}"
           done
 
       - name: Retain accepted upstream image vulnerabilities
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: upstream-image-release-${{ github.sha }}
           path: ${{ runner.temp }}/channelwatch-upstream-linux-*.json
@@ -1479,7 +1537,7 @@ jobs:
         id: syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          syft-version: v1.51.0
+          syft-version: v1.54.1
 
       - name: Download and verify existing draft release assets
         env:

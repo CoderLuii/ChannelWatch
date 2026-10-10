@@ -34,6 +34,7 @@ import { ActivityTimeline } from "@/components/dashboard/activity-timeline";
 import { StatusPanel } from "@/components/dashboard/status-panel";
 import { RecentActivityList } from "@/components/dashboard/recent-activity-list";
 import { UpcomingRecordingsList } from "@/components/dashboard/upcoming-recordings-list";
+import { MaintenanceWindowsCard } from "@/components/dashboard/maintenance-windows-card";
 
 interface StatusOverviewProps {
   settings: AppSettings | null;
@@ -866,6 +867,11 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           count={upcomingRecordings}
         />
       </div>
+
+      <MaintenanceWindowsCard
+        selectedDvr={selectedDvr}
+        refreshKey={lastUpdated?.getTime() ?? 0}
+      />
     </div>
   );
 }

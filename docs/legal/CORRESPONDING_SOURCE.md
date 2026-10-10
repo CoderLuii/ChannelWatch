@@ -1,6 +1,6 @@
 # ChannelWatch Corresponding Source and Rebuild Map
 
-This document records the source and notice material for the Debian components in the ChannelWatch v1.3.0 container image. ChannelWatch does not modify these upstream components. The final release SBOMs for the published amd64 and arm64 images are the authoritative package inventories.
+This document records the source and notice material for the Debian components in the ChannelWatch v1.4.0 container image. ChannelWatch does not modify these upstream components. The final release SBOMs for the published amd64 and arm64 images are the authoritative package inventories.
 
 <!-- cspell:ignore adduser apt passwd dpkg debconf debianutils diffutils e2fsprogs logsave gnupg gpgv acl attr libcap cdebconf libffi libxcrypt libgcrypt gmp gnutls libhogweed libnettle libidn libmd p11 libpam libtasn libunistring mawk netbase sysvinit usrmerge xxhash Sleepycat coreutils libbz -->
 
@@ -8,9 +8,9 @@ This document records the source and notice material for the Debian components i
 
 ## Exact base inputs
 
-- Image index: `docker.io/library/python@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88`
-- amd64 manifest: `sha256:d1e795fbdab8a4744432467f32f348c6baa99f07abc05ffde710913f65c8261d`
-- arm64 manifest: `sha256:6e1f3bd1526e54623c48ea9f79f91fe354f8c5a0430473db89528c9846951585`
+- Image index: `docker.io/library/python@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83`
+- amd64 manifest: `sha256:a66d3a463d0be3cc537c269b0d3418746dda512417a975559a0eaa8a6406baaf`
+- arm64 manifest: `sha256:0e24db28cf5b7788413afe3fdc63075ca22bc4ecf74f5472304b391c2110e629`
 - Base: Debian Bookworm Slim. The pinned manifests each contain the same 97 Debian package names and versions; only the architecture differs.
 - Official Python build recipe: [`docker-library/python@7cc547b3ff8d45d540cd23144227af126a79d60c:3.14/slim-bookworm/Dockerfile`](https://github.com/docker-library/python/blob/7cc547b3ff8d45d540cd23144227af126a79d60c/3.14/slim-bookworm/Dockerfile)
 - Python source: [`Python-3.14.8.tar.xz`](https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tar.xz), SHA-256 `c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73`.

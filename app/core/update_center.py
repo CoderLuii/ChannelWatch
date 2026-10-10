@@ -45,6 +45,7 @@ from core.update_catalog import (
     LauncherProtocol,
     launcher_protocol_for_image_version,
     normalize_catalog,
+    select_catalog_app_release,
     select_catalog_release,
 )
 
@@ -641,21 +642,37 @@ def read_update_document_bytes(
             launcher_protocol=launcher_protocol,
             recovery=recovery,
         )
+        app_selection = select_catalog_app_release(
+            catalog,
+            current_version=current_version,
+            runtime_abi=runtime_abi,
+            settings_schema_version=settings_schema_version,
+            launcher_protocol=launcher_protocol,
+            recovery=recovery,
+        )
     except (TypeError, ValueError) as exc:
         raise UpdateManifestError(str(exc)) from exc
     if selection.release is None:
         raise UpdateManifestError(
             "The signed catalog contains no release compatible with this installation."
         )
+    selected = selection
+    if (
+        app_selection.release is not None
+        and compare_versions(app_selection.release["version"], current_version) > 0
+    ):
+        selected = app_selection
     return {
         "schema": CATALOG_SCHEMA_VERSION,
-        "payload": selection.release,
+        "payload": selected.release,
         "signature": catalog["signature"],
         "catalog": {
             "channel": catalog["payload"]["channel"],
             "published_at": catalog["payload"].get("published_at"),
-            "selection_reason": selection.reason,
-            "considered_versions": list(selection.considered_versions),
+            "selection_reason": selected.reason,
+            "considered_versions": list(selected.considered_versions),
+            "compatible_app_release": app_selection.release,
+            "latest_compatible_release": selection.release,
             "payload_sha256": sha256_hex(canonical_payload_bytes(catalog["payload"])),
         },
     }
@@ -2098,6 +2115,22 @@ class UpdateManager:
         job = load_json(self.job_path, None)
         rollback = load_json(self.rollback_path, None)
         payload = latest.get("payload") if isinstance(latest, dict) else None
+        catalog = latest.get("catalog") if isinstance(latest, dict) else None
+        recommended_release = (
+            catalog.get("latest_compatible_release")
+            if isinstance(catalog, dict)
+            and isinstance(catalog.get("latest_compatible_release"), dict)
+            else payload
+        )
+        compatible_app_release = (
+            catalog.get("compatible_app_release")
+            if isinstance(catalog, dict)
+            and isinstance(catalog.get("compatible_app_release"), dict)
+            else payload
+            if isinstance(payload, dict)
+            and payload.get("delivery_mode") != DeliveryMode.IMAGE_REQUIRED.value
+            else None
+        )
         catalog_checked_at = self._catalog_checked_at()
         catalog_state = "not_checked" if latest is None else "error"
         cached_release_stale = False
@@ -2105,6 +2138,7 @@ class UpdateManager:
         visible_latest: dict[str, Any] | None = None
         update_available = False
         image_required = False
+        image_update_available = False
         if isinstance(payload, dict):
             try:
                 comparison = compare_versions(
@@ -2124,6 +2158,18 @@ class UpdateManager:
                     catalog_state = "update_available"
             except Exception:
                 catalog_state = "error"
+        if isinstance(recommended_release, dict):
+            try:
+                image_update_available = (
+                    compare_versions(
+                        str(recommended_release.get("version") or "0.0.0"),
+                        self.current_version,
+                    )
+                    > 0
+                    and self._payload_requires_image(recommended_release)
+                )
+            except Exception:
+                image_update_available = False
 
         lock_active = self._operation_lock_active()
         transition_pending = self.runtime_transition_pending()
@@ -2157,6 +2203,8 @@ class UpdateManager:
             # safe visible release rather than an arbitrary stale cache row.
             "latest": visible_latest,
             "trusted_target": trusted_target,
+            "compatible_app_release": compatible_app_release,
+            "recommended_release": recommended_release,
             "update_available": update_available,
             "catalog_state": catalog_state,
             "catalog_checked_at": catalog_checked_at,
@@ -2164,6 +2212,7 @@ class UpdateManager:
             "operation_state": operation_state,
             "operation_busy": operation_busy,
             "image_required": image_required if update_available else False,
+            "image_update_available": image_update_available,
             "delivery_mode": (
                 str(
                     visible_latest.get("delivery_mode")
@@ -2173,12 +2222,15 @@ class UpdateManager:
                 else None
             ),
             "image_refresh_recommended": bool(
-                isinstance(visible_latest, dict)
-                and visible_latest.get("image_refresh_recommended")
+                image_update_available
+                or (
+                    isinstance(visible_latest, dict)
+                    and visible_latest.get("image_refresh_recommended")
+                )
             ),
             "recommended_image_version": (
-                visible_latest.get("recommended_image_version")
-                if isinstance(visible_latest, dict)
+                recommended_release.get("recommended_image_version")
+                if isinstance(recommended_release, dict)
                 else None
             ),
             "last_job": job if isinstance(job, dict) else None,

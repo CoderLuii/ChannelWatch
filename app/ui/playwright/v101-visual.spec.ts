@@ -25,6 +25,17 @@ async function waitForCollapsedDesktopSidebar(page: Page) {
   await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible()
 }
 
+async function waitForMaintenanceCard(page: Page) {
+  const card = page.getByTestId("maintenance-windows-card")
+  await expect(card).toContainText("Known schedule only")
+  await expect(card).toContainText("2h 30m")
+  await card.scrollIntoViewIfNeeded()
+  await expect(card).toBeInViewport()
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeInViewport()
+  return card
+}
+
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-08-26T12:00:00Z"))
   await installApiMocks(page)
@@ -136,18 +147,33 @@ test("Dashboard multi-DVR uptime dialog", async ({ page }) => {
   }))
   await page.goto("/#overview")
   await waitForCollapsedDesktopSidebar(page)
+  await waitForMaintenanceCard(page)
   await page.getByRole("button", { name: /DVR uptime/ }).click()
   await expect(page.getByRole("dialog", { name: "DVR uptime" })).toBeVisible()
   await expect(page).toHaveScreenshot("dashboard-dvr-uptime-dialog.png", screenshotOptions)
+})
+
+test("Dashboard maintenance windows", async ({ page }) => {
+  await useTheme(page, "dark")
+  await page.goto("/#overview")
+  await waitForCollapsedDesktopSidebar(page)
+  const card = await waitForMaintenanceCard(page)
+  await expect(card).toHaveScreenshot("dashboard-maintenance-windows.png", screenshotOptions)
 })
 
 test("Recent Activity client filter", async ({ page }) => {
   await useTheme(page, "dark")
   await page.goto("/#overview")
   await waitForCollapsedDesktopSidebar(page)
+  await waitForMaintenanceCard(page)
   await page.getByRole("button", { name: "Filter activity by type" }).click()
   await expect(page.getByText("The timeline remains an aggregate across all clients.")).toBeVisible()
-  await expect(page).toHaveScreenshot("recent-activity-client-filter.png", screenshotOptions)
+  await expect(page).toHaveScreenshot("recent-activity-client-filter.png", {
+    ...screenshotOptions,
+    // Chromium clips off-viewport tiles while this menu is open. The separate
+    // maintenance-card snapshot retains full pixel coverage for that content.
+    fullPage: false,
+  })
 })
 
 test("Watch History client filter", async ({ page }) => {

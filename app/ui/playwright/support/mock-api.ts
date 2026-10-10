@@ -250,6 +250,31 @@ const upcomingRecordings = [
   },
 ]
 
+export const maintenanceWindows = {
+  timezone: "America/New_York",
+  minimum_minutes: 60,
+  days: 7,
+  start_hour: 0,
+  end_hour: 24,
+  weekdays: [],
+  dvrs: [
+    {
+      dvr_id: "main-dvr",
+      dvr_name: "Main DVR",
+      status: "truncated",
+      coverage_end: "2026-10-12T04:00:00Z",
+      windows: [
+        {
+          start: "2026-10-11T05:00:00Z",
+          end: "2026-10-11T07:30:00Z",
+          duration_minutes: 150,
+        },
+      ],
+      message: "Later time was not assessed because the known schedule ends before the requested range.",
+    },
+  ],
+}
+
 const activityItems = [
   {
     id: "activity-1",
@@ -475,6 +500,7 @@ export async function installApiMocks(page: Page) {
     if (pathname === "/api/system-info") return json(route, mockSystemInfo)
     if (pathname === "/api/streams/details") return json(route, streamDetails)
     if (pathname === "/api/recordings/upcoming") return json(route, upcomingRecordings)
+    if (pathname === "/api/v1/maintenance-windows") return json(route, maintenanceWindows)
     if (pathname === "/api/recent-activity") return json(route, activityItems)
     if (pathname === "/api/activity-history") {
       return json(route, {

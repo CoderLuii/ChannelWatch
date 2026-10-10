@@ -70,7 +70,7 @@ No modifications have been made to the `zeroconf` library itself.
 
 ## Container base packages
 
-The published image contains unmodified Debian Bookworm packages from the official Python 3.14.8 image. Both Python stages use image index `sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88`. The image retains Debian package copyright files under `/usr/share/doc` and full common-license texts under `/usr/share/common-licenses`.
+The published image contains unmodified Debian Bookworm packages from the official Python 3.14.8 image. Both Python stages use image index `sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83`. The image retains Debian package copyright files under `/usr/share/doc` and full common-license texts under `/usr/share/common-licenses`.
 
 The image and app-update archive include the complete GPL 1.0, GPL 2.0,
 GPL 3.0, LGPL 2.0, LGPL 2.1, LGPL 3.0, and GCC Runtime Library Exception 3.1

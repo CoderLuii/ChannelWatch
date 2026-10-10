@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -60,6 +61,42 @@ def test_dockerfile_pins_reviewed_official_python_base_for_both_python_stages():
     assert 'CMD ["/usr/local/bin/python", "-c"' in dockerfile
     assert "apk add" not in dockerfile
     assert "COPY --from=python-deps /usr/share/zoneinfo" not in dockerfile
+
+
+def test_legal_inventory_pins_the_dockerfile_python_base():
+    dockerfile = (_REPO_DIR / "deploy" / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    corresponding_source = (
+        _REPO_DIR / "docs" / "legal" / "CORRESPONDING_SOURCE.md"
+    ).read_text(encoding="utf-8")
+    third_party_licenses = (
+        _REPO_DIR / "docs" / "legal" / "THIRD_PARTY_LICENSES.md"
+    ).read_text(encoding="utf-8")
+
+    base_digests = re.findall(
+        r"^FROM python:3\.14-slim-bookworm@sha256:([0-9a-f]{64})",
+        dockerfile,
+        re.MULTILINE,
+    )
+    assert len(base_digests) == 2
+    assert len(set(base_digests)) == 1
+    expected_digest = base_digests[0]
+
+    corresponding_source_digest = re.search(
+        r"^- Image index: `docker\.io/library/python@sha256:([0-9a-f]{64})`$",
+        corresponding_source,
+        re.MULTILINE,
+    )
+    assert corresponding_source_digest is not None
+    assert corresponding_source_digest.group(1) == expected_digest
+
+    legal_inventory_digest = re.search(
+        r"Both Python stages use image index `sha256:([0-9a-f]{64})`",
+        third_party_licenses,
+    )
+    assert legal_inventory_digest is not None
+    assert legal_inventory_digest.group(1) == expected_digest
 
 
 def test_container_helper_uses_the_shipped_virtual_environment():

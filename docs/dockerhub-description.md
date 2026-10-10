@@ -14,7 +14,7 @@ The Dashboard also suggests maintenance windows from known recording jobs, with 
 Recommended tags:
 
 - `latest` for the newest stable image
-- `1.4.0` for the current release
+- `1.4.1` for the current release
 
 ## Quick Start
 
@@ -38,15 +38,15 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.4.0 for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use v1.4.1 for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.4.0 is a container-image milestone. Pull the v1.4.0 image and recreate the container with the same `/config` volume and any external storage key configuration. **Settings > Updates** identifies this as an image update and does not replace the container image in-app.
+ChannelWatch v1.4.1 is a signed in-app update for the v1.4.0 image. It corrects the documented Python base-image digest in the bundled third-party license inventory without changing runtime dependencies or container behavior. Install it from **Settings > Updates**, or pull v1.4.1 for a fresh container.
 
 From v1.0.0 forward, every `X.Y.0` version is a container-image milestone. Versions `X.Y.1` through `X.Y.9` install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.4.0 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve `/config` and pull/recreate the v1.4.1 image. It repairs stale legacy update markers without discarding the preserved configuration; after this image refresh, use Update Center normally.
 
-An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v1.4.0, or provide the correct old key for one migration restart.
+An already-blocked v0.9.17 installation with a missing or incorrect old deployment key cannot reach its old portal. Preserve `/config` and pull/recreate v1.4.1, or provide the correct old key for one migration restart.
 
 After v0.9.18 or newer is installed, a setup or legacy-recovery state can use a narrowly scoped official signed recovery update before normal admin navigation is available. It requires same-origin anti-CSRF state and exact typed confirmation and does not accept custom feeds, URLs, uploads, keys, or downgrades.
 

@@ -101,12 +101,12 @@ for (const endpoint of ["system-info", "recordings/upcoming", "activity-history"
   test(`Dashboard marks ${endpoint} failure stale and clears it on recovery`, async ({ page }) => {
     await page.goto("/#overview")
     await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
-    await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
+    await expect(page.getByLabel("Refresh", { exact: true })).toBeEnabled()
     await page.route(`**/api/${endpoint}**`, route => route.fulfill({ status: 503, json: { detail: "Temporarily unavailable" } }))
-    await page.getByRole("button", { name: "Refresh", exact: true }).click()
+    await page.getByLabel("Refresh", { exact: true }).click()
     await expect(page.getByText(/some data may be stale/)).toBeVisible()
     await page.unroute(`**/api/${endpoint}**`)
-    await page.getByRole("button", { name: "Refresh", exact: true }).click()
+    await page.getByLabel("Refresh", { exact: true }).click()
     await expect(page.getByText(/some data may be stale/)).toHaveCount(0)
   })
 }

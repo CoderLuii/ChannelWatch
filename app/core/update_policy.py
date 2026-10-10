@@ -2335,7 +2335,9 @@ class UpdateAutomationService:
 
 def _public_recovery_status(status: Mapping[str, Any]) -> dict[str, Any]:
     latest = status.get("latest")
+    recommended_release = status.get("recommended_release")
     public_latest = None
+    public_recommended_release = None
     if isinstance(latest, dict):
         public_latest = {
             key: latest.get(key)
@@ -2349,11 +2351,26 @@ def _public_recovery_status(status: Mapping[str, Any]) -> dict[str, Any]:
                 "highlights",
             )
         }
+    if isinstance(recommended_release, dict):
+        public_recommended_release = {
+            key: recommended_release.get(key)
+            for key in (
+                "version",
+                "version_tag",
+                "delivery_mode",
+                "image_required",
+                "recommended_image_version",
+                "release_url",
+            )
+        }
     return {
         "current_version": status.get("current_version"),
         "update_available": bool(status.get("update_available")),
         "image_required": bool(status.get("image_required")),
+        "image_update_available": bool(status.get("image_update_available")),
+        "recommended_image_version": status.get("recommended_image_version"),
         "latest": public_latest,
+        "recommended_release": public_recommended_release,
     }
 
 

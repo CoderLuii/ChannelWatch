@@ -808,9 +808,9 @@ def test_corresponding_source_map_pins_exact_release_sources():
     )
 
     for required in (
-        "c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88",
-        "d1e795fbdab8a4744432467f32f348c6baa99f07abc05ffde710913f65c8261d",
-        "6e1f3bd1526e54623c48ea9f79f91fe354f8c5a0430473db89528c9846951585",
+        "48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83",
+        "a66d3a463d0be3cc537c269b0d3418746dda512417a975559a0eaa8a6406baaf",
+        "0e24db28cf5b7788413afe3fdc63075ca22bc4ecf74f5472304b391c2110e629",
         "7cc547b3ff8d45d540cd23144227af126a79d60c",
         "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73",
         "glibc/2.36-9+deb12u14",
@@ -829,22 +829,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_130_image_release():
+def test_release_config_declares_140_image_release():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.3.0"
+    assert config["version"] == "1.4.0"
     assert config["image_required"] is True
     assert config["delivery_mode"] == "image_required"
-    assert config["minimum_image_version"] == "1.3.0"
+    assert config["minimum_image_version"] == "1.4.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.3.0"
+    assert config["recommended_image_version"] == "1.4.0"
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.2.0", "1.2.1"]
+    assert config["compatible_source_application_versions"] == ["1.2.0", "1.2.1", "1.3.0"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.3.0 - Container compatibility and dependency updates"
+        "# ChannelWatch v1.4.0 - Maintenance windows and update choices"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -922,7 +922,7 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
     assert result.triggering_paths == ("scripts/release/release-config.json",)
 
 
-def test_release_version_surfaces_use_130_release():
+def test_release_version_surfaces_use_140_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -933,11 +933,11 @@ def test_release_version_surfaces_use_130_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.3.0"
-    assert metadata["versionTag"] == "v1.3.0"
-    assert metadata["dockerTag"] == "1.3.0"
-    assert metadata["helmChartVersion"] == "1.3.0"
-    assert metadata["helmAppVersion"] == "1.3.0"
+    assert metadata["version"] == "1.4.0"
+    assert metadata["versionTag"] == "v1.4.0"
+    assert metadata["dockerTag"] == "1.4.0"
+    assert metadata["helmChartVersion"] == "1.4.0"
+    assert metadata["helmAppVersion"] == "1.4.0"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -2433,7 +2433,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--target "${RELEASE_SHA}"' in workflow
     assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
     assert "python-version: '3.14'" in workflow
-    assert "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" in workflow
+    assert "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1" in workflow
     assert "node-version: '24'" in workflow
     assert "package-manager-cache: false" in workflow
 
@@ -2544,6 +2544,50 @@ def test_release_runs_the_complete_backend_suite_without_retry():
     assert "||" not in gate
 
 
+def test_release_workflow_scans_verified_single_platform_archives():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    candidate_scan = workflow.split(
+        "      - name: Scan exact nonpublishing candidate image", 1
+    )[1].split(
+        "\n      - name: Retain accepted upstream image vulnerabilities", 1
+    )[0]
+    release_scan = workflow.split(
+        "      - name: Scan exact release candidate images", 1
+    )[1].split(
+        "\n      - name: Retain accepted upstream image vulnerabilities", 1
+    )[0]
+
+    for scan, descriptor in (
+        (
+            candidate_scan,
+            'descriptor="dist/candidate-one/channelwatch-image-${tag}.json"',
+        ),
+        (release_scan, 'descriptor="${RUNNER_TEMP}/release-image.json"'),
+    ):
+        assert descriptor in scan
+        assert 'arch="${platform#linux/}"' in scan
+        assert "docker run --rm --pull=never" in scan
+        assert '"${SKOPEO_IMAGE}" copy' in scan
+        assert '--override-arch "${arch}"' in scan
+        assert "oci:/work/channelwatch.oci:release-candidate" in scan
+        assert 'docker-archive:/output/channelwatch-scan-${arch}.tar:' in scan
+        assert "expected_config_digest=" in scan
+        assert ".config.digest" in scan
+        assert "actual_config_digest=" in scan
+        assert 'config_architecture="$(tar -xOf' in scan
+        assert 'config_os="$(tar -xOf' in scan
+        assert '"${config_architecture}" != "${arch}"' in scan
+        assert '"${config_os}" != "linux"' in scan
+        assert '"${actual_config_digest}" != "${expected_config_digest}"' in scan
+        assert scan.count('--input "${scan_archive}"') == 2
+        assert '--input "${OCI_LAYOUT}"' not in scan
+        assert '--platform "${platform}"' not in scan
+
+    assert 'docker pull "${SKOPEO_IMAGE}"' in release_scan
+
+
 def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
@@ -2622,8 +2666,9 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "--severity CRITICAL,HIGH" in enforced_scan
     assert "--exit-code 1" in enforced_scan
     assert "Retain accepted upstream image vulnerabilities" in image_job
-    assert '--input "${OCI_LAYOUT}"' in image_job
-    assert '--platform "${platform}"' in image_job
+    assert scan_block.count('--input "${scan_archive}"') == 2
+    assert '--input "${OCI_LAYOUT}"' not in scan_block
+    assert '--platform "${platform}"' not in scan_block
 
     syft_index = image_job.index("      - name: Install pinned Syft")
     download_assets_index = image_job.index(
@@ -2647,7 +2692,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
         "anchore/sbom-action/download-syft@"
         "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c"
     ) in image_job
-    assert "syft-version: v1.51.0" in image_job
+    assert "syft-version: v1.54.1" in image_job
     assert '"oci-dir:${OCI_LAYOUT}"' in image_job
     assert '"spdx-json=${spdx}"' in image_job
     assert '"cyclonedx-json=${cyclonedx}"' in image_job
@@ -2706,6 +2751,10 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     )
     assert "Refusing to overwrite existing immutable tag" in publish_job
     assert 'if [ "${image_index_digest}" != "${APPROVED_IMAGE_INDEX_DIGEST}" ]' in publish_job
+    assert (
+        "      APPROVED_IMAGE_INDEX_DIGEST: "
+        "${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}"
+    ) in image_job.split("    steps:", 1)[0]
     assert "Published manifest does not contain the exact scanned platform descriptors" in publish_job
     assert '"docker://${repository}@${version_digest}"' not in publish_job
     assert '"${VERSION}-amd64"' not in publish_job

@@ -1,4 +1,4 @@
-import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus, KeyRecoveryResult, KeyRecoveryStatus } from "@/lib/types"
+import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus, KeyRecoveryResult, KeyRecoveryStatus, MaintenanceWindowsResponse } from "@/lib/types"
 import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
 import { encodeReportChallengeProof, solveReportChallenge, type ReportChallenge } from "@/lib/report-proof"
 
@@ -395,12 +395,16 @@ export interface UpdateStatus {
   active_bundle?: Record<string, unknown> | null
   latest?: UpdateManifestPayload | null
   trusted_target?: UpdateManifestPayload | null
+  compatible_app_release?: UpdateManifestPayload | null
+  recommended_release?: UpdateManifestPayload | null
   catalog_state?: "not_checked" | "checking" | "current" | "update_available" | "stale_cache" | "error"
   catalog_checked_at?: string | null
   cached_release_stale?: boolean
   operation_state?: "idle" | "checking" | "downloading" | "backing_up" | "applying" | "restarting" | "validating" | "rolling_back" | "failed"
   update_available: boolean
   image_required: boolean
+  image_update_available?: boolean
+  recommended_image_version?: string | null
   operation_busy?: boolean
   last_job?: UpdateJob | null
   rollback_available: boolean
@@ -413,8 +417,11 @@ export interface RecoveryUpdateStatus {
   current_version: string
   active_bundle?: { version?: string | null } | null
   latest?: UpdateManifestPayload | null
+  recommended_release?: UpdateManifestPayload | null
   update_available: boolean
   image_required: boolean
+  image_update_available?: boolean
+  recommended_image_version?: string | null
   recovery_waiting_for_newer_release?: boolean
   recovery_active: boolean
   bootstrap_csrf?: string | null
@@ -680,6 +687,101 @@ export async function fetchUpcomingRecordings(limit: number = 250): Promise<Reco
   }
 
   return response.json()
+}
+
+export interface FetchMaintenanceWindowsOptions {
+  minimumMinutes?: number
+  days?: number
+  startHour?: number
+  endHour?: number
+  weekdays?: number[]
+  dvrId?: string
+  signal?: AbortSignal
+}
+
+function isMaintenanceWindowsResponse(value: unknown): value is MaintenanceWindowsResponse {
+  if (!value || typeof value !== "object") return false
+  const response = value as Record<string, unknown>
+  const isIntegerInRange = (candidate: unknown, minimum: number, maximum: number) => (
+    typeof candidate === "number"
+    && Number.isInteger(candidate)
+    && candidate >= minimum
+    && candidate <= maximum
+  )
+  const isValidTimestamp = (candidate: unknown) => (
+    typeof candidate === "string" && Number.isFinite(Date.parse(candidate))
+  )
+  const isValidTimezone = (candidate: unknown) => {
+    if (typeof candidate !== "string" || !candidate) return false
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format(0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (
+    !isValidTimezone(response.timezone)
+    || !isIntegerInRange(response.minimum_minutes, 1, 1440)
+    || !isIntegerInRange(response.days, 1, 31)
+    || !isIntegerInRange(response.start_hour, 0, 23)
+    || !isIntegerInRange(response.end_hour, 0, 24)
+    || !Array.isArray(response.weekdays)
+    || !response.weekdays.every((weekday) => isIntegerInRange(weekday, 0, 6))
+    || !Array.isArray(response.dvrs)
+  ) return false
+
+  return response.dvrs.every((candidate) => {
+    if (!candidate || typeof candidate !== "object") return false
+    const dvr = candidate as Record<string, unknown>
+    if (
+      typeof dvr.dvr_id !== "string"
+      || typeof dvr.dvr_name !== "string"
+      || typeof dvr.status !== "string"
+      || !["available", "truncated", "unknown", "offline"].includes(dvr.status)
+      || (dvr.coverage_end !== null && !isValidTimestamp(dvr.coverage_end))
+      || typeof dvr.message !== "string"
+      || !Array.isArray(dvr.windows)
+    ) return false
+
+    return dvr.windows.every((candidateWindow) => {
+      if (!candidateWindow || typeof candidateWindow !== "object") return false
+      const window = candidateWindow as Record<string, unknown>
+      if (
+        !isValidTimestamp(window.start)
+        || !isValidTimestamp(window.end)
+        || !isIntegerInRange(window.duration_minutes, 1, 31 * 24 * 60)
+      ) return false
+      return Date.parse(window.start as string) < Date.parse(window.end as string)
+    })
+  })
+}
+
+export async function fetchMaintenanceWindows(
+  options: FetchMaintenanceWindowsOptions = {},
+): Promise<MaintenanceWindowsResponse> {
+  const params = new URLSearchParams({
+    minimum_minutes: String(options.minimumMinutes ?? 60),
+    days: String(options.days ?? 7),
+    start_hour: String(options.startHour ?? 0),
+    end_hour: String(options.endHour ?? 24),
+  })
+  if (options.dvrId && options.dvrId !== "all") params.set("dvr_id", options.dvrId)
+  if (options.weekdays?.length) params.set("weekdays", options.weekdays.join(","))
+  const response = await fetch(`${API_BASE}/v1/maintenance-windows?${params.toString()}`, {
+    headers: authHeaders(),
+    signal: options.signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP error ${response.status}`)
+  }
+
+  const payload: unknown = await response.json()
+  if (!isMaintenanceWindowsResponse(payload)) {
+    throw new Error("Invalid maintenance windows response")
+  }
+  return payload
 }
 
 export async function fetchActiveRecordingsCount(): Promise<number> {

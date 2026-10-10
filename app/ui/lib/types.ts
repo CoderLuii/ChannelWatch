@@ -259,6 +259,33 @@ export interface RecordingInfo {
   dvr_name?: string
 }
 
+export type MaintenanceScheduleStatus = "available" | "truncated" | "unknown" | "offline"
+
+export interface MaintenanceWindow {
+  start: string
+  end: string
+  duration_minutes: number
+}
+
+export interface DvrMaintenanceWindows {
+  dvr_id: string
+  dvr_name: string
+  status: MaintenanceScheduleStatus
+  coverage_end: string | null
+  windows: MaintenanceWindow[]
+  message: string
+}
+
+export interface MaintenanceWindowsResponse {
+  timezone: string
+  minimum_minutes: number
+  days: number
+  start_hour: number
+  end_hour: number
+  weekdays: number[]
+  dvrs: DvrMaintenanceWindows[]
+}
+
 export interface ActivityItem {
   id: string
   type: string

@@ -38,7 +38,7 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     )
 
     assert "corepack enable" in dockerfile
-    assert '"packageManager": "pnpm@11.28.3+' in package_json
+    assert '"packageManager": "pnpm@11.28.5+' in package_json
     assert "pnpm install --frozen-lockfile" in dockerfile
     assert "/venv/bin/python -m pip uninstall --yes pip setuptools" in dockerfile
 
@@ -50,7 +50,7 @@ def test_dockerfile_pins_reviewed_official_python_base_for_both_python_stages():
 
     pinned_base = (
         "python:3.14-slim-bookworm@sha256:"
-        "c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88"
+        "48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83"
     )
     assert dockerfile.count(f"FROM {pinned_base}") == 2
     assert f"FROM {pinned_base} AS python-deps" in dockerfile

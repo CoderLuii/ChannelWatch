@@ -6,8 +6,8 @@ Security fixes are provided for the current stable release line.
 
 | Version line | Supported |
 |---|---|
-| 1.3.x | Yes |
-| 1.2.x and earlier | No |
+| 1.4.x | Yes |
+| 1.3.x and earlier | No |
 
 If you are still on an older build, upgrade before reporting a security issue unless the issue itself blocks upgrade.
 

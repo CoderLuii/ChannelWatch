@@ -145,6 +145,14 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
       {!status.update_available ? <p role="status" className="text-sm text-muted-foreground">{t("runtimeRecovery.updateCurrent")}</p> : null}
       {!authorizationReady ? <p role="status" className="text-sm text-muted-foreground">{t("runtimeRecovery.updateSignInRequired")}</p> : null}
       {status.image_required ? <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("runtimeRecovery.updateImageRequired")}</p> : null}
+      {status.update_available && !status.image_required && status.image_update_available && status.recommended_image_version ? (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-300">
+          {t("runtimeRecovery.intermediateUpdateAvailable", {
+            appVersion: latestVersionLabel,
+            imageVersion: `v${status.recommended_image_version.replace(/^v/, "")}`,
+          })}
+        </p>
+      ) : null}
       {message ? <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{message}</p> : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
     </div>

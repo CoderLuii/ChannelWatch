@@ -32,6 +32,7 @@
   {"method":"POST","path":"/api/v1/dvrs/test-connection","auth":"middleware","minimum_role":"operator","legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/dvrs/test-connection"},
   {"method":"GET","path":"/api/discover-servers","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/discover-servers"},
   {"method":"GET","path":"/api/recordings/upcoming","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/recordings/upcoming"},
+  {"method":"GET","path":"/api/v1/maintenance-windows","auth":"middleware","minimum_role":null,"legacy_alias":false,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/v1/maintenance-windows"},
   {"method":"GET","path":"/api/recordings/active","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/recordings/active"},
   {"method":"GET","path":"/api/streams/active","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/streams/active"},
   {"method":"GET","path":"/api/streams/details","auth":"middleware","minimum_role":null,"legacy_alias":true,"error_shape":"structured-detail","client":"lib/api.ts","client_marker":"/streams/details"},

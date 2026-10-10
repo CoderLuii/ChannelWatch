@@ -882,6 +882,55 @@
       ],
       "revocation_state": "active",
       "publication_time": "2026-10-06T04:00:09Z"
+    },
+    {
+      "version": "1.3.0",
+      "version_tag": "v1.3.0",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": true,
+      "delivery_mode": "image_required",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.3.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.3.0",
+      "automatic_install_allowed": false,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.3.0",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.3.0/channelwatch-app-v1.3.0.zip",
+      "bundle_sha256": "682e048bec2c9fe4f21cd67d37a6c8ba1e6ad6252dcb30d6d1ab4da3ed827b06",
+      "bundle_signature": "1HAZEbWGpAkJMC+3ctFaKKrWJ+9Qdm15uk3EJ690mvgjoiMQqxc7wbAaDuxlstrcooXxeJaEFN4bKh9/nM0IBg==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-10-06T07:09:06Z",
+      "highlights": [
+        "Container image update required. Pull v1.3.0 and recreate the container with the same `/config` volume and existing external storage key configuration.",
+        "Use the official Python 3.14.8 Debian Bookworm image in both Python stages. This restores the x86-64-v1 CPU baseline for older AMD64 hosts.",
+        "Refresh compatible timezone data, UI libraries, PostCSS, and release scanning tools. Keep Apprise on its supported 1.x notification interface.",
+        "Update the container source map and license archive for the Debian base.",
+        "Allow a configured repository runner to handle trusted maintainer tag releases. Pull requests keep using GitHub-hosted runners.",
+        "Keep `channelwatch doctor` working with the container's Python environment.",
+        "Update the frontend's compatible `source-map-js` dependency to address its indexed-source-map denial-of-service advisory.",
+        "Retry temporary connection failures while fetching pinned release license texts."
+      ],
+      "automatic_install_after": "2026-10-13T07:09:06Z",
+      "compatible_source_application_versions": [
+        "1.2.0",
+        "1.2.1"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-10-06T07:09:06Z"
     }
   ]
 }

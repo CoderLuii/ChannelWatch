@@ -70,6 +70,7 @@ from core.helpers.soft_delete_manager import (
     soft_delete_dvr as _soft_delete_dvr,
 )
 from core.helpers.url_validator import is_safe_url, redact_url
+from core.maintenance_windows import calculate_maintenance_windows
 from core.watchdog import load_watchdog_snapshot, summarize_enabled_dvrs
 from .schemas import (
     AppSettings,
@@ -82,6 +83,8 @@ from .schemas import (
     SetupStatusResponse,
     NotificationDestinationSafetyRequest,
     NotificationDestinationSafetyResponse,
+    DvrMaintenanceWindows,
+    MaintenanceWindowsResponse,
 )
 import secrets
 import uuid
@@ -98,6 +101,7 @@ import threading
 import re
 import unicodedata
 import logging
+from zoneinfo import ZoneInfoNotFoundError
 from contextvars import ContextVar
 from xml.sax.saxutils import escape as xml_escape
 
@@ -4840,6 +4844,115 @@ async def _render_calendar_feed() -> str:
 async def get_upcoming_recordings(response: Response, limit: int = 250):
     response.headers["X-Deprecated-API"] = "Use /api/v1/"
     return await _collect_upcoming_recordings(limit=limit)
+
+
+@app.get(
+    "/api/v1/maintenance-windows",
+    response_model=MaintenanceWindowsResponse,
+    tags=["DVR V1"],
+)
+async def get_maintenance_windows_v1(
+    minimum_minutes: int = Query(default=60, ge=1, le=1440),
+    days: int = Query(default=7, ge=1, le=31),
+    start_hour: int = Query(default=0, ge=0, le=23),
+    end_hour: int = Query(default=24, ge=0, le=24),
+    weekdays: Optional[str] = Query(default=None, pattern=r"^[0-6](,[0-6])*$"),
+    dvr_id: Optional[str] = Query(default=None),
+):
+    settings = await _load_settings_async()
+    timezone_name = str(getattr(settings, "tz", "UTC") or "UTC")
+    servers = await _get_dvr_servers_async()
+    if dvr_id:
+        servers = [entry for entry in servers if entry[0] == dvr_id]
+        if not servers:
+            raise structured_error(
+                ErrorCode.DVR_NOT_FOUND, message=f"DVR {dvr_id!r} not found"
+            )
+
+    observed_at = datetime.now(_tz.utc)
+    selected_weekdays = (
+        {int(value) for value in weekdays.split(",")} if weekdays else None
+    )
+
+    async def _collect_for_dvr(entry) -> DvrMaintenanceWindows:
+        server_id, server_name, server_url = entry
+        try:
+            schedule_response = await _safe_dvr_get_url(
+                f"{server_url}/dvr/jobs", timeout=5
+            )
+        except (httpx.RequestError, OSError, asyncio.TimeoutError):
+            return DvrMaintenanceWindows(
+                dvr_id=server_id,
+                dvr_name=server_name,
+                status="offline",
+                message="The DVR schedule could not be reached, so no time was marked free.",
+            )
+        except Exception:
+            log.exception(
+                "Unexpected maintenance schedule request failure for DVR %s",
+                server_id,
+            )
+            return DvrMaintenanceWindows(
+                dvr_id=server_id,
+                dvr_name=server_name,
+                status="offline",
+                message="The DVR schedule could not be reached, so no time was marked free.",
+            )
+
+        if schedule_response.status_code != 200:
+            return DvrMaintenanceWindows(
+                dvr_id=server_id,
+                dvr_name=server_name,
+                status="offline",
+                message="The DVR schedule could not be reached, so no time was marked free.",
+            )
+
+        try:
+            result = calculate_maintenance_windows(
+                schedule_response.json(),
+                now=observed_at,
+                timezone_name=timezone_name,
+                horizon_days=days,
+                minimum_minutes=minimum_minutes,
+                start_hour=start_hour,
+                end_hour=end_hour,
+                weekdays=selected_weekdays,
+            )
+        except (json.JSONDecodeError, ZoneInfoNotFoundError):
+            return DvrMaintenanceWindows(
+                dvr_id=server_id,
+                dvr_name=server_name,
+                status="unknown",
+                message="The DVR schedule could not be verified, so no time was marked free.",
+            )
+        except Exception:
+            log.exception(
+                "Unexpected maintenance-window calculation failure for DVR %s",
+                server_id,
+            )
+            return DvrMaintenanceWindows(
+                dvr_id=server_id,
+                dvr_name=server_name,
+                status="unknown",
+                message="The DVR schedule could not be verified, so no time was marked free.",
+            )
+
+        return DvrMaintenanceWindows(
+            dvr_id=server_id,
+            dvr_name=server_name,
+            **result,
+        )
+
+    results = await _bounded_dvr_probe_gather(servers, _collect_for_dvr)
+    return MaintenanceWindowsResponse(
+        timezone=timezone_name,
+        minimum_minutes=minimum_minutes,
+        days=days,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        weekdays=sorted(selected_weekdays or []),
+        dvrs=results,
+    )
 
 
 # Canonical feed URLs live under /api/v1/feeds/. Bare aliases reuse these

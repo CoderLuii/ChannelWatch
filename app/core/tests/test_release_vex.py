@@ -40,7 +40,7 @@ def test_current_release_vex_has_no_stale_runtime_dispositions():
         module.validate_vex(document, expected_version="1.2.0")
 
 
-@pytest.mark.parametrize("version", ["1.2.1", "1.3.0"])
+@pytest.mark.parametrize("version", ["1.2.1", "1.3.0", "1.4.0"])
 def test_future_release_vex_accepts_empty_reviewed_statements(version):
     document = json.loads(
         (ROOT / "deploy/security/channelwatch-v1.2.0.openvex.json").read_text(

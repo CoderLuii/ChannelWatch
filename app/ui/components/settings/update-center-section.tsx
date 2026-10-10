@@ -39,12 +39,12 @@ function versionLabel(status: UpdateStatus | null): string {
   return active ? `${status.current_version} (${t("updates.activeBundle", { version: String(active) })})` : status.current_version
 }
 
-function trustedReleaseLabel(status: UpdateStatus | null): string {
+function compatibleAppReleaseLabel(status: UpdateStatus | null): string {
   if (!status) return t("updates.notChecked")
   if (status.catalog_state === "checking") return t("updates.catalog.checking")
   if (status.catalog_state === "error") return t("updates.catalog.unavailable")
-  const target = status.trusted_target
-  if (target && status.catalog_state === "update_available") {
+  const target = status.compatible_app_release ?? (!status.image_required ? status.trusted_target : null)
+  if (target && status.update_available && !status.image_required) {
     return target.version_tag || `v${target.version}`
   }
   if (["current", "stale_cache"].includes(status.catalog_state ?? "")) {
@@ -337,11 +337,17 @@ export function UpdateCenterSection() {
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
               <p className="text-xs uppercase text-muted-foreground">{t("updates.imageVersion")}</p>
               <p className="mt-1 text-lg font-semibold">{status?.image_version ? `v${status.image_version.replace(/^v/, "")}` : t("common.unknown")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{status?.image_refresh_recommended ? t("updates.imageRefreshRecommended") : t("updates.imageCompatible")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {status?.image_update_available && status.recommended_image_version
+                  ? t("updates.imageUpdateAvailable", { version: `v${status.recommended_image_version.replace(/^v/, "")}` })
+                  : status?.image_refresh_recommended
+                    ? t("updates.imageRefreshRecommended")
+                    : t("updates.imageCompatible")}
+              </p>
             </div>
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.latestVersion")}</p>
-              <p className="mt-1 text-lg font-semibold">{trustedReleaseLabel(status)}</p>
+              <p className="text-xs uppercase text-muted-foreground">{t("updates.compatibleAppVersion")}</p>
+              <p className="mt-1 text-lg font-semibold">{compatibleAppReleaseLabel(status)}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {status?.catalog_state === "update_available"
                   ? t(`updates.delivery.${status.delivery_mode ?? "app_update"}`)
@@ -358,7 +364,14 @@ export function UpdateCenterSection() {
           <Alert aria-live="polite" className="border-sky-400/30 bg-sky-500/10 text-sky-900 dark:text-sky-100 [&>svg]:text-sky-500">
             <PackageCheck className="h-4 w-4" />
             <AlertTitle>{primaryMessage}</AlertTitle>
-            <AlertDescription>{t("updates.bootstrapNote")}</AlertDescription>
+            <AlertDescription>
+              {status?.update_available && !status.image_required && status.image_update_available && status.recommended_image_version
+                ? t("updates.intermediateAppAvailable", {
+                    appVersion: latestVersion ?? t("common.unknown"),
+                    imageVersion: `v${status.recommended_image_version.replace(/^v/, "")}`,
+                  })
+                : t("updates.bootstrapNote")}
+            </AlertDescription>
           </Alert>
 
           {status?.cached_release_stale ? (

@@ -18,7 +18,7 @@ RUN pnpm build
 #-----------------------------------------------------------------------------
 # Stage 2: Python Dependencies
 #-----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88 AS python-deps
+FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS python-deps
 
 # This build-only stage installs dependencies and is not the shipped runtime.
 # hadolint ignore=DL3002,DL3066
@@ -41,7 +41,7 @@ RUN ["/usr/local/bin/python", "/tmp/copyleft_licenses.py", "--output-dir", "/rel
 #-----------------------------------------------------------------------------
 # Stage 3: Application
 #-----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88
+FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
 
 # The entrypoint needs root only to repair /config ownership for configurable
 # PUID/PGID, then verifies a fail-closed UID/GID and group drop before exec.
@@ -50,7 +50,7 @@ FROM python:3.14-slim-bookworm@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.3.0
+ARG VERSION=1.4.0
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

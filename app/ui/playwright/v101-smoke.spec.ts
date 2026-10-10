@@ -103,7 +103,7 @@ test("Active Streams renders recorded-content title and clean client metadata", 
   }))
 
   await page.goto("/#overview")
-  await page.getByRole("button", { name: "Refresh" }).click()
+  await page.getByLabel("Refresh", { exact: true }).click()
 
   await expect(page.getByText("bedroom channels watching WYFF News 4 at 6pm")).toBeVisible()
   const activeStreamsCard = page.getByText("Active Streams").locator("..", { hasText: "Active Streams" }).locator("..")
@@ -640,6 +640,56 @@ test("Update Center ignores an older cached release and offers v1.0.1 as an app 
   await page.getByRole("button", { name: "Check for updates" }).click()
   await expect(page.getByText("v1.0.1", { exact: true })).toBeVisible()
   await expect(page.getByText("A newer container image is required.")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
+})
+
+test("Update Center keeps a compatible app update visible below a newer image release", async ({ page }) => {
+  await page.route("**/api/v1/update/status", (route) => fulfillJson(route, {
+    current_version: "1.2.0",
+    image_version: "1.2.0",
+    runtime_abi: "channelwatch-runtime-v1",
+    launcher_protocol: 3,
+    runtime_source: "image",
+    delivery_mode: "app_update",
+    image_refresh_recommended: true,
+    image_update_available: true,
+    recommended_image_version: "1.3.0",
+    settings_schema_version: 7,
+    active_bundle: null,
+    catalog_state: "update_available",
+    catalog_checked_at: "2026-10-10T12:05:00Z",
+    trusted_target: {
+      version: "1.2.1",
+      version_tag: "v1.2.1",
+      image_required: false,
+      delivery_mode: "app_update",
+      runtime_abi: "channelwatch-runtime-v1",
+      settings_schema_version: 7,
+      highlights: ["Compatible updater repair."],
+    },
+    recommended_release: {
+      version: "1.3.0",
+      version_tag: "v1.3.0",
+      image_required: true,
+      delivery_mode: "image_required",
+      recommended_image_version: "1.3.0",
+    },
+    cached_release_stale: false,
+    operation_state: "idle",
+    operation_busy: false,
+    latest: null,
+    update_available: true,
+    image_required: false,
+    last_job: null,
+    rollback_available: false,
+    auth_disabled_warning: false,
+  }))
+
+  await page.goto("/#settings:updates")
+
+  await expect(page.getByText("v1.2.1", { exact: true })).toBeVisible()
+  await expect(page.getByText("Container image v1.3.0 is also available.")).toBeVisible()
+  await expect(page.getByText(/Install the signed v1\.2\.1 app update now/)).toBeVisible()
   await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
 })
 

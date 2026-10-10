@@ -18,6 +18,7 @@ from core.update_catalog import (
     DeliveryMode,
     LauncherProtocol,
     normalize_catalog,
+    select_catalog_app_release,
     select_catalog_release,
 )
 from core.update_center import (
@@ -153,6 +154,49 @@ def _normalized_catalog(data: bytes, public: dict[str, str]) -> dict:
         canonical_payload=canonical_payload_bytes,
         validate_url=validate_trusted_url,
     )
+
+
+def _mixed_image_and_app_catalog(
+    private: Ed25519PrivateKey,
+    bundle: bytes,
+    *,
+    app_sources: list[str] | None = None,
+) -> bytes:
+    app_release = json.loads(
+        _catalog(
+            private,
+            bundle,
+            version="1.2.1",
+            sources=app_sources or ["1.2.0"],
+        )
+    )["payload"]["releases"][0]
+    image_release = json.loads(
+        _catalog(
+            private,
+            bundle,
+            version="1.3.0",
+            sources=["1.2.0", "1.2.1"],
+        )
+    )["payload"]["releases"][0]
+    image_release["delivery_mode"] = "image_required"
+    payload = {
+        "channel": "stable",
+        "published_at": "2026-10-06T00:00:00Z",
+        "releases": [image_release, app_release],
+    }
+    return json.dumps(
+        {
+            "schema": 2,
+            "payload": payload,
+            "signature": {
+                "alg": "ed25519",
+                "key_id": "test-key",
+                "value": base64.b64encode(
+                    private.sign(canonical_payload_bytes(payload))
+                ).decode("ascii"),
+            },
+        }
+    ).encode()
 
 
 def test_schema_two_catalog_preserves_canonical_contract_and_selects_protocol_one():
@@ -299,6 +343,143 @@ def test_catalog_selects_retained_intermediate_when_latest_is_incompatible():
     assert selected.considered_versions == ("0.9.20", "0.9.19")
 
 
+def test_catalog_selects_compatible_app_release_below_newer_image_release():
+    private, public = _key_pair()
+    catalog = _normalized_catalog(
+        _mixed_image_and_app_catalog(private, _bundle("1.2.1")), public
+    )
+
+    overall = select_catalog_release(
+        catalog,
+        current_version="1.2.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=LauncherProtocol.RECOVERY_CAPABLE,
+    )
+    app = select_catalog_app_release(
+        catalog,
+        current_version="1.2.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=LauncherProtocol.RECOVERY_CAPABLE,
+    )
+
+    assert overall.release["version"] == "1.3.0"
+    assert overall.release["delivery_mode"] == "image_required"
+    assert app.release["version"] == "1.2.1"
+    assert app.considered_versions == ("1.3.0", "1.2.1")
+
+
+def test_update_document_exposes_app_target_and_image_recommendation_separately():
+    private, public = _key_pair()
+    document = read_update_document_bytes(
+        _mixed_image_and_app_catalog(private, _bundle("1.2.1")),
+        public_keys=public,
+        current_version="1.2.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=3,
+    )
+
+    assert document["payload"]["version"] == "1.2.1"
+    assert document["payload"]["image_required"] is False
+    assert document["catalog"]["compatible_app_release"]["version"] == "1.2.1"
+    assert document["catalog"]["latest_compatible_release"]["version"] == "1.3.0"
+    assert document["catalog"]["latest_compatible_release"]["image_required"] is True
+
+
+def test_update_document_uses_image_release_when_no_forward_app_update_exists():
+    private, public = _key_pair()
+    catalog = _mixed_image_and_app_catalog(private, _bundle("1.2.1"))
+
+    up_to_date = read_update_document_bytes(
+        catalog,
+        public_keys=public,
+        current_version="1.2.1",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=3,
+    )
+    incompatible = read_update_document_bytes(
+        _mixed_image_and_app_catalog(
+            private, _bundle("1.2.1"), app_sources=["1.1.0"]
+        ),
+        public_keys=public,
+        current_version="1.2.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=3,
+    )
+
+    assert up_to_date["payload"]["version"] == "1.3.0"
+    assert up_to_date["payload"]["image_required"] is True
+    assert incompatible["payload"]["version"] == "1.3.0"
+    assert incompatible["payload"]["image_required"] is True
+
+
+def test_mixed_catalog_reports_current_at_latest_image_release(tmp_path: Path):
+    private, public = _key_pair()
+    document = read_update_document_bytes(
+        _mixed_image_and_app_catalog(private, _bundle("1.2.1")),
+        public_keys=public,
+        current_version="1.3.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=3,
+    )
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.3.0",
+        image_version="1.3.0",
+        launcher_protocol=3,
+        public_keys=public,
+    )
+    manager._ensure_runtime()
+    manager.latest_path.write_text(json.dumps(document), encoding="utf-8")
+
+    status = manager.status()
+
+    assert status["latest"]["version"] == "1.3.0"
+    assert status["compatible_app_release"] is None
+    assert status["update_available"] is False
+    assert status["image_required"] is False
+    assert status["image_update_available"] is False
+
+
+def test_intermediate_selection_still_rejects_bad_catalog_signature_and_release():
+    private, public = _key_pair()
+    tampered = json.loads(
+        _mixed_image_and_app_catalog(private, _bundle("1.2.1"))
+    )
+    tampered["payload"]["releases"][1]["highlights"] = ["unsigned change"]
+    with pytest.raises(UpdateManifestError, match="signature could not be verified"):
+        read_update_document_bytes(
+            json.dumps(tampered).encode(),
+            public_keys=public,
+            current_version="1.2.0",
+            runtime_abi=RUNTIME_ABI,
+            settings_schema_version=7,
+            launcher_protocol=3,
+        )
+
+    malformed = json.loads(
+        _mixed_image_and_app_catalog(private, _bundle("1.2.1"))
+    )
+    malformed["payload"]["releases"][1]["bundle_sha256"] = "bad"
+    malformed["signature"]["value"] = base64.b64encode(
+        private.sign(canonical_payload_bytes(malformed["payload"]))
+    ).decode("ascii")
+    with pytest.raises(UpdateManifestError, match="bundle_sha256 is invalid"):
+        read_update_document_bytes(
+            json.dumps(malformed).encode(),
+            public_keys=public,
+            current_version="1.2.0",
+            runtime_abi=RUNTIME_ABI,
+            settings_schema_version=7,
+            launcher_protocol=3,
+        )
+
+
 def test_schema_two_catalog_rejects_automatic_install_before_24_hour_delay():
     private, public = _key_pair()
     raw = json.loads(_catalog(private, _bundle("0.9.19")))
@@ -353,6 +534,33 @@ def test_update_manager_checks_and_applies_schema_two_catalog(tmp_path: Path):
     assert checked["update_available"] is True
     assert checked["delivery_mode"] == "app_update_with_image_refresh"
     assert manager.apply("0.9.19")["status"] == "restarting"
+
+
+def test_update_manager_applies_intermediate_app_target_and_keeps_image_recommendation(
+    tmp_path: Path,
+):
+    private, public = _key_pair()
+    bundle = _bundle("1.2.1")
+    catalog_bytes = _mixed_image_and_app_catalog(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.2.0",
+        image_version="1.2.0",
+        launcher_protocol=3,
+        public_keys=public,
+        fetcher=lambda url, _limit: bundle if url.endswith(".zip") else catalog_bytes,
+        restart_callable=lambda: True,
+    )
+
+    checked = manager.check()
+    assert checked["trusted_target"]["version"] == "1.2.1"
+    assert checked["compatible_app_release"]["version"] == "1.2.1"
+    assert checked["update_available"] is True
+    assert checked["image_required"] is False
+    assert checked["recommended_release"]["version"] == "1.3.0"
+    assert checked["image_update_available"] is True
+    assert checked["recommended_image_version"] == "1.3.0"
+    assert manager.apply("1.2.1")["status"] == "restarting"
 
 
 @pytest.mark.parametrize(
@@ -2456,6 +2664,41 @@ def test_recovery_status_filters_active_runtime_path(tmp_path: Path):
     status = service.status()
     assert "active_bundle" not in status
     assert "/private/runtime/path" not in json.dumps(status)
+
+
+def test_recovery_status_separates_compatible_app_target_from_image_recommendation(
+    tmp_path: Path,
+):
+    private, public = _key_pair()
+    service = OfficialRecoveryUpdateService(
+        config_dir=tmp_path,
+        current_version="1.2.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        image_version="1.2.0",
+        launcher_protocol=3,
+    )
+    service.manager.public_keys = public
+    service.manager._ensure_runtime()
+    document = read_update_document_bytes(
+        _mixed_image_and_app_catalog(private, _bundle("1.2.1")),
+        public_keys=public,
+        current_version="1.2.0",
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=3,
+        recovery=True,
+    )
+    service.manager.latest_path.write_text(json.dumps(document), encoding="utf-8")
+
+    status = service._public_status(service.manager.status())
+
+    assert status["latest"]["version"] == "1.2.1"
+    assert status["image_required"] is False
+    assert status["image_update_available"] is True
+    assert status["recommended_image_version"] == "1.3.0"
+    assert status["recommended_release"]["version"] == "1.3.0"
+    assert "bundle_url" not in status["recommended_release"]
 
 
 def test_recovery_service_waits_for_a_newer_exact_signed_release(

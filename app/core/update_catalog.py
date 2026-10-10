@@ -365,10 +365,57 @@ def select_catalog_release(
     launcher_protocol: int,
     recovery: bool = False,
 ) -> CatalogSelection:
+    return _select_catalog_release(
+        catalog,
+        current_version=current_version,
+        runtime_abi=runtime_abi,
+        settings_schema_version=settings_schema_version,
+        launcher_protocol=launcher_protocol,
+        recovery=recovery,
+    )
+
+
+def select_catalog_app_release(
+    catalog: dict[str, Any],
+    *,
+    current_version: str,
+    runtime_abi: str,
+    settings_schema_version: int,
+    launcher_protocol: int,
+    recovery: bool = False,
+) -> CatalogSelection:
+    """Select the highest compatible release that can install in-app."""
+
+    return _select_catalog_release(
+        catalog,
+        current_version=current_version,
+        runtime_abi=runtime_abi,
+        settings_schema_version=settings_schema_version,
+        launcher_protocol=launcher_protocol,
+        recovery=recovery,
+        app_delivery_only=True,
+    )
+
+
+def _select_catalog_release(
+    catalog: dict[str, Any],
+    *,
+    current_version: str,
+    runtime_abi: str,
+    settings_schema_version: int,
+    launcher_protocol: int,
+    recovery: bool = False,
+    app_delivery_only: bool = False,
+) -> CatalogSelection:
     releases: Iterable[dict[str, Any]] = catalog["payload"]["releases"]
     considered: list[str] = []
     for release in releases:
         considered.append(str(release["version"]))
+        if (
+            app_delivery_only
+            and release["delivery_mode"] == DeliveryMode.IMAGE_REQUIRED.value
+        ):
+            continue
         if _release_compatible(
             release,
             current_version=current_version,
@@ -385,7 +432,13 @@ def select_catalog_release(
     return CatalogSelection(
         release=None,
         reason=(
-            "no-compatible-recovery-release" if recovery else "no-compatible-release"
+            "no-compatible-recovery-app-release"
+            if recovery and app_delivery_only
+            else "no-compatible-app-release"
+            if app_delivery_only
+            else "no-compatible-recovery-release"
+            if recovery
+            else "no-compatible-release"
         ),
         considered_versions=tuple(considered),
     )

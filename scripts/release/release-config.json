@@ -1,16 +1,17 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "image_required": true,
   "delivery_mode": "image_required",
-  "minimum_image_version": "1.3.0",
+  "minimum_image_version": "1.4.0",
   "updater_protocol": 2,
-  "recommended_image_version": "1.3.0",
-  "publication_time": "2026-10-06T07:09:06Z",
-  "automatic_install_after": "2026-10-13T07:09:06Z",
+  "recommended_image_version": "1.4.0",
+  "publication_time": "2026-10-10T15:45:00Z",
+  "automatic_install_after": "2026-10-17T15:45:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.2.0",
-    "1.2.1"
+    "1.2.1",
+    "1.3.0"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -18,6 +19,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.3.0 - Container compatibility and dependency updates",
+  "release_heading": "# ChannelWatch v1.4.0 - Maintenance windows and update choices",
   "verification_assets": true
 }

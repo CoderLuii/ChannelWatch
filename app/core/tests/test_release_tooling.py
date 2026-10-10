@@ -896,22 +896,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_140_image_release():
+def test_release_config_declares_141_in_app_release_on_140_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.4.0"
-    assert config["image_required"] is True
-    assert config["delivery_mode"] == "image_required"
+    assert config["version"] == "1.4.1"
+    assert config["image_required"] is False
+    assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.4.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.4.0"
+    assert config["recommended_image_version"] == "1.4.1"
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.2.0", "1.2.1", "1.3.0"]
+    assert config["compatible_source_application_versions"] == ["1.4.0"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.4.0 - Maintenance windows and update choices"
+        "# ChannelWatch v1.4.1 - Corrected container license inventory"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -970,7 +970,7 @@ def test_release_version_policy_enforces_single_digit_patch_cadence():
         )
 
 
-def test_release_impact_classifier_forces_v1_minor_milestone_image():
+def test_release_impact_classifier_keeps_v1_patch_in_app():
     module = _load_script(
         "release_impact_version_policy",
         "scripts/release/classify-release-impact.py",
@@ -980,16 +980,16 @@ def test_release_impact_classifier_forces_v1_minor_milestone_image():
         "release_version_policy_for_classifier",
         "scripts/release/release_version_policy.py",
     )
-    policy = policy_module.release_version_policy("1.4.0")
+    policy = policy_module.release_version_policy("1.4.1")
 
     result = module.apply_release_version_policy(empty, policy)
 
-    assert result.delivery_mode == "image_required"
-    assert result.image_required is True
-    assert result.triggering_paths == ("scripts/release/release-config.json",)
+    assert result.delivery_mode == "app_update"
+    assert result.image_required is False
+    assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_140_release():
+def test_release_version_surfaces_use_141_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1000,11 +1000,11 @@ def test_release_version_surfaces_use_140_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.4.0"
-    assert metadata["versionTag"] == "v1.4.0"
-    assert metadata["dockerTag"] == "1.4.0"
-    assert metadata["helmChartVersion"] == "1.4.0"
-    assert metadata["helmAppVersion"] == "1.4.0"
+    assert metadata["version"] == "1.4.1"
+    assert metadata["versionTag"] == "v1.4.1"
+    assert metadata["dockerTag"] == "1.4.1"
+    assert metadata["helmChartVersion"] == "1.4.1"
+    assert metadata["helmAppVersion"] == "1.4.1"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(

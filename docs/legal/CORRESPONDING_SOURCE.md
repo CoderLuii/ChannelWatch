@@ -1,6 +1,6 @@
 # ChannelWatch Corresponding Source and Rebuild Map
 
-This document records the source and notice material for the Debian components in the ChannelWatch v1.4.0 container image. ChannelWatch does not modify these upstream components. The final release SBOMs for the published amd64 and arm64 images are the authoritative package inventories.
+This document records the source and notice material for the Debian components in the ChannelWatch v1.4.1 container image. ChannelWatch does not modify these upstream components. The final release SBOMs for the published amd64 and arm64 images are the authoritative package inventories.
 
 <!-- cspell:ignore adduser apt passwd dpkg debconf debianutils diffutils e2fsprogs logsave gnupg gpgv acl attr libcap cdebconf libffi libxcrypt libgcrypt gmp gnutls libhogweed libnettle libidn libmd p11 libpam libtasn libunistring mawk netbase sysvinit usrmerge xxhash Sleepycat coreutils libbz -->
 

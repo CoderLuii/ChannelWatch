@@ -1,17 +1,15 @@
 {
-  "version": "1.4.0",
-  "image_required": true,
-  "delivery_mode": "image_required",
+  "version": "1.4.1",
+  "image_required": false,
+  "delivery_mode": "app_update",
   "minimum_image_version": "1.4.0",
   "updater_protocol": 2,
-  "recommended_image_version": "1.4.0",
-  "publication_time": "2026-10-10T17:55:00Z",
-  "automatic_install_after": "2026-10-17T17:55:00Z",
+  "recommended_image_version": "1.4.1",
+  "publication_time": "2026-10-10T19:10:00Z",
+  "automatic_install_after": "2026-10-17T19:10:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
-    "1.2.0",
-    "1.2.1",
-    "1.3.0"
+    "1.4.0"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -19,6 +17,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.4.0 - Maintenance windows and update choices",
+  "release_heading": "# ChannelWatch v1.4.1 - Corrected container license inventory",
   "verification_assets": true
 }

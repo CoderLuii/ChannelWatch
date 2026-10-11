@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
@@ -70,6 +73,38 @@ def validate_release_config(config: dict[str, object]) -> ReleaseVersionPolicy |
     return policy
 
 
+def verify_release_source(root: Path, version: str) -> None:
+    source = (root / "app" / "core" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', source, re.MULTILINE)
+    source_version = match.group(1) if match else ""
+    if source_version != version:
+        raise ValueError(
+            "Release configuration and app/core/__init__.py disagree: "
+            f"{version!r} != {source_version!r}."
+        )
+
+    document = root / "deploy" / "security" / f"channelwatch-v{version}.openvex.json"
+    if not document.is_file():
+        raise ValueError(f"Release VEX document is missing: {document.relative_to(root)}")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "release" / "verify-vex.py"),
+            "--document",
+            str(document),
+            "--expected-version",
+            version,
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "verification failed"
+        raise ValueError(f"Release VEX verification failed: {detail}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate ChannelWatch release numbering and delivery policy."
@@ -85,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(config, dict):
         raise ValueError("Release configuration must contain a JSON object.")
     policy = validate_release_config(config)
+    version = str(config.get("version") or "").strip().lstrip("v")
+    verify_release_source(Path(__file__).resolve().parents[2], version)
     if policy is None:
         print("Historical pre-v1 release policy accepted.")
     else:

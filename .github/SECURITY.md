@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are provided for the current stable release line. The current release is v1.4.4.
+Security fixes are provided for the current stable release line. The current release is v1.4.5.
 
 | Version line | Supported |
 |---|---|

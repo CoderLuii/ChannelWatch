@@ -8,11 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
-## [1.4.4] - 2026-10-11
+## [1.4.5] - 2026-10-11
 
 ### Important
 
 - Signed in-app update for the v1.4.0 image. You can install it from **Settings > Updates** without recreating the container.
+
+### Fixed
+
+- Keep the exact Apply or Retry job through temporary restart disconnects, resume it after Settings reopens, and refresh only when that job and the new runtime are ready.
+- Show a compatible signed future image-required release as an announcement without treating its runtime bundle as an installable app update.
+- Write the candidate transport context as exact canonical JSON bytes so the isolated signer can seal and hand off the verified release candidate.
+- Verify that the failed v1.4.4, v1.4.3, and v1.4.2 tags have no GitHub releases before retaining v1.4.1 as the signed catalog predecessor.
+- Check the exact versioned OpenVEX security document before publishing update assets.
+
+## [1.4.4] - 2026-10-11
+
+### Important
+
+- Publishing failed during OpenVEX validation before any v1.4.4 app bundle, catalog, container image, or GitHub release was published. Use v1.4.5 instead.
 
 ### Fixed
 
@@ -25,7 +39,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Important
 
-- Publishing failed before any v1.4.3 app bundle, catalog, container image, or GitHub release was published. Use v1.4.4 instead.
+- Publishing failed before any v1.4.3 app bundle, catalog, container image, or GitHub release was published. Use v1.4.5 instead.
 
 ### Fixed
 
@@ -37,7 +51,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Important
 
-- Publishing failed before any v1.4.2 app bundle, catalog, container image, or GitHub release was published. Use v1.4.4 instead.
+- Publishing failed before any v1.4.2 app bundle, catalog, container image, or GitHub release was published. Use v1.4.5 instead.
 
 ### Fixed
 
@@ -895,7 +909,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.4...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.5...HEAD
+[1.4.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.1...v1.4.2

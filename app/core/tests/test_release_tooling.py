@@ -1425,29 +1425,38 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_144_in_app_release_on_140_image():
+def test_release_config_declares_145_in_app_release_on_140_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.4.4"
+    assert config["version"] == "1.4.5"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.4.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.4.4"
+    assert config["recommended_image_version"] == "1.4.5"
     assert config["automatic_install_allowed"] is False
     assert config["compatible_source_application_versions"] == [
         "1.4.0",
         "1.4.1",
         "1.4.2",
         "1.4.3",
+        "1.4.4",
     ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
-    assert config["unpublished_predecessor_tags"] == ["v1.4.3", "v1.4.2"]
-    assert config["unpublished_release_tags"] == ["v1.4.2", "v1.4.3"]
+    assert config["unpublished_predecessor_tags"] == [
+        "v1.4.4",
+        "v1.4.3",
+        "v1.4.2",
+    ]
+    assert config["unpublished_release_tags"] == [
+        "v1.4.2",
+        "v1.4.3",
+        "v1.4.4",
+    ]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.4.4 - Reliable release transport"
+        "# ChannelWatch v1.4.5 - Reliable release transport"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -1465,6 +1474,33 @@ def test_release_config_declares_144_in_app_release_on_140_image():
         "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
     )
     assert release_141["published_at"] == "2026-10-10T19:10:00Z"
+
+
+def test_release_policy_requires_current_verified_versioned_openvex():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/release/release_version_policy.py",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_release_policy_rejects_missing_current_openvex(tmp_path: Path):
+    module = _load_script(
+        "release_version_policy_missing_vex",
+        "scripts/release/release_version_policy.py",
+    )
+    source = tmp_path / "app/core/__init__.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('__version__ = "1.4.5"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Release VEX document is missing"):
+        module.verify_release_source(tmp_path, "1.4.5")
 
 
 def test_release_version_policy_enforces_single_digit_patch_cadence():
@@ -1535,7 +1571,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_144_release():
+def test_release_version_surfaces_use_145_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1546,11 +1582,11 @@ def test_release_version_surfaces_use_144_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.4.4"
-    assert metadata["versionTag"] == "v1.4.4"
-    assert metadata["dockerTag"] == "1.4.4"
-    assert metadata["helmChartVersion"] == "1.4.4"
-    assert metadata["helmAppVersion"] == "1.4.4"
+    assert metadata["version"] == "1.4.5"
+    assert metadata["versionTag"] == "v1.4.5"
+    assert metadata["dockerTag"] == "1.4.5"
+    assert metadata["helmChartVersion"] == "1.4.5"
+    assert metadata["helmAppVersion"] == "1.4.5"
     assert [release["version"] for release in metadata["previousReleases"]] == [
         "1.4.1",
         "1.4.0",
@@ -1559,7 +1595,7 @@ def test_release_version_surfaces_use_144_release():
     ]
 
 
-def test_future_metadata_keeps_failed_142_and_143_excluded(
+def test_future_metadata_keeps_failed_142_through_144_excluded(
     monkeypatch,
 ):
     module = _load_script(
@@ -1572,10 +1608,15 @@ def test_future_metadata_keeps_failed_142_and_143_excluded(
 ### Added
 - Image update.
 
-## [1.4.4] - 2026-10-11
+## [1.4.5] - 2026-10-11
 
 ### Fixed
 - Release transport.
+
+## [1.4.4] - 2026-10-11
+
+### Important
+- Publishing failed.
 
 ## [1.4.3] - 2026-10-11
 
@@ -1600,7 +1641,13 @@ def test_future_metadata_keeps_failed_142_and_143_excluded(
     files = {
         "docs/releases/CHANGELOG.md": changelog,
         "scripts/release/release-config.json": json.dumps(
-            {"unpublished_release_tags": ["v1.4.2", "v1.4.3"]}
+            {
+                "unpublished_release_tags": [
+                    "v1.4.2",
+                    "v1.4.3",
+                    "v1.4.4",
+                ]
+            }
         ),
     }
     monkeypatch.setattr(
@@ -1612,7 +1659,7 @@ def test_future_metadata_keeps_failed_142_and_143_excluded(
     parsed = module.parse_changelog("1.5.0")
 
     assert [release["version"] for release in parsed["previousReleases"]] == [
-        "1.4.4",
+        "1.4.5",
         "1.4.1",
         "0.9.17",
     ]

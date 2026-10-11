@@ -8,11 +8,11 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
-## [1.5.0] - 2026-10-11
+## [1.5.1] - 2026-10-11
 
 ### Important
 
-- Container image update required. Pull v1.5.0 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
+- Container image update required. Pull v1.5.1 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
 
 ### Added
 
@@ -24,8 +24,16 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- Keep runtime security tests independent of the hosted test interpreter's writable permissions while continuing to reject unsafe interpreter paths.
+- Verify unpublished milestone recovery before publishing the replacement image and its four native migration reports.
 - Make interrupted update preparation retryable after the current runtime starts again, while preserving the selected release and saved configuration.
 - Keep update policy button labels readable on smaller screens.
+
+## [1.5.0] - 2026-10-11
+
+### Important
+
+- Publishing failed in the source tests before any v1.5.0 release assets, container image, or GitHub release was published. Use v1.5.1 instead. The original tag remains unchanged.
 
 ## [1.4.5] - 2026-10-11
 
@@ -928,7 +936,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.5...v1.5.0
 [1.4.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.3...v1.4.4

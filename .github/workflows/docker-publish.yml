@@ -1755,11 +1755,14 @@ jobs:
         run: |
           set -euo pipefail
           version="$(jq -r '.version' scripts/release/release-config.json)"
-          if [ "${version}" != "1.5.0" ]; then
+          test "${RELEASE_TAG}" = "v${version}"
+          recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
+          if [ -z "${recovery}" ]; then
             exit 0
           fi
           fixtures="scripts/release/image-upgrade-baselines.json"
           test "$(jq -r '.candidate_version' "${fixtures}")" = "${version}"
+          test "$(jq -r '.recovers_unpublished_image_milestone' "${fixtures}")" = "${recovery}"
           baseline_dir="${RUNNER_TEMP}/image-upgrade-baselines"
           mkdir -p "${baseline_dir}"
           catalog="${baseline_dir}/catalog.json"
@@ -1995,9 +1998,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${TAG}" != "v1.5.0" ]; then
+          version="${TAG#v}"
+          config_version="$(jq -r '.version' scripts/release/release-config.json)"
+          test "${config_version}" = "${version}"
+          recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
+          if [ -z "${recovery}" ]; then
             exit 0
           fi
+          fixtures="scripts/release/image-upgrade-baselines.json"
+          test "$(jq -r '.candidate_version' "${fixtures}")" = "${version}"
+          test "$(jq -r '.recovers_unpublished_image_milestone' "${fixtures}")" = "${recovery}"
           evidence_dir="${RUNNER_TEMP}/native-image-evidence"
           output_dir="dist/update"
           manifest="${output_dir}/channelwatch-image-upgrade-${TAG}-evidence.json"
@@ -2005,6 +2015,7 @@ jobs:
             --evidence-directory "${evidence_dir}" \
             --baselines scripts/release/image-upgrade-baselines.json \
             --descriptor "${RUNNER_TEMP}/approved-candidate/channelwatch-image-${TAG}.json" \
+            --candidate-version "${version}" \
             --source-commit "${RELEASE_SHA}" \
             --archive-sha256 "${EXPECTED_ARCHIVE_SHA256}" \
             --descriptor-sha256 "${EXPECTED_DESCRIPTOR_SHA256}" \
@@ -2299,7 +2310,12 @@ jobs:
           assets=("${bundle}" "${manifest}" "${catalog}" "${vex}")
           test -s "${native_evidence}"
           assets+=("${native_evidence}")
-          if [ "${TAG}" = "v1.5.0" ]; then
+          recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
+          if [ -n "${recovery}" ]; then
+            fixtures="scripts/release/image-upgrade-baselines.json"
+            test "${TAG}" = "v${VERSION}"
+            test "$(jq -r '.candidate_version' "${fixtures}")" = "${VERSION}"
+            test "$(jq -r '.recovers_unpublished_image_milestone' "${fixtures}")" = "${recovery}"
             upgrade_evidence="dist/update/channelwatch-image-upgrade-${TAG}-evidence.json"
             upgrade_logs="dist/update/channelwatch-image-upgrade-${TAG}-logs.tar"
             test -s "${upgrade_evidence}"
@@ -2597,6 +2613,24 @@ jobs:
               "channelwatch-runtime-scan-${TAG}.tar"
             )
           fi
+          recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
+          if [ -n "${recovery}" ]; then
+            version="${TAG#v}"
+            config_version="$(jq -r '.version' scripts/release/release-config.json)"
+            fixtures="scripts/release/image-upgrade-baselines.json"
+            test "${config_version}" = "${version}"
+            test "$(jq -r '.candidate_version' "${fixtures}")" = "${version}"
+            test "$(jq -r '.recovers_unpublished_image_milestone' "${fixtures}")" = "${recovery}"
+            draft_assets+=(
+              "channelwatch-image-upgrade-${TAG}-evidence.json"
+              "channelwatch-image-upgrade-${TAG}-logs.tar"
+            )
+            for architecture in amd64 arm64; do
+              for baseline in 1.4.0 1.4.1; do
+                draft_assets+=("channelwatch-image-upgrade-${TAG}-${architecture}-${baseline}.json")
+              done
+            done
+          fi
           for asset in "${draft_assets[@]}"; do
             gh release download "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -2720,6 +2754,24 @@ jobs:
               "channelwatch-runtime-${TAG}-arm64.zip"
               "channelwatch-runtime-scan-${TAG}.tar"
             )
+          fi
+          recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
+          if [ -n "${recovery}" ]; then
+            version="${TAG#v}"
+            config_version="$(jq -r '.version' scripts/release/release-config.json)"
+            fixtures="scripts/release/image-upgrade-baselines.json"
+            test "${config_version}" = "${version}"
+            test "$(jq -r '.candidate_version' "${fixtures}")" = "${version}"
+            test "$(jq -r '.recovers_unpublished_image_milestone' "${fixtures}")" = "${recovery}"
+            required_assets+=(
+              "channelwatch-image-upgrade-${TAG}-evidence.json"
+              "channelwatch-image-upgrade-${TAG}-logs.tar"
+            )
+            for architecture in amd64 arm64; do
+              for baseline in 1.4.0 1.4.1; do
+                required_assets+=("channelwatch-image-upgrade-${TAG}-${architecture}-${baseline}.json")
+              done
+            done
           fi
           for required_asset in "${required_assets[@]}"; do
             if [ ! -s "${release_dir}/${required_asset}" ]; then
@@ -3420,6 +3472,24 @@ jobs:
               "channelwatch-runtime-scan-${tag}.tar" \
               >> "${expected_assets}"
           fi
+          recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
+          if [ -n "${recovery}" ]; then
+            version="${tag#v}"
+            config_version="$(jq -r '.version' scripts/release/release-config.json)"
+            fixtures="scripts/release/image-upgrade-baselines.json"
+            test "${config_version}" = "${version}"
+            test "$(jq -r '.candidate_version' "${fixtures}")" = "${version}"
+            test "$(jq -r '.recovers_unpublished_image_milestone' "${fixtures}")" = "${recovery}"
+            printf '%s\n' \
+              "channelwatch-image-upgrade-${tag}-evidence.json" \
+              "channelwatch-image-upgrade-${tag}-logs.tar" \
+              >> "${expected_assets}"
+            for architecture in amd64 arm64; do
+              for baseline in 1.4.0 1.4.1; do
+                echo "channelwatch-image-upgrade-${tag}-${architecture}-${baseline}.json" >> "${expected_assets}"
+              done
+            done
+          fi
           sort -o "${expected_assets}" "${expected_assets}"
           jq -r '.assets[].name' <<<"${release_json}" | sort > "${actual_assets}"
           if ! diff -u "${expected_assets}" "${actual_assets}"; then
@@ -3462,6 +3532,9 @@ jobs:
           fi
           if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
             expected_checksum_count=$((expected_checksum_count + 3))
+          fi
+          if [ -n "$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)" ]; then
+            expected_checksum_count=$((expected_checksum_count + 6))
           fi
           if [ "$(wc -l < "${public_dir}/${checksum_file}" | tr -d ' ')" != "${expected_checksum_count}" ]; then
             echo "::error::Public checksum manifest must cover all ${expected_checksum_count} non-checksum assets."

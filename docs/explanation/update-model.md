@@ -15,7 +15,9 @@ Published v1.0.0 through v1.4.x lines follow one image milestone per minor line:
 
 For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9. Published versions keep their original delivery requirements. Patch numbers still stop at 9.
 
-After a verified protocol-4 image milestone at v1.5.0 or newer, a future minor line may retain that image floor. This requires a complete signed runtime generation, the exact immutable bootstrap identity, and matching native AMD64 and ARM64 compatibility, restart, and rollback evidence. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
+After a verified protocol-4 image milestone at v1.5.1 or newer, a future minor line may retain that image floor. This requires a complete signed runtime generation, the exact immutable bootstrap identity, and matching native AMD64 and ARM64 compatibility, restart, and rollback evidence. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
+
+An image milestone without a published GitHub release can be recovered by a later patch in the same minor line. The release tooling verifies that every intervening tag has no GitHub release, keeps those versions out of signed update catalog history, and requires the replacement's matching image. v1.5.1 follows this path after v1.5.0 publishing failed before any GitHub release, release assets, or container image was published. The original v1.5.0 tag remains unchanged. Future runtime generations must name the actual published image and its exact digest.
 
 The default policy installs verified compatible updates during the local 03:00–05:00 maintenance window. Administrators can choose notify-only, apply immediately, postpone for 24 hours or 7 days, retry a failed attempt, or roll back. This keeps routine updates simple without pretending that a running container can safely replace its own base image, Python runtime, system packages, or launcher contract.
 
@@ -66,7 +68,8 @@ They require one container image update before dependency generations can be
 used. An application-only download cannot replace their immutable launchers.
 Preserve `/config` and any external storage key during that image update.
 
-v1.5.0 is the first image milestone with this authority. Once it is installed,
+v1.5.0 failed before release assets or images were published. v1.5.1 recovers
+that milestone and is the first published image with this authority. Once it is installed,
 future compatible releases can update the application and official Python
 packages together without recreating the container.
 

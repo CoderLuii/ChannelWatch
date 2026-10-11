@@ -36,6 +36,22 @@ def _protocol_four_runtime_capability(monkeypatch):
     monkeypatch.setenv("CHANNELWATCH_LAUNCHER_PROTOCOL", "4")
 
 
+@pytest.fixture
+def _immutable_runtime_preparation_python(
+    monkeypatch, immutable_image_python: Path
+):
+    prepare = runtime_preparation.prepare_runtime_archive_bounded
+
+    def prepare_with_image_python(*args, **kwargs):
+        return prepare(*args, image_python=immutable_image_python, **kwargs)
+
+    monkeypatch.setattr(
+        runtime_preparation,
+        "prepare_runtime_archive_bounded",
+        prepare_with_image_python,
+    )
+
+
 def _file_record(path: str, content: bytes, mode: str = "0644") -> dict:
     return {
         "path": path,
@@ -485,6 +501,7 @@ def test_pre_handoff_failure_does_not_replace_accepted_activation(
 
 def test_runtime_apply_rejected_archive_keeps_active_pointer_byte_identical(
     tmp_path: Path,
+    _immutable_runtime_preparation_python,
 ):
     private, public = _key_pair()
     descriptor, inventory_raw, payloads = _runtime_fixture()
@@ -516,7 +533,7 @@ def test_runtime_apply_rejected_archive_keeps_active_pointer_byte_identical(
 
 
 def test_runtime_apply_journal_binds_generation_and_dependency_identity(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, _immutable_runtime_preparation_python
 ):
     private, public = _key_pair()
     descriptor, inventory_raw, payloads = _runtime_fixture()

@@ -25,6 +25,7 @@ def load_module():
 @pytest.fixture
 def evidence(tmp_path):
     baselines = json.loads((ROOT / "scripts/release/image-upgrade-baselines.json").read_text())
+    candidate_version = baselines["candidate_version"]
     descriptor = {
         "image_index": {"digest": "sha256:" + "a" * 64},
         "platforms": [
@@ -53,7 +54,7 @@ def evidence(tmp_path):
             platform = next(row for row in descriptor["platforms"] if row["platform"] == "linux/" + arch)
             receipt = {
                 "schema": 1, "status": "passed", "architecture": arch,
-                "candidate_version": "1.5.0", "source_commit": source,
+                "candidate_version": candidate_version, "source_commit": source,
                 "baseline": {
                     "repository": baselines["repository"], "image_version": version,
                     "source_commit": baseline["source_commit"],
@@ -75,7 +76,7 @@ def evidence(tmp_path):
                 "old_container_id": "5" * 64, "replacement_container_id": "6" * 64,
                 "restarted_container_id": "6" * 64,
                 "old_status": {"current_version": "1.4.5", "launcher_protocol": 3, "active_bundle": active},
-                "candidate_status": {"current_version": "1.5.0", "image_version": "1.5.0",
+                "candidate_status": {"current_version": candidate_version, "image_version": candidate_version,
                                      "launcher_protocol": 4, "runtime_source": "image", "active_bundle": None,
                                      "worker_runtime": {"python_executable": "/venv/bin/python", "verified_generation": None}},
                 "old_control_inventory": {"active.json": {"type": "file"}, "rollback.json": {"type": "file"}},
@@ -103,7 +104,8 @@ def evidence(tmp_path):
 def run_aggregate(evidence):
     baselines, descriptor, source, records, directory = evidence
     return load_module().aggregate(records, baselines=baselines, descriptor=descriptor,
-                                   source_commit=source, archive_sha256="3" * 64,
+                                   candidate_version=baselines["candidate_version"], source_commit=source,
+                                   archive_sha256="3" * 64,
                                    descriptor_sha256="4" * 64, evidence_directory=directory)
 
 
@@ -117,9 +119,54 @@ def test_complete_native_migration_matrix_is_bound_to_candidate(evidence):
     )
     result = run_aggregate(evidence)
     assert result["status"] == "passed"
+    assert result["candidate_version"] == "1.5.1"
+    assert result["recovers_unpublished_image_milestone"] == "1.5.0"
     assert [(row["architecture"], row["baseline_image_version"]) for row in result["migrations"]] == [
         ("amd64", "1.4.0"), ("amd64", "1.4.1"), ("arm64", "1.4.0"), ("arm64", "1.4.1")
     ]
+
+
+def test_candidate_version_must_match_the_recovery_fixture(evidence):
+    baselines, descriptor, source, records, directory = evidence
+    with pytest.raises(ValueError, match="candidate"):
+        load_module().aggregate(
+            records,
+            baselines=baselines,
+            descriptor=descriptor,
+            candidate_version="1.5.0",
+            source_commit=source,
+            archive_sha256="3" * 64,
+            descriptor_sha256="4" * 64,
+            evidence_directory=directory,
+        )
+
+
+def test_later_patch_can_recover_the_same_canonical_image_milestone(evidence):
+    baselines, _descriptor, _source, records, _directory = evidence
+    baselines["candidate_version"] = "2.7.3"
+    baselines["recovers_unpublished_image_milestone"] = "2.7.0"
+    for receipt in records.values():
+        receipt["candidate_version"] = "2.7.3"
+        receipt["candidate_status"]["current_version"] = "2.7.3"
+        receipt["candidate_status"]["image_version"] = "2.7.3"
+
+    result = run_aggregate(evidence)
+
+    assert result["candidate_version"] == "2.7.3"
+    assert result["recovers_unpublished_image_milestone"] == "2.7.0"
+
+
+def test_candidate_patch_above_recovery_policy_bound_is_rejected(evidence):
+    baselines, _descriptor, _source, records, _directory = evidence
+    baselines["candidate_version"] = "2.7.10"
+    baselines["recovers_unpublished_image_milestone"] = "2.7.0"
+    for receipt in records.values():
+        receipt["candidate_version"] = "2.7.10"
+        receipt["candidate_status"]["current_version"] = "2.7.10"
+        receipt["candidate_status"]["image_version"] = "2.7.10"
+
+    with pytest.raises(ValueError, match="recovery milestone"):
+        run_aggregate(evidence)
 
 
 def test_docker_image_id_may_equal_oci_config_digest(evidence):
@@ -135,7 +182,10 @@ def test_docker_image_id_may_equal_oci_config_digest(evidence):
     assert run_aggregate(evidence)["status"] == "passed"
 
 
-@pytest.mark.parametrize("case", ["missing", "extra", "source", "manifest", "config", "archive",
+@pytest.mark.parametrize("case", ["missing", "extra", "source", "candidate", "status-version",
+                                  "status-image-version", "recovery-missing", "recovery-wrong-line",
+                                  "recovery-nonzero-patch",
+                                  "manifest", "config", "archive",
                                   "descriptor", "image-id-missing", "image-id-malformed",
                                   "image-id-inconsistent", "baseline", "app", "key", "external-key",
                                   "old-id", "restart-id", "old-runtime", "active", "deactivated",
@@ -149,6 +199,18 @@ def test_incomplete_or_unbound_migration_proof_is_rejected(evidence, case):
         records[("arm64", "1.4.2")] = copy.deepcopy(row)
     elif case == "source":
         row["source_commit"] = "0" * 40
+    elif case == "candidate":
+        row["candidate_version"] = "1.5.0"
+    elif case == "status-version":
+        row["candidate_status"]["current_version"] = "1.5.0"
+    elif case == "status-image-version":
+        row["candidate_status"]["image_version"] = "1.5.0"
+    elif case == "recovery-missing":
+        evidence[0].pop("recovers_unpublished_image_milestone")
+    elif case == "recovery-wrong-line":
+        evidence[0]["recovers_unpublished_image_milestone"] = "2.5.0"
+    elif case == "recovery-nonzero-patch":
+        evidence[0]["recovers_unpublished_image_milestone"] = "1.5.1"
     elif case == "manifest":
         row["candidate"]["manifest_digest"] = "sha256:" + "0" * 64
     elif case == "config":
@@ -216,6 +278,10 @@ def test_workflow_requires_old_volume_migrations_before_foundation_publication()
     migration = next(step for step in steps if step.get("name") == "Qualify published older installations on the foundation image")
     verifier = next(step for step in steps if step.get("name") == "Qualify exact native OCI child without rebuilding")
     assert steps.index(verifier) < steps.index(migration)
+    assert ".recovers_unpublished_image_milestone // empty" in migration["run"]
+    assert ".recovers_unpublished_image_milestone" in migration["run"]
+    assert 'test "${RELEASE_TAG}" = "v${version}"' in migration["run"]
+    assert '!= "1.5.0"' not in migration["run"]
     assert 'for baseline in 1.4.0 1.4.1' in migration["run"]
     assert "verify-image-upgrade.py" in migration["run"]
     assert "--baseline-app-source-commit" in migration["run"]
@@ -225,6 +291,35 @@ def test_workflow_requires_old_volume_migrations_before_foundation_publication()
     release = workflow["jobs"]["build-update-bundle-and-release"]
     binding = next(step for step in release["steps"] if step.get("name") == "Bind older-installation migration evidence to the foundation candidate")
     assert "aggregate-image-upgrades.py" in binding["run"]
+    assert "--candidate-version \"${version}\"" in binding["run"]
+    assert ".recovers_unpublished_image_milestone // empty" in binding["run"]
+    assert 'test "${config_version}" = "${version}"' in binding["run"]
     assert "--descriptor" in binding["run"]
     assert "--source-commit" in binding["run"]
     assert "channelwatch-image-upgrade-${TAG}-evidence.json" in str(release)
+
+
+def test_recovery_migration_assets_are_mandatory_through_public_verification():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    release = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
+        "\n  build-and-push:", 1
+    )[0]
+    image = workflow.split("  build-and-push:", 1)[1].split(
+        "\n  publish-github-release:", 1
+    )[0]
+    public = workflow.split("  verify-public-release-assets:", 1)[1].split(
+        "\n  sync-site:", 1
+    )[0]
+
+    assert release.count(".recovers_unpublished_image_milestone // empty") >= 2
+    assert 'if [ "${TAG}" = "v1.5.0" ]' not in release
+    for name in (
+        "channelwatch-image-upgrade-${TAG}-evidence.json",
+        "channelwatch-image-upgrade-${TAG}-logs.tar",
+        "channelwatch-image-upgrade-${TAG}-${architecture}-${baseline}.json",
+    ):
+        assert name in release
+        assert name in image
+    assert ".recovers_unpublished_image_milestone // empty" in image
+    assert ".recovers_unpublished_image_milestone // empty" in public
+    assert "expected_checksum_count=$((expected_checksum_count + 6))" in public

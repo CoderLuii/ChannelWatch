@@ -14,6 +14,7 @@ from typing import Any
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SHA40 = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 ARCHITECTURES = ("amd64", "arm64")
 BASELINE_VERSIONS = ("1.4.0", "1.4.1")
 
@@ -33,15 +34,24 @@ def file_sha256(path: Path) -> str:
 
 def aggregate(
     receipts: dict[tuple[str, str], dict[str, Any]], *, baselines: dict[str, Any],
-    descriptor: dict[str, Any], source_commit: str, archive_sha256: str,
-    descriptor_sha256: str, evidence_directory: Path,
+    descriptor: dict[str, Any], candidate_version: str, source_commit: str,
+    archive_sha256: str, descriptor_sha256: str, evidence_directory: Path,
 ) -> dict[str, Any]:
     expected = {(arch, version) for arch in ARCHITECTURES for version in BASELINE_VERSIONS}
     require(set(receipts) == expected, "All four native baseline migrations are required.")
     require(SHA40.fullmatch(source_commit) is not None, "Candidate source commit is invalid.")
     require(all(SHA256.fullmatch(value) for value in (archive_sha256, descriptor_sha256)),
             "Candidate artifact hashes are invalid.")
-    require(baselines.get("schema") == 1 and baselines.get("candidate_version") == "1.5.0"
+    version_match = VERSION.fullmatch(candidate_version)
+    require(version_match is not None, "Foundation candidate version is invalid.")
+    version_parts = tuple(int(part) for part in version_match.groups())
+    recovery_version = baselines.get("recovers_unpublished_image_milestone", "")
+    recovery_match = VERSION.fullmatch(recovery_version)
+    require(recovery_match is not None and 1 <= version_parts[2] <= 9
+            and tuple(int(part) for part in recovery_match.groups())
+            == (version_parts[0], version_parts[1], 0),
+            "Foundation recovery milestone is invalid for the candidate.")
+    require(baselines.get("schema") == 1 and baselines.get("candidate_version") == candidate_version
             and set(baselines.get("images", {})) == set(BASELINE_VERSIONS),
             "Foundation baseline fixture is incomplete.")
     app = baselines["signed_app"]
@@ -58,7 +68,7 @@ def aggregate(
         receipt = receipts[(architecture, version)]
         require(receipt.get("schema") == 1 and receipt.get("status") == "passed"
                 and receipt.get("architecture") == architecture
-                and receipt.get("candidate_version") == "1.5.0"
+                and receipt.get("candidate_version") == candidate_version
                 and receipt.get("source_commit") == source_commit,
                 "Migration receipt is failed or belongs to another candidate.")
         baseline = baselines["images"][version]
@@ -98,7 +108,8 @@ def aggregate(
                 "Migration did not begin with a healthy signed protocol-3 app.")
         status = receipt.get("candidate_status", {})
         worker = status.get("worker_runtime", {})
-        require(status.get("current_version") == "1.5.0" and status.get("image_version") == "1.5.0"
+        require(status.get("current_version") == candidate_version
+                and status.get("image_version") == candidate_version
                 and status.get("launcher_protocol") == 4 and status.get("runtime_source") == "image"
                 and status.get("active_bundle") is None
                 and worker.get("python_executable") == "/venv/bin/python"
@@ -158,7 +169,8 @@ def aggregate(
                            "baseline_index_digest": baseline["index_digest"],
                            "baseline_manifest_digest": baseline["manifests"][architecture],
                            "logs_sha256": logs})
-    return {"schema": 1, "status": "passed", "candidate_version": "1.5.0", "source_commit": source_commit,
+    return {"schema": 1, "status": "passed", "candidate_version": candidate_version,
+            "recovers_unpublished_image_milestone": recovery_version, "source_commit": source_commit,
             "oci_archive_sha256": archive_sha256, "descriptor_sha256": descriptor_sha256,
             "image_index_digest": index, "signed_app": app, "migrations": migrations}
 
@@ -168,6 +180,7 @@ def main() -> int:
     parser.add_argument("--evidence-directory", type=Path, required=True)
     parser.add_argument("--baselines", type=Path, required=True)
     parser.add_argument("--descriptor", type=Path, required=True)
+    parser.add_argument("--candidate-version", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--archive-sha256", required=True)
     parser.add_argument("--descriptor-sha256", required=True)
@@ -183,7 +196,8 @@ def main() -> int:
             receipts[(architecture, version)] = json.loads(path.read_text(encoding="utf-8"))
     result = aggregate(receipts, baselines=json.loads(args.baselines.read_text(encoding="utf-8")),
                        descriptor=json.loads(args.descriptor.read_text(encoding="utf-8")),
-                       source_commit=args.source_commit, archive_sha256=args.archive_sha256,
+                       candidate_version=args.candidate_version, source_commit=args.source_commit,
+                       archive_sha256=args.archive_sha256,
                        descriptor_sha256=args.descriptor_sha256, evidence_directory=args.evidence_directory)
     for migration in result["migrations"]:
         name = f"native-image-upgrade-{migration['architecture']}-{migration['baseline_image_version']}.json"

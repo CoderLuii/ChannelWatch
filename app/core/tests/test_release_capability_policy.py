@@ -257,6 +257,89 @@ def test_release_version_policy_preserves_legacy_141_and_rejects_unproven_floor(
         )
 
 
+def _recovery_config(**overrides):
+    return {
+        "version": "1.5.1",
+        "image_required": True,
+        "delivery_mode": "image_required",
+        "minimum_image_version": "1.5.1",
+        "recommended_image_version": "1.5.1",
+        "updater_protocol": 4,
+        "minimum_launcher_protocol": 4,
+        "compatible_launcher_protocols": [4],
+        "runtime_generation_required": False,
+        "runtime_compatibility_evidence": {},
+        "automatic_install_allowed": False,
+        "recovers_unpublished_image_milestone": "1.5.0",
+        "unpublished_predecessor_tags": ["v1.5.0"],
+        "unpublished_release_tags": ["v1.4.2", "v1.4.3", "v1.4.4", "v1.5.0"],
+        **overrides,
+    }
+
+
+def test_failed_image_milestone_recovery_is_the_replacement_image_foundation():
+    module = _load_script(
+        "release_version_policy_image_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+
+    policy = module.validate_release_config(_recovery_config())
+
+    assert policy.image_milestone is True
+    assert policy.minimum_image_version == "1.5.1"
+    assert policy.retained_capability_floor is False
+
+
+@pytest.mark.parametrize(
+    "mutation,error",
+    [
+        ({"minimum_image_version": "1.5.0"}, "matching image floor"),
+        ({"recommended_image_version": "1.5.0"}, "matching image floor"),
+        ({"recovers_unpublished_image_milestone": "1.5.1"}, "X.Y.0 milestone"),
+        ({"recovers_unpublished_image_milestone": "1.4.0"}, "same minor release line"),
+        ({"unpublished_predecessor_tags": []}, "contiguous unpublished predecessors"),
+        (
+            {"unpublished_release_tags": ["v1.4.2", "v1.4.3", "v1.4.4"]},
+            "public release history",
+        ),
+        ({"runtime_generation_required": True}, "image bootstrap launcher contract"),
+        ({"runtime_bootstrap_sha256": "a" * 64}, "runtime generation fields"),
+        ({"minimum_image_sha256": "sha256:" + "a" * 64}, "runtime generation fields"),
+        ({"runtime_compatibility_evidence": {"amd64": {}}}, "runtime generation fields"),
+        ({"automatic_install_allowed": True}, "automatic in-app installation"),
+    ],
+)
+def test_failed_image_milestone_recovery_fails_closed(mutation, error):
+    module = _load_script(
+        "release_version_policy_invalid_image_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        module.validate_release_config(_recovery_config(**mutation))
+
+
+def test_failed_image_milestone_recovery_forces_image_delivery_classification():
+    policy_module = _load_script(
+        "release_version_policy_recovery_classifier",
+        "scripts/release/release_version_policy.py",
+    )
+    classifier = _load_script(
+        "classify_release_impact_recovery",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    policy = policy_module.validate_release_config(_recovery_config())
+    result = classifier.apply_release_version_policy(
+        classifier.classify_paths([]),
+        policy,
+    )
+
+    assert result.image_required is True
+    assert result.delivery_mode == "image_required"
+    assert result.triggering_paths == ("scripts/release/release-config.json",)
+
+
 @pytest.mark.parametrize("version,floor", [("1.5.1", "1.5.0"), ("1.6.1", "1.6.0")])
 def test_future_patch_cannot_revert_to_an_app_only_legacy_launcher(version, floor):
     module = _load_script(
@@ -276,25 +359,37 @@ def test_future_patch_cannot_revert_to_an_app_only_legacy_launcher(version, floo
         )
 
 
-def test_first_dependency_patch_requires_a_bootstrap_digest():
+def test_first_release_after_recovery_requires_a_bootstrap_digest():
     module = _load_script(
         "release_version_policy_first_dependency_patch",
         "scripts/release/release_version_policy.py",
     )
     with pytest.raises(ValueError, match="bootstrap SHA-256"):
         module.validate_release_config(
-            _config(version="1.5.1", runtime_bootstrap_sha256=None)
+            _config(
+                version="1.5.2",
+                minimum_image_version="1.5.1",
+                runtime_bootstrap_sha256=None,
+                unpublished_release_tags=["v1.5.0"],
+            )
         )
 
 
-def test_first_dependency_patch_accepts_a_complete_generation_contract():
+@pytest.mark.parametrize("version", ["1.5.2", "1.6.0"])
+def test_future_release_accepts_a_complete_generation_from_the_recovery(version):
     module = _load_script(
         "release_version_policy_complete_dependency_patch",
         "scripts/release/release_version_policy.py",
     )
-    policy = module.validate_release_config(_config(version="1.5.1"))
+    policy = module.validate_release_config(
+        _config(
+            version=version,
+            minimum_image_version="1.5.1",
+            unpublished_release_tags=["v1.5.0"],
+        )
+    )
     assert policy.image_milestone is False
-    assert policy.minimum_image_version == "1.5.0"
+    assert policy.minimum_image_version == "1.5.1"
     with pytest.raises(ValueError, match="same major release line"):
         module.validate_release_config(
             _config(version="2.0.0", minimum_image_version="1.5.0")
@@ -302,6 +397,50 @@ def test_first_dependency_patch_accepts_a_complete_generation_contract():
     with pytest.raises(ValueError, match="bootstrap SHA-256"):
         module.validate_release_config(
             _config(runtime_bootstrap_sha256="0" * 63)
+        )
+
+
+def test_retained_floor_must_be_older_published_and_canonical():
+    module = _load_script(
+        "release_version_policy_retained_floor_identity",
+        "scripts/release/release_version_policy.py",
+    )
+
+    with pytest.raises(ValueError, match="strictly older"):
+        module.validate_release_config(
+            _config(version="1.5.2", minimum_image_version="1.5.2")
+        )
+    with pytest.raises(ValueError, match="published image foundation"):
+        module.validate_release_config(
+            _config(
+                version="1.5.2",
+                minimum_image_version="1.5.1",
+                unpublished_release_tags=["v1.5.0", "v1.5.1"],
+            )
+        )
+    with pytest.raises(ValueError, match="canonical numeric"):
+        module.validate_release_config(
+            _config(version="1.5.2", minimum_image_version="1.5.01")
+        )
+
+
+@pytest.mark.parametrize(
+    "version,floor",
+    [("1.5.2", "1.5.0"), ("1.6.0", "1.5.0")],
+)
+def test_in_app_generation_cannot_use_an_unpublished_image_floor(version, floor):
+    module = _load_script(
+        "release_version_policy_unpublished_floor",
+        "scripts/release/release_version_policy.py",
+    )
+
+    with pytest.raises(ValueError, match="published image foundation"):
+        module.validate_release_config(
+            _config(
+                version=version,
+                minimum_image_version=floor,
+                unpublished_release_tags=[f"v{floor}"],
+            )
         )
 
 

@@ -58,7 +58,7 @@ def _descriptor() -> dict[str, object]:
 
 @pytest.mark.parametrize("as_file", [False, True])
 def test_bounded_preparation_accepts_bytes_and_file_descriptors(
-    tmp_path: Path, monkeypatch, as_file: bool
+    tmp_path: Path, monkeypatch, immutable_image_python: Path, as_file: bool
 ):
     marker = tmp_path / "environment.json"
     image = _fixture_image(
@@ -109,7 +109,7 @@ def install_runtime_archive(source, releases_dir, descriptor):
             _descriptor(),
             timeout_seconds=5,
             image_app_dir=image,
-            image_python=Path(sys.executable),
+            image_python=immutable_image_python,
         )
     finally:
         if not isinstance(source, bytes):
@@ -125,7 +125,7 @@ def install_runtime_archive(source, releases_dir, descriptor):
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups and fd passing")
 def test_timeout_reaps_descendant_and_preserves_active_control(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, immutable_image_python: Path
 ):
     marker = tmp_path / "descendant.json"
     image = _fixture_image(
@@ -175,7 +175,7 @@ while True: time.sleep(1)
             _descriptor(),
             timeout_seconds=5,
             image_app_dir=image,
-            image_python=Path(sys.executable),
+            image_python=immutable_image_python,
         )
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -199,7 +199,9 @@ while True: time.sleep(1)
         probe.close()
 
 
-def test_child_failure_does_not_publish_active_control(tmp_path: Path):
+def test_child_failure_does_not_publish_active_control(
+    tmp_path: Path, immutable_image_python: Path
+):
     image = _fixture_image(
         tmp_path,
         "def install_runtime_archive(*_args):\n    raise RuntimeError('rejected archive')\n",
@@ -218,7 +220,7 @@ def test_child_failure_does_not_publish_active_control(tmp_path: Path):
             _descriptor(),
             timeout_seconds=5,
             image_app_dir=image,
-            image_python=Path(sys.executable),
+            image_python=immutable_image_python,
         )
 
     assert active.read_bytes() == active_before
@@ -226,7 +228,7 @@ def test_child_failure_does_not_publish_active_control(tmp_path: Path):
 
 @pytest.mark.skipif(os.name == "nt", reason="Linux parent-death signal and process groups")
 def test_parent_death_reaps_background_preparation_and_descendant(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, immutable_image_python: Path
 ):
     marker = tmp_path / "parent-death.json"
     image = _fixture_image(
@@ -283,7 +285,7 @@ prepare_runtime_archive_bounded(
     {"generation_id": "a" * 64, "dependency_inventory_sha256": "b" * 64},
     timeout_seconds=30,
     image_app_dir=Path(sys.argv[2]),
-    image_python=Path(sys.executable),
+    image_python=Path(sys.argv[3]),
 )
 """,
         encoding="utf-8",
@@ -292,7 +294,13 @@ prepare_runtime_archive_bounded(
     environment["PYTHONPATH"] = str(ROOT / "app")
     environment["PREPARATION_MARKER"] = str(marker)
     parent = subprocess.Popen(
-        [sys.executable, str(parent_script), str(releases), str(image)],
+        [
+            sys.executable,
+            str(parent_script),
+            str(releases),
+            str(image),
+            str(immutable_image_python),
+        ],
         env=environment,
     )
     try:
@@ -329,6 +337,32 @@ prepare_runtime_archive_bounded(
         if parent.poll() is None:
             parent.kill()
         parent.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode validation")
+def test_bounded_preparation_rejects_writable_image_python(
+    tmp_path: Path, immutable_image_python: Path
+):
+    image = _fixture_image(
+        tmp_path,
+        "def install_runtime_archive(*_args):\n    raise AssertionError('unreachable')\n",
+    )
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    immutable_image_python.chmod(0o775)
+
+    with pytest.raises(
+        runtime_preparation.RuntimePreparationError,
+        match="The image Python interpreter is not trusted",
+    ):
+        runtime_preparation.prepare_runtime_archive_bounded(
+            b"archive",
+            releases,
+            _descriptor(),
+            timeout_seconds=5,
+            image_app_dir=image,
+            image_python=immutable_image_python,
+        )
 
 
 def test_descriptor_transport_is_raw_and_bounded():

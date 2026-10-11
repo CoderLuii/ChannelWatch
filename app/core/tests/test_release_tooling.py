@@ -955,18 +955,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_150_dependency_image_bootstrap():
+def test_release_config_declares_151_replacement_dependency_image_bootstrap():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
+    policy_module = _load_script(
+        "release_version_policy_current_recovery",
+        "scripts/release/release_version_policy.py",
+    )
 
-    assert config["version"] == "1.5.0"
+    assert config["version"] == "1.5.1"
     assert config["image_required"] is True
     assert config["delivery_mode"] == "image_required"
-    assert config["minimum_image_version"] == "1.5.0"
+    assert config["minimum_image_version"] == "1.5.1"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.5.0"
+    assert config["recommended_image_version"] == "1.5.1"
     assert config["automatic_install_allowed"] is False
     assert config["compatible_source_application_versions"] == [
         "1.4.0",
@@ -980,17 +984,31 @@ def test_release_config_declares_150_dependency_image_bootstrap():
     assert config["runtime_generation_required"] is False
     assert not config.get("runtime_variants")
     assert not config.get("runtime_bootstrap_sha256")
-    assert config["unpublished_release_tags"] == ["v1.4.2", "v1.4.3", "v1.4.4"]
-    assert "unpublished_predecessor_tags" not in config
+    assert not config.get("runtime_descriptor")
+    assert not config.get("minimum_image_sha256")
+    assert config["runtime_compatibility_evidence"] == {}
+    assert config["recovers_unpublished_image_milestone"] == "1.5.0"
+    assert config["unpublished_predecessor_tags"] == ["v1.5.0"]
+    assert config["unpublished_release_tags"] == [
+        "v1.4.2",
+        "v1.4.3",
+        "v1.4.4",
+        "v1.5.0",
+    ]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.5.0 - Dependency update foundation"
+        "# ChannelWatch v1.5.1 - Dependency update foundation"
     )
     assert config["verification_assets"] is True
+    policy = policy_module.validate_release_config(config)
+    assert policy.image_milestone is True
+    assert policy.minimum_image_version == "1.5.1"
     history = json.loads(
         (ROOT / "scripts/release/update-catalog-history.json").read_text(
             encoding="utf-8"
         )
     )["releases"]
+    assert "1.5.0" not in {release["version"] for release in history}
+    assert "1.5.1" not in {release["version"] for release in history}
     release_141 = next(release for release in history if release["version"] == "1.4.1")
     assert release_141["bundle_sha256"] == (
         "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
@@ -1107,7 +1125,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_150_release():
+def test_release_version_surfaces_use_151_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1118,11 +1136,11 @@ def test_release_version_surfaces_use_150_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.5.0"
-    assert metadata["versionTag"] == "v1.5.0"
-    assert metadata["dockerTag"] == "1.5.0"
-    assert metadata["helmChartVersion"] == "1.5.0"
-    assert metadata["helmAppVersion"] == "1.5.0"
+    assert metadata["version"] == "1.5.1"
+    assert metadata["versionTag"] == "v1.5.1"
+    assert metadata["dockerTag"] == "1.5.1"
+    assert metadata["helmChartVersion"] == "1.5.1"
+    assert metadata["helmAppVersion"] == "1.5.1"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -5125,7 +5143,78 @@ def test_catalog_predecessor_cannot_use_failed_143_142_exceptions_for_150():
         )
 
 
-def test_future_metadata_keeps_failed_142_through_144_excluded(
+def test_catalog_predecessor_accepts_150_as_the_only_failed_predecessor_for_151(
+    tmp_path,
+):
+    module = _load_script(
+        "build_update_bundle_151_recovery_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.5", "1.5.0", "1.5.1"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.5.1":
+            git("tag", f"v{version}")
+
+    requests = []
+
+    def release_not_found(request, *, timeout):
+        requests.append((request, timeout))
+        if request.full_url.endswith("/releases/tags/v1.5.0"):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b'[{"tag_name":"v1.4.5"}]',
+            close=lambda: None,
+        )
+
+    module.require_previous_catalog_release(
+        "1.5.1",
+        [{"version": "1.4.5"}],
+        ["v1.4.5", "v1.5.0"],
+        unpublished_predecessor_tags=["v1.5.0"],
+        repository="CoderLuii/ChannelWatch",
+        github_token="authenticated-test-token",
+        repo_root=repo,
+        urlopen=release_not_found,
+    )
+
+    assert [
+        request.full_url.rsplit("/", 1)[-1]
+        for request, _timeout in requests
+        if "/releases/tags/" in request.full_url
+    ] == ["v1.5.0"]
+
+
+def test_future_metadata_keeps_failed_142_through_150_excluded(
     monkeypatch,
 ):
     module = _load_script(
@@ -5133,10 +5222,15 @@ def test_future_metadata_keeps_failed_142_through_144_excluded(
         "scripts/release/export-site-release-metadata.py",
     )
     changelog = """\
-## [1.5.0] - 2026-10-20
+## [1.5.1] - 2026-10-20
 
 ### Added
 - Image update.
+
+## [1.5.0] - 2026-10-11
+
+### Important
+- Publishing failed.
 
 ## [1.4.5] - 2026-10-11
 
@@ -5171,7 +5265,14 @@ def test_future_metadata_keeps_failed_142_through_144_excluded(
     files = {
         "docs/releases/CHANGELOG.md": changelog,
         "scripts/release/release-config.json": json.dumps(
-            {"unpublished_release_tags": ["v1.4.2", "v1.4.3", "v1.4.4"]}
+            {
+                "unpublished_release_tags": [
+                    "v1.4.2",
+                    "v1.4.3",
+                    "v1.4.4",
+                    "v1.5.0",
+                ]
+            }
         ),
     }
     monkeypatch.setattr(
@@ -5180,7 +5281,7 @@ def test_future_metadata_keeps_failed_142_through_144_excluded(
         lambda relative, tree_ref=None: files[relative],
     )
 
-    parsed = module.parse_changelog("1.5.0")
+    parsed = module.parse_changelog("1.5.1")
 
     assert [release["version"] for release in parsed["previousReleases"]] == [
         "1.4.5",

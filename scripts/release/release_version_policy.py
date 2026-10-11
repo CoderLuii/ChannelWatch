@@ -1,9 +1,10 @@
 """Validate ChannelWatch release numbering and delivery policy.
 
 Starting with v1.0.0, each minor line defaults to one image milestone followed
-by at most nine in-app releases. A prospective minor line may retain a proven
-protocol-4 image floor at v1.5.0 or newer. Historical declarations keep their
-original rules because published identifiers cannot be rewritten.
+by at most nine in-app releases. A failed, unpublished image milestone may be
+recovered by a later patch in the same line. Prospective releases may retain a
+proven protocol-4 image floor at v1.5.0 or newer. Historical declarations keep
+their original rules because published identifiers cannot be rewritten.
 """
 
 from __future__ import annotations
@@ -24,15 +25,43 @@ class ReleaseVersionPolicy(NamedTuple):
     retained_capability_floor: bool = False
 
 
+def _canonical_version_parts(version: str, *, label: str) -> tuple[int, int, int]:
+    parts = version.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ValueError(f"{label} must use numeric X.Y.Z format.")
+    parsed = tuple(int(part) for part in parts)
+    if version != ".".join(str(part) for part in parsed):
+        raise ValueError(f"{label} must use canonical numeric X.Y.Z format.")
+    return parsed
+
+
+def _unpublished_release_tags(config: dict[str, object]) -> list[str]:
+    raw_tags = config.get("unpublished_release_tags", [])
+    if not isinstance(raw_tags, list) or any(
+        not isinstance(tag, str) or not tag.startswith("v") for tag in raw_tags
+    ):
+        raise ValueError(
+            "release-config unpublished_release_tags must be a list of version tags."
+        )
+    if len(raw_tags) != len(set(raw_tags)):
+        raise ValueError(
+            "release-config unpublished_release_tags cannot contain duplicates."
+        )
+    for tag in raw_tags:
+        _canonical_version_parts(
+            tag.removeprefix("v"),
+            label="release-config unpublished release tags",
+        )
+    return raw_tags
+
+
 def release_version_policy(version: str) -> ReleaseVersionPolicy | None:
     normalized = str(version or "").strip().lstrip("v")
-    parts = normalized.split(".")
-    if len(parts) != 3 or any(not part.isdigit() for part in parts):
-        raise ValueError("Release version must use numeric X.Y.Z format.")
-    major, minor, patch = (int(part) for part in parts)
+    major, minor, patch = _canonical_version_parts(
+        normalized,
+        label="Release version",
+    )
     canonical = f"{major}.{minor}.{patch}"
-    if canonical != normalized:
-        raise ValueError("Release version must use canonical numeric X.Y.Z format.")
     if major < 1:
         return None
     if patch > 9:
@@ -54,33 +83,80 @@ def validate_release_config(config: dict[str, object]) -> ReleaseVersionPolicy |
     delivery_mode = str(config.get("delivery_mode") or "")
     image_required = config.get("image_required")
     minimum_image_version = str(config.get("minimum_image_version") or "").lstrip("v")
-    if minimum_image_version != policy.minimum_image_version:
-        try:
-            floor_parts = tuple(int(part) for part in minimum_image_version.split("."))
-            version_parts = tuple(int(part) for part in policy.version.split("."))
-        except ValueError as exc:
+    version_parts = _canonical_version_parts(
+        policy.version,
+        label="Release version",
+    )
+    recovery_version = config.get("recovers_unpublished_image_milestone")
+    if recovery_version is not None:
+        if not isinstance(recovery_version, str):
             raise ValueError(
-                "release-config minimum_image_version must use numeric X.Y.Z format."
-            ) from exc
-        if len(floor_parts) != 3 or minimum_image_version != ".".join(
-            str(part) for part in floor_parts
-        ):
-            raise ValueError(
-                "release-config minimum_image_version must use canonical numeric "
+                "recovers_unpublished_image_milestone must use canonical numeric "
                 "X.Y.Z format."
             )
+        recovery_parts = _canonical_version_parts(
+            recovery_version,
+            label="recovers_unpublished_image_milestone",
+        )
+        if recovery_parts[2] != 0:
+            raise ValueError(
+                "recovers_unpublished_image_milestone must name an X.Y.0 milestone."
+            )
+        if recovery_parts[:2] != version_parts[:2]:
+            raise ValueError(
+                "An image-milestone recovery must stay in the same minor release line."
+            )
+        if recovery_parts >= version_parts:
+            raise ValueError(
+                "An image-milestone recovery must follow the unpublished milestone."
+            )
+        if minimum_image_version != policy.version or config.get(
+            "recommended_image_version"
+        ) != policy.version:
+            raise ValueError(
+                "An image-milestone recovery must declare the recovery as its matching "
+                "image floor and recommended image."
+            )
+        expected_predecessor_tags = [
+            f"v{version_parts[0]}.{version_parts[1]}.{patch}"
+            for patch in range(version_parts[2] - 1, recovery_parts[2] - 1, -1)
+        ]
+        if config.get("unpublished_predecessor_tags") != expected_predecessor_tags:
+            raise ValueError(
+                "An image-milestone recovery must name the exact contiguous unpublished "
+                "predecessors in descending order."
+            )
+        unpublished_release_tags = _unpublished_release_tags(config)
+        if any(
+            tag not in unpublished_release_tags for tag in expected_predecessor_tags
+        ):
+            raise ValueError(
+                "Every recovered predecessor must remain excluded from public release "
+                "history."
+            )
+        policy = ReleaseVersionPolicy(
+            version=policy.version,
+            image_milestone=True,
+            minimum_image_version=policy.version,
+        )
+    elif minimum_image_version != policy.minimum_image_version:
+        floor_parts = _canonical_version_parts(
+            minimum_image_version,
+            label="release-config minimum_image_version",
+        )
         if floor_parts < (1, 5, 0):
             raise ValueError(
                 "A retained dependency-runtime image floor must be v1.5.0 or newer."
             )
-        if floor_parts > version_parts:
+        if floor_parts >= version_parts:
             raise ValueError(
-                "A retained dependency-runtime image floor cannot exceed the release."
+                "A retained dependency-runtime image floor must be strictly older than "
+                "the release."
             )
-        if floor_parts[0] != version_parts[0] or floor_parts[2] != 0:
+        if floor_parts[0] != version_parts[0]:
             raise ValueError(
-                "A retained dependency-runtime image floor must be an X.Y.0 "
-                "milestone in the same major release line."
+                "A retained dependency-runtime image floor must stay in the same major "
+                "release line."
             )
         if (
             config.get("runtime_generation_required") is not True
@@ -111,8 +187,12 @@ def validate_release_config(config: dict[str, object]) -> ReleaseVersionPolicy |
             minimum_image_version=minimum_image_version,
             retained_capability_floor=True,
         )
-    version_parts = tuple(int(part) for part in policy.version.split("."))
     if version_parts >= (1, 5, 0) and not policy.image_milestone:
+        if f"v{policy.minimum_image_version}" in _unpublished_release_tags(config):
+            raise ValueError(
+                "A retained dependency-runtime image floor must name a published image "
+                "foundation."
+            )
         if (
             config.get("updater_protocol") != 4
             or config.get("runtime_generation_required") is not True
@@ -140,8 +220,13 @@ def validate_release_config(config: dict[str, object]) -> ReleaseVersionPolicy |
             )
     if policy.image_milestone:
         if image_required is not True or delivery_mode != "image_required":
+            release_kind = (
+                "Image-milestone recovery releases"
+                if recovery_version is not None
+                else "X.Y.0 releases"
+            )
             raise ValueError(
-                "X.Y.0 releases must require the matching ChannelWatch container image."
+                f"{release_kind} must require the matching ChannelWatch container image."
             )
         if version_parts >= (1, 5, 0):
             if (
@@ -160,15 +245,16 @@ def validate_release_config(config: dict[str, object]) -> ReleaseVersionPolicy |
                     "runtime_bootstrap_sha256",
                     "runtime_variants",
                     "runtime_descriptor",
+                    "minimum_image_sha256",
                 )
-            ):
+            ) or config.get("runtime_compatibility_evidence", {}) != {}:
                 raise ValueError(
                     "A v1.5.0 or newer protocol-4 image milestone cannot declare "
                     "runtime generation fields."
                 )
         if config.get("automatic_install_allowed") is not False:
             raise ValueError(
-                "X.Y.0 image milestones cannot allow automatic in-app installation."
+                "Image foundation releases cannot allow automatic in-app installation."
             )
     elif image_required is not False or delivery_mode == "image_required":
         raise ValueError(

@@ -77,6 +77,58 @@ async function trackDocumentLoads(page: Page) {
   })
 }
 
+async function policyButtonGeometryViolations(page: Page, state: string) {
+  const violations: string[] = []
+  for (const name of ["Automatic during maintenance window", "Notify me only"]) {
+    const geometry = await page.getByRole("button", { name, exact: true }).evaluate((element) => {
+      const button = element.getBoundingClientRect()
+      const parent = element.parentElement?.getBoundingClientRect()
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+      const textRects: Array<{ left: number; right: number; top: number; bottom: number }> = []
+      while (walker.nextNode()) {
+        const node = walker.currentNode
+        if (!node.textContent?.trim()) continue
+        const range = document.createRange()
+        range.selectNodeContents(node)
+        for (const rect of range.getClientRects()) {
+          if (rect.width > 0 && rect.height > 0) {
+            textRects.push({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })
+          }
+        }
+      }
+      return {
+        button: { left: button.left, right: button.right, top: button.top, bottom: button.bottom },
+        parent: parent ? { left: parent.left, right: parent.right, top: parent.top, bottom: parent.bottom } : null,
+        textRects,
+      }
+    })
+    const tolerance = 0.75
+    if (!geometry.parent) {
+      violations.push(`${state}: ${name} has no parent bounds`)
+      continue
+    }
+    if (
+      geometry.button.left < geometry.parent.left - tolerance
+      || geometry.button.right > geometry.parent.right + tolerance
+      || geometry.button.top < geometry.parent.top - tolerance
+      || geometry.button.bottom > geometry.parent.bottom + tolerance
+    ) {
+      violations.push(`${state}: ${name} button exceeds its parent bounds`)
+    }
+    for (const [index, rect] of geometry.textRects.entries()) {
+      if (
+        rect.left < geometry.button.left - tolerance
+        || rect.right > geometry.button.right + tolerance
+        || rect.top < geometry.button.top - tolerance
+        || rect.bottom > geometry.button.bottom + tolerance
+      ) {
+        violations.push(`${state}: ${name} text rect ${index} exceeds its button bounds`)
+      }
+    }
+  }
+  return violations
+}
+
 test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
   await trackDocumentLoads(page)
@@ -94,6 +146,38 @@ test.beforeEach(async ({ page }) => {
       value: undefined,
     })
   }, TEST_JOB_ID)
+})
+
+test("mobile policy controls fit before Apply and while dependencies are preparing", async ({ page }) => {
+  const preparingJob = {
+    ...pendingJob,
+    status: "applying",
+    phase: "preparing",
+    phase_budget_seconds: 600,
+    phase_deadline_at: new Date(Date.now() + 600_000).toISOString(),
+    message: "Preparing verified runtime dependencies.",
+  }
+  let jobRequests = 0
+
+  await page.route("**/api/v1/update/status", (route) => fulfillJson(route, availableStatus))
+  await page.route("**/api/v1/update/apply", (route) => fulfillJson(route, preparingJob))
+  await page.route(`**/api/v1/update/jobs/${TEST_JOB_ID}`, (route) => {
+    jobRequests += 1
+    return fulfillJson(route, preparingJob)
+  })
+
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto("/#settings:updates")
+
+  const violations = await policyButtonGeometryViolations(page, "idle")
+  await page.getByRole("button", { name: "Apply update" }).click()
+  await expect(page.getByText("Preparing dependencies", { exact: true })).toBeVisible()
+  await expect.poll(() => jobRequests).toBeGreaterThanOrEqual(1)
+  await expect(page.getByRole("button", { name: "Automatic during maintenance window" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Notify me only" })).toBeDisabled()
+  violations.push(...await policyButtonGeometryViolations(page, "preparing"))
+
+  expect(violations).toEqual([])
 })
 
 test("one Apply action survives a restart disconnect and refreshes once after the durable job is ready", async ({ page }, testInfo) => {
@@ -130,7 +214,7 @@ test("one Apply action survives a restart disconnect and refreshes once after th
     element.click()
   })
 
-  await expect(page.getByRole("heading", { name: "Installing" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Downloading", exact: true })).toBeVisible()
   await expect(page.getByText("The dashboard will refresh when ready.")).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath("update-waiting-mobile.png"),
@@ -147,29 +231,42 @@ test("a restored update job resumes its bounded wait without submitting Apply ag
   let applyRequests = 0
   let jobRequests = 0
   let updateReady = false
+  let releaseSuccess!: () => void
+  const successGate = new Promise<void>((resolve) => {
+    releaseSuccess = resolve
+  })
+  const downloadingJob = {
+    ...pendingJob,
+    status: "downloading",
+    message: "Downloading verified runtime dependencies.",
+  }
 
   await page.route("**/api/v1/update/status", (route) => fulfillJson(route, updateReady ? readyStatus : {
     ...availableStatus,
-    operation_state: "restarting",
+    operation_state: "downloading",
     operation_busy: true,
-    last_job: pendingJob,
+    last_job: downloadingJob,
   }))
   await page.route("**/api/v1/update/apply", (route) => {
     applyRequests += 1
-    return fulfillJson(route, pendingJob)
+    return fulfillJson(route, downloadingJob)
   })
-  await page.route(`**/api/v1/update/jobs/${TEST_JOB_ID}`, (route) => {
+  await page.route(`**/api/v1/update/jobs/${TEST_JOB_ID}`, async (route) => {
     jobRequests += 1
     if (jobRequests === 1) return route.abort("connectionreset")
-    if (jobRequests === 2) return fulfillJson(route, pendingJob)
+    if (jobRequests === 2) return fulfillJson(route, downloadingJob)
+    await successGate
     updateReady = true
     return fulfillJson(route, successfulJob)
   })
 
   await page.goto("/#settings:updates")
 
-  await expect(page.getByText("Restarting", { exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Downloading", exact: true })).toBeVisible()
   await expect(page.getByText("The dashboard will refresh when ready.")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Apply update" })).toHaveCount(0)
+  expect(applyRequests).toBe(0)
+  releaseSuccess()
   await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
   expect(applyRequests).toBe(0)
   expect(jobRequests).toBeGreaterThanOrEqual(3)

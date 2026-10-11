@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import re
@@ -24,9 +25,25 @@ if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
 from core.update_catalog import normalize_catalog
+from core.runtime_archive import (
+    MAX_BUNDLE_MEMBER_BYTES as MAX_RUNTIME_MEMBER_BYTES,
+    MAX_BUNDLE_MEMBER_COUNT as MAX_RUNTIME_MEMBER_COUNT,
+    _archive_files as _runtime_archive_files,
+)
+from core.runtime_catalog import (
+    normalize_runtime_release,
+    validate_runtime_release_variants,
+)
+from core.runtime_generation import (
+    DEPENDENCY_INVENTORY_PATH,
+    DESCRIPTOR_FILENAME,
+    RuntimeGenerationError,
+    validate_runtime_descriptor_shape,
+)
 from core.update_center import (
     MAX_BUNDLE_BYTES,
     MAX_MANIFEST_BYTES,
+    MAX_RUNTIME_CATALOG_BYTES,
     UPDATE_PUBLIC_KEYS,
     UpdateBundleError,
     UpdateCenterError,
@@ -365,6 +382,274 @@ def verify_update_catalog(
     return catalog
 
 
+def _verify_runtime_archive_bytes(
+    bundle: bytes, descriptor: dict[str, Any]
+) -> None:
+    if not bundle or len(bundle) > MAX_BUNDLE_BYTES:
+        raise UpdateBundleError("Runtime bundle exceeds its bounded download size.")
+    try:
+        validate_runtime_descriptor_shape(descriptor)
+    except RuntimeGenerationError as exc:
+        raise UpdateBundleError(str(exc)) from exc
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(bundle), "r")
+    except zipfile.BadZipFile as exc:
+        raise UpdateBundleError("Runtime bundle is not a valid ZIP archive.") from exc
+    with archive:
+        members = archive.infolist()
+        if len(members) > MAX_RUNTIME_MEMBER_COUNT:
+            raise UpdateBundleError("Runtime bundle has too many members.")
+        descriptor_members = [
+            info for info in members if info.filename == DESCRIPTOR_FILENAME
+        ]
+        if len(descriptor_members) != 1 or not (
+            0 <= descriptor_members[0].file_size <= MAX_RUNTIME_MEMBER_BYTES
+        ):
+            raise UpdateBundleError("Runtime bundle descriptor member is invalid.")
+        selected = _runtime_archive_files(archive, descriptor)
+        if archive.testzip() is not None:
+            raise UpdateBundleError("Runtime bundle ZIP integrity check failed.")
+        try:
+            embedded = json.loads(
+                archive.read(selected[DESCRIPTOR_FILENAME]).decode("utf-8")
+            )
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise UpdateBundleError("Runtime bundle descriptor is invalid.") from exc
+        if embedded != descriptor:
+            raise UpdateBundleError(
+                "Runtime bundle descriptor does not match the signed catalog."
+            )
+        inventory = archive.read(selected[DEPENDENCY_INVENTORY_PATH])
+        if hashlib.sha256(inventory).hexdigest() != descriptor[
+            "dependency_inventory_sha256"
+        ]:
+            raise UpdateBundleError("Runtime bundle inventory hash did not match.")
+        expanded_size = len(inventory)
+        for record in descriptor["files"]:
+            content = archive.read(selected[record["path"]])
+            if len(content) != record["size"] or hashlib.sha256(content).hexdigest() != (
+                record["sha256"]
+            ):
+                raise UpdateBundleError("Runtime bundle payload hash did not match.")
+            expanded_size += len(content)
+        if expanded_size != descriptor["expanded_size"]:
+            raise UpdateBundleError("Runtime bundle expanded size did not match.")
+
+
+def verify_runtime_update_catalog(
+    catalog_bytes: bytes,
+    runtime_bundles: dict[str, bytes],
+    *,
+    public_keys: dict[str, str] | None = None,
+    expected_version: str,
+    expected_source_commit: str,
+    expected_bundle_urls: dict[str, str],
+) -> dict[str, Any]:
+    """Verify a signed protocol-4 bootstrap or dependency catalog."""
+
+    keys = UPDATE_PUBLIC_KEYS if public_keys is None else public_keys
+    if len(catalog_bytes) > MAX_RUNTIME_CATALOG_BYTES:
+        raise UpdateBundleError("Runtime update catalog exceeds its size limit.")
+    if re.fullmatch(r"[0-9a-f]{40}", expected_source_commit) is None:
+        raise UpdateBundleError(
+            "Expected runtime source commit must be a full lowercase Git SHA."
+        )
+    try:
+        raw = json.loads(catalog_bytes.decode("utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema") != 3:
+            raise ValueError("Runtime update catalog schema is unsupported.")
+        payload = raw["payload"]
+        signature = raw["signature"]
+        if not isinstance(payload, dict) or not isinstance(signature, dict):
+            raise TypeError("Runtime update catalog envelope is incomplete.")
+        if signature.get("alg") != "ed25519":
+            raise ValueError("Runtime update catalog signature algorithm is unsupported.")
+        verify_ed25519_signature(
+            keys,
+            str(signature.get("key_id") or ""),
+            str(signature.get("value") or ""),
+            canonical_payload_bytes(payload),
+        )
+        releases = payload.get("releases")
+        if not isinstance(releases, list):
+            raise TypeError("Runtime update catalog releases are invalid.")
+        normalized_version = expected_version.strip().lstrip("v")
+        matches = [
+            release
+            for release in releases
+            if isinstance(release, dict)
+            and str(release.get("version") or "").strip().lstrip("v")
+            == normalized_version
+        ]
+        if len(matches) != 1:
+            raise ValueError("Runtime update catalog target release is not unique.")
+        release = matches[0]
+        for catalog_release in releases:
+            if not isinstance(catalog_release, dict):
+                continue
+            if catalog_release.get("delivery_mode") == "image_required":
+                if catalog_release is release:
+                    continue
+                if (
+                    "runtime_variants" in catalog_release
+                    or "runtime_descriptor" in catalog_release
+                ):
+                    raise ValueError(
+                        "Historical image-only releases cannot contain runtime generations."
+                    )
+                continue
+            if "runtime_variants" in catalog_release:
+                validate_runtime_release_variants(
+                    catalog_release, validate_url=validate_trusted_url
+                )
+        for historical_release in releases:
+            if (
+                historical_release is release
+                or not isinstance(historical_release, dict)
+                or historical_release.get("delivery_mode") == "image_required"
+                or "runtime_variants" not in historical_release
+            ):
+                continue
+            for historical_variant in historical_release["runtime_variants"]:
+                verify_ed25519_signature(
+                    keys,
+                    str(historical_variant.get("key_id") or ""),
+                    str(historical_variant.get("bundle_signature") or ""),
+                    bytes.fromhex(str(historical_variant["bundle_sha256"])),
+                )
+        variants = release.get("runtime_variants")
+    except (UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, UpdateCenterError):
+            raise
+        raise UpdateBundleError("Signed runtime update catalog is invalid.") from exc
+
+    if release.get("compatible_launcher_protocols") != [4]:
+        raise UpdateBundleError("Runtime update catalog must target protocol 4.")
+    image_bootstrap = (
+        release.get("delivery_mode") == "image_required"
+        and release.get("image_required") is True
+    )
+    if image_bootstrap:
+        if "runtime_variants" in release or "runtime_descriptor" in release:
+            raise UpdateBundleError(
+                "Image-only runtime catalog cannot contain a runtime generation."
+            )
+        if runtime_bundles or expected_bundle_urls:
+            raise UpdateBundleError(
+                "Image-only runtime catalog cannot verify runtime generation assets."
+            )
+        try:
+            normalized = normalize_runtime_release(
+                release, platform=None, validate_url=validate_trusted_url
+            )
+        except (TypeError, ValueError) as exc:
+            raise UpdateBundleError(
+                "Image-only runtime catalog release is invalid."
+            ) from exc
+        if normalized["delivery_mode"] != "image_required":
+            raise UpdateBundleError(
+                "Image-only runtime catalog cannot be applied as an app update."
+            )
+        return raw
+    if (
+        release.get("delivery_mode") == "image_required"
+        or release.get("image_required") is not False
+    ):
+        raise UpdateBundleError("Runtime update catalog classification is inconsistent.")
+    if not isinstance(variants, list) or len(variants) != 2:
+        raise UpdateBundleError("Runtime update catalog must contain two native variants.")
+    if set(runtime_bundles) != {"amd64", "arm64"} or set(expected_bundle_urls) != {
+        "amd64",
+        "arm64",
+    }:
+        raise UpdateBundleError(
+            "Runtime update verification requires exactly amd64 and arm64 assets."
+        )
+    for url in expected_bundle_urls.values():
+        validate_trusted_url(url)
+
+    by_architecture: dict[str, dict[str, Any]] = {}
+    interpreter_identity: tuple[object, ...] | None = None
+    for variant in variants:
+        descriptor = variant["runtime_descriptor"]
+        architecture = descriptor["architecture"]
+        if architecture in by_architecture:
+            raise UpdateBundleError("Runtime catalog contains a duplicate architecture.")
+        by_architecture[architecture] = variant
+        if descriptor["source_commit"] != expected_source_commit:
+            raise UpdateBundleError("Runtime descriptor source commit does not match.")
+        identity = (
+            descriptor["python_implementation"],
+            descriptor["python_cache_tag"],
+            descriptor["python_version"],
+            descriptor["os_family"],
+            descriptor["libc_family"],
+            tuple(descriptor["minimum_libc_version"]),
+        )
+        if interpreter_identity is None:
+            interpreter_identity = identity
+        elif identity != interpreter_identity:
+            raise UpdateBundleError(
+                "Runtime descriptor interpreter and system bindings do not match."
+            )
+    if set(by_architecture) != {"amd64", "arm64"}:
+        raise UpdateBundleError("Runtime catalog architectures are incomplete.")
+
+    for architecture in ("amd64", "arm64"):
+        variant = by_architecture[architecture]
+        if variant["bundle_url"] != expected_bundle_urls[architecture]:
+            raise UpdateBundleError("Runtime bundle URL does not match the release contract.")
+        bundle = runtime_bundles[architecture]
+        actual_hash = sha256_hex(bundle)
+        if variant["bundle_sha256"] != actual_hash:
+            raise UpdateBundleError("Runtime bundle hash did not match the catalog.")
+        verify_ed25519_signature(
+            keys,
+            str(variant.get("key_id") or ""),
+            str(variant.get("bundle_signature") or ""),
+            bytes.fromhex(actual_hash),
+        )
+        _verify_runtime_archive_bytes(bundle, variant["runtime_descriptor"])
+    return raw
+
+
+def verify_runtime_catalog_binding(
+    app_catalog: dict[str, Any],
+    runtime_catalog: dict[str, Any],
+    *,
+    expected_version: str,
+) -> None:
+    """Bind independently verified catalogs to the same signed app history."""
+
+    app_payload = app_catalog["payload"]
+    runtime_payload = runtime_catalog["payload"]
+    for name in ("channel", "published_at"):
+        if app_payload.get(name) != runtime_payload.get(name):
+            raise UpdateBundleError("Runtime and app catalog publication fields differ.")
+    normalized_version = expected_version.strip().lstrip("v")
+    release_maps = []
+    for payload in (app_payload, runtime_payload):
+        releases = payload["releases"]
+        by_version = {
+            str(release.get("version") or "").strip().lstrip("v"): release
+            for release in releases
+            if isinstance(release, dict)
+        }
+        if len(by_version) != len(releases) or normalized_version not in by_version:
+            raise UpdateBundleError("Catalog target release is not unique.")
+        release_maps.append(by_version)
+    if release_maps[0].keys() != release_maps[1].keys():
+        raise UpdateBundleError("Runtime and app catalog release histories differ.")
+    for version, app_release in release_maps[0].items():
+        runtime_release = {
+            name: value
+            for name, value in release_maps[1][version].items()
+            if name != "runtime_variants"
+        }
+        if app_release != runtime_release:
+            raise UpdateBundleError("Runtime catalog does not match the signed app release.")
+
+
 def _read_limited_file(path: Path, *, max_bytes: int) -> bytes:
     size = path.stat().st_size
     if size > max_bytes:
@@ -372,11 +657,40 @@ def _read_limited_file(path: Path, *, max_bytes: int) -> bytes:
     return path.read_bytes()
 
 
+def _architecture_values(values: list[str] | None, *, label: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values or []:
+        architecture, separator, item = value.partition("=")
+        if (
+            not separator
+            or architecture not in {"amd64", "arm64"}
+            or not item
+            or architecture in result
+        ):
+            raise UpdateBundleError(
+                f"{label} must provide one unique amd64=value and arm64=value pair."
+            )
+        result[architecture] = item
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--catalog", type=Path)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--runtime-catalog", type=Path)
+    parser.add_argument(
+        "--runtime-bundle",
+        action="append",
+        help="Runtime archive as amd64=path or arm64=path.",
+    )
+    parser.add_argument(
+        "--expected-runtime-bundle-url",
+        action="append",
+        help="Expected runtime URL as amd64=url or arm64=url.",
+    )
+    parser.add_argument("--expected-runtime-source-commit")
     parser.add_argument("--expected-version", required=True)
     parser.add_argument("--expected-channel", choices=("stable",), required=True)
     parser.add_argument("--expected-runtime-abi", required=True)
@@ -440,13 +754,15 @@ def main() -> int:
             expected_bundle_url=args.expected_bundle_url,
             expected_source_root=args.source_root,
         )
+        verified_catalog = None
         if args.catalog is not None:
             if not args.expected_delivery_mode:
                 raise UpdateBundleError(
                     "Catalog verification requires --expected-delivery-mode."
                 )
+            catalog_bytes = _read_limited_file(args.catalog, max_bytes=MAX_MANIFEST_BYTES)
             verify_update_catalog(
-                _read_limited_file(args.catalog, max_bytes=MAX_MANIFEST_BYTES),
+                catalog_bytes,
                 _read_limited_file(args.bundle, max_bytes=MAX_BUNDLE_BYTES),
                 public_keys=public_keys,
                 expected_version=args.expected_version,
@@ -456,6 +772,62 @@ def main() -> int:
                 expected_recommended_image_version=(
                     args.expected_recommended_image_version or args.expected_version
                 ),
+            )
+            # Compare signed records, without normalization-added defaults.
+            verified_catalog = json.loads(catalog_bytes)
+        runtime_paths = _architecture_values(
+            args.runtime_bundle, label="--runtime-bundle"
+        )
+        runtime_urls = _architecture_values(
+            args.expected_runtime_bundle_url,
+            label="--expected-runtime-bundle-url",
+        )
+        runtime_requested = bool(
+            args.runtime_catalog
+            or runtime_paths
+            or runtime_urls
+            or args.expected_runtime_source_commit
+        )
+        if runtime_requested:
+            if (
+                args.runtime_catalog is None
+                or not args.expected_runtime_source_commit
+                or verified_catalog is None
+            ):
+                raise UpdateBundleError(
+                    "Runtime verification requires both catalogs and a source commit."
+                )
+            if args.expected_runtime_source_commit != args.expected_git_sha.strip().lower():
+                raise UpdateBundleError("Runtime and app verification source commits differ.")
+            if (runtime_paths or runtime_urls) and (
+                set(runtime_paths) != {"amd64", "arm64"}
+                or set(runtime_urls) != {"amd64", "arm64"}
+            ):
+                raise UpdateBundleError(
+                    "Runtime generation verification requires both native bundles and URLs."
+                )
+            runtime_catalog = verify_runtime_update_catalog(
+                _read_limited_file(
+                    args.runtime_catalog, max_bytes=MAX_RUNTIME_CATALOG_BYTES
+                ),
+                (
+                    {
+                        architecture: _read_limited_file(
+                            Path(runtime_paths[architecture]),
+                            max_bytes=MAX_BUNDLE_BYTES,
+                        )
+                        for architecture in ("amd64", "arm64")
+                    }
+                    if runtime_paths
+                    else {}
+                ),
+                public_keys=public_keys,
+                expected_version=args.expected_version,
+                expected_source_commit=args.expected_runtime_source_commit,
+                expected_bundle_urls=runtime_urls,
+            )
+            verify_runtime_catalog_binding(
+                verified_catalog, runtime_catalog, expected_version=args.expected_version
             )
     except (OSError, ValueError, UpdateCenterError) as exc:
         print(f"update asset verification failed: {exc}", file=sys.stderr)

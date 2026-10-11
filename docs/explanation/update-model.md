@@ -7,13 +7,15 @@ ChannelWatch v0.9.18 introduced the repaired hybrid update model. Starting with 
 
 ## Version and delivery cadence
 
-From v1.0.0 forward, every minor line begins with one deliberate image milestone:
+Published v1.0.0 through v1.4.x lines follow one image milestone per minor line:
 
 - `X.Y.0` requires the matching Docker, Unraid, Compose, or Helm image;
 - `X.Y.1` through `X.Y.9` use the signed in-app Update Center;
 - after `X.Y.9`, the next version is `X.(Y+1).0`, never `X.Y.10`.
 
-For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9. Release tooling rejects a `.0` release that is not image-required, rejects a `.1` through `.9` release that is image-required, and rejects patch numbers above 9. A separately documented emergency may require a new minor `.0` milestone sooner, but an existing published version is never reclassified or replaced.
+For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9. Published versions keep their original delivery requirements. Patch numbers still stop at 9.
+
+After a verified protocol-4 image milestone at v1.5.0 or newer, a future minor line may retain that image floor. This requires a complete signed runtime generation, the exact immutable bootstrap identity, and matching native AMD64 and ARM64 compatibility, restart, and rollback evidence. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
 
 The default policy installs verified compatible updates during the local 03:00–05:00 maintenance window. Administrators can choose notify-only, apply immediately, postpone for 24 hours or 7 days, retry a failed attempt, or roll back. This keeps routine updates simple without pretending that a running container can safely replace its own base image, Python runtime, system packages, or launcher contract.
 
@@ -45,11 +47,57 @@ The reconnect code was written for v1.4.2. Publications of v1.4.2 through v1.4.4
 
 For manual Apply and Retry actions, the browser assigns the job ID before sending the request. The authenticated updater retains that ID in its existing activation record, so a lost reply does not force the browser to guess which update completed. Signature verification and the server's single-flight lock still govern installation.
 
-## Image-required updates
+## Dependency runtime generations
 
-An update is image-required when it needs something the current container image cannot provide safely. Examples include dependency changes, base image updates, OS package changes, Supervisor changes, persistent schema changes, and deployment chart assumptions.
+Images with launcher protocol 4 can verify an application and its Python
+packages as one signed runtime generation. Each generation contains the core,
+backend, static frontend, dependency files, package notices and platform
+inventory. Preparation happens in an inactive directory under `/config`; it
+does not install packages into the running image's `/venv` or operating system.
 
-Beginning with v1.0.0, ChannelWatch intentionally groups those runtime refreshes into `X.Y.0` milestones. Even when a particular `.0` release contains mostly application changes, installing its matching image creates one clear and testable runtime baseline for the following nine in-app releases.
+The image-owned launcher checks the signed release record, descriptor,
+dependency inventory and prepared environment before importing selected code.
+Core and UI start in fresh processes using the same generation. Both must
+report that exact activation as healthy before installation succeeds. Startup
+failure restores the previous application and dependency selection together.
+
+Published v1.4.x images do not have this verification authority.
+They require one container image update before dependency generations can be
+used. An application-only download cannot replace their immutable launchers.
+Preserve `/config` and any external storage key during that image update.
+
+v1.5.0 is the first image milestone with this authority. Once it is installed,
+future compatible releases can update the application and official Python
+packages together without recreating the container.
+
+This capability covers compatible Python packages, including qualified binary
+wheels. It does not replace Python itself, the operating system, glibc,
+Supervisor or the image-owned verifier. Those components still need image
+maintenance. Updating a worker package does not repair a vulnerability in the
+older image copy of that package.
+
+Dependency-aware clients use the signed v3 catalog. Existing clients keep
+their v2 app-only catalog and published release history. Every protocol-4
+application update needs a complete signed generation, even when its package
+versions have not changed; a missing identity cannot downgrade startup checks.
+
+The dependency catalog can retain the previous complete runtime release as a
+compatible fallback within its size limit. Older release history remains
+visible, but a record without its signed package variants is not offered as an
+installable dependency update. This does not remove the last good generation
+already saved in `/config` for local rollback.
+
+Preparation requires writable, executable persistent storage and enough space
+for the download, expanded candidate, previous generation and preparation
+headroom. Unsupported mounts or insufficient space stop installation before
+selection changes. Keep the active and last good generations; cleanup removes
+only unreferenced, authenticated generations after successful activation.
+
+## Remaining image-required updates
+
+An update is image-required when it needs something the current container image cannot provide safely. Examples include incompatible dependencies, base image updates, OS package changes, Supervisor changes, persistent schema changes, and deployment chart assumptions. Images without protocol-4 dependency support also need an image update for package changes.
+
+ChannelWatch groups image-required runtime changes into `X.Y.0` milestones. A future minor line may keep a proven protocol-4 image baseline only when release tooling verifies the complete dependency-generation evidence described above.
 
 Image-required releases stay on the normal Docker, Unraid, Compose, or Helm update path. Deployment documentation or template presentation by itself is not image-required when the signed bundle remains compatible with the installed ABI, schema, dependencies, and image-owned launcher.
 
@@ -66,15 +114,13 @@ At container startup, the image entrypoint resolves the active runtime:
 3. Runtime ABI or schema mismatch falls back to the image.
 4. Missing or corrupt active metadata falls back to the image.
 
-Supervisor always starts an image-owned runtime launcher first. The launcher then imports the selected app directory. If the selected bundle fails during activation, the launcher records the failure and rolls back to the previous runtime or the image copy.
+Supervisor always starts an image-owned runtime launcher first. Protocol 4 authenticates every selected generation before importing its app or packages; missing dependency identity cannot select an unverified app. If the selected bundle fails during activation, the launcher records the failure and rolls back to the previous runtime or the image copy.
 
 ## Why not replace the Docker image in-app?
 
 Replacing the container image from inside the app would require control over the host Docker socket, Unraid template state, Compose files, Helm releases, permissions, and restart policy. That would increase risk and vary by platform.
 
-The safer user experience is explicit:
+Update Center distinguishes the two delivery paths:
 
-- compatible app updates happen in-app;
-- runtime-changing updates say **container image update required**.
-
-That keeps the simple path simple and the dangerous path visible.
+- compatible app and supported package updates happen in-app;
+- interpreter, OS, or image-owned launcher changes say **container image update required**.

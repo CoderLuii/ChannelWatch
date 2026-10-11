@@ -216,21 +216,23 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:1.4.5` for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use `coderluii/channelwatch:1.5.0` for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.4.5 is a signed in-app update for the v1.4.0 image. Update Center keeps the exact Apply or Retry job through temporary restart disconnects, resumes it after Settings reopens, and refreshes only when that job and the new runtime are ready. It can also announce a compatible signed future image-required release without attempting to install that release as an app update. Install v1.4.5 from **Settings > Updates**, or pull v1.4.5 for a fresh container.
+ChannelWatch v1.5.0 requires a container image update. Every published v1.4.x installation needs this one-time recreation to receive launcher protocol 4. Keep the same `/config` volume; saved DVRs, credentials, settings, history, and the application-managed encryption key remain there.
+
+After v1.5.0 is running, **Settings > Updates** can install future compatible application code and official Python packages as one signed runtime generation. ChannelWatch prepares the generation away from the active runtime, restarts, verifies the matching core and UI, and rolls the application and packages back together if startup fails.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 
-From v1.0.0 forward, every `X.Y.0` release requires its matching container image, and `X.Y.1` through `X.Y.9` install through the signed Update Center. After `X.Y.9`, ChannelWatch advances to `X.(Y+1).0` rather than publishing patch 10.
+Published v1.0.0 through v1.5.0 use `X.Y.0` as a container-image milestone, while `X.Y.1` through `X.Y.9` install through the signed Update Center. A future `.0` release can retain the proven v1.5.0 image floor only when its complete signed runtime generation passes the required AMD64 and ARM64 compatibility, restart, and rollback checks. After `X.Y.9`, ChannelWatch advances to `X.(Y+1).0` rather than publishing patch 10.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** The immutable published entrypoints in those images cannot safely activate v0.9.18. Preserve the existing `/config` volume and pull/recreate the v0.9.18 image once. v0.9.18 repairs any stale legacy update marker without discarding the preserved configuration, and its improved Update Center becomes the normal path for future compatible releases.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve the existing `/config` volume and any external storage key configuration, then pull/recreate the v1.5.0 image directly. The current image repairs stale legacy update markers without discarding the preserved configuration. Future compatible releases use the improved Update Center normally.
 
 Once v0.9.18 or newer is installed, its setup and legacy-recovery shell can use only the official signed stable recovery channel before normal administrator navigation is available. The narrow recovery action uses same-origin anti-CSRF state and exact typed confirmation; it cannot accept custom feeds, URLs, uploads, signing keys, or downgrades.
 
 The Update Center checks trusted public ChannelWatch release metadata, verifies signed app bundles, creates a pre-update backup, activates the update, restarts ChannelWatch, and keeps rollback available when the previous runtime can be restored. It does not add telemetry.
 
-Some releases still require a normal container image update. ChannelWatch will say **container image update required** when a release changes Python dependencies, base image packages, Supervisor/container behavior, runtime ABI, Helm assumptions, or persistent schema. See [`docs/how-to/update-channelwatch.md`](docs/how-to/update-channelwatch.md) for the full update guide.
+Some releases still require a normal container image update. ChannelWatch will say **container image update required** for Python interpreter, OS, glibc, Supervisor, image-owned verifier, incompatible package, runtime ABI, Helm, or persistent schema changes. See [`docs/how-to/update-channelwatch.md`](docs/how-to/update-channelwatch.md) for the full update guide.
 
 ## Troubleshooting
 
@@ -238,7 +240,7 @@ Some releases still require a normal container image update. ChannelWatch will s
 
 Fresh v1.0.0 Project One-Click installations do not need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
 
-If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first v0.9.18 restart. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. v0.9.9 and v0.9.10 still require the one-time image pull described above; their preserved envelopes migrate after v0.9.18 starts.
+If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first restart on a migration-capable image (v0.9.18 or newer), including v1.5.0. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. For v0.9.9 and v0.9.10, keep those inputs when recreating directly with v1.5.0; their preserved envelopes migrate when the new image starts.
 
 If the old value is unavailable or incorrect, ChannelWatch does not overwrite the protected data. Sign in and open **Settings > Security** to retry migration after restoring the value, or explicitly reset only the unrecoverable DVR API keys and custom webhook URLs/secrets while preserving other settings and history. The third-party Project One-Click repository is not modified or redistributed by ChannelWatch.
 

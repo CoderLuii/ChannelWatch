@@ -86,6 +86,21 @@ What it does not check directly:
 
 `GET /api/health` is the authenticated detailed monitoring route when authentication is configured. It uses the same monitoring summary, returns `200` when ready, and returns `503` with `"status":"degraded"` when monitoring is not ready. Its response includes DVR IDs, DVR names, monitoring states, reasons, and notification-routing diagnostics; it still makes no live DVR calls.
 
+## Application and dependency identity
+
+Update status reports `current_version` separately from `image_version`.
+`worker_runtime` reports the interpreter version and executable used by the
+responding process. Its `verified_generation` is present only when an
+image-verified dependency worker supplied a process-local generation claim.
+The claim includes the application path, generation descriptor digest and
+dependency inventory digest; it is not accepted from environment variables.
+
+An updated application or worker package does not mean the container image,
+Python interpreter, operating system or image-owned verification packages
+have been updated. Report those separately when investigating an issue.
+An HTTP liveness response alone also does not prove a successful update:
+both core and UI must validate the exact activation identity.
+
 ## Kubernetes style probes
 
 Use the three implemented `/healthz/*` routes for Kubernetes style probes:

@@ -1381,6 +1381,18 @@ class UpdateAutomationService:
                 quarantine=quarantine,
             )
             return "verification-failed" if quarantine else "retry-scheduled"
+        terminalizer = getattr(manager, "record_pre_handoff_apply_failure", None)
+        if callable(terminalizer):
+            try:
+                terminalizer(
+                    job_id=str(attempt.get("job_id") or ""),
+                    scheduler_attempt_id=str(attempt.get("attempt_id") or ""),
+                    version=str(attempt.get("version") or ""),
+                    bundle_sha256=str(attempt.get("bundle_sha256") or ""),
+                    error=str(error),
+                )
+            except (OSError, RuntimeError, ValueError, UpdateCenterError):
+                pass
         try:
             manager_status = manager.status()
         except (OSError, RuntimeError, ValueError, UpdateCenterError):

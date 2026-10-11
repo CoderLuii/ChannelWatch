@@ -21,6 +21,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 import asyncio
+from core.runtime_identity import get_verified_runtime_claim
 from pydantic import BaseModel, Field
 from . import config as backend_config
 from .config import load_settings, save_settings
@@ -2927,34 +2928,66 @@ def _session_setup_required(*, rbac_enabled: bool) -> bool:
         return True
 
 
-def _dvr_api_keys_encrypted_at_rest(settings: AppSettings) -> bool:
-    import stat
-    from core.helpers.encryption import FERNET_PREFIX
+def _dvr_api_keys_encrypted_at_rest() -> bool:
+    from base64 import urlsafe_b64encode
 
-    servers = [
-        s for s in (getattr(settings, "dvr_servers", None) or []) if isinstance(s, dict)
-    ]
-    api_keys = [
-        str(server.get("api_key", "") or "")
-        for server in servers
-        if server.get("api_key") not in ("", None)
-    ]
+    from cryptography.fernet import Fernet, InvalidToken
+
+    from core.helpers.atomic_io import read_regular_file_bytes
+    from core.helpers.config import MAX_SETTINGS_FILE_BYTES
+    from core.helpers.protected_credentials import is_protected_ciphertext
+
+    settings_path = backend_config.CONFIG_FILE
+    try:
+        raw_settings = json.loads(
+            read_regular_file_bytes(
+                settings_path,
+                max_bytes=MAX_SETTINGS_FILE_BYTES,
+            ).decode("utf-8-sig")
+        )
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(raw_settings, dict):
+        return False
+
+    servers = raw_settings.get("dvr_servers", [])
+    if not isinstance(servers, list) or any(
+        not isinstance(server, dict) for server in servers
+    ):
+        return False
+    api_keys: list[str] = []
+    for server in servers:
+        value = server.get("api_key")
+        if value in ("", None):
+            continue
+        if not is_protected_ciphertext(value):
+            return False
+        api_keys.append(value)
     if not api_keys:
         return True
 
-    if any(not value.startswith(FERNET_PREFIX) for value in api_keys):
-        return False
-
-    key_path = CONFIG_DIR / "encryption.key"
-    if not key_path.exists():
-        return False
-
+    key_path = settings_path.parent / "encryption.key"
     try:
-        mode = stat.S_IMODE(key_path.stat().st_mode)
-    except OSError:
+        key_metadata = key_path.lstat()
+        if (
+            not stat.S_ISREG(key_metadata.st_mode)
+            or getattr(key_metadata, "st_nlink", 1) != 1
+            or stat.S_IMODE(key_metadata.st_mode) & 0o077
+        ):
+            return False
+        raw_key = read_regular_file_bytes(key_path, max_bytes=32)
+    except (OSError, ValueError):
+        return False
+    if len(raw_key) != 32:
         return False
 
-    return (mode & 0o077) == 0
+    fernet = Fernet(urlsafe_b64encode(raw_key))
+    try:
+        for value in api_keys:
+            fernet.extract_timestamp(value.removeprefix("fernet:").encode("ascii"))
+    except (InvalidToken, UnicodeError, ValueError):
+        return False
+    return True
 
 
 def _build_security_status() -> SecurityStatusResponse:
@@ -2987,7 +3020,7 @@ def _build_security_status() -> SecurityStatusResponse:
         auth_disabled=auth_state.runtime_auth_override_active
         or auth_state.configured_mode == "none",
         api_key_configured=auth_state.api_key_configured,
-        encrypted_dvr_api_keys_at_rest=_dvr_api_keys_encrypted_at_rest(settings),
+        encrypted_dvr_api_keys_at_rest=_dvr_api_keys_encrypted_at_rest(),
         encryption_key_path=str(CONFIG_DIR / "encryption.key"),
         feeds=SecurityFeedsStatus(
             implemented=True,
@@ -3565,6 +3598,8 @@ def run_startup_initialization():
                 running_version=__version__,
                 activation_id=os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
                 healthy=_update_center_healthcheck(),
+                running_app_path=Path(__file__).resolve().parents[2],
+                verified_runtime_claim=get_verified_runtime_claim(),
             )
         except _UpdateRestartError as exc:
             # The selected runtime has already rolled back. Do not publish UI

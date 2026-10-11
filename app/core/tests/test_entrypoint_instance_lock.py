@@ -236,19 +236,25 @@ def test_pre_exec_failure_releases_lock_without_spawning_guard_process(
         "cleanup_restart_journal_candidates_before_validation",
         lambda: None,
     )
-    monkeypatch.setattr(entrypoint, "validate_config_tree", lambda _path: None)
+    monkeypatch.setattr(
+        entrypoint, "validate_config_tree", lambda _path, **_kwargs: None
+    )
     monkeypatch.setattr(entrypoint, "ensure_settings", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         entrypoint, "merge_bootstrap_env", lambda _created, **_kwargs: None
     )
-    monkeypatch.setattr(entrypoint, "chown_tree", lambda *_args: None)
-    monkeypatch.setattr(entrypoint, "chmod_config_tree", lambda _path: None)
+    monkeypatch.setattr(entrypoint, "chown_tree", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        entrypoint, "chmod_config_tree", lambda _path, **_kwargs: None
+    )
     monkeypatch.setattr(
         entrypoint, "render_supervisor_config", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(entrypoint, "prepare_standard_streams", lambda: None)
     monkeypatch.setattr(entrypoint, "drop_privileges", lambda *_args: None)
-    monkeypatch.setattr(entrypoint, "verify_config_tree_writable", lambda _path: None)
+    monkeypatch.setattr(
+        entrypoint, "verify_config_tree_writable", lambda _path, **_kwargs: None
+    )
     monkeypatch.setattr(entrypoint, "set_runtime_umask", lambda: None)
     monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint", "supervisord"])
     monkeypatch.setattr(
@@ -297,7 +303,9 @@ def test_mature_read_only_config_skips_mutation_but_reaches_exec(
         "cleanup_restart_journal_candidates_before_validation",
         lambda: None,
     )
-    monkeypatch.setattr(entrypoint, "validate_config_tree", lambda _path: None)
+    monkeypatch.setattr(
+        entrypoint, "validate_config_tree", lambda _path, **_kwargs: None
+    )
     monkeypatch.setattr(
         entrypoint,
         "validate_read_only_runtime_state",

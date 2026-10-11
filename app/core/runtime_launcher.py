@@ -19,6 +19,20 @@ import time
 import traceback
 import uuid
 
+# This file is executed by absolute path from the immutable image.  A selected
+# runtime may be present in an inherited PYTHONPATH after a coordinated restart;
+# keep package imports below bound to the image until the dependency bridge has
+# validated and installed the selected generation.
+_IMAGE_IMPORT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path[:] = [
+    _IMAGE_IMPORT_ROOT,
+    *(
+        entry
+        for entry in sys.path
+        if os.path.realpath(entry or os.curdir) != _IMAGE_IMPORT_ROOT
+    ),
+]
+
 # The parser is reachable only over a mode-0600, UID-owned local Unix socket.
 import xmlrpc.client  # nosec B411
 from contextlib import contextmanager
@@ -27,6 +41,10 @@ from pathlib import Path
 from typing import Any
 
 from core.image_metadata import resolve_image_metadata
+from core.runtime_identity import (
+    activation_records_match,
+    readiness_marker_matches,
+)
 
 try:
     import fcntl
@@ -78,6 +96,7 @@ RESTART_JOURNAL_FIELDS = {
 RESTART_REQUIRED_WATCHDOG_INTERVAL_SECONDS = 1.0
 RESTART_REQUIRED_PRELAUNCH_DELAY_SECONDS = 2.0
 LAUNCHER_PROTOCOL_RECOVERY_CAPABLE = 3
+LAUNCHER_PROTOCOL_VERIFIED_DEPENDENCIES = 4
 RECOVERY_MODE_FILE = "official-recovery-mode.json"
 SUPERVISOR_SOCKET_FILE = os.environ.get(
     "CHANNELWATCH_SUPERVISOR_SOCKET_FILE",
@@ -110,6 +129,10 @@ class RestartRequestError(RuntimeError):
             raise ValueError("Unsupported restart failure diagnostic.")
         self.diagnostic = diagnostic
         super().__init__("Coordinated restart request failed.")
+
+
+class _RestartHelperAlreadyActive(RuntimeError):
+    """A trusted helper owns the fixed restart-operation lock."""
 
 
 def utc_now() -> str:
@@ -288,7 +311,7 @@ def _protocol_three_restart_helper_lock(socket_path: Path):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError(
+            raise _RestartHelperAlreadyActive(
                 "A coordinated restart helper is already active."
             ) from exc
         try:
@@ -872,6 +895,8 @@ def image_launcher_protocol(image_version: str | None = None) -> int:
     if resolved_version is None:
         resolved_version = resolve_image_metadata(image_app_dir=IMAGE_APP_DIR).version
     version = _parse_image_version(resolved_version)
+    if version >= (1, 5, 0):
+        return LAUNCHER_PROTOCOL_VERIFIED_DEPENDENCIES
     if version <= (0, 9, 9):
         return 0
     if version <= (0, 9, 15):
@@ -1795,22 +1820,40 @@ def restart_supervisor_services(*, socket_path: Path, ack_fd: int) -> int:
                 )
                 _protocol_three_restart_helper_checkpoint("handoff-published")
             return 0
-    except Exception as exc:
+    except _RestartHelperAlreadyActive:
         try:
-            _write_restart_helper_ack(
-                ack_fd,
-                f"error:{exc.__class__.__name__}\n".encode(),
+            transition_present = (
+                restart_journal_present() or protocol_three_handoff_present()
             )
-        except OSError:
-            pass
-        log(f"Coordinated service restart encountered {exc.__class__.__name__}.")
-        return 1
+            if not transition_present:
+                raise RuntimeError(
+                    "An ordinary duplicate restart helper cannot be acknowledged."
+                )
+            # Strict validation binds the duplicate to the same durable restart
+            # transaction. The lock owner may complete and a replacement child
+            # may consume it while this helper waits for the journal lock; that
+            # completed transition is also safe to acknowledge.
+            validate_protocol_three_restart_handoff_if_present()
+            _write_restart_helper_ack(ack_fd, b"ready\n")
+            return 0
+        except Exception as exc:
+            failure = exc
+    except Exception as exc:
+        failure = exc
+    try:
+        _write_restart_helper_ack(
+            ack_fd,
+            f"error:{failure.__class__.__name__}\n".encode(),
+        )
+    except OSError:
+        pass
+    log(f"Coordinated service restart encountered {failure.__class__.__name__}.")
+    return 1
 
 
 def _spawn_protocol_three_restart_helper() -> None:
     read_fd, write_fd = os.pipe()
-    command = [
-        sys.executable,
+    helper_arguments = [
         str(IMAGE_APP_DIR / "core" / "runtime_launcher.py"),
         "restart-services",
         "--socket",
@@ -1818,6 +1861,25 @@ def _spawn_protocol_three_restart_helper() -> None:
         "--ack-fd",
         str(write_fd),
     ]
+    popen_options: dict[str, Any] = {}
+    if image_launcher_protocol() >= LAUNCHER_PROTOCOL_VERIFIED_DEPENDENCIES:
+        command = ["/venv/bin/python", "-I", "-B", "-S", *helper_arguments]
+        environment = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith("PYTHON")
+            and name
+            not in {
+                "CHANNELWATCH_APP_DIR",
+                "LD_AUDIT",
+                "LD_LIBRARY_PATH",
+                "LD_PRELOAD",
+                "VIRTUAL_ENV",
+            }
+        }
+        popen_options.update(env=environment, cwd=str(IMAGE_APP_DIR))
+    else:
+        command = [sys.executable, *helper_arguments]
     try:
         # Fixed argv, no shell, and an image-owned executable prevent command injection.
         subprocess.Popen(
@@ -1828,6 +1890,7 @@ def _spawn_protocol_three_restart_helper() -> None:
             close_fds=True,
             pass_fds=(write_fd,),
             start_new_session=True,
+            **popen_options,
         )
     except Exception:
         os.close(read_fd)
@@ -1978,32 +2041,13 @@ def _parse_utc(value: Any) -> datetime | None:
 
 def _marker_matches_pending(component: str, pending: dict[str, Any]) -> bool:
     marker = load_json(RUNTIME_DIR / f"activation-{component}-ready.json", {})
-    return isinstance(marker, dict) and all(
-        marker.get(key) == value
-        for key, value in {
-            "component": component,
-            "version": str(pending.get("version") or "").strip().lstrip("v"),
-            "activation_id": str(pending.get("activation_id") or ""),
-            "path": str(pending.get("path") or ""),
-            "healthy": True,
-        }.items()
-    )
+    return readiness_marker_matches(marker, pending, component=component)
 
 
 def _pending_matches_active(
     pending: dict[str, Any], active: dict[str, Any], app_dir: Path | None = None
 ) -> bool:
-    if not all(
-        str(pending.get(key) or "") == str(active.get(key) or "")
-        for key in ("activation_id", "version", "path")
-    ) or not str(active.get("activation_id") or ""):
-        return False
-    if app_dir is None:
-        return True
-    try:
-        return Path(str(pending.get("path") or "")).resolve() == app_dir.resolve()
-    except OSError:
-        return False
+    return activation_records_match(pending, active, app_dir)
 
 
 def _claim_pending(pending: dict[str, Any], *, claimant: str) -> Path | None:
@@ -2018,10 +2062,7 @@ def _claim_pending(pending: dict[str, Any], *, claimant: str) -> Path | None:
         return None
     fsync_directory(RUNTIME_DIR)
     claimed = load_json(claim_path, None)
-    if not isinstance(claimed, dict) or any(
-        str(claimed.get(key) or "") != str(pending.get(key) or "")
-        for key in ("activation_id", "version", "path")
-    ):
+    if not activation_records_match(claimed, pending):
         return None
     return claim_path
 
@@ -2344,11 +2385,26 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     start_restart_required_watchdog()
     app_dir = selected_app_dir()
-    prepare_import_path(app_dir)
-    start_activation_watchdog(app_dir)
-    log(f"Launching {args.mode} from {app_dir}")
-
     try:
+        from core.runtime_image_bootstrap import (
+            maybe_supervise as maybe_supervise_runtime_generation,
+        )
+
+        start_activation_watchdog(app_dir)
+        if maybe_supervise_runtime_generation(
+            image_app_dir=IMAGE_APP_DIR,
+            runtime_dir=RUNTIME_DIR,
+            app_dir=app_dir,
+            launcher_protocol=image_launcher_protocol(),
+            mode=args.mode,
+            app_args=tuple(args.app_args) if args.mode == "core" else (),
+            host=getattr(args, "host", None),
+            port=getattr(args, "port", None),
+            log_level=getattr(args, "log_level", None),
+        ):
+            return 0
+        prepare_import_path(app_dir)
+        log(f"Launching {args.mode} from {app_dir}")
         if args.mode == "core":
             run_core(args)
         elif args.mode == "ui":

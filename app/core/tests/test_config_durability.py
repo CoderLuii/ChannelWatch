@@ -708,6 +708,8 @@ def test_backend_lifespan_rejects_terminal_update_restart_failure():
             "running_version": main_mod.__version__,
             "activation_id": os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
             "healthy": False,
+            "running_app_path": Path(main_mod.__file__).resolve().parents[2],
+            "verified_runtime_claim": None,
         }
     ]
 

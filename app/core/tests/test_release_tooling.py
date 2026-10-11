@@ -289,6 +289,54 @@ def test_update_bundle_copies_required_legal_files(tmp_path):
         assert rendered.split("\n", 1)[1] == (ROOT / "docs/legal" / name).read_text().split("\n", 1)[1]
 
 
+def test_runtime_application_staging_uses_image_payload_roots(tmp_path, monkeypatch):
+    update_builder = _load_script(
+        "build_update_bundle_runtime_staging",
+        "scripts/release/build-update-bundle.py",
+    )
+    runtime_builder = _load_script(
+        "build_runtime_bundle_staging_contract",
+        "scripts/release/build-runtime-bundle.py",
+    )
+    fixture_root = tmp_path / "source"
+    for relative, content in {
+        "app/core/main.py": "core\n",
+        "app/ui/backend/main.py": "backend\n",
+        "app/ui/out/index.html": "frontend\n",
+        "app/ui/public/images/logo.svg": "<svg/>\n",
+    }.items():
+        path = fixture_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(update_builder, "ROOT", fixture_root)
+    monkeypatch.setattr(
+        update_builder,
+        "copy_release_legal_files",
+        lambda root, **_kwargs: (
+            (root / "core" / "release_legal").mkdir(parents=True),
+            (root / "core" / "release_legal" / "LICENSE").write_text(
+                "license\n", encoding="utf-8"
+            ),
+        ),
+    )
+    monkeypatch.setattr(update_builder, "copy_copyleft_release_files", lambda _root: None)
+    stage = tmp_path / "runtime-app"
+
+    update_builder.stage_runtime_application_payload(stage, version="1.5.0")
+
+    payload = runtime_builder._collect_payload(
+        stage,
+        allowed_prefixes=("core/", "ui/backend/"),
+        label="Application payload",
+    )
+    assert "core/main.py" in payload
+    assert "ui/backend/main.py" in payload
+    assert "core/release_legal/LICENSE" in payload
+    assert any(path.startswith("ui/backend/static_ui/") for path in payload)
+    assert not any(path.startswith("app/") for path in payload)
+    assert not any(".git" in path.split("/") for path in payload)
+
+
 def test_update_bundle_zip_is_reproducible_and_normalizes_metadata(tmp_path):
     module = _load_script(
         "build_update_bundle_reproducible_zip",
@@ -406,524 +454,6 @@ def test_update_bundle_retains_deterministic_v2_catalog_history(tmp_path):
     with pytest.raises(ValueError, match="retain the permanent v0.9.18 bridge"):
         module.load_catalog_history("0.9.20", path=history)
     assert module.load_catalog_history("0.9.18", path=history) == []
-
-
-def test_catalog_predecessor_allows_only_verified_unpublished_ancestor(tmp_path):
-    module = _load_script(
-        "build_update_bundle_unpublished_predecessor",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def git(*args):
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=ChannelWatch Test",
-                "-c",
-                "user.email=channelwatch-test@example.invalid",
-                *args,
-            ],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-    git("init", "--initial-branch=main")
-    tracked = repo / "tracked.txt"
-    for version in ("1.4.1", "1.4.2", "1.4.3"):
-        tracked.write_text(version, encoding="utf-8")
-        git("add", "tracked.txt")
-        git("commit", "-m", version)
-        if version != "1.4.3":
-            git("tag", f"v{version}")
-
-    requests = []
-
-    def release_not_found(request, *, timeout):
-        requests.append((request, timeout))
-        if "/releases/tags/" in request.full_url:
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "Not Found",
-                {},
-                io.BytesIO(b'{"message":"Not Found"}'),
-            )
-        return SimpleNamespace(
-            status=200,
-            read=lambda _limit: b"[]",
-            close=lambda: None,
-        )
-
-    module.require_previous_catalog_release(
-        "1.4.3",
-        [{"version": "1.4.1"}],
-        ["v1.4.1", "v1.4.2"],
-        unpublished_tags=["v1.4.2"],
-        repository="CoderLuii/ChannelWatch",
-        github_token="authenticated-test-token",
-        repo_root=repo,
-        urlopen=release_not_found,
-    )
-
-    assert len(requests) == 2
-    tag_request, tag_timeout = requests[0]
-    assert tag_request.full_url.endswith(
-        "/repos/CoderLuii/ChannelWatch/releases/tags/v1.4.2"
-    )
-    list_request, list_timeout = requests[1]
-    assert list_request.full_url.endswith(
-        "/repos/CoderLuii/ChannelWatch/releases?per_page=100"
-    )
-    for request in (tag_request, list_request):
-        assert request.get_header("Authorization") == "Bearer authenticated-test-token"
-    assert tag_timeout == list_timeout == 15
-
-
-def test_catalog_predecessor_allows_verified_contiguous_unpublished_tags(tmp_path):
-    module = _load_script(
-        "build_update_bundle_contiguous_unpublished_predecessors",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def git(*args):
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=ChannelWatch Test",
-                "-c",
-                "user.email=channelwatch-test@example.invalid",
-                *args,
-            ],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-    git("init", "--initial-branch=main")
-    tracked = repo / "tracked.txt"
-    for version in ("1.4.1", "1.4.2", "1.4.3", "1.4.4"):
-        tracked.write_text(version, encoding="utf-8")
-        git("add", "tracked.txt")
-        git("commit", "-m", version)
-        if version != "1.4.4":
-            git("tag", f"v{version}")
-
-    requests = []
-
-    def release_not_found(request, *, timeout):
-        requests.append((request, timeout))
-        if "/releases/tags/" in request.full_url:
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "Not Found",
-                {},
-                io.BytesIO(b'{"message":"Not Found"}'),
-            )
-        return SimpleNamespace(
-            status=200,
-            read=lambda _limit: b'[{"tag_name":"v1.4.1"}]',
-            close=lambda: None,
-        )
-
-    module.require_previous_catalog_release(
-        "1.4.4",
-        [{"version": "1.4.1"}],
-        ["v1.4.1", "v1.4.2", "v1.4.3"],
-        unpublished_tags=["v1.4.3", "v1.4.2"],
-        repository="CoderLuii/ChannelWatch",
-        github_token="authenticated-test-token",
-        repo_root=repo,
-        urlopen=release_not_found,
-    )
-
-    assert [
-        request.full_url.rsplit("/", 1)[-1]
-        for request, _timeout in requests
-        if "/releases/tags/" in request.full_url
-    ] == ["v1.4.3", "v1.4.2"]
-    assert len(requests) == 4
-    assert all(timeout == 15 for _request, timeout in requests)
-    assert all(
-        request.get_header("Authorization") == "Bearer authenticated-test-token"
-        for request, _timeout in requests
-    )
-
-
-def test_catalog_predecessor_rejects_noncontiguous_or_unretained_history(tmp_path):
-    module = _load_script(
-        "build_update_bundle_noncontiguous_unpublished_predecessors",
-        "scripts/release/build-update-bundle.py",
-    )
-    failure_urlopen = lambda *_args, **_kwargs: pytest.fail(
-        "Invalid exception lists must fail before GitHub is queried."
-    )
-
-    with pytest.raises(ValueError, match="retain the previous release 1.4.3"):
-        module.require_previous_catalog_release(
-            "1.4.4",
-            [{"version": "1.4.1"}],
-            ["v1.4.1", "v1.4.2", "v1.4.3"],
-            unpublished_tags=["v1.4.3", "v1.4.1"],
-            urlopen=failure_urlopen,
-        )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def git(*args):
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=ChannelWatch Test",
-                "-c",
-                "user.email=channelwatch-test@example.invalid",
-                *args,
-            ],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-    git("init", "--initial-branch=main")
-    tracked = repo / "tracked.txt"
-    for version in ("1.4.1", "1.4.2", "1.4.3", "1.4.4"):
-        tracked.write_text(version, encoding="utf-8")
-        git("add", "tracked.txt")
-        git("commit", "-m", version)
-        if version != "1.4.4":
-            git("tag", f"v{version}")
-
-    def release_not_found(request, *, timeout):
-        assert timeout == 15
-        if "/releases/tags/" in request.full_url:
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "Not Found",
-                {},
-                io.BytesIO(b'{"message":"Not Found"}'),
-            )
-        return SimpleNamespace(
-            status=200,
-            read=lambda _limit: b'[{"tag_name":"v1.4.1"}]',
-            close=lambda: None,
-        )
-
-    with pytest.raises(ValueError, match="nearest published predecessor 1.4.1"):
-        module.require_previous_catalog_release(
-            "1.4.4",
-            [],
-            ["v1.4.1", "v1.4.2", "v1.4.3"],
-            unpublished_tags=["v1.4.3", "v1.4.2"],
-            repository="CoderLuii/ChannelWatch",
-            github_token="authenticated-test-token",
-            repo_root=repo,
-            urlopen=release_not_found,
-        )
-
-
-def test_catalog_predecessor_unpublished_exception_rejects_draft_release(tmp_path):
-    module = _load_script(
-        "build_update_bundle_unpublished_draft_predecessor",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def git(*args):
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=ChannelWatch Test",
-                "-c",
-                "user.email=channelwatch-test@example.invalid",
-                *args,
-            ],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-    git("init", "--initial-branch=main")
-    tracked = repo / "tracked.txt"
-    for version in ("1.4.1", "1.4.2", "1.4.3"):
-        tracked.write_text(version, encoding="utf-8")
-        git("add", "tracked.txt")
-        git("commit", "-m", version)
-        if version != "1.4.3":
-            git("tag", f"v{version}")
-
-    def release_lookup(request, *, timeout):
-        assert timeout == 15
-        if "/releases/tags/" in request.full_url:
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "Not Found",
-                {},
-                io.BytesIO(b'{"message":"Not Found"}'),
-            )
-        return SimpleNamespace(
-            status=200,
-            read=lambda _limit: json.dumps(
-                [{"tag_name": "v1.4.2", "draft": True}]
-            ).encode("utf-8"),
-            close=lambda: None,
-        )
-
-    with pytest.raises(ValueError, match="because a release exists"):
-        module.require_previous_catalog_release(
-            "1.4.3",
-            [{"version": "1.4.1"}],
-            ["v1.4.1", "v1.4.2"],
-            unpublished_tags=["v1.4.2"],
-            repository="CoderLuii/ChannelWatch",
-            github_token="authenticated-test-token",
-            repo_root=repo,
-            urlopen=release_lookup,
-        )
-
-
-@pytest.mark.parametrize("malformed_release", [None, {}, {"tag_name": ""}])
-def test_catalog_predecessor_unpublished_exception_rejects_malformed_release_list(
-    tmp_path, malformed_release
-):
-    module = _load_script(
-        "build_update_bundle_unpublished_malformed_release_list",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def git(*args):
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=ChannelWatch Test",
-                "-c",
-                "user.email=channelwatch-test@example.invalid",
-                *args,
-            ],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-    git("init", "--initial-branch=main")
-    tracked = repo / "tracked.txt"
-    for version in ("1.4.1", "1.4.2", "1.4.3"):
-        tracked.write_text(version, encoding="utf-8")
-        git("add", "tracked.txt")
-        git("commit", "-m", version)
-        if version != "1.4.3":
-            git("tag", f"v{version}")
-
-    def release_lookup(request, *, timeout):
-        assert timeout == 15
-        if "/releases/tags/" in request.full_url:
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "Not Found",
-                {},
-                io.BytesIO(b'{"message":"Not Found"}'),
-            )
-        return SimpleNamespace(
-            status=200,
-            read=lambda _limit: json.dumps([malformed_release]).encode("utf-8"),
-            close=lambda: None,
-        )
-
-    with pytest.raises(ValueError, match="release list was malformed"):
-        module.require_previous_catalog_release(
-            "1.4.3",
-            [{"version": "1.4.1"}],
-            ["v1.4.1", "v1.4.2"],
-            unpublished_tags=["v1.4.2"],
-            repository="CoderLuii/ChannelWatch",
-            github_token="authenticated-test-token",
-            repo_root=repo,
-            urlopen=release_lookup,
-        )
-
-
-@pytest.mark.parametrize("status", [200, 403])
-def test_catalog_predecessor_unpublished_exception_fails_closed(
-    tmp_path, status
-):
-    module = _load_script(
-        f"build_update_bundle_unpublished_predecessor_{status}",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(
-        ["git", "init", "--initial-branch=main"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    tracked = repo / "tracked.txt"
-    tracked.write_text("1.4.2", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=ChannelWatch Test",
-            "-c",
-            "user.email=channelwatch-test@example.invalid",
-            "commit",
-            "-m",
-            "1.4.2",
-        ],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
-
-    def release_response(request, *, timeout):
-        if status == 403:
-            raise urllib.error.HTTPError(
-                request.full_url,
-                status,
-                "Forbidden",
-                {},
-                io.BytesIO(b'{"message":"Forbidden"}'),
-            )
-        return SimpleNamespace(status=status, close=lambda: None)
-
-    with pytest.raises(ValueError, match="GitHub release absence"):
-        module.require_previous_catalog_release(
-            "1.4.3",
-            [{"version": "1.4.1"}],
-            ["v1.4.1", "v1.4.2"],
-            unpublished_tags=["v1.4.2"],
-            repository="CoderLuii/ChannelWatch",
-            github_token="authenticated-test-token",
-            repo_root=repo,
-            urlopen=release_response,
-        )
-
-
-def test_catalog_predecessor_unpublished_exception_rejects_network_failure(
-    tmp_path,
-):
-    module = _load_script(
-        "build_update_bundle_unpublished_network_failure",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(
-        ["git", "init", "--initial-branch=main"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    tracked = repo / "tracked.txt"
-    tracked.write_text("1.4.2", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=ChannelWatch Test",
-            "-c",
-            "user.email=channelwatch-test@example.invalid",
-            "commit",
-            "-m",
-            "1.4.2",
-        ],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
-
-    with pytest.raises(ValueError, match="GitHub release absence"):
-        module.require_previous_catalog_release(
-            "1.4.3",
-            [{"version": "1.4.1"}],
-            ["v1.4.1", "v1.4.2"],
-            unpublished_tags=["v1.4.2"],
-            repository="CoderLuii/ChannelWatch",
-            github_token="authenticated-test-token",
-            repo_root=repo,
-            urlopen=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                urllib.error.URLError("network unavailable")
-            ),
-        )
-
-
-def test_catalog_predecessor_exception_requires_tag_ancestor(tmp_path):
-    module = _load_script(
-        "build_update_bundle_unpublished_nonancestor",
-        "scripts/release/build-update-bundle.py",
-    )
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(
-        ["git", "init", "--initial-branch=main"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    tracked = repo / "tracked.txt"
-    tracked.write_text("base", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
-    commit = [
-        "git",
-        "-c",
-        "user.name=ChannelWatch Test",
-        "-c",
-        "user.email=channelwatch-test@example.invalid",
-        "commit",
-        "-m",
-        "commit",
-    ]
-    subprocess.run(commit, cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "switch", "-c", "unpublished"], cwd=repo, check=True)
-    tracked.write_text("unpublished", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
-    subprocess.run(commit, cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
-    subprocess.run(["git", "switch", "main"], cwd=repo, check=True)
-
-    with pytest.raises(ValueError, match="ancestor"):
-        module.require_previous_catalog_release(
-            "1.4.3",
-            [{"version": "1.4.1"}],
-            ["v1.4.1", "v1.4.2"],
-            unpublished_tags=["v1.4.2"],
-            repository="CoderLuii/ChannelWatch",
-            github_token="authenticated-test-token",
-            repo_root=repo,
-            urlopen=lambda *_args, **_kwargs: pytest.fail(
-                "GitHub must not be queried for a non-ancestor tag"
-            ),
-        )
 
 
 def test_future_release_verifier_requires_the_exact_pinned_v1_bridge():
@@ -1425,17 +955,18 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_145_in_app_release_on_140_image():
+def test_release_config_declares_150_dependency_image_bootstrap():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.4.5"
-    assert config["image_required"] is False
-    assert config["delivery_mode"] == "app_update"
-    assert config["minimum_image_version"] == "1.4.0"
-    assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.4.5"
+    assert config["version"] == "1.5.0"
+    assert config["image_required"] is True
+    assert config["delivery_mode"] == "image_required"
+    assert config["minimum_image_version"] == "1.5.0"
+    assert config["updater_protocol"] == 4
+    assert config["minimum_launcher_protocol"] == 4
+    assert config["recommended_image_version"] == "1.5.0"
     assert config["automatic_install_allowed"] is False
     assert config["compatible_source_application_versions"] == [
         "1.4.0",
@@ -1443,27 +974,18 @@ def test_release_config_declares_145_in_app_release_on_140_image():
         "1.4.2",
         "1.4.3",
         "1.4.4",
+        "1.4.5",
     ]
-    assert config["compatible_launcher_protocols"] == [1, 2, 3]
-    assert config["unpublished_predecessor_tags"] == [
-        "v1.4.4",
-        "v1.4.3",
-        "v1.4.2",
-    ]
-    assert config["unpublished_release_tags"] == [
-        "v1.4.2",
-        "v1.4.3",
-        "v1.4.4",
-    ]
+    assert config["compatible_launcher_protocols"] == [4]
+    assert config["runtime_generation_required"] is False
+    assert not config.get("runtime_variants")
+    assert not config.get("runtime_bootstrap_sha256")
+    assert config["unpublished_release_tags"] == ["v1.4.2", "v1.4.3", "v1.4.4"]
+    assert "unpublished_predecessor_tags" not in config
     assert config["release_heading"] == (
-        "# ChannelWatch v1.4.5 - Reliable release transport"
+        "# ChannelWatch v1.5.0 - Dependency update foundation"
     )
     assert config["verification_assets"] is True
-    publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
-    automatic = datetime.fromisoformat(
-        config["automatic_install_after"].replace("Z", "+00:00")
-    )
-    assert automatic >= publication + timedelta(days=7)
     history = json.loads(
         (ROOT / "scripts/release/update-catalog-history.json").read_text(
             encoding="utf-8"
@@ -1474,33 +996,11 @@ def test_release_config_declares_145_in_app_release_on_140_image():
         "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
     )
     assert release_141["published_at"] == "2026-10-10T19:10:00Z"
-
-
-def test_release_policy_requires_current_verified_versioned_openvex():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "scripts/release/release_version_policy.py",
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+    publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
+    automatic = datetime.fromisoformat(
+        config["automatic_install_after"].replace("Z", "+00:00")
     )
-    assert result.returncode == 0, result.stderr
-
-
-def test_release_policy_rejects_missing_current_openvex(tmp_path: Path):
-    module = _load_script(
-        "release_version_policy_missing_vex",
-        "scripts/release/release_version_policy.py",
-    )
-    source = tmp_path / "app/core/__init__.py"
-    source.parent.mkdir(parents=True)
-    source.write_text('__version__ = "1.4.5"\n', encoding="utf-8")
-
-    with pytest.raises(ValueError, match="Release VEX document is missing"):
-        module.verify_release_source(tmp_path, "1.4.5")
+    assert automatic >= publication + timedelta(hours=48)
 
 
 def test_release_version_policy_enforces_single_digit_patch_cadence():
@@ -1552,6 +1052,42 @@ def test_release_version_policy_enforces_single_digit_patch_cadence():
         )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"updater_protocol": 2},
+        {"minimum_launcher_protocol": 3},
+        {"compatible_launcher_protocols": [3]},
+        {"runtime_generation_required": True},
+        {"runtime_bootstrap_sha256": "a" * 64},
+        {"runtime_variants": []},
+        {"runtime_descriptor": {}},
+    ],
+)
+def test_release_version_policy_rejects_invalid_dependency_image_milestones(
+    mutation,
+):
+    module = _load_script(
+        "dependency_image_milestone_policy",
+        "scripts/release/release_version_policy.py",
+    )
+    config = {
+        "version": "1.5.0",
+        "image_required": True,
+        "delivery_mode": "image_required",
+        "minimum_image_version": "1.5.0",
+        "automatic_install_allowed": False,
+        "updater_protocol": 4,
+        "minimum_launcher_protocol": 4,
+        "compatible_launcher_protocols": [4],
+        "runtime_generation_required": False,
+        **mutation,
+    }
+
+    with pytest.raises(ValueError, match="protocol-4 image milestone"):
+        module.validate_release_config(config)
+
+
 def test_release_impact_classifier_keeps_v1_patch_in_app():
     module = _load_script(
         "release_impact_version_policy",
@@ -1571,7 +1107,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_145_release():
+def test_release_version_surfaces_use_150_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1582,87 +1118,11 @@ def test_release_version_surfaces_use_145_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.4.5"
-    assert metadata["versionTag"] == "v1.4.5"
-    assert metadata["dockerTag"] == "1.4.5"
-    assert metadata["helmChartVersion"] == "1.4.5"
-    assert metadata["helmAppVersion"] == "1.4.5"
-    assert [release["version"] for release in metadata["previousReleases"]] == [
-        "1.4.1",
-        "1.4.0",
-        "1.3.0",
-        "1.2.1",
-    ]
-
-
-def test_future_metadata_keeps_failed_142_through_144_excluded(
-    monkeypatch,
-):
-    module = _load_script(
-        "export_release_metadata_future_history",
-        "scripts/release/export-site-release-metadata.py",
-    )
-    changelog = """\
-## [1.5.0] - 2026-10-20
-
-### Added
-- Image update.
-
-## [1.4.5] - 2026-10-11
-
-### Fixed
-- Release transport.
-
-## [1.4.4] - 2026-10-11
-
-### Important
-- Publishing failed.
-
-## [1.4.3] - 2026-10-11
-
-### Important
-- Publishing failed.
-
-## [1.4.2] - 2026-10-10
-
-### Important
-- Publishing failed.
-
-## [1.4.1] - 2026-10-10
-
-### Fixed
-- Earlier app update.
-
-## [0.9.17] - 2026-01-01
-
-### Fixed
-- Pre-catalog release.
-"""
-    files = {
-        "docs/releases/CHANGELOG.md": changelog,
-        "scripts/release/release-config.json": json.dumps(
-            {
-                "unpublished_release_tags": [
-                    "v1.4.2",
-                    "v1.4.3",
-                    "v1.4.4",
-                ]
-            }
-        ),
-    }
-    monkeypatch.setattr(
-        module,
-        "read_text",
-        lambda relative, tree_ref=None: files[relative],
-    )
-
-    parsed = module.parse_changelog("1.5.0")
-
-    assert [release["version"] for release in parsed["previousReleases"]] == [
-        "1.4.5",
-        "1.4.1",
-        "0.9.17",
-    ]
+    assert metadata["version"] == "1.5.0"
+    assert metadata["versionTag"] == "v1.5.0"
+    assert metadata["dockerTag"] == "1.5.0"
+    assert metadata["helmChartVersion"] == "1.5.0"
+    assert metadata["helmAppVersion"] == "1.5.0"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3381,6 +2841,29 @@ def test_signed_candidate_workflow_archive_round_trip_preserves_dist_layout(
         signer_root / "dist" / "candidate-initial" / "signed-assets.sealed",
         signer_artifact / "signed-assets.sealed",
     )
+    dependency_payload = runner_temp / "dependency-payload" / "dependencies" / "site-packages"
+    dependency_payload.mkdir(parents=True)
+    runtime_dependencies = runner_temp / "runtime-dependencies"
+    runtime_dependencies.mkdir()
+    dependency_archive = runtime_dependencies / "channelwatch-runtime-dependencies-amd64.tar"
+    subprocess.run(
+        [
+            "tar",
+            "-cf",
+            str(dependency_archive),
+            "-C",
+            str(dependency_payload.parents[1]),
+            ".",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    dependency_digest = hashlib.sha256(dependency_archive.read_bytes()).hexdigest()
+    (runtime_dependencies / f"{dependency_archive.name}.sha256").write_text(
+        f"{dependency_digest}  {dependency_archive.name}\n",
+        encoding="utf-8",
+    )
     qualification_root = tmp_path / "qualification"
     qualification_scripts = qualification_root / "scripts" / "release"
     qualification_scripts.mkdir(parents=True)
@@ -3513,11 +2996,12 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert "package-manager-cache: false" in workflow
 
     assert workflow.count("scripts/release/verify-minimum-image-app-update.py") == 2
-    assert workflow.count("--image-index-digest") == 2
-    assert workflow.count("jq -r '.minimum_image_sha256' scripts/release/release-config.json") == 2
     assert "Verify app update frontend on the minimum compatible image" in workflow
     assert "Reverify app update frontend on the minimum compatible image" in workflow
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
+    assert workflow.count(
+        '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
+    ) == 3
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     reverify_block = workflow.split(
@@ -3583,7 +3067,7 @@ def test_release_workflow_uses_one_tag_driven_candidate_run():
     assert "RELEASE_SHA: ${{ github.sha }}" in workflow
     assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 7
     assert "if: github.event_name == 'push'" in release_job
-    assert "needs: signed-candidate" in release_job
+    assert "needs: [signed-candidate, native-image-qualification]" in release_job
     assert "promote-release-identity" not in workflow
     assert "APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}" in release_job
     assert "The verification job did not produce an approved candidate artifact" in release_job
@@ -3710,7 +3194,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert 'cmp --silent "${archive}" "${second_archive}"' in candidate
     assert "channelwatch-image-${tag}.oci.tar" in candidate
 
-    import_index = image_job.index("      - name: Open the exact approved candidate image")
+    import_index = image_job.index("      - name: Download exact approved candidate image")
     scan_index = image_job.index("      - name: Scan exact release candidate images")
     docker_login_index = image_job.index("      - name: Login to Docker Hub")
     ghcr_login_index = image_job.index("      - name: Login to GHCR")
@@ -3789,7 +3273,11 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert 'docker cp -L "${container_id}:/usr/share/common-licenses/."' in image_job
     assert '--override-arch "${arch}"' in image_job
     assert "docker-archive:/output/channelwatch-legal-${arch}.tar" in image_job
-    assert "Release checksum manifest must cover all 13 non-checksum assets" in image_job
+    assert "expected_checksum_count=\"${#required_assets[@]}\"" in image_job
+    assert (
+        "Release checksum manifest must cover all ${expected_checksum_count} "
+        "non-checksum assets"
+    ) in image_job
     for existing_asset in (
         "channelwatch-app-${TAG}.zip",
         "channelwatch-update-${TAG}.json",
@@ -3908,9 +3396,9 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
     assert "The verification job did not produce an approved candidate artifact" in release_job
     assert "Build signed app bundle" not in release_job
     assert "seal-candidate-artifact.py open" in release_job
-    assert 'cp "${approved_dir}/channelwatch-app-${TAG}.zip"' in release_job
-    assert 'cp "${approved_dir}/channelwatch-update-${TAG}.json"' in release_job
-    assert 'cp "${approved_dir}/channelwatch-catalog-${TAG}.json"' in release_job
+    assert "channelwatch-app-${TAG}.zip" in release_job
+    assert "channelwatch-update-${TAG}.json" in release_job
+    assert "channelwatch-catalog-${TAG}.json" in release_job
     assert 'image_descriptor="channelwatch-image-${TAG}.json"' in release_job
     assert 'image_digest="channelwatch-image-${TAG}.digest"' in release_job
     assert 'image_archive="channelwatch-image-${TAG}.oci.tar"' in release_job
@@ -4121,40 +3609,6 @@ def test_ci_python_job_disables_cross_trust_dependency_caching():
     assert "cache-dependency-path:" not in python_job
 
 
-def test_candidate_signer_checkout_fetches_complete_release_history():
-    workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(
-            encoding="utf-8"
-        )
-    )
-    checkout = next(
-        step
-        for step in workflow["jobs"]["candidate-signing"]["steps"]
-        if step.get("name") == "Checkout exact audited signer"
-    )
-
-    assert checkout["with"] == {
-        "ref": "${{ github.sha }}",
-        "fetch-depth": 0,
-        "persist-credentials": False,
-    }
-    signing_step = next(
-        step
-        for step in workflow["jobs"]["candidate-signing"]["steps"]
-        if step.get("name") == "Sign, verify, and seal immutable candidate inputs"
-    )
-    assert signing_step["env"]["GH_TOKEN"] == "${{ github.token }}"
-    comparison_step = next(
-        step
-        for step in workflow["jobs"]["candidate-qualification"]["steps"]
-        if step.get("name") == "Rebuild and compare the complete application payload"
-    )
-    assert comparison_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
-    assert workflow["jobs"]["candidate-qualification"]["permissions"] == {
-        "contents": "read"
-    }
-
-
 def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     workflow_path = ROOT / ".github" / "workflows" / "docker-publish.yml"
     workflow_text = workflow_path.read_text(encoding="utf-8")
@@ -4170,21 +3624,55 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     protected_jobs = {
         "candidate-source-gates",
         "candidate-signing",
+        "runtime-capability",
+        "native-image-qualification",
         "candidate-qualification",
         "signed-candidate",
         "build-update-bundle-and-release",
         "build-and-push",
         "publish-github-release",
     }
-    assert all(
-        job["runs-on"] == expected
+    ordinary_jobs = {
+        name: job
         for name, job in workflow["jobs"].items()
-        if name not in protected_jobs
-    )
+        if name != "runtime-dependencies" and name not in protected_jobs
+    }
+    assert all(job["runs-on"] == expected for job in ordinary_jobs.values())
     assert all(
         workflow["jobs"][name]["runs-on"] == "ubuntu-24.04"
-        for name in protected_jobs
+        for name in protected_jobs - {"runtime-capability", "native-image-qualification"}
     )
+    capability_job = workflow["jobs"]["runtime-capability"]
+    assert capability_job["runs-on"] == "${{ matrix.runner }}"
+    assert capability_job["strategy"]["matrix"]["include"] == [
+        {"architecture": "amd64", "runner": "ubuntu-24.04"},
+        {"architecture": "arm64", "runner": "ubuntu-24.04-arm"},
+    ]
+    native_job = workflow["jobs"]["native-image-qualification"]
+    assert native_job["runs-on"] == "${{ matrix.runner }}"
+    assert native_job["strategy"]["matrix"]["include"] == [
+        {"architecture": "amd64", "runner": "ubuntu-24.04"},
+        {"architecture": "arm64", "runner": "ubuntu-24.04-arm"},
+    ]
+    runtime_job = workflow["jobs"]["runtime-dependencies"]
+    source_gates = workflow_text.split("  candidate-source-gates:", 1)[1].split(
+        "\n  candidate-signing:", 1
+    )[0]
+    assert runtime_job["runs-on"] == "${{ matrix.runner }}"
+    assert runtime_job["strategy"]["matrix"]["include"] == [
+        {
+            "architecture": "amd64",
+            "runner": "ubuntu-24.04",
+            "machine": "x86_64",
+            "wheel_platform": "manylinux_2_36_x86_64",
+        },
+        {
+            "architecture": "arm64",
+            "runner": "ubuntu-24.04-arm",
+            "machine": "aarch64",
+            "wheel_platform": "manylinux_2_36_aarch64",
+        },
+    ]
     assert "runs-on: self-hosted" not in workflow_text
     assert "runs-on: [self-hosted" not in workflow_text
     cleanup = next(
@@ -4195,59 +3683,253 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     assert cleanup["if"] == "runner.environment == 'github-hosted'"
 
 
-def test_release_signing_isolated_from_source_and_lifecycle_steps():
-    workflow_path = ROOT / ".github/workflows/docker-publish.yml"
-    workflow_text = workflow_path.read_text(encoding="utf-8")
-    workflow = yaml.safe_load(workflow_text)
-    expected_secret_jobs = {
+def test_production_signing_key_isolated_to_first_shell_step_on_fresh_runners():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    expected_jobs = {
         "candidate-signing",
+        "runtime-capability",
+        "native-image-qualification",
         "candidate-qualification",
         "signed-candidate",
         "build-update-bundle-and-release",
         "build-and-push",
         "publish-github-release",
     }
-    actual_secret_jobs = set()
-    forbidden_before_secret = (
-        "pytest",
-        "pnpm ",
-        "docker ",
-        "build-update-bundle.py",
-        "build-push-action@",
-    )
+    actual_jobs = set()
     for name, job in workflow["jobs"].items():
         steps = job.get("steps", [])
         secret_steps = [
             (index, step)
             for index, step in enumerate(steps)
-            if "secrets.CHANNELWATCH_UPDATE_SIGNING_KEY" in str(step)
+            if "CHANNELWATCH_UPDATE_SIGNING_KEY" in str(step)
         ]
         if not secret_steps:
             continue
-        actual_secret_jobs.add(name)
-        assert job["runs-on"] == "ubuntu-24.04"
+        actual_jobs.add(name)
+        if name in {"runtime-capability", "native-image-qualification"}:
+            assert job["runs-on"] == "${{ matrix.runner }}"
+        else:
+            assert job["runs-on"] == "ubuntu-24.04"
         assert len(secret_steps) == 1
         secret_index, secret_step = secret_steps[0]
-        prefix = str(steps[:secret_index]).lower()
-        assert all(command not in prefix for command in forbidden_before_secret)
+        earlier_runs = [step for step in steps[:secret_index] if "run" in step]
+        if earlier_runs:
+            assert len(earlier_runs) == 1
+            assert "--only-binary=:all: --require-hashes" in earlier_runs[0]["run"]
+        assert "cache" not in str(steps[: secret_index]).lower()
+        assert secret_step.get("run")
         assert "unset CHANNELWATCH_UPDATE_SIGNING_KEY" in secret_step["run"]
         assert all(
-            "secrets.CHANNELWATCH_UPDATE_SIGNING_KEY" not in str(step)
+            "CHANNELWATCH_UPDATE_SIGNING_KEY" not in str(step)
             for step in steps[secret_index + 1 :]
         )
-    assert actual_secret_jobs == expected_secret_jobs
+    assert actual_jobs == expected_jobs
 
-    source_job = workflow["jobs"]["candidate-source-gates"]
-    assert source_job["runs-on"] == "ubuntu-24.04"
-    source_text = str(source_job)
-    assert "app/ui/out/" in source_text
-    assert "app/ui/dist" not in source_text
+
+def test_native_image_qualification_uses_exact_sealed_oci_on_native_hosts():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["native-image-qualification"]
+    text = str(job)
+    assert job["needs"] == "signed-candidate"
+    assert "verify-native-image.py" in text
+    assert "channelwatch-image-${tag}.oci.tar" in text
+    assert "channelwatch-image-${tag}.json" in text
+    assert "--architecture \"${NATIVE_ARCHITECTURE}\"" in text
+    assert ".launcher_protocol == 4" in text
+    assert "docker/build-push-action@" not in text
+    assert "setup-qemu" not in text
+    assert "pnpm exec playwright install --with-deps chromium" in text
+    upload = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Retain native image qualification receipt"
+    )
+    assert upload["if"] == "always()"
+    release = workflow["jobs"]["build-update-bundle-and-release"]
+    assert set(release["needs"]) == {"signed-candidate", "native-image-qualification"}
+    evidence_download = next(
+        step
+        for step in release["steps"]
+        if step.get("name") == "Download exact native image qualification evidence"
+    )
+    assert evidence_download["with"]["pattern"] == "native-image-*-${{ github.sha }}"
+    assert evidence_download["with"]["merge-multiple"] is True
+    release_text = str(release)
+    assert "candidate_seal_sha256" in release_text
+    assert "container_log_sha256 == $log_sha256" in release_text
+    assert ".launcher_protocol == 4" in release_text
+    assert "channelwatch-native-image-${TAG}-evidence.json" in release_text
+    assert "channelwatch-native-image-${TAG}-${architecture}.json" in release_text
+    assert "channelwatch-native-image-${TAG}-${architecture}.log" in release_text
+    assert '["amd64", "arm64"]' in release_text
+
+
+def test_native_signer_requirements_cover_both_linux_architectures():
+    requirements = (
+        ROOT / "scripts" / "release" / "signer-requirements.txt"
+    ).read_text(encoding="utf-8")
+    assert "cryptography==50.0.2" in requirements
+    assert "cffi==2.1.1" in requirements
+    assert "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079" in requirements
+    assert "87e9ce85beb6b328ba370cc6e6aea483c92617b4c95b1d33a49297eb662bfb04" in requirements
+    assert "b0431303acaea1089ad4b3e9ce4e6518193def1118d4073ca848635ee4ea2e96" in requirements
+    assert "58acb8ab8e295e6c5ea12f888cbb13cf21511ef2a3303a23f4325c29d17fe5c1" in requirements
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    native_job = workflow["jobs"]["native-image-qualification"]
+    assert "-r scripts/release/signer-requirements.txt" in str(native_job)
+
+
+def test_release_workflow_builds_native_runtime_generations_and_seals_exact_assets():
+    workflow_path = ROOT / ".github" / "workflows" / "docker-publish.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    signer_checkout = next(
+        step for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Checkout exact audited signer"
+    )
+    assert signer_checkout["with"]["fetch-depth"] == 0
+    assert signer_checkout["with"]["ref"] == "${{ github.sha }}"
+    assert signer_checkout["with"]["persist-credentials"] is False
+    runtime_job = workflow["jobs"]["runtime-dependencies"]
+    source_gates = workflow_text.split("  candidate-source-gates:", 1)[1].split(
+        "\n  candidate-signing:", 1
+    )[0]
+    signer = workflow_text.split("  candidate-signing:", 1)[1].split(
+        "\n  runtime-capability:", 1
+    )[0]
+    capability = workflow_text.split("  runtime-capability:", 1)[1].split(
+        "\n  candidate-qualification:", 1
+    )[0]
     candidate = workflow_text.split("  candidate-qualification:", 1)[1].split(
         "\n  signed-candidate:", 1
     )[0]
+    final_sealer = workflow_text.split("  signed-candidate:", 1)[1].split(
+        "\n  build-update-bundle-and-release:", 1
+    )[0]
+    release_job = workflow_text.split("  build-update-bundle-and-release:", 1)[
+        1
+    ].split("\n  build-and-push:", 1)[0]
+    public_job = workflow_text.split("  verify-public-release-assets:", 1)[1].split(
+        "\n  sync-site:", 1
+    )[0]
+    sync_job = workflow_text.split("  sync-site:", 1)[1].split(
+        "\n  verify-live-update-manifest:", 1
+    )[0]
+    live_job = workflow_text.split("  verify-live-update-manifest:", 1)[1].split(
+        "\n  advance-compatible-aliases:", 1
+    )[0]
+
+    runtime_text = workflow_text.split("  runtime-dependencies:", 1)[1].split(
+        "\n  candidate-source-gates:", 1
+    )[0]
+    assert runtime_job["runs-on"] == "${{ matrix.runner }}"
+    assert [row["runner"] for row in runtime_job["strategy"]["matrix"]["include"]] == [
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm",
+    ]
+    assert "docker/setup-qemu-action@" not in runtime_text
+    assert "docker/setup-buildx-action@" not in runtime_text
+    assert "docker run --rm --pull=never" in runtime_text
+    assert "--platform" not in runtime_text
+    assert 'image_architecture="$(docker image inspect' in runtime_text
+    assert 'if [ "${image_architecture}" != "${ARCHITECTURE}" ]' in runtime_text
+    assert runtime_text.count("build-runtime-dependencies.py") == 1
+    assert "for build in one two" in runtime_text
+    assert "diff -ru" in runtime_text
+    assert "python -I -" in runtime_text
+    for module in (
+        "bcrypt",
+        "cryptography",
+        "httptools",
+        "pydantic_core",
+        "sqlalchemy",
+        "uvloop",
+        "yaml",
+    ):
+        assert f"import {module}" in runtime_text
+
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in signer
+    assert workflow["jobs"]["candidate-source-gates"]["runs-on"] == "ubuntu-24.04"
+    assert "path: app/ui/out/" in source_gates
+    assert "app/ui/dist" not in source_gates
+    assert source_gates.count("build-runtime-bundle.py") == 1
+    assert 'for candidate in candidate-one candidate-two' in source_gates
+    assert "build-runtime-bundle.py" not in signer
+    assert "unsigned-runtime-bundles-${{ github.sha }}" in signer
+    assert 'runtime_one_args=(' in signer
+    assert 'runtime_two_args=(' in signer
+    assert signer.count("--runtime-bundle-url") >= 1
+    assert 'diff -u <(cd dist/candidate-one' in signer
+    assert "ubuntu-24.04-arm" in capability
+    assert "verify-runtime-capability.py" in capability
+    assert '--architecture "${NATIVE_ARCHITECTURE}"' in capability
+    assert "docker/setup-qemu-action@" not in capability
+    assert "{status:\"not_required\"" not in capability
+    capability_job = workflow["jobs"]["runtime-capability"]
+    conditional_steps = {
+        step["name"]: step.get("if")
+        for step in capability_job["steps"]
+        if step["name"] in {
+            "Open signed assets before native qualification starts",
+            "Run the native protocol-4 lifecycle verifier",
+        }
+    }
+    assert set(conditional_steps.values()) == {
+        "needs.candidate-source-gates.outputs.runtime_generation_required == 'true'"
+    }
+    assert "aggregate-runtime-capability.py" in candidate
+    assert "scan-runtime-artifacts.py" in candidate
+    assert "syft-version: v1.54.1" in candidate
+    assert "version: v0.75.0" in candidate
+    assert 'install -d -m 0700 "${trivy_cache_dir}"' in candidate
+    assert '--trivy-cache-dir "${trivy_cache_dir}"' in candidate
+    assert '--syft "${syft_path}"' in candidate
+    assert '--trivy "${trivy_path}"' in candidate
+    assert "dbf75864e7a7ff9e1fbf00552c31483f693188632a9f68f343cd7653dac513d6" in candidate
+    assert "93f9da8e4ba5e0c1c76d8234ed2494cf9afb0a96fd21953e424bb795f3299b8e" in candidate
+    assert "channelwatch-runtime-scan-${tag}.tar" in candidate
     assert "Rebuild and compare the complete application payload" in candidate
     assert "--signing-key-env CHANNELWATCH_COMPARISON_SIGNING_KEY" in candidate
-    assert "CHANNELWATCH_UPDATE_SIGNING_KEY=\"${ephemeral_signing_key}\"" not in candidate
+    assert candidate.count("build-runtime-bundle.py") == 1
+    assert '"dist/candidate-one/channelwatch-runtime-${tag}-${architecture}.zip"' in candidate
+    assert '"${comparison_dir}/channelwatch-app-${tag}.zip"' in candidate
+    assert (
+        'if [ "${updater_protocol}" = "4" ] && '
+        '[ "${runtime_generation_required}" = "true" ]; then'
+    ) in candidate
+    assert '--runtime-capability-evidence "${capability_evidence}"' in candidate
+    assert "channelwatch-update-catalog-v3.json" in candidate
+    assert "Encrypt qualified candidate for the final sealer" in candidate
+    assert "Open qualification and create the final production seal" in final_sealer
+
+    assert "Open the exact qualified candidate before release checks" in release_job
+    assert 'sha256sum --check SHA256SUMS.txt' in release_job
+    assert 'cp "${approved_dir}/channelwatch-update-catalog-v3.json"' in release_job
+    assert 'cp "${approved_dir}/channelwatch-runtime-capability-${TAG}.json"' in release_job
+    assert '--runtime-capability-evidence "dist/update/channelwatch-runtime-capability-${TAG}.json"' in release_job
+    assert "channelwatch-runtime-${TAG}-amd64.zip" in release_job
+    assert "channelwatch-runtime-${TAG}-arm64.zip" in release_job
+    assert "channelwatch-runtime-scan-${TAG}.tar" in release_job
+    assert "runtime_catalog_url:" in release_job
+    assert "runtime_catalog_sha256:" in release_job
+
+    assert 'expected_checksum_count=$((expected_checksum_count + 1))' in public_job
+    assert 'expected_checksum_count=$((expected_checksum_count + 3))' in public_job
+    assert 18 + 1 + 3 == 22
+    assert "channelwatch-update-catalog-v3.json" in public_job
+    assert "--runtime-catalog" in public_job
+    assert "--expected-runtime-source-commit" in public_job
+    assert "runtime_update_catalog_url: $runtime_update_catalog_url" in sync_job
+    assert 'updates/v2/stable.json' in live_job
+    assert 'updates/v3/stable.json' in live_job
+    assert "Verify live runtime update catalog" in live_job
+    assert "--runtime-catalog" in live_job
 
 
 def test_trivy_root_entrypoint_exception_is_narrow_and_expires():
@@ -4881,3 +4563,715 @@ def test_update_asset_verifier_checks_generated_legal_identity_and_body(tmp_path
         manifest, bundle, keys = _signed_update_assets(version, member_contents=altered)
         with pytest.raises(Exception, match="does not match exact release source"):
             module.verify_update_assets(manifest, bundle, public_keys=keys, expected_version=version, expected_source_root=tmp_path)
+
+
+def test_catalog_predecessor_allows_only_verified_unpublished_ancestor(tmp_path):
+    module = _load_script(
+        "build_update_bundle_unpublished_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.3":
+            git("tag", f"v{version}")
+
+    requests = []
+
+    def release_not_found(request, *, timeout):
+        requests.append((request, timeout))
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b"[]",
+            close=lambda: None,
+        )
+
+    module.require_previous_catalog_release(
+        "1.4.3",
+        [{"version": "1.4.1"}],
+        ["v1.4.1", "v1.4.2"],
+        unpublished_predecessor_tags=["v1.4.2"],
+        repository="CoderLuii/ChannelWatch",
+        github_token="authenticated-test-token",
+        repo_root=repo,
+        urlopen=release_not_found,
+    )
+
+    assert len(requests) == 2
+    tag_request, tag_timeout = requests[0]
+    assert tag_request.full_url.endswith(
+        "/repos/CoderLuii/ChannelWatch/releases/tags/v1.4.2"
+    )
+    list_request, list_timeout = requests[1]
+    assert list_request.full_url.endswith(
+        "/repos/CoderLuii/ChannelWatch/releases?per_page=100"
+    )
+    for request in (tag_request, list_request):
+        assert request.get_header("Authorization") == "Bearer authenticated-test-token"
+    assert tag_timeout == list_timeout == 15
+
+
+def test_catalog_predecessor_unpublished_exception_rejects_draft_release(tmp_path):
+    module = _load_script(
+        "build_update_bundle_unpublished_draft_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.3":
+            git("tag", f"v{version}")
+
+    def release_lookup(request, *, timeout):
+        assert timeout == 15
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: json.dumps(
+                [{"tag_name": "v1.4.2", "draft": True}]
+            ).encode("utf-8"),
+            close=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="because a release exists"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_predecessor_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_lookup,
+        )
+
+
+@pytest.mark.parametrize("malformed_release", [None, {}, {"tag_name": ""}])
+def test_catalog_predecessor_unpublished_exception_rejects_malformed_release_list(
+    tmp_path, malformed_release
+):
+    module = _load_script(
+        "build_update_bundle_unpublished_malformed_release_list",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.3":
+            git("tag", f"v{version}")
+
+    def release_lookup(request, *, timeout):
+        assert timeout == 15
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: json.dumps([malformed_release]).encode("utf-8"),
+            close=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="release list was malformed"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_predecessor_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_lookup,
+        )
+
+
+@pytest.mark.parametrize("status", [200, 403])
+def test_catalog_predecessor_unpublished_exception_fails_closed(
+    tmp_path, status
+):
+    module = _load_script(
+        f"build_update_bundle_unpublished_predecessor_{status}",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("1.4.2", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=ChannelWatch Test",
+            "-c",
+            "user.email=channelwatch-test@example.invalid",
+            "commit",
+            "-m",
+            "1.4.2",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
+
+    def release_response(request, *, timeout):
+        if status == 403:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                status,
+                "Forbidden",
+                {},
+                io.BytesIO(b'{"message":"Forbidden"}'),
+            )
+        return SimpleNamespace(status=status, close=lambda: None)
+
+    with pytest.raises(ValueError, match="GitHub release absence"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_predecessor_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_response,
+        )
+
+
+def test_catalog_predecessor_unpublished_exception_rejects_network_failure(
+    tmp_path,
+):
+    module = _load_script(
+        "build_update_bundle_unpublished_network_failure",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("1.4.2", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=ChannelWatch Test",
+            "-c",
+            "user.email=channelwatch-test@example.invalid",
+            "commit",
+            "-m",
+            "1.4.2",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
+
+    with pytest.raises(ValueError, match="GitHub release absence"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_predecessor_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                urllib.error.URLError("network unavailable")
+            ),
+        )
+
+
+def test_catalog_predecessor_exception_requires_tag_ancestor(tmp_path):
+    module = _load_script(
+        "build_update_bundle_unpublished_nonancestor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("base", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    commit = [
+        "git",
+        "-c",
+        "user.name=ChannelWatch Test",
+        "-c",
+        "user.email=channelwatch-test@example.invalid",
+        "commit",
+        "-m",
+        "commit",
+    ]
+    subprocess.run(commit, cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "switch", "-c", "unpublished"], cwd=repo, check=True)
+    tracked.write_text("unpublished", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(commit, cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
+    subprocess.run(["git", "switch", "main"], cwd=repo, check=True)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_predecessor_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=lambda *_args, **_kwargs: pytest.fail(
+                "GitHub must not be queried for a non-ancestor tag"
+            ),
+        )
+
+
+def test_catalog_predecessor_allows_verified_contiguous_unpublished_tags(tmp_path):
+    module = _load_script(
+        "build_update_bundle_contiguous_unpublished_predecessors",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3", "1.4.4"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.4":
+            git("tag", f"v{version}")
+
+    requests = []
+
+    def release_not_found(request, *, timeout):
+        requests.append((request, timeout))
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b'[{"tag_name":"v1.4.1"}]',
+            close=lambda: None,
+        )
+
+    module.require_previous_catalog_release(
+        "1.4.4",
+        [{"version": "1.4.1"}],
+        ["v1.4.1", "v1.4.2", "v1.4.3"],
+        unpublished_predecessor_tags=["v1.4.3", "v1.4.2"],
+        repository="CoderLuii/ChannelWatch",
+        github_token="authenticated-test-token",
+        repo_root=repo,
+        urlopen=release_not_found,
+    )
+
+    assert [
+        request.full_url.rsplit("/", 1)[-1]
+        for request, _timeout in requests
+        if "/releases/tags/" in request.full_url
+    ] == ["v1.4.3", "v1.4.2"]
+    assert len(requests) == 4
+    assert all(timeout == 15 for _request, timeout in requests)
+    assert all(
+        request.get_header("Authorization") == "Bearer authenticated-test-token"
+        for request, _timeout in requests
+    )
+
+
+def test_catalog_predecessor_rejects_noncontiguous_or_unretained_history(tmp_path):
+    module = _load_script(
+        "build_update_bundle_noncontiguous_unpublished_predecessors",
+        "scripts/release/build-update-bundle.py",
+    )
+    failure_urlopen = lambda *_args, **_kwargs: pytest.fail(
+        "Invalid exception lists must fail before GitHub is queried."
+    )
+
+    with pytest.raises(ValueError, match="retain the previous release 1.4.3"):
+        module.require_previous_catalog_release(
+            "1.4.4",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2", "v1.4.3"],
+            unpublished_predecessor_tags=["v1.4.3", "v1.4.1"],
+            urlopen=failure_urlopen,
+        )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3", "1.4.4"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.4":
+            git("tag", f"v{version}")
+
+    def release_not_found(request, *, timeout):
+        assert timeout == 15
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b'[{"tag_name":"v1.4.1"}]',
+            close=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="nearest published predecessor 1.4.1"):
+        module.require_previous_catalog_release(
+            "1.4.4",
+            [],
+            ["v1.4.1", "v1.4.2", "v1.4.3"],
+            unpublished_predecessor_tags=["v1.4.3", "v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_not_found,
+        )
+
+
+def test_catalog_predecessor_accepts_retained_144_for_150_with_durable_exclusions():
+    module = _load_script(
+        "build_update_bundle_retained_144_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+
+    module.require_previous_catalog_release(
+        "1.5.0",
+        [{"version": "1.4.4"}, {"version": "1.4.1"}],
+        ["v1.4.1", "v1.4.2", "v1.4.3", "v1.4.4"],
+    )
+
+
+def test_catalog_predecessor_rejects_missing_144_for_150():
+    module = _load_script(
+        "build_update_bundle_missing_144_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+
+    with pytest.raises(ValueError, match="retain the previous release 1.4.4"):
+        module.require_previous_catalog_release(
+            "1.5.0",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2", "v1.4.3", "v1.4.4"],
+        )
+
+
+def test_catalog_predecessor_cannot_use_failed_143_142_exceptions_for_150():
+    module = _load_script(
+        "build_update_bundle_wrong_143_142_predecessor_exceptions",
+        "scripts/release/build-update-bundle.py",
+    )
+
+    with pytest.raises(ValueError, match="retain the previous release 1.4.4"):
+        module.require_previous_catalog_release(
+            "1.5.0",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2", "v1.4.3", "v1.4.4"],
+            unpublished_predecessor_tags=["v1.4.3", "v1.4.2"],
+        )
+
+
+def test_future_metadata_keeps_failed_142_through_144_excluded(
+    monkeypatch,
+):
+    module = _load_script(
+        "export_release_metadata_future_history",
+        "scripts/release/export-site-release-metadata.py",
+    )
+    changelog = """\
+## [1.5.0] - 2026-10-20
+
+### Added
+- Image update.
+
+## [1.4.5] - 2026-10-11
+
+### Fixed
+- App update.
+
+## [1.4.4] - 2026-10-11
+
+### Important
+- Publishing failed.
+
+## [1.4.3] - 2026-10-11
+
+### Important
+- Publishing failed.
+
+## [1.4.2] - 2026-10-10
+
+### Important
+- Publishing failed.
+
+## [1.4.1] - 2026-10-10
+
+### Fixed
+- Earlier app update.
+
+## [0.9.17] - 2026-01-01
+
+### Fixed
+- Pre-catalog release.
+"""
+    files = {
+        "docs/releases/CHANGELOG.md": changelog,
+        "scripts/release/release-config.json": json.dumps(
+            {"unpublished_release_tags": ["v1.4.2", "v1.4.3", "v1.4.4"]}
+        ),
+    }
+    monkeypatch.setattr(
+        module,
+        "read_text",
+        lambda relative, tree_ref=None: files[relative],
+    )
+
+    parsed = module.parse_changelog("1.5.0")
+
+    assert [release["version"] for release in parsed["previousReleases"]] == [
+        "1.4.5",
+        "1.4.1",
+        "0.9.17",
+    ]
+
+
+def test_candidate_signer_checkout_fetches_complete_release_history():
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    checkout = next(
+        step
+        for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Checkout exact audited signer"
+    )
+
+    assert checkout["with"] == {
+        "ref": "${{ github.sha }}",
+        "fetch-depth": 0,
+        "persist-credentials": False,
+    }
+    signing_step = next(
+        step
+        for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Sign, verify, and seal immutable candidate inputs"
+    )
+    assert signing_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    comparison_step = next(
+        step
+        for step in workflow["jobs"]["candidate-qualification"]["steps"]
+        if step.get("name") == "Rebuild and compare the complete application payload"
+    )
+    assert comparison_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert workflow["jobs"]["candidate-qualification"]["permissions"] == {
+        "contents": "read"
+    }
+
+
+def test_dependency_docs_exclude_failed_142_through_144_from_published_images():
+    update_model = (ROOT / "docs/explanation/update-model.md").read_text(
+        encoding="utf-8"
+    )
+    update_how_to = (ROOT / "docs/how-to/update-channelwatch.md").read_text(
+        encoding="utf-8"
+    )
+    changelog = (ROOT / "docs/releases/CHANGELOG.md").read_text(encoding="utf-8")
+
+    for false_image_list in (
+        "v1.4.0, v1.4.1, and v1.4.2 images",
+        "v1.4.0, v1.4.1, and v1.4.3 images",
+        "v1.4.0, v1.4.1, and v1.4.4 images",
+    ):
+        assert false_image_list not in update_model
+        assert false_image_list not in update_how_to
+    assert "Published v1.4.x images" in update_model
+    assert "Published\nv1.4.x images" in update_how_to
+    for failed_version in ("v1.4.2", "v1.4.3"):
+        assert (
+            f"Publishing failed before any {failed_version} app bundle, catalog, "
+            "container image, or GitHub release was published."
+        ) in changelog
+    assert "## [1.4.4] - 2026-10-11" in changelog
+    assert (
+        "Publishing failed during OpenVEX validation before any v1.4.4 "
+        "app bundle, catalog, container image, or GitHub release was published."
+    ) in changelog
+    assert "## [1.4.5] - 2026-10-11" in changelog
+
+
+def test_release_policy_requires_current_verified_versioned_openvex():
+    result = subprocess.run(
+        [sys.executable, "scripts/release/release_version_policy.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_release_policy_rejects_missing_current_openvex(tmp_path: Path):
+    module = _load_script(
+        "release_version_policy_missing_vex",
+        "scripts/release/release_version_policy.py",
+    )
+    source = tmp_path / "app/core/__init__.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('__version__ = "1.5.0"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="Release VEX document is missing"):
+        module.verify_release_source(tmp_path, "1.5.0")

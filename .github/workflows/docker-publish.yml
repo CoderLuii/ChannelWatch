@@ -187,7 +187,8 @@ jobs:
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.75.0
-          cache: true
+          cache: false
+
       - name: Scan filesystem, including the rendered Helm chart
         env:
           CHANNELWATCH_TRIVY_REPORT: ${{ runner.temp }}/channelwatch-trivy.json
@@ -292,13 +293,136 @@ jobs:
               f"({len(default_targets)} + {len(secret_targets)} resources)."
           )
           PY
+  runtime-dependencies:
+    name: Build native ${{ matrix.architecture }} runtime dependencies
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+            machine: x86_64
+            wheel_platform: manylinux_2_36_x86_64
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+            wheel_platform: manylinux_2_36_aarch64
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Build and execute deterministic native dependency closure twice
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+          RUNTIME_BUILDER_DIGEST: sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
+          RUNTIME_BUILDER_IMAGE: python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
+          WHEEL_PLATFORM: ${{ matrix.wheel_platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${RUNTIME_BUILDER_IMAGE}"
+          image_digest="$(docker image inspect --format '{{join .RepoDigests "\n"}}' \
+            "${RUNTIME_BUILDER_IMAGE}" | grep -Fx "python@${RUNTIME_BUILDER_DIGEST}")"
+          if [ "${image_digest}" != "python@${RUNTIME_BUILDER_DIGEST}" ]; then
+            echo "::error::Runtime builder image does not match its immutable digest."
+            exit 1
+          fi
+          image_architecture="$(docker image inspect --format '{{.Architecture}}' \
+            "${RUNTIME_BUILDER_IMAGE}")"
+          if [ "${image_architecture}" != "${ARCHITECTURE}" ]; then
+            echo "::error::Runtime dependency build is not running on native ${ARCHITECTURE}."
+            exit 1
+          fi
+
+          docker run --rm --pull=never \
+            --env ARCHITECTURE \
+            --env EXPECTED_MACHINE \
+            --env RUNTIME_BUILDER_DIGEST \
+            --env WHEEL_PLATFORM \
+            --volume "${GITHUB_WORKSPACE}:/src:ro" \
+            --volume "${RUNNER_TEMP}:/work" \
+            --workdir /src \
+            "${RUNTIME_BUILDER_IMAGE}" \
+            /bin/sh -euxc '
+              [ "$(uname -m)" = "${EXPECTED_MACHINE}" ]
+              python - <<"PY" > /work/compatible-wheel-tags.txt
+          from pip._vendor.packaging.tags import sys_tags
+          print("\n".join(sorted({str(tag) for tag in sys_tags()})))
+          PY
+              for build in one two; do
+                set --
+                while IFS= read -r tag; do
+                  set -- "$@" --compatible-wheel-tag "${tag}"
+                done < /work/compatible-wheel-tags.txt
+                python scripts/release/build-runtime-dependencies.py \
+                  --requirements deploy/requirements/runtime-update.txt \
+                  --lock deploy/requirements/runtime-update.lock \
+                  --wheelhouse "/work/wheelhouse-${build}" \
+                  --output "/work/runtime-${ARCHITECTURE}-${build}" \
+                  --architecture "${ARCHITECTURE}" \
+                  --python-cache-tag cpython-314 \
+                  --python-version 3.14.8 \
+                  --libc-family glibc \
+                  --minimum-libc-version 2.36 \
+                  --wheel-platform "${WHEEL_PLATFORM}" \
+                  --builder-image-digest "${RUNTIME_BUILDER_DIGEST}" \
+                  "$@"
+              done
+              diff -ru "/work/runtime-${ARCHITECTURE}-one" \
+                "/work/runtime-${ARCHITECTURE}-two"
+              python -I - "/work/runtime-${ARCHITECTURE}-one/dependencies/site-packages" \
+                "${EXPECTED_MACHINE}" <<"PY"
+          import platform
+          import sys
+          sys.path.insert(0, sys.argv[1])
+          import bcrypt
+          import cryptography
+          import httptools
+          import pydantic_core
+          import sqlalchemy
+          import uvloop
+          import yaml
+          assert platform.machine() == sys.argv[2]
+          assert all((bcrypt, cryptography, httptools, pydantic_core, sqlalchemy, uvloop, yaml))
+          PY
+              tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+                -C "/work/runtime-${ARCHITECTURE}-one" \
+                -cf "/work/channelwatch-runtime-dependencies-${ARCHITECTURE}.tar" .
+              cd /work
+              sha256sum "channelwatch-runtime-dependencies-${ARCHITECTURE}.tar" \
+                > "channelwatch-runtime-dependencies-${ARCHITECTURE}.tar.sha256"
+            '
+
+      - name: Retain native dependency closure
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/channelwatch-runtime-dependencies-${{ matrix.architecture }}.tar
+            ${{ runner.temp }}/channelwatch-runtime-dependencies-${{ matrix.architecture }}.tar.sha256
+          retention-days: 7
+          if-no-files-found: error
+
   candidate-source-gates:
     name: Verify release source and static frontend without secrets
+    needs: runtime-dependencies
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
+    outputs:
+      runtime_generation_required: ${{ steps.release_config.outputs.runtime_generation_required }}
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -306,6 +430,16 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Read release capability requirements
+        id: release_config
+        shell: bash
+        run: |
+          required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
+          if [ "${required}" != "true" ] && [ "${required}" != "false" ]; then
+            echo "::error::runtime_generation_required must be boolean."
+            exit 1
+          fi
+          echo "runtime_generation_required=${required}" >> "${GITHUB_OUTPUT}"
       - name: Set up pinned Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -346,6 +480,60 @@ jobs:
           path: app/ui/out/
           retention-days: 7
           if-no-files-found: error
+      - name: Download native runtime dependency closures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtime-dependencies-*-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-dependencies
+          merge-multiple: true
+      - name: Build deterministic unsigned runtime archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" != "true" ]; then
+            mkdir -p dist/unsigned-runtime
+            printf '{"status":"not_required"}\n' > dist/unsigned-runtime/runtime-not-required.json
+            exit 0
+          fi
+          source_date_epoch="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          runtime_app_root="${RUNNER_TEMP}/channelwatch-runtime-application"
+          python -I - "${runtime_app_root}" "${version}" <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+          script = Path("scripts/release/build-update-bundle.py").resolve()
+          spec = importlib.util.spec_from_file_location("channelwatch_update_bundle", script)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.stage_runtime_application_payload(Path(sys.argv[1]), version=sys.argv[2])
+          PY
+          for architecture in amd64 arm64; do
+            archive="channelwatch-runtime-dependencies-${architecture}.tar"
+            (cd "${RUNNER_TEMP}/runtime-dependencies" && sha256sum --check "${archive}.sha256")
+            dependency_root="${RUNNER_TEMP}/runtime-${architecture}"
+            mkdir -p "${dependency_root}"
+            tar -xf "${RUNNER_TEMP}/runtime-dependencies/${archive}" -C "${dependency_root}"
+            for candidate in candidate-one candidate-two; do
+              mkdir -p "dist/unsigned-runtime/${candidate}"
+              python scripts/release/build-runtime-bundle.py \
+                --app-root "${runtime_app_root}" \
+                --dependency-root "${dependency_root}" \
+                --output "dist/unsigned-runtime/${candidate}/channelwatch-runtime-v${version}-${architecture}.zip" \
+                --application-version "${version}" --source-commit "${GITHUB_SHA}" \
+                --settings-schema-version 7 --source-date-epoch "${source_date_epoch}"
+            done
+          done
+          diff -u \
+            <(cd dist/unsigned-runtime/candidate-one && sha256sum ./*) \
+            <(cd dist/unsigned-runtime/candidate-two && sha256sum ./*)
+      - name: Retain deterministic unsigned runtime archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-runtime-bundles-${{ github.sha }}
+          path: dist/unsigned-runtime/
+          retention-days: 7
+          if-no-files-found: error
       - name: Retain browser diagnostics, including first failed attempts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -359,10 +547,10 @@ jobs:
 
   candidate-signing:
     name: Sign and seal candidate assets on a fresh runner
-    needs: candidate-source-gates
+    needs: [candidate-source-gates, runtime-dependencies]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -376,16 +564,21 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
-      - name: Install exact binary signer dependencies
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --only-binary=:all: --require-hashes
-          -r scripts/release/signer-requirements.txt
       - name: Download verified static frontend
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-static-${{ github.sha }}
           path: app/ui/out
+      - name: Download native runtime dependency closures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-dependencies
+      - name: Download deterministic unsigned runtime archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-runtime-bundles-${{ github.sha }}
+          path: ${{ runner.temp }}/unsigned-runtime
       - name: Sign, verify, and seal immutable candidate inputs
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
@@ -396,22 +589,40 @@ jobs:
           signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
           test -n "${signing_key}"
           unset CHANNELWATCH_UPDATE_SIGNING_KEY
-          mkdir -p dist/candidate-initial
+          mkdir -p dist/runtime-dependencies/amd64 dist/candidate-initial
+          (cd "${RUNNER_TEMP}/runtime-dependencies" && sha256sum --check channelwatch-runtime-dependencies-amd64.tar.sha256)
+          tar -xf "${RUNNER_TEMP}/runtime-dependencies/channelwatch-runtime-dependencies-amd64.tar" \
+            -C dist/runtime-dependencies/amd64
+          export PYTHONPATH="${GITHUB_WORKSPACE}/dist/runtime-dependencies/amd64/dependencies/site-packages"
           version="$(jq -r '.version' scripts/release/release-config.json)"
           tag="v${version}"
+          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+          runtime_generation_required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
           common_args=(
             --version "${version}"
             --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}"
-            --delivery-mode "$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+            --delivery-mode "${delivery_mode}"
             --minimum-image-version "$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
             --updater-protocol "$(jq -r '.updater_protocol' scripts/release/release-config.json)"
             --recommended-image-version "$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
             --publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
             --automatic-install-after "$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
           )
-          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" --out-dir dist/candidate-one
-          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" --out-dir dist/candidate-two
+          runtime_url_args=()
+          runtime_one_args=()
+          runtime_two_args=()
+          if [ "${runtime_generation_required}" = "true" ]; then
+            cp -R "${RUNNER_TEMP}/unsigned-runtime/candidate-one" dist/candidate-one
+            cp -R "${RUNNER_TEMP}/unsigned-runtime/candidate-two" dist/candidate-two
+            for architecture in amd64 arm64; do
+              runtime_url_args+=(--runtime-bundle-url "${architecture}=https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-runtime-${tag}-${architecture}.zip")
+            done
+            runtime_one_args=(--runtime-bundle "amd64=dist/candidate-one/channelwatch-runtime-${tag}-amd64.zip" --runtime-bundle "arm64=dist/candidate-one/channelwatch-runtime-${tag}-arm64.zip")
+            runtime_two_args=(--runtime-bundle "amd64=dist/candidate-two/channelwatch-runtime-${tag}-amd64.zip" --runtime-bundle "arm64=dist/candidate-two/channelwatch-runtime-${tag}-arm64.zip")
+          fi
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" "${runtime_url_args[@]}" "${runtime_one_args[@]}" --out-dir dist/candidate-one
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" "${runtime_url_args[@]}" "${runtime_two_args[@]}" --out-dir dist/candidate-two
           diff -u <(cd dist/candidate-one && sha256sum ./*) <(cd dist/candidate-two && sha256sum ./*)
           config_sha256="$(sha256sum scripts/release/release-config.json | awk '{print $1}')"
           jq -cS -j -n --arg repository "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" \
@@ -436,14 +647,110 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  runtime-capability:
+    name: Prove protocol-4 runtime lifecycle (${{ matrix.architecture }})
+    needs: [candidate-source-gates, candidate-signing, runtime-dependencies]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact native verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Download sealed signed runtime assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-signer-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate-signer
+      - name: Download the native verified dependency closure
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-dependencies
+      - name: Open signed assets before native qualification starts
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          dependency_archive="channelwatch-runtime-dependencies-${NATIVE_ARCHITECTURE}.tar"
+          (cd "${RUNNER_TEMP}/runtime-dependencies" && sha256sum --check "${dependency_archive}.sha256")
+          dependency_root="${RUNNER_TEMP}/native-dependencies"
+          mkdir -p "${dependency_root}" "${RUNNER_TEMP}/signed-assets"
+          tar -xf "${RUNNER_TEMP}/runtime-dependencies/${dependency_archive}" -C "${dependency_root}"
+          export PYTHONPATH="${dependency_root}/dependencies/site-packages"
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${RUNNER_TEMP}/candidate-signer/signed-assets.sealed" \
+            --output "${RUNNER_TEMP}/signed-assets.tar"
+          tar -xf "${RUNNER_TEMP}/signed-assets.tar" -C "${RUNNER_TEMP}/signed-assets"
+          rm -f "${RUNNER_TEMP}/signed-assets.tar"
+          echo "PYTHONPATH=${PYTHONPATH}" >> "${GITHUB_ENV}"
+      - name: Run the native protocol-4 lifecycle verifier
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
+        env:
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/runtime-capability"
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          runtime_generation_required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
+          if [ "${updater_protocol}" != "4" ] || [ "${runtime_generation_required}" != "true" ]; then
+            echo "::error::Native runtime qualification was scheduled for a release without a full protocol-4 generation."
+            exit 1
+          fi
+          tag="v${version}"
+          python scripts/release/verify-runtime-capability.py \
+            --catalog "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-update-catalog-v3.json" \
+            --amd64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-amd64.zip" \
+            --arm64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-arm64.zip" \
+            --version "${version}" \
+            --source-commit "${GITHUB_SHA}" \
+            --minimum-image-version "$(jq -r '.minimum_image_version' scripts/release/release-config.json)" \
+            --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
+            --architecture "${NATIVE_ARCHITECTURE}" \
+            --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}.json"
+      - name: Retain native runtime capability evidence
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-capability-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-capability/
+          retention-days: 7
+          if-no-files-found: error
+
   candidate-qualification:
-    needs: [docs-config, helm, security, candidate-signing]
+    needs: [docs-config, helm, security, runtime-dependencies, candidate-source-gates, candidate-signing, runtime-capability]
     name: Build and verify private signed candidate
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
       contents: read
+    outputs:
+      artifact_id: ${{ steps.candidate_upload.outputs.artifact-id }}
 
     steps:
       - name: Checkout exact candidate
@@ -457,16 +764,28 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
-      - name: Install exact binary opener dependencies
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --only-binary=:all: --require-hashes
-          -r scripts/release/signer-requirements.txt
+
       - name: Download sealed initial signer output
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: candidate-signer-${{ github.sha }}
           path: ${{ runner.temp }}/candidate-signer
+
+      - name: Download native runtime capability evidence
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtime-capability-*-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-capability
+          merge-multiple: true
+
+      - name: Download native runtime dependency closures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtime-dependencies-*-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-dependencies
+          merge-multiple: true
+
       - name: Open signed assets before qualification starts
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
@@ -476,6 +795,11 @@ jobs:
           signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
           test -n "${signing_key}"
           unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          mkdir -p "${RUNNER_TEMP}/opener-dependencies"
+          (cd "${RUNNER_TEMP}/runtime-dependencies" && sha256sum --check channelwatch-runtime-dependencies-amd64.tar.sha256)
+          tar -xf "${RUNNER_TEMP}/runtime-dependencies/channelwatch-runtime-dependencies-amd64.tar" \
+            -C "${RUNNER_TEMP}/opener-dependencies"
+          export PYTHONPATH="${RUNNER_TEMP}/opener-dependencies/dependencies/site-packages"
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
             --input "${RUNNER_TEMP}/candidate-signer/signed-assets.sealed" \
             --output "${RUNNER_TEMP}/signed-assets.tar"
@@ -590,7 +914,10 @@ jobs:
           version="$(jq -r '.version' scripts/release/release-config.json)"
           tag="v${version}"
           comparison_dir="${RUNNER_TEMP}/application-payload-comparison"
-          ephemeral_signing_key="$(python - <<'PY'
+          runtime_app_root="${RUNNER_TEMP}/qualification-runtime-application"
+          source_date_epoch="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          runtime_generation_required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
+          comparison_signing_key="$(python - <<'PY'
           import base64
           from cryptography.hazmat.primitives import serialization
           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -602,6 +929,16 @@ jobs:
           print(base64.b64encode(key).decode("ascii"))
           PY
           )"
+          python -I - "${runtime_app_root}" "${version}" <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+          script = Path("scripts/release/build-update-bundle.py").resolve()
+          spec = importlib.util.spec_from_file_location("channelwatch_update_bundle", script)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.stage_runtime_application_payload(Path(sys.argv[1]), version=sys.argv[2])
+          PY
           common_args=(
             --version "${version}"
             --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
@@ -613,10 +950,35 @@ jobs:
             --publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
             --automatic-install-after "$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
           )
-          CHANNELWATCH_COMPARISON_SIGNING_KEY="${ephemeral_signing_key}" \
+          runtime_path_args=()
+          runtime_url_args=()
+          if [ "${runtime_generation_required}" = "true" ]; then
+            mkdir -p "${comparison_dir}"
+            for architecture in amd64 arm64; do
+              dependency_archive="channelwatch-runtime-dependencies-${architecture}.tar"
+              (cd "${RUNNER_TEMP}/runtime-dependencies" && sha256sum --check "${dependency_archive}.sha256")
+              dependency_root="${RUNNER_TEMP}/qualification-runtime-${architecture}"
+              mkdir -p "${dependency_root}"
+              tar -xf "${RUNNER_TEMP}/runtime-dependencies/${dependency_archive}" -C "${dependency_root}"
+              runtime_bundle="${comparison_dir}/channelwatch-runtime-${tag}-${architecture}.zip"
+              python scripts/release/build-runtime-bundle.py \
+                --app-root "${runtime_app_root}" \
+                --dependency-root "${dependency_root}" \
+                --output "${runtime_bundle}" \
+                --application-version "${version}" --source-commit "${GITHUB_SHA}" \
+                --settings-schema-version 7 --source-date-epoch "${source_date_epoch}"
+              cmp --silent \
+                "dist/candidate-one/channelwatch-runtime-${tag}-${architecture}.zip" \
+                "${runtime_bundle}"
+              runtime_path_args+=(--runtime-bundle "${architecture}=${runtime_bundle}")
+              runtime_url_args+=(--runtime-bundle-url "${architecture}=https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-runtime-${tag}-${architecture}.zip")
+            done
+          fi
+          CHANNELWATCH_COMPARISON_SIGNING_KEY="${comparison_signing_key}" \
             python scripts/release/build-update-bundle.py \
               --signing-key-env CHANNELWATCH_COMPARISON_SIGNING_KEY \
-              "${common_args[@]}" --out-dir "${comparison_dir}"
+              "${common_args[@]}" "${runtime_path_args[@]}" "${runtime_url_args[@]}" \
+              --out-dir "${comparison_dir}"
           cmp --silent \
             "dist/candidate-one/channelwatch-app-${tag}.zip" \
             "${comparison_dir}/channelwatch-app-${tag}.zip"
@@ -633,6 +995,29 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+      - name: Verify and extract native runtime dependency closures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/runtime-dependencies
+          for architecture in amd64 arm64; do
+            archive="channelwatch-runtime-dependencies-${architecture}.tar"
+            (
+              cd "${RUNNER_TEMP}/runtime-dependencies"
+              sha256sum --check "${archive}.sha256"
+            )
+            mkdir "dist/runtime-dependencies/${architecture}"
+            tar -xf "${RUNNER_TEMP}/runtime-dependencies/${archive}" \
+              -C "dist/runtime-dependencies/${architecture}"
+          done
+
+      - name: Require byte-identical assets from the fresh signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          diff -u \
+            <(cd dist/candidate-one && sha256sum ./*) \
+            <(cd dist/candidate-two && sha256sum ./*)
       - name: Verify app update frontend on the minimum compatible image
         shell: bash
         run: |
@@ -754,7 +1139,13 @@ jobs:
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.75.0
-          cache: true
+          cache: false
+
+      - name: Install pinned Syft for runtime artifact qualification
+        id: runtime_syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
 
       - name: Scan exact nonpublishing candidate image
         shell: bash
@@ -1026,6 +1417,8 @@ jobs:
           PY
 
       - name: Verify signed v1 bridge, v2 catalog, and exact source
+        env:
+          RUNTIME_SYFT_CMD: ${{ steps.runtime_syft.outputs.cmd }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1034,6 +1427,23 @@ jobs:
           delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
           image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
           recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          runtime_generation_required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
+          runtime_verify_args=()
+          if [ "${updater_protocol}" = "4" ]; then
+            runtime_verify_args=(
+              --runtime-catalog "dist/candidate-one/channelwatch-update-catalog-v3.json"
+              --expected-runtime-source-commit "${GITHUB_SHA}"
+            )
+            if [ "${runtime_generation_required}" = "true" ]; then
+              for architecture in amd64 arm64; do
+                runtime_verify_args+=(
+                  --runtime-bundle "${architecture}=dist/candidate-one/channelwatch-runtime-${tag}-${architecture}.zip"
+                  --expected-runtime-bundle-url "${architecture}=https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-runtime-${tag}-${architecture}.zip"
+                )
+              done
+            fi
+          fi
           python scripts/release/verify-update-assets.py \
             --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
             --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
@@ -1048,6 +1458,7 @@ jobs:
             --expected-git-sha "${GITHUB_SHA}" \
             --expected-release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}" \
             --expected-bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip" \
+            "${runtime_verify_args[@]}" \
             --source-root "${GITHUB_WORKSPACE}"
           compatibility_args=()
           if [ "${version}" = "0.9.18" ]; then
@@ -1073,15 +1484,59 @@ jobs:
               --minimum-image-app-update-bundle "dist/candidate-one/channelwatch-app-${tag}.zip"
             )
           fi
+          runtime_policy_args=()
+          if [ "${updater_protocol}" = "4" ] && [ "${runtime_generation_required}" = "true" ]; then
+            capability_evidence="dist/candidate-one/channelwatch-runtime-capability-${tag}.json"
+            python scripts/release/aggregate-runtime-capability.py \
+              --amd64-evidence "${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64.json" \
+              --arm64-evidence "${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64.json" \
+              --catalog "dist/candidate-one/channelwatch-update-catalog-v3.json" \
+              --release-config scripts/release/release-config.json \
+              --source-commit "${GITHUB_SHA}" \
+              --output "${capability_evidence}"
+            runtime_policy_args=(
+              --runtime-catalog "dist/candidate-one/channelwatch-update-catalog-v3.json"
+              --runtime-capability-evidence "${capability_evidence}"
+            )
+          fi
           python scripts/release/classify-release-impact.py \
             --base-ref "${base_ref}" \
             --target-ref "${GITHUB_SHA}" \
             "${compatibility_args[@]}" \
-            "${minimum_image_args[@]}"
+            "${minimum_image_args[@]}" \
+            "${runtime_policy_args[@]}"
           python scripts/release/verify-publication-window.py \
             --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
             --version "${version}" \
             --prospective-publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
+          if [ "${runtime_generation_required}" = "true" ]; then
+            runtime_scan_dir="${RUNNER_TEMP}/runtime-artifact-scan"
+            trivy_cache_dir="${RUNNER_TEMP}/runtime-trivy-cache"
+            install -d -m 0700 "${trivy_cache_dir}"
+            syft_path="$(readlink -f "${RUNTIME_SYFT_CMD}")"
+            trivy_path="$(readlink -f "$(command -v trivy)")"
+            if [[ "${syft_path}" != /* ]] || [[ "${trivy_path}" != /* ]]; then
+              echo "::error::Runtime scanners must resolve to absolute pinned executable paths."
+              exit 1
+            fi
+            echo "dbf75864e7a7ff9e1fbf00552c31483f693188632a9f68f343cd7653dac513d6  ${syft_path}" | sha256sum --check --strict
+            echo "93f9da8e4ba5e0c1c76d8234ed2494cf9afb0a96fd21953e424bb795f3299b8e  ${trivy_path}" | sha256sum --check --strict
+            python scripts/release/scan-runtime-artifacts.py \
+              --catalog "dist/candidate-one/channelwatch-update-catalog-v3.json" \
+              --runtime-bundle "amd64=dist/candidate-one/channelwatch-runtime-${tag}-amd64.zip" \
+              --runtime-bundle "arm64=dist/candidate-one/channelwatch-runtime-${tag}-arm64.zip" \
+              --expected-runtime-bundle-url "amd64=https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-runtime-${tag}-amd64.zip" \
+              --expected-runtime-bundle-url "arm64=https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-runtime-${tag}-arm64.zip" \
+              --expected-version "${version}" \
+              --expected-source-commit "${GITHUB_SHA}" \
+              --syft "${syft_path}" \
+              --trivy "${trivy_path}" \
+              --trivy-cache-dir "${trivy_cache_dir}" \
+              --output "${runtime_scan_dir}"
+            tar --sort=name --owner=0 --group=0 --numeric-owner --format=posix \
+              -C "${runtime_scan_dir}" \
+              -cf "dist/candidate-one/channelwatch-runtime-scan-${tag}.tar" .
+          fi
           checksum_tmp="${RUNNER_TEMP}/channelwatch-candidate-SHA256SUMS.txt"
           (
             cd dist/candidate-one
@@ -1104,10 +1559,17 @@ jobs:
           python scripts/release/candidate-transport.py encrypt \
             --context "${RUNNER_TEMP}/candidate-signer/transport-context.json" \
             --public-key "${RUNNER_TEMP}/candidate-signer/transport-public.json" \
-            --input "${archive}" --output "${encrypted}" \
+            --input "${archive}" \
+            --output "${encrypted}" \
             --artifact-name "channelwatch-release-candidate-${GITHUB_SHA}.tar"
           rm -f "${archive}"
+          if [ ! -s "${encrypted}" ]; then
+            echo "::error::Encrypted qualification artifact was not created."
+            exit 1
+          fi
+
       - name: Retain encrypted qualification evidence
+        id: candidate_upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-qualification-${{ github.sha }}
@@ -1136,11 +1598,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
-      - name: Install exact binary sealer dependencies
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --only-binary=:all: --require-hashes
-          -r scripts/release/signer-requirements.txt
       - name: Download signer key material
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1151,6 +1608,11 @@ jobs:
         with:
           name: candidate-qualification-${{ github.sha }}
           path: ${{ runner.temp }}/candidate-qualification
+      - name: Download audited opener dependencies
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/opener-runtime
       - name: Open qualification and create the final production seal
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
@@ -1160,12 +1622,18 @@ jobs:
           signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
           test -n "${signing_key}"
           unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          (cd "${RUNNER_TEMP}/opener-runtime" && sha256sum --check channelwatch-runtime-dependencies-amd64.tar.sha256)
+          mkdir -p "${RUNNER_TEMP}/opener-dependencies"
+          tar -xf "${RUNNER_TEMP}/opener-runtime/channelwatch-runtime-dependencies-amd64.tar" \
+            -C "${RUNNER_TEMP}/opener-dependencies"
+          export PYTHONPATH="${RUNNER_TEMP}/opener-dependencies/dependencies/site-packages"
           archive="${RUNNER_TEMP}/channelwatch-release-candidate-${GITHUB_SHA}.tar"
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/candidate-transport.py decrypt \
             --context "${RUNNER_TEMP}/candidate-signer/transport-context.json" \
             --sealed-private-key "${RUNNER_TEMP}/candidate-signer/transport-private.sealed" \
             --input "${RUNNER_TEMP}/candidate-qualification/channelwatch-release-candidate-${GITHUB_SHA}.transport" \
-            --output "${archive}" --artifact-name "channelwatch-release-candidate-${GITHUB_SHA}.tar"
+            --output "${archive}" \
+            --artifact-name "channelwatch-release-candidate-${GITHUB_SHA}.tar"
           mkdir -p dist/candidate-sealed
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py seal \
             --input "${archive}" \
@@ -1181,9 +1649,170 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  native-image-qualification:
+    name: Native image qualification (${{ matrix.architecture }})
+    needs: signed-candidate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact native verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python for the audited opener
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact binary opener dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download exact sealed candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.signed-candidate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/native-candidate
+      - name: Open exact candidate before native qualification
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          candidate_dir="${RUNNER_TEMP}/native-candidate"
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${candidate_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed" \
+            --output "${RUNNER_TEMP}/native-candidate.tar"
+          tar -xf "${RUNNER_TEMP}/native-candidate.tar" -C "${candidate_dir}"
+          rm -f "${RUNNER_TEMP}/native-candidate.tar" "${candidate_dir}"/*.sealed
+          (cd "${candidate_dir}" && sha256sum --check SHA256SUMS.txt)
+      - name: Set up pinned Node.js after the signing key is removed
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install the existing headless browser harness
+        working-directory: app/ui
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm exec playwright install --with-deps chromium
+      - name: Qualify exact native OCI child without rebuilding
+        env:
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_dir="${RUNNER_TEMP}/native-candidate"
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          archive="${candidate_dir}/channelwatch-image-${tag}.oci.tar"
+          descriptor="${candidate_dir}/channelwatch-image-${tag}.json"
+          archive_sha="$(sha256sum "${archive}" | awk '{print $1}')"
+          descriptor_sha="$(sha256sum "${descriptor}" | awk '{print $1}')"
+          docker pull "${SKOPEO_IMAGE}"
+          python scripts/release/verify-native-image.py \
+            --oci-archive "${archive}" \
+            --descriptor "${descriptor}" \
+            --expected-archive-sha256 "${archive_sha}" \
+            --expected-descriptor-sha256 "${descriptor_sha}" \
+            --source-commit "${GITHUB_SHA}" \
+            --version "${version}" \
+            --architecture "${NATIVE_ARCHITECTURE}" \
+            --skopeo-image "${SKOPEO_IMAGE}" \
+            --receipt "${RUNNER_TEMP}/native-image-${NATIVE_ARCHITECTURE}.json" \
+            --log-output "${RUNNER_TEMP}/native-image-${NATIVE_ARCHITECTURE}.log"
+          jq -e \
+            --arg architecture "${NATIVE_ARCHITECTURE}" \
+            --arg source_commit "${GITHUB_SHA}" \
+            --arg version "${version}" \
+            '.schema == 1 and .status == "passed" and .native == true and
+             .architecture == $architecture and .source_commit == $source_commit and
+             .version == $version and .launcher_protocol == 4 and .runtime_ready == true and .cli == true and
+             .headless_browser == true and .same_container_restart == true and
+             .persistence == true' \
+            "${RUNNER_TEMP}/native-image-${NATIVE_ARCHITECTURE}.json" >/dev/null
+      - name: Qualify published older installations on the foundation image
+        env:
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          if [ "${version}" != "1.5.0" ]; then
+            exit 0
+          fi
+          fixtures="scripts/release/image-upgrade-baselines.json"
+          test "$(jq -r '.candidate_version' "${fixtures}")" = "${version}"
+          baseline_dir="${RUNNER_TEMP}/image-upgrade-baselines"
+          mkdir -p "${baseline_dir}"
+          catalog="${baseline_dir}/catalog.json"
+          bundle="${baseline_dir}/app.zip"
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "$(jq -r '.signed_app.catalog_url' "${fixtures}")" --output "${catalog}"
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "$(jq -r '.signed_app.bundle_url' "${fixtures}")" --output "${bundle}"
+          printf '%s  %s\n' "$(jq -r '.signed_app.catalog_sha256' "${fixtures}")" "${catalog}" \
+            "$(jq -r '.signed_app.bundle_sha256' "${fixtures}")" "${bundle}" | sha256sum --check
+          candidate_dir="${RUNNER_TEMP}/native-candidate"
+          archive="${candidate_dir}/channelwatch-image-v${version}.oci.tar"
+          descriptor="${candidate_dir}/channelwatch-image-v${version}.json"
+          archive_sha="$(sha256sum "${archive}" | awk '{print $1}')"
+          descriptor_sha="$(sha256sum "${descriptor}" | awk '{print $1}')"
+          for baseline in 1.4.0 1.4.1; do
+            python scripts/release/verify-image-upgrade.py \
+              --candidate-oci-archive "${archive}" \
+              --candidate-descriptor "${descriptor}" \
+              --expected-archive-sha256 "${archive_sha}" \
+              --expected-descriptor-sha256 "${descriptor_sha}" \
+              --candidate-version "${version}" \
+              --source-commit "${GITHUB_SHA}" \
+              --architecture "${NATIVE_ARCHITECTURE}" \
+              --skopeo-image "${SKOPEO_IMAGE}" \
+              --baseline-repository "$(jq -r '.repository' "${fixtures}")" \
+              --baseline-image-version "${baseline}" \
+              --baseline-source-commit "$(jq -r --arg baseline "${baseline}" '.images[$baseline].source_commit' "${fixtures}")" \
+              --baseline-index-digest "$(jq -r --arg baseline "${baseline}" '.images[$baseline].index_digest' "${fixtures}")" \
+              --baseline-manifest-digest "$(jq -r --arg baseline "${baseline}" --arg architecture "${NATIVE_ARCHITECTURE}" '.images[$baseline].manifests[$architecture]' "${fixtures}")" \
+              --baseline-app-version "$(jq -r '.signed_app.version' "${fixtures}")" \
+              --baseline-app-source-commit "$(jq -r '.signed_app.source_commit' "${fixtures}")" \
+              --baseline-catalog "${catalog}" \
+              --baseline-bundle "${bundle}" \
+              --receipt "${RUNNER_TEMP}/native-image-upgrade-${NATIVE_ARCHITECTURE}-${baseline}.json" \
+              --log-directory "${RUNNER_TEMP}/native-image-upgrade-${NATIVE_ARCHITECTURE}-${baseline}-logs"
+          done
+      - name: Retain native image qualification receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-image-${{ matrix.architecture }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-image-${{ matrix.architecture }}.json
+            ${{ runner.temp }}/native-image-${{ matrix.architecture }}.log
+            ${{ runner.temp }}/native-image-upgrade-${{ matrix.architecture }}-*.json
+            ${{ runner.temp }}/native-image-upgrade-${{ matrix.architecture }}-*-logs/
+          if-no-files-found: warn
+          retention-days: 30
+
   build-update-bundle-and-release:
     name: Build signed update bundle and release
-    needs: signed-candidate
+    needs: [signed-candidate, native-image-qualification]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -1194,6 +1823,8 @@ jobs:
       manifest_url: ${{ steps.assets.outputs.manifest_url }}
       catalog_url: ${{ steps.assets.outputs.catalog_url }}
       catalog_sha256: ${{ steps.assets.outputs.catalog_sha256 }}
+      runtime_catalog_url: ${{ steps.assets.outputs.runtime_catalog_url }}
+      runtime_catalog_sha256: ${{ steps.assets.outputs.runtime_catalog_sha256 }}
       bundle_sha256: ${{ steps.assets.outputs.bundle_sha256 }}
       approved_candidate_artifact_id: ${{ steps.approved_candidate.outputs.artifact_id }}
       approved_image_index_digest: ${{ steps.approved_candidate.outputs.image_index_digest }}
@@ -1213,16 +1844,23 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install exact binary opener dependencies
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --only-binary=:all: --require-hashes
-          -r scripts/release/signer-requirements.txt
+      - name: Download audited opener dependencies
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/opener-runtime
       - name: Download the exact qualified candidate seal
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.signed-candidate.outputs.artifact_id }}
           path: ${{ runner.temp }}/approved-candidate
+      - name: Download exact native image qualification evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-image-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-image-evidence
+          merge-multiple: true
+
       - name: Open the exact qualified candidate before release checks
         id: approved_candidate
         env:
@@ -1235,33 +1873,156 @@ jobs:
           signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
           test -n "${signing_key}"
           unset CHANNELWATCH_UPDATE_SIGNING_KEY
-          artifact_id="${APPROVED_ARTIFACT_ID}"
-          if [[ ! "${artifact_id}" =~ ^[0-9]+$ ]]; then
-            echo "::error::The verification job did not produce an approved candidate artifact for exact SHA ${RELEASE_SHA}."
+          (cd "${RUNNER_TEMP}/opener-runtime" && sha256sum --check channelwatch-runtime-dependencies-amd64.tar.sha256)
+          mkdir -p "${RUNNER_TEMP}/opener-dependencies"
+          tar -xf "${RUNNER_TEMP}/opener-runtime/channelwatch-runtime-dependencies-amd64.tar" \
+            -C "${RUNNER_TEMP}/opener-dependencies"
+          export PYTHONPATH="${RUNNER_TEMP}/opener-dependencies/dependencies/site-packages"
+          if [[ ! "${APPROVED_ARTIFACT_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::The verification job did not produce an approved candidate artifact."
             exit 1
           fi
           approved_dir="${RUNNER_TEMP}/approved-candidate"
+          mkdir -p "${approved_dir}" dist/update
+          candidate_seal="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
+          candidate_seal_sha256="$(sha256sum "${candidate_seal}" | awk '{print $1}')"
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
-            --input "${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed" \
+            --input "${candidate_seal}" \
             --output "${RUNNER_TEMP}/approved-candidate.tar"
           tar -xf "${RUNNER_TEMP}/approved-candidate.tar" -C "${approved_dir}"
           rm -f "${RUNNER_TEMP}/approved-candidate.tar" "${approved_dir}"/*.sealed
           (cd "${approved_dir}" && sha256sum --check SHA256SUMS.txt)
-          mkdir -p dist/update
           cp "${approved_dir}/channelwatch-app-${TAG}.zip" dist/update/
           cp "${approved_dir}/channelwatch-update-${TAG}.json" dist/update/
           cp "${approved_dir}/channelwatch-catalog-${TAG}.json" dist/update/
+          if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
+            cp "${approved_dir}/channelwatch-update-catalog-v3.json" dist/update/
+          fi
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            cp "${approved_dir}/channelwatch-runtime-capability-${TAG}.json" dist/update/
+            cp "${approved_dir}/channelwatch-runtime-${TAG}-amd64.zip" dist/update/
+            cp "${approved_dir}/channelwatch-runtime-${TAG}-arm64.zip" dist/update/
+            cp "${approved_dir}/channelwatch-runtime-scan-${TAG}.tar" dist/update/
+          fi
           image_descriptor="channelwatch-image-${TAG}.json"
           image_digest="channelwatch-image-${TAG}.digest"
           image_archive="channelwatch-image-${TAG}.oci.tar"
           image_index_digest="$(tr -d '\r\n' < "${approved_dir}/${image_digest}")"
           [[ "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           {
-            echo "artifact_id=${artifact_id}"
+            echo "artifact_id=${APPROVED_ARTIFACT_ID}"
+            echo "candidate_seal_sha256=${candidate_seal_sha256}"
             echo "image_index_digest=${image_index_digest}"
             echo "image_descriptor_sha256=$(sha256sum "${approved_dir}/${image_descriptor}" | awk '{print $1}')"
             echo "image_archive_sha256=$(sha256sum "${approved_dir}/${image_archive}" | awk '{print $1}')"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Bind native qualification evidence to the exact signed candidate
+        env:
+          CANDIDATE_SEAL_SHA256: ${{ steps.approved_candidate.outputs.candidate_seal_sha256 }}
+          EXPECTED_ARCHIVE_SHA256: ${{ steps.approved_candidate.outputs.image_archive_sha256 }}
+          EXPECTED_DESCRIPTOR_SHA256: ${{ steps.approved_candidate.outputs.image_descriptor_sha256 }}
+          EXPECTED_IMAGE_INDEX_DIGEST: ${{ steps.approved_candidate.outputs.image_index_digest }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/native-image-evidence"
+          output_dir="dist/update"
+          version="${TAG#v}"
+          manifest="${output_dir}/channelwatch-native-image-${TAG}-evidence.json"
+          jq -n \
+            --arg source_commit "${RELEASE_SHA}" \
+            --arg version "${version}" \
+            --arg candidate_seal_sha256 "${CANDIDATE_SEAL_SHA256}" \
+            --arg image_index_digest "${EXPECTED_IMAGE_INDEX_DIGEST}" \
+            --arg oci_archive_sha256 "${EXPECTED_ARCHIVE_SHA256}" \
+            --arg descriptor_sha256 "${EXPECTED_DESCRIPTOR_SHA256}" \
+            '{schema: 1, source_commit: $source_commit, version: $version,
+              candidate_seal_sha256: $candidate_seal_sha256,
+              image_index_digest: $image_index_digest,
+              oci_archive_sha256: $oci_archive_sha256,
+              descriptor_sha256: $descriptor_sha256,
+              architectures: []}' > "${manifest}"
+          for architecture in amd64 arm64; do
+            receipt="${evidence_dir}/native-image-${architecture}.json"
+            log="${evidence_dir}/native-image-${architecture}.log"
+            test -s "${receipt}"
+            test -f "${log}"
+            log_sha256="$(sha256sum "${log}" | awk '{print $1}')"
+            jq -e \
+              --arg architecture "${architecture}" \
+              --arg source_commit "${RELEASE_SHA}" \
+              --arg version "${version}" \
+              --arg archive_sha256 "${EXPECTED_ARCHIVE_SHA256}" \
+              --arg descriptor_sha256 "${EXPECTED_DESCRIPTOR_SHA256}" \
+              --arg image_index_digest "${EXPECTED_IMAGE_INDEX_DIGEST}" \
+              --arg log_sha256 "${log_sha256}" \
+              '.schema == 1 and .status == "passed" and .native == true and
+               .architecture == $architecture and .source_commit == $source_commit and
+               .version == $version and .oci_archive_sha256 == $archive_sha256 and
+               .descriptor_sha256 == $descriptor_sha256 and
+               .image_index_digest == $image_index_digest and
+               .container_log_sha256 == $log_sha256 and
+               .launcher_protocol == 4 and .runtime_ready == true and .cli == true and .headless_browser == true and
+               .same_container_restart == true and .persistence == true' \
+              "${receipt}" >/dev/null
+            public_receipt="${output_dir}/channelwatch-native-image-${TAG}-${architecture}.json"
+            public_log="${output_dir}/channelwatch-native-image-${TAG}-${architecture}.log"
+            cp "${receipt}" "${public_receipt}"
+            cp "${log}" "${public_log}"
+            receipt_sha256="$(sha256sum "${public_receipt}" | awk '{print $1}')"
+            updated="${RUNNER_TEMP}/native-image-evidence-${architecture}.json"
+            jq \
+              --arg architecture "${architecture}" \
+              --arg receipt_sha256 "${receipt_sha256}" \
+              --arg log_sha256 "${log_sha256}" \
+              '.architectures += [{architecture: $architecture,
+                receipt_sha256: $receipt_sha256, log_sha256: $log_sha256}]' \
+              "${manifest}" > "${updated}"
+            mv "${updated}" "${manifest}"
+          done
+          jq -e \
+            '.schema == 1 and
+             [.architectures[].architecture] == ["amd64", "arm64"]' \
+            "${manifest}" >/dev/null
+
+      - name: Bind older-installation migration evidence to the foundation candidate
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ steps.approved_candidate.outputs.image_archive_sha256 }}
+          EXPECTED_DESCRIPTOR_SHA256: ${{ steps.approved_candidate.outputs.image_descriptor_sha256 }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${TAG}" != "v1.5.0" ]; then
+            exit 0
+          fi
+          evidence_dir="${RUNNER_TEMP}/native-image-evidence"
+          output_dir="dist/update"
+          manifest="${output_dir}/channelwatch-image-upgrade-${TAG}-evidence.json"
+          python scripts/release/aggregate-image-upgrades.py \
+            --evidence-directory "${evidence_dir}" \
+            --baselines scripts/release/image-upgrade-baselines.json \
+            --descriptor "${RUNNER_TEMP}/approved-candidate/channelwatch-image-${TAG}.json" \
+            --source-commit "${RELEASE_SHA}" \
+            --archive-sha256 "${EXPECTED_ARCHIVE_SHA256}" \
+            --descriptor-sha256 "${EXPECTED_DESCRIPTOR_SHA256}" \
+            --output "${manifest}"
+          logs=()
+          for architecture in amd64 arm64; do
+            for baseline in 1.4.0 1.4.1; do
+              cp "${evidence_dir}/native-image-upgrade-${architecture}-${baseline}.json" \
+                "${output_dir}/channelwatch-image-upgrade-${TAG}-${architecture}-${baseline}.json"
+              logs+=("native-image-upgrade-${architecture}-${baseline}-logs")
+            done
+          done
+          log_archive="${output_dir}/channelwatch-image-upgrade-${TAG}-logs.tar"
+          tar -cf "${log_archive}" -C "${evidence_dir}" "${logs[@]}"
+          updated="${RUNNER_TEMP}/image-upgrade-evidence.json"
+          jq --arg sha256 "$(sha256sum "${log_archive}" | awk '{print $1}')" \
+            '.log_archive_sha256 = $sha256' "${manifest}" > "${updated}"
+          mv "${updated}" "${manifest}"
 
       - name: Set up pinned Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1362,9 +2123,26 @@ jobs:
           expected_image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
           expected_delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
           expected_recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          runtime_generation_required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
           if [ "${expected_image_required}" != "true" ] && [ "${expected_image_required}" != "false" ]; then
             echo "::error::release-config.json image_required must be true or false."
             exit 1
+          fi
+          runtime_verify_args=()
+          if [ "${updater_protocol}" = "4" ]; then
+            runtime_verify_args=(
+              --runtime-catalog "dist/update/channelwatch-update-catalog-v3.json"
+              --expected-runtime-source-commit "${EXPECTED_GIT_SHA}"
+            )
+            if [ "${runtime_generation_required}" = "true" ]; then
+              for architecture in amd64 arm64; do
+                runtime_verify_args+=(
+                  --runtime-bundle "${architecture}=dist/update/channelwatch-runtime-${TAG}-${architecture}.zip"
+                  --expected-runtime-bundle-url "${architecture}=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-runtime-${TAG}-${architecture}.zip"
+                )
+              done
+            fi
           fi
           python scripts/release/verify-update-assets.py \
             --manifest "dist/update/channelwatch-update-${TAG}.json" \
@@ -1380,6 +2158,7 @@ jobs:
             --expected-git-sha "${EXPECTED_GIT_SHA}" \
             --expected-release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
             --expected-bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
+            "${runtime_verify_args[@]}" \
             --source-root "${RELEASE_SOURCE_ROOT}"
 
           compatibility_args=()
@@ -1409,11 +2188,19 @@ jobs:
               --minimum-image-app-update-bundle "dist/update/channelwatch-app-${TAG}.zip"
             )
           fi
+          runtime_policy_args=()
+          if [ "${updater_protocol}" = "4" ] && [ "${runtime_generation_required}" = "true" ]; then
+            runtime_policy_args=(
+              --runtime-catalog "dist/update/channelwatch-update-catalog-v3.json"
+              --runtime-capability-evidence "dist/update/channelwatch-runtime-capability-${TAG}.json"
+            )
+          fi
           python scripts/release/classify-release-impact.py \
             --base-ref "${base_ref}" \
             --target-ref "${RELEASE_SHA}" \
             "${compatibility_args[@]}" \
-            "${minimum_image_args[@]}"
+            "${minimum_image_args[@]}" \
+            "${runtime_policy_args[@]}"
           # This tag workflow uses the real runner clock. A future signed
           # publication time must stop the job before even a draft release,
           # immutable image, public release, registry alias, or feed changes.
@@ -1502,20 +2289,66 @@ jobs:
           bundle="dist/update/channelwatch-app-${TAG}.zip"
           manifest="dist/update/channelwatch-update-${TAG}.json"
           catalog="dist/update/channelwatch-catalog-${TAG}.json"
+          runtime_catalog="dist/update/channelwatch-update-catalog-v3.json"
+          native_evidence="dist/update/channelwatch-native-image-${TAG}-evidence.json"
           vex="deploy/security/channelwatch-${TAG}.openvex.json"
           if [ ! -f "${bundle}" ] || [ ! -f "${manifest}" ] || [ ! -f "${catalog}" ] || [ ! -f "${vex}" ]; then
             echo "::error::Expected update assets were not created."
             exit 1
           fi
-          gh release upload "${TAG}" "${bundle}" "${manifest}" "${catalog}" "${vex}" --repo "${GITHUB_REPOSITORY}" --clobber
+          assets=("${bundle}" "${manifest}" "${catalog}" "${vex}")
+          test -s "${native_evidence}"
+          assets+=("${native_evidence}")
+          if [ "${TAG}" = "v1.5.0" ]; then
+            upgrade_evidence="dist/update/channelwatch-image-upgrade-${TAG}-evidence.json"
+            upgrade_logs="dist/update/channelwatch-image-upgrade-${TAG}-logs.tar"
+            test -s "${upgrade_evidence}"
+            test -s "${upgrade_logs}"
+            assets+=("${upgrade_evidence}" "${upgrade_logs}")
+            for architecture in amd64 arm64; do
+              for baseline in 1.4.0 1.4.1; do
+                upgrade_receipt="dist/update/channelwatch-image-upgrade-${TAG}-${architecture}-${baseline}.json"
+                test -s "${upgrade_receipt}"
+                assets+=("${upgrade_receipt}")
+              done
+            done
+          fi
+          for architecture in amd64 arm64; do
+            native_receipt="dist/update/channelwatch-native-image-${TAG}-${architecture}.json"
+            native_log="dist/update/channelwatch-native-image-${TAG}-${architecture}.log"
+            test -s "${native_receipt}"
+            test -f "${native_log}"
+            assets+=("${native_receipt}" "${native_log}")
+          done
+          runtime_catalog_sha=""
+          runtime_catalog_url=""
+          if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
+            test -s "${runtime_catalog}"
+            assets+=("${runtime_catalog}")
+            runtime_catalog_sha="$(sha256sum "${runtime_catalog}" | awk '{print $1}')"
+            runtime_catalog_url="https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-update-catalog-v3.json"
+          fi
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            for architecture in amd64 arm64; do
+              runtime_bundle="dist/update/channelwatch-runtime-${TAG}-${architecture}.zip"
+              test -s "${runtime_bundle}"
+              assets+=("${runtime_bundle}")
+            done
+            runtime_scan="dist/update/channelwatch-runtime-scan-${TAG}.tar"
+            test -s "${runtime_scan}"
+            assets+=("${runtime_scan}")
+          fi
+          gh release upload "${TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
           bundle_sha="$(sha256sum "${bundle}" | awk '{print $1}')"
           catalog_sha="$(sha256sum "${catalog}" | awk '{print $1}')"
           {
             echo "bundle_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip"
             echo "manifest_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-update-${TAG}.json"
             echo "catalog_url=https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-catalog-${TAG}.json"
+            echo "runtime_catalog_url=${runtime_catalog_url}"
             echo "bundle_sha256=${bundle_sha}"
             echo "catalog_sha256=${catalog_sha}"
+            echo "runtime_catalog_sha256=${runtime_catalog_sha}"
           } >> "${GITHUB_OUTPUT}"
 
   build-and-push:
@@ -1546,17 +2379,17 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
-      - name: Install exact binary opener dependencies
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --only-binary=:all: --require-hashes
-          -r scripts/release/signer-requirements.txt
+      - name: Download audited opener dependencies
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/opener-runtime
       - name: Download the exact approved candidate seal
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
           path: ${{ runner.temp }}/approved-candidate
-      - name: Open the exact approved candidate image
+      - name: Download exact approved candidate image
         env:
           APPROVED_ARCHIVE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_archive_sha256 }}
           APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
@@ -1570,6 +2403,11 @@ jobs:
           signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
           test -n "${signing_key}"
           unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          (cd "${RUNNER_TEMP}/opener-runtime" && sha256sum --check channelwatch-runtime-dependencies-amd64.tar.sha256)
+          mkdir -p "${RUNNER_TEMP}/opener-dependencies"
+          tar -xf "${RUNNER_TEMP}/opener-runtime/channelwatch-runtime-dependencies-amd64.tar" \
+            -C "${RUNNER_TEMP}/opener-dependencies"
+          export PYTHONPATH="${RUNNER_TEMP}/opener-dependencies/dependencies/site-packages"
           if [[ ! "${APPROVED_ARTIFACT_ID}" =~ ^[0-9]+$ ]] || \
              [[ ! "${APPROVED_IMAGE_INDEX_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
              [[ ! "${APPROVED_DESCRIPTOR_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
@@ -1578,13 +2416,18 @@ jobs:
             exit 1
           fi
           approved_dir="${RUNNER_TEMP}/approved-candidate"
-          mkdir -p "${RUNNER_TEMP}/channelwatch-release.oci"
+          mkdir -p "${approved_dir}" "${RUNNER_TEMP}/channelwatch-release.oci"
+          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
+          opened="${RUNNER_TEMP}/approved-candidate.tar"
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
-            --input "${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed" \
-            --output "${RUNNER_TEMP}/approved-candidate.tar"
-          tar -xf "${RUNNER_TEMP}/approved-candidate.tar" -C "${approved_dir}"
-          rm -f "${RUNNER_TEMP}/approved-candidate.tar" "${approved_dir}"/*.sealed
-          (cd "${approved_dir}" && sha256sum --check SHA256SUMS.txt)
+            --input "${sealed}" \
+            --output "${opened}"
+          tar -xf "${opened}" -C "${approved_dir}"
+          rm -f "${opened}" "${sealed}"
+          (
+            cd "${approved_dir}"
+            sha256sum --check SHA256SUMS.txt
+          )
           descriptor="${approved_dir}/channelwatch-image-${TAG}.json"
           digest="${approved_dir}/channelwatch-image-${TAG}.digest"
           archive="${approved_dir}/channelwatch-image-${TAG}.oci.tar"
@@ -1601,6 +2444,7 @@ jobs:
             --digest-output "${RUNNER_TEMP}/release-image.digest"
           cmp --silent "${descriptor}" "${RUNNER_TEMP}/release-image.json"
           cmp --silent "${digest}" "${RUNNER_TEMP}/release-image.digest"
+          echo "The exact private candidate image is ready for repeat scanning and publication."
 
       - name: Parse version
         id: version
@@ -1732,11 +2576,28 @@ jobs:
             echo "::error::Signed assets must come from the matching exact-SHA draft release."
             exit 1
           fi
-          for asset in \
-            "channelwatch-app-${TAG}.zip" \
-            "channelwatch-update-${TAG}.json" \
-            "channelwatch-catalog-${TAG}.json" \
-            "channelwatch-${TAG}.openvex.json"; do
+          draft_assets=(
+            "channelwatch-app-${TAG}.zip"
+            "channelwatch-update-${TAG}.json"
+            "channelwatch-catalog-${TAG}.json"
+            "channelwatch-${TAG}.openvex.json"
+            "channelwatch-native-image-${TAG}-evidence.json"
+            "channelwatch-native-image-${TAG}-amd64.json"
+            "channelwatch-native-image-${TAG}-amd64.log"
+            "channelwatch-native-image-${TAG}-arm64.json"
+            "channelwatch-native-image-${TAG}-arm64.log"
+          )
+          if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
+            draft_assets+=("channelwatch-update-catalog-v3.json")
+          fi
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            draft_assets+=(
+              "channelwatch-runtime-${TAG}-amd64.zip"
+              "channelwatch-runtime-${TAG}-arm64.zip"
+              "channelwatch-runtime-scan-${TAG}.tar"
+            )
+          fi
+          for asset in "${draft_assets[@]}"; do
             gh release download "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               --pattern "${asset}" \
@@ -1830,20 +2691,37 @@ jobs:
             --image-license-root "arm64=${image_license_root}/arm64" \
             --archive "${release_dir}/channelwatch-${TAG}-COPYLEFT-LICENSES.zip"
 
-          for required_asset in \
-            "channelwatch-app-${TAG}.zip" \
-            "channelwatch-update-${TAG}.json" \
-            "channelwatch-catalog-${TAG}.json" \
-            "channelwatch-${TAG}.openvex.json" \
-            "channelwatch-${TAG}-amd64.spdx.json" \
-            "channelwatch-${TAG}-amd64.cyclonedx.json" \
-            "channelwatch-${TAG}-arm64.spdx.json" \
-            "channelwatch-${TAG}-arm64.cyclonedx.json" \
-            "channelwatch-${TAG}-LICENSE.txt" \
-            "channelwatch-${TAG}-NOTICE.txt" \
-            "channelwatch-${TAG}-THIRD-PARTY-LICENSES.md" \
-            "channelwatch-${TAG}-CORRESPONDING-SOURCE.md" \
-            "channelwatch-${TAG}-COPYLEFT-LICENSES.zip"; do
+          required_assets=(
+            "channelwatch-app-${TAG}.zip"
+            "channelwatch-update-${TAG}.json"
+            "channelwatch-catalog-${TAG}.json"
+            "channelwatch-${TAG}.openvex.json"
+            "channelwatch-${TAG}-amd64.spdx.json"
+            "channelwatch-${TAG}-amd64.cyclonedx.json"
+            "channelwatch-${TAG}-arm64.spdx.json"
+            "channelwatch-${TAG}-arm64.cyclonedx.json"
+            "channelwatch-${TAG}-LICENSE.txt"
+            "channelwatch-${TAG}-NOTICE.txt"
+            "channelwatch-${TAG}-THIRD-PARTY-LICENSES.md"
+            "channelwatch-${TAG}-CORRESPONDING-SOURCE.md"
+            "channelwatch-${TAG}-COPYLEFT-LICENSES.zip"
+            "channelwatch-native-image-${TAG}-evidence.json"
+            "channelwatch-native-image-${TAG}-amd64.json"
+            "channelwatch-native-image-${TAG}-amd64.log"
+            "channelwatch-native-image-${TAG}-arm64.json"
+            "channelwatch-native-image-${TAG}-arm64.log"
+          )
+          if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
+            required_assets+=("channelwatch-update-catalog-v3.json")
+          fi
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            required_assets+=(
+              "channelwatch-runtime-${TAG}-amd64.zip"
+              "channelwatch-runtime-${TAG}-arm64.zip"
+              "channelwatch-runtime-scan-${TAG}.tar"
+            )
+          fi
+          for required_asset in "${required_assets[@]}"; do
             if [ ! -s "${release_dir}/${required_asset}" ]; then
               echo "::error::Required checksummed release asset is missing: ${required_asset}"
               exit 1
@@ -1859,8 +2737,9 @@ jobs:
             sha256sum --check "${checksum_tmp}"
           )
           mv "${checksum_tmp}" "${checksum_file}"
-          if [ "$(wc -l < "${checksum_file}" | tr -d ' ')" != "13" ]; then
-            echo "::error::Release checksum manifest must cover all 13 non-checksum assets."
+          expected_checksum_count="${#required_assets[@]}"
+          if [ "$(wc -l < "${checksum_file}" | tr -d ' ')" != "${expected_checksum_count}" ]; then
+            echo "::error::Release checksum manifest must cover all ${expected_checksum_count} non-checksum assets."
             exit 1
           fi
 
@@ -2096,18 +2975,21 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
-      - name: Install exact binary opener dependencies
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --only-binary=:all: --require-hashes
-          -r scripts/release/signer-requirements.txt
+
+      - name: Download audited opener dependencies
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/opener-runtime
       - name: Download the exact approved candidate seal
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
           path: ${{ runner.temp }}/approved-candidate-canary
+
       - name: Open candidate before publication verification starts
         env:
+          APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
         shell: bash
         run: |
@@ -2115,7 +2997,13 @@ jobs:
           signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
           test -n "${signing_key}"
           unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          (cd "${RUNNER_TEMP}/opener-runtime" && sha256sum --check channelwatch-runtime-dependencies-amd64.tar.sha256)
+          mkdir -p "${RUNNER_TEMP}/opener-dependencies"
+          tar -xf "${RUNNER_TEMP}/opener-runtime/channelwatch-runtime-dependencies-amd64.tar" \
+            -C "${RUNNER_TEMP}/opener-dependencies"
+          export PYTHONPATH="${RUNNER_TEMP}/opener-dependencies/dependencies/site-packages"
           approved_dir="${RUNNER_TEMP}/approved-candidate-canary"
+          mkdir -p "${approved_dir}"
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
             --input "${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed" \
             --output "${RUNNER_TEMP}/approved-candidate-canary.tar"
@@ -2515,8 +3403,24 @@ jobs:
             "channelwatch-${tag}-THIRD-PARTY-LICENSES.md" \
             "channelwatch-${tag}-CORRESPONDING-SOURCE.md" \
             "channelwatch-${tag}-COPYLEFT-LICENSES.zip" \
+            "channelwatch-native-image-${tag}-evidence.json" \
+            "channelwatch-native-image-${tag}-amd64.json" \
+            "channelwatch-native-image-${tag}-amd64.log" \
+            "channelwatch-native-image-${tag}-arm64.json" \
+            "channelwatch-native-image-${tag}-arm64.log" \
             "channelwatch-${tag}-SHA256SUMS.txt" \
             | sort > "${expected_assets}"
+          if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
+            echo "channelwatch-update-catalog-v3.json" >> "${expected_assets}"
+          fi
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            printf '%s\n' \
+              "channelwatch-runtime-${tag}-amd64.zip" \
+              "channelwatch-runtime-${tag}-arm64.zip" \
+              "channelwatch-runtime-scan-${tag}.tar" \
+              >> "${expected_assets}"
+          fi
+          sort -o "${expected_assets}" "${expected_assets}"
           jq -r '.assets[].name' <<<"${release_json}" | sort > "${actual_assets}"
           if ! diff -u "${expected_assets}" "${actual_assets}"; then
             echo "::error::Public release has an unexpected or missing asset."
@@ -2552,8 +3456,15 @@ jobs:
           done < "${RUNNER_TEMP}/expected-public-assets.txt"
 
           checksum_file="channelwatch-${TAG}-SHA256SUMS.txt"
-          if [ "$(wc -l < "${public_dir}/${checksum_file}" | tr -d ' ')" != "13" ]; then
-            echo "::error::Public checksum manifest must cover all 13 non-checksum assets."
+          expected_checksum_count=18
+          if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
+            expected_checksum_count=$((expected_checksum_count + 1))
+          fi
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            expected_checksum_count=$((expected_checksum_count + 3))
+          fi
+          if [ "$(wc -l < "${public_dir}/${checksum_file}" | tr -d ' ')" != "${expected_checksum_count}" ]; then
+            echo "::error::Public checksum manifest must cover all ${expected_checksum_count} non-checksum assets."
             exit 1
           fi
           (
@@ -2573,6 +3484,23 @@ jobs:
           image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
           delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
           recommended_image="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+          runtime_generation_required="$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)"
+          runtime_verify_args=()
+          if [ "${updater_protocol}" = "4" ]; then
+            runtime_verify_args=(
+              --runtime-catalog "${public_dir}/channelwatch-update-catalog-v3.json"
+              --expected-runtime-source-commit "${RELEASE_SHA}"
+            )
+            if [ "${runtime_generation_required}" = "true" ]; then
+              for architecture in amd64 arm64; do
+                runtime_verify_args+=(
+                  --runtime-bundle "${architecture}=${public_dir}/channelwatch-runtime-${TAG}-${architecture}.zip"
+                  --expected-runtime-bundle-url "${architecture}=https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/channelwatch-runtime-${TAG}-${architecture}.zip"
+                )
+              done
+            fi
+          fi
           python scripts/release/verify-update-assets.py \
             --manifest "${manifest}" \
             --catalog "${catalog}" \
@@ -2587,6 +3515,7 @@ jobs:
             --expected-git-sha "${RELEASE_SHA}" \
             --expected-release-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
             --expected-bundle-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
+            "${runtime_verify_args[@]}" \
             --source-root "${GITHUB_WORKSPACE}"
           if [ "${version}" = "0.9.18" ]; then
             python scripts/release/verify-legacy-update-bridge.py \
@@ -2687,6 +3616,7 @@ jobs:
           UPDATE_BUNDLE_URL: ${{ needs.build-update-bundle-and-release.outputs.bundle_url }}
           UPDATE_MANIFEST_URL: ${{ needs.build-update-bundle-and-release.outputs.manifest_url }}
           UPDATE_CATALOG_URL: ${{ needs.build-update-bundle-and-release.outputs.catalog_url }}
+          RUNTIME_UPDATE_CATALOG_URL: ${{ needs.build-update-bundle-and-release.outputs.runtime_catalog_url }}
           UPDATE_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
         shell: bash
         run: |
@@ -2712,6 +3642,7 @@ jobs:
             --arg update_bundle_url "${UPDATE_BUNDLE_URL}" \
             --arg update_manifest_url "${stable_manifest_url}" \
             --arg update_catalog_url "${UPDATE_CATALOG_URL}" \
+            --arg runtime_update_catalog_url "${RUNTIME_UPDATE_CATALOG_URL}" \
             --arg update_bundle_sha256 "${UPDATE_BUNDLE_SHA256}" \
             '{
               event_type: "channelwatch-release",
@@ -2724,6 +3655,7 @@ jobs:
                 update_bundle_url: $update_bundle_url,
                 update_manifest_url: $update_manifest_url,
                 update_catalog_url: $update_catalog_url,
+                runtime_update_catalog_url: $runtime_update_catalog_url,
                 update_bundle_sha256: $update_bundle_sha256
               }
             }' > site-sync-dispatch.json
@@ -2762,6 +3694,7 @@ jobs:
             echo "image_required=$(jq -r '.image_required' scripts/release/release-config.json)"
             echo "delivery_mode=$(jq -r '.delivery_mode' scripts/release/release-config.json)"
             echo "recommended_image_version=$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+            echo "updater_protocol=$(jq -r '.updater_protocol' scripts/release/release-config.json)"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Install update verifier dependencies
@@ -2788,6 +3721,72 @@ jobs:
             --catalog-url "https://channelwatch.coderluii.dev/updates/v2/stable.json" \
             --attempts "90" \
             --interval "10"
+
+      - name: Verify live runtime update catalog
+        if: steps.release.outputs.updater_protocol == '4'
+        env:
+          EXPECTED_RUNTIME_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.runtime_catalog_sha256 }}
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_dir="${RUNNER_TEMP}/live-runtime-catalog"
+          mkdir -p "${live_dir}"
+          download() {
+            url="$1"
+            output="$2"
+            curl --fail --silent --show-error --location \
+              --proto '=https' --tlsv1.2 \
+              --connect-timeout 20 --max-time 180 \
+              --retry 12 --retry-all-errors --retry-delay 5 --retry-max-time 360 \
+              --output "${output}" "${url}"
+            test -s "${output}"
+          }
+          runtime_catalog="${live_dir}/channelwatch-update-catalog-v3.json"
+          bundle="${live_dir}/channelwatch-app-${RELEASE_TAG}.zip"
+          manifest="${live_dir}/channelwatch-update-${RELEASE_TAG}.json"
+          catalog="${live_dir}/channelwatch-catalog-${RELEASE_TAG}.json"
+          download "https://channelwatch.coderluii.dev/updates/v3/stable.json" "${runtime_catalog}"
+          if [ "$(sha256sum "${runtime_catalog}" | awk '{print $1}')" != "${EXPECTED_RUNTIME_CATALOG_SHA256}" ]; then
+            echo "::error::Live schema-3 catalog does not match the approved release asset."
+            exit 1
+          fi
+          release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          download "${release_base}/$(basename "${bundle}")" "${bundle}"
+          download "${release_base}/$(basename "${manifest}")" "${manifest}"
+          download "${release_base}/$(basename "${catalog}")" "${catalog}"
+
+          runtime_verify_args=(
+            --runtime-catalog "${runtime_catalog}"
+            --expected-runtime-source-commit "${RELEASE_SHA}"
+          )
+          if [ "$(jq -r '.runtime_generation_required // false' scripts/release/release-config.json)" = "true" ]; then
+            for architecture in amd64 arm64; do
+              runtime_bundle="${live_dir}/channelwatch-runtime-${RELEASE_TAG}-${architecture}.zip"
+              runtime_url="${release_base}/$(basename "${runtime_bundle}")"
+              download "${runtime_url}" "${runtime_bundle}"
+              runtime_verify_args+=(
+                --runtime-bundle "${architecture}=${runtime_bundle}"
+                --expected-runtime-bundle-url "${architecture}=${runtime_url}"
+              )
+            done
+          fi
+          python scripts/release/verify-update-assets.py \
+            --manifest "${manifest}" \
+            --catalog "${catalog}" \
+            --bundle "${bundle}" \
+            --expected-version "${VERSION}" \
+            --expected-channel stable \
+            --expected-runtime-abi channelwatch-runtime-v1 \
+            --expected-settings-schema-version 7 \
+            --expected-image-required "${{ steps.release.outputs.image_required }}" \
+            --expected-delivery-mode "${{ steps.release.outputs.delivery_mode }}" \
+            --expected-recommended-image-version "${{ steps.release.outputs.recommended_image_version }}" \
+            --expected-git-sha "${RELEASE_SHA}" \
+            --expected-release-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
+            --expected-bundle-url "${release_base}/$(basename "${bundle}")" \
+            "${runtime_verify_args[@]}" \
+            --source-root "${GITHUB_WORKSPACE}"
 
       - name: Verify pinned public v1 bridge
         run: |

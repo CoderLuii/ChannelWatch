@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import stat
+import sys
 import xmlrpc.client
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,6 +108,243 @@ def _seed_mature_read_only_config(entrypoint, tmp_path: Path, settings=None) -> 
 
 
 class TestEntrypointWritesSupervisorSocketConfig:
+    def test_runtime_selection_records_are_normalized_before_writable_check(
+        self, tmp_path, monkeypatch
+    ):
+        entrypoint = _load_entrypoint()
+        config_dir = tmp_path / "config"
+        runtime_dir = config_dir / "channelwatch-runtime"
+        generation = runtime_dir / "releases" / ("a" * 64)
+        generation.mkdir(parents=True)
+        generation_payload = generation / "signed-payload.txt"
+        generation_payload.write_text("immutable\n", encoding="utf-8")
+        generation_payload.chmod(0o444)
+        generation.chmod(0o555)
+        generation_before = generation_payload.stat()
+        (runtime_dir / "active.json").write_text(
+            json.dumps(
+                {
+                    "version": "1.4.5",
+                    "path": str(generation),
+                    "runtime_abi": entrypoint.RUNTIME_ABI,
+                    "settings_schema_version": entrypoint.CURRENT_SCHEMA_VERSION,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        supervisor_runtime = tmp_path / "supervisor"
+        monkeypatch.setattr(entrypoint, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(entrypoint, "SETTINGS_FILE", config_dir / "settings.json")
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(
+            entrypoint,
+            "RESTART_REQUIRED_PATH",
+            runtime_dir / entrypoint.RESTART_REQUIRED_FILE,
+        )
+        monkeypatch.setattr(entrypoint, "IMAGE_APP_DIR", _REPO_DIR / "app")
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", supervisor_runtime)
+        monkeypatch.setattr(
+            entrypoint, "SUPERVISOR_SOCKET", supervisor_runtime / "supervisor.sock"
+        )
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", tmp_path / "supervisord.conf")
+
+        runtime_uid = getattr(os, "geteuid", lambda: 1000)()
+        runtime_gid = getattr(os, "getegid", lambda: 1000)()
+        entrypoint.chown_tree(
+            config_dir,
+            runtime_uid,
+            runtime_gid,
+            trusted_runtime_root=runtime_dir,
+        )
+        entrypoint.chmod_config_tree(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_dir,
+        )
+
+        entrypoint.render_supervisor_config(runtime_uid, runtime_gid)
+        entrypoint.verify_config_tree_writable(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_dir,
+        )
+
+        assert not (runtime_dir / "active.json").exists()
+        for name in ("startup-status.json", "deactivated-active.json"):
+            marker = runtime_dir / name
+            assert marker.is_file()
+            if os.name != "nt":
+                metadata = marker.stat()
+                assert (metadata.st_uid, metadata.st_gid) == (
+                    runtime_uid,
+                    runtime_gid,
+                )
+                assert stat.S_IMODE(metadata.st_mode) == 0o640
+        generation_after = generation_payload.stat()
+        assert generation_payload.read_text(encoding="utf-8") == "immutable\n"
+        assert (
+            generation_after.st_size,
+            stat.S_IMODE(generation_after.st_mode),
+            generation_after.st_ino,
+        ) == (
+            generation_before.st_size,
+            stat.S_IMODE(generation_before.st_mode),
+            generation_before.st_ino,
+        )
+
+    def test_runtime_tree_normalization_leaves_absent_tree_absent(
+        self, tmp_path, monkeypatch
+    ):
+        entrypoint = _load_entrypoint()
+        runtime_dir = tmp_path / "channelwatch-runtime"
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_dir)
+
+        entrypoint._normalize_runtime_tree_if_present(1000, 1000)
+
+        assert not runtime_dir.exists()
+
+    @pytest.mark.parametrize("unsafe_kind", ["symlink", "regular"])
+    def test_runtime_tree_normalization_rejects_unsafe_existing_path(
+        self, tmp_path, monkeypatch, unsafe_kind
+    ):
+        entrypoint = _load_entrypoint()
+        runtime_dir = tmp_path / "channelwatch-runtime"
+        if unsafe_kind == "symlink":
+            target = tmp_path / "external"
+            target.mkdir()
+            runtime_dir.symlink_to(target, target_is_directory=True)
+        else:
+            runtime_dir.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_dir)
+
+        with pytest.raises(
+            RuntimeError, match="Unsafe or inaccessible configuration directory"
+        ):
+            entrypoint._normalize_runtime_tree_if_present(1000, 1000)
+
+    def test_runtime_tree_normalization_rejects_inspection_failure(self, monkeypatch):
+        entrypoint = _load_entrypoint()
+
+        class UninspectableRuntimeDir:
+            def lstat(self):
+                raise OSError(errno.EIO, "simulated inspection failure")
+
+            def __str__(self):
+                return "/config/channelwatch-runtime"
+
+        monkeypatch.setattr(
+            entrypoint, "CHANNELWATCH_RUNTIME_DIR", UninspectableRuntimeDir()
+        )
+
+        with pytest.raises(RuntimeError, match="Could not inspect runtime state directory"):
+            entrypoint._normalize_runtime_tree_if_present(1000, 1000)
+
+    def test_runtime_tree_normalization_fails_if_tree_disappears_after_inspection(
+        self, tmp_path, monkeypatch
+    ):
+        entrypoint = _load_entrypoint()
+        runtime_dir = tmp_path / "channelwatch-runtime"
+        runtime_dir.mkdir()
+        original_chown_tree = entrypoint.chown_tree
+
+        def remove_before_walk(*args, **kwargs):
+            runtime_dir.rmdir()
+            return original_chown_tree(*args, **kwargs)
+
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "chown_tree", remove_before_walk)
+
+        with pytest.raises(
+            RuntimeError, match="Unsafe or inaccessible configuration directory"
+        ):
+            entrypoint._normalize_runtime_tree_if_present(1000, 1000)
+
+    def test_read_only_render_never_normalizes_runtime_tree(
+        self, tmp_path, monkeypatch
+    ):
+        entrypoint = _load_entrypoint()
+        supervisor_runtime = tmp_path / "supervisor"
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", supervisor_runtime)
+        monkeypatch.setattr(
+            entrypoint, "SUPERVISOR_SOCKET", supervisor_runtime / "supervisor.sock"
+        )
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", tmp_path / "supervisord.conf")
+        monkeypatch.setattr(
+            entrypoint, "select_app_runtime_dir", lambda **_kwargs: _REPO_DIR / "app"
+        )
+        monkeypatch.setattr(
+            entrypoint,
+            "_normalize_runtime_tree_if_present",
+            lambda *_args: pytest.fail("read-only render normalized /config"),
+            raising=False,
+        )
+
+        runtime_uid = getattr(os, "getuid", lambda: 1000)()
+        runtime_gid = getattr(os, "getgid", lambda: 1000)()
+        entrypoint.render_supervisor_config(
+            runtime_uid, runtime_gid, config_read_only=True
+        )
+
+    def test_writable_render_normalizes_runtime_tree_after_selection(
+        self, tmp_path, monkeypatch
+    ):
+        entrypoint = _load_entrypoint()
+        runtime_dir = tmp_path / "channelwatch-runtime"
+        supervisor_runtime = tmp_path / "supervisor"
+        events = []
+
+        def select_runtime(**_kwargs):
+            runtime_dir.mkdir()
+            (runtime_dir / "deactivated-active.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            events.append("selected")
+            return _REPO_DIR / "app"
+
+        def normalize_runtime(uid, gid):
+            assert (runtime_dir / "deactivated-active.json").is_file()
+            assert (uid, gid) == (1000, 1000)
+            events.append("normalized")
+
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", supervisor_runtime)
+        monkeypatch.setattr(
+            entrypoint, "SUPERVISOR_SOCKET", supervisor_runtime / "supervisor.sock"
+        )
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", tmp_path / "supervisord.conf")
+        monkeypatch.setattr(entrypoint, "select_app_runtime_dir", select_runtime)
+        monkeypatch.setattr(
+            entrypoint, "_normalize_runtime_tree_if_present", normalize_runtime
+        )
+
+        entrypoint.render_supervisor_config(1000, 1000)
+
+        assert events == ["selected", "normalized"]
+
+    def test_predropped_runtime_tree_normalizes_only_owned_records(
+        self, tmp_path, monkeypatch
+    ):
+        if os.name == "nt":
+            return
+
+        entrypoint = _load_entrypoint()
+        runtime_dir = tmp_path / "channelwatch-runtime"
+        runtime_dir.mkdir()
+        record = runtime_dir / "startup-status.json"
+        record.write_text("{}", encoding="utf-8")
+        record.chmod(0o600)
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_dir)
+        monkeypatch.setattr(entrypoint, "running_as_root", lambda: False)
+
+        entrypoint._normalize_runtime_tree_if_present(os.geteuid(), os.getegid())
+
+        assert stat.S_IMODE(runtime_dir.stat().st_mode) == 0o750
+        assert stat.S_IMODE(record.stat().st_mode) == 0o640
+
     def test_entrypoint_sets_verified_private_umask_before_exec(
         self, monkeypatch
     ):
@@ -173,6 +411,11 @@ class TestEntrypointWritesSupervisorSocketConfig:
         monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
+        monkeypatch.setattr(
+            entrypoint,
+            "CHANNELWATCH_RUNTIME_DIR",
+            tmp_path / "channelwatch-runtime",
+        )
 
         entrypoint.render_supervisor_config(1000, 1000)
 
@@ -205,6 +448,11 @@ class TestEntrypointWritesSupervisorSocketConfig:
         monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
+        monkeypatch.setattr(
+            entrypoint,
+            "CHANNELWATCH_RUNTIME_DIR",
+            tmp_path / "channelwatch-runtime",
+        )
 
         entrypoint.render_supervisor_config(1000, 1000)
 
@@ -231,6 +479,11 @@ class TestEntrypointWritesSupervisorSocketConfig:
         monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
+        monkeypatch.setattr(
+            entrypoint,
+            "CHANNELWATCH_RUNTIME_DIR",
+            tmp_path / "channelwatch-runtime",
+        )
         monkeypatch.setattr(Path, "write_text", assert_replaced_before_write)
 
         entrypoint.render_supervisor_config(1000, 1000)
@@ -345,6 +598,47 @@ class TestEntrypointWritesSupervisorSocketConfig:
         monkeypatch.setattr(entrypoint, "_chmod_path_no_follow", fail_config_chmod)
 
         with pytest.raises(RuntimeError, match="read-only test config"):
+            entrypoint.render_supervisor_config(1000, 1000)
+
+        assert restart_required.exists()
+
+    def test_failed_post_selection_normalization_keeps_restart_handoff_fail_closed(
+        self, tmp_path, monkeypatch
+    ):
+        supervisor_runtime = tmp_path / "supervisor"
+        restart_required = (
+            tmp_path
+            / "config"
+            / "channelwatch-runtime"
+            / "restart-required.json"
+        )
+        restart_required.parent.mkdir(parents=True)
+        _write_restart_journal(restart_required)
+        entrypoint = _load_entrypoint()
+
+        def fail_normalization(*_args):
+            raise RuntimeError("repair failed")
+
+        monkeypatch.setattr(
+            entrypoint, "CHANNELWATCH_RUNTIME_DIR", restart_required.parent
+        )
+        monkeypatch.setattr(entrypoint, "RESTART_REQUIRED_PATH", restart_required)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_RUNTIME_DIR", supervisor_runtime)
+        monkeypatch.setattr(
+            entrypoint, "SUPERVISOR_SOCKET", supervisor_runtime / "supervisor.sock"
+        )
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
+        monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", tmp_path / "supervisord.conf")
+        monkeypatch.setattr(
+            entrypoint, "select_app_runtime_dir", lambda **_kwargs: _REPO_DIR / "app"
+        )
+        monkeypatch.setattr(
+            entrypoint,
+            "_normalize_runtime_tree_if_present",
+            fail_normalization,
+        )
+
+        with pytest.raises(RuntimeError, match="repair failed"):
             entrypoint.render_supervisor_config(1000, 1000)
 
         assert restart_required.exists()
@@ -789,6 +1083,414 @@ class TestEntrypointWritesSupervisorSocketConfig:
         assert (external.stat().st_uid, external.stat().st_gid) == original_owner
         assert inside.stat().st_ino == external.stat().st_ino
 
+    def test_config_walk_allows_only_generated_runtime_interpreter_link(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        python_link = (
+            config_dir
+            / "channelwatch-runtime"
+            / "releases"
+            / ("a" * 64)
+            / "environment"
+            / "bin"
+            / "python"
+        )
+        python_link.parent.mkdir(parents=True)
+        image_python = Path(sys.executable).resolve(strict=True)
+        python_link.symlink_to(image_python)
+        payload = python_link.parents[2] / "app" / "worker"
+        payload.parent.mkdir(parents=True)
+        payload.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        payload.parent.chmod(0o755)
+        payload.chmod(0o755)
+        original = image_python.stat()
+        original_payload = payload.stat()
+        entrypoint = _load_entrypoint()
+        runtime_root = config_dir / "channelwatch-runtime"
+        runtime_uid = python_link.lstat().st_uid
+        monkeypatch.setattr(entrypoint.os, "geteuid", lambda: runtime_uid + 1)
+
+        entrypoint.validate_config_tree(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_root,
+        )
+        entrypoint.chown_tree(
+            config_dir,
+            runtime_uid,
+            os.getgid(),
+            trusted_runtime_root=runtime_root,
+        )
+        entrypoint.chmod_config_tree(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_root,
+        )
+        real_open = entrypoint.os.open
+        interpreter_write_opens = []
+
+        def observe_open(name, flags, *args, **kwargs):
+            if name == "python" and flags & os.O_RDWR:
+                interpreter_write_opens.append(name)
+            return real_open(name, flags, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint.os, "geteuid", lambda: runtime_uid)
+        monkeypatch.setattr(entrypoint.os, "open", observe_open)
+        entrypoint.verify_config_tree_writable(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_root,
+        )
+
+        assert python_link.is_symlink()
+        assert python_link.readlink() == image_python
+        assert image_python.stat() == original
+        assert payload.stat() == original_payload
+        assert interpreter_write_opens == []
+        assert list(config_dir.rglob(".channelwatch-access-*")) == []
+
+    def test_config_walk_rejects_generated_runtime_interpreter_link_owned_by_other_uid(
+        self, tmp_path
+    ):
+        config_dir = tmp_path / "config"
+        python_link = (
+            config_dir
+            / "channelwatch-runtime"
+            / "releases"
+            / ("a" * 64)
+            / "environment"
+            / "bin"
+            / "python"
+        )
+        python_link.parent.mkdir(parents=True)
+        python_link.symlink_to(Path(sys.executable).resolve(strict=True))
+        entrypoint = _load_entrypoint()
+
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            entrypoint.validate_config_tree(
+                config_dir,
+                trusted_runtime_uid=python_link.lstat().st_uid + 1,
+                trusted_runtime_root=config_dir / "channelwatch-runtime",
+            )
+
+    def test_runtime_subtree_repair_keeps_generated_interpreter_link_no_follow(
+        self, tmp_path, monkeypatch
+    ):
+        runtime_root = tmp_path / "config" / "channelwatch-runtime"
+        python_link = (
+            runtime_root
+            / "releases"
+            / ("b" * 64)
+            / "environment"
+            / "bin"
+            / "python"
+        )
+        python_link.parent.mkdir(parents=True)
+        image_python = Path(sys.executable).resolve(strict=True)
+        python_link.symlink_to(image_python)
+        payload = python_link.parents[2] / "app" / "worker"
+        payload.parent.mkdir(parents=True)
+        payload.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        payload.parent.chmod(0o755)
+        payload.chmod(0o755)
+        prepare_lock = runtime_root / "releases" / f".prepare-{'b' * 64}.lock"
+        prepare_lock.write_text("", encoding="utf-8")
+        prepare_lock.chmod(0o666)
+        original = image_python.stat()
+        original_payload = payload.stat()
+        entrypoint = _load_entrypoint()
+        runtime_uid = python_link.lstat().st_uid
+        monkeypatch.setattr(entrypoint, "CHANNELWATCH_RUNTIME_DIR", runtime_root)
+
+        entrypoint._normalize_runtime_tree_if_present(runtime_uid, os.getgid())
+
+        assert python_link.is_symlink()
+        assert python_link.readlink() == image_python
+        assert image_python.stat() == original
+        assert payload.stat() == original_payload
+        assert stat.S_IMODE(prepare_lock.stat().st_mode) == 0o600
+
+    @pytest.mark.parametrize(
+        "relative_path",
+        [
+            Path("releases") / f".prepare-{'a' * 63}.lock",
+            Path("releases") / f".prepare-{'A' * 64}.lock",
+            Path("other") / f".prepare-{'a' * 64}.lock",
+        ],
+    )
+    def test_prepare_lock_private_mode_requires_exact_runtime_release_path(
+        self, tmp_path, relative_path
+    ):
+        runtime_root = tmp_path / "config" / "channelwatch-runtime"
+        candidate = runtime_root / relative_path
+        candidate.parent.mkdir(parents=True)
+        candidate.write_text("", encoding="utf-8")
+        candidate.chmod(0o666)
+        entrypoint = _load_entrypoint()
+
+        entrypoint.chmod_config_tree(
+            runtime_root,
+            trusted_runtime_uid=os.getuid(),
+            trusted_runtime_root=runtime_root,
+        )
+
+        assert stat.S_IMODE(candidate.stat().st_mode) == 0o640
+
+    @pytest.mark.parametrize(
+        "relative_path",
+        [
+            Path("trust") / f"{'a' * 64}.json",
+            Path("trust") / ".catalog-interrupted",
+            Path("trust") / "nested" / "orphan",
+        ],
+    )
+    def test_entire_runtime_trust_subtree_remains_private(
+        self, tmp_path, relative_path
+    ):
+        runtime_root = tmp_path / "config" / "channelwatch-runtime"
+        candidate = runtime_root / relative_path
+        candidate.parent.mkdir(parents=True)
+        candidate.write_text("", encoding="utf-8")
+        candidate.chmod(0o666)
+        entrypoint = _load_entrypoint()
+
+        entrypoint.chmod_config_tree(
+            runtime_root,
+            trusted_runtime_uid=os.getuid(),
+            trusted_runtime_root=runtime_root,
+        )
+
+        assert stat.S_IMODE((runtime_root / "trust").stat().st_mode) == 0o700
+        if candidate.parent != runtime_root / "trust":
+            assert stat.S_IMODE(candidate.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(candidate.stat().st_mode) == 0o600
+
+    def test_runtime_generation_tree_is_validated_without_metadata_or_write_mutation(
+        self, tmp_path, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        runtime_root = config_dir / "channelwatch-runtime"
+        generation = runtime_root / "releases" / ("d" * 64)
+        payload_dir = generation / "app"
+        payload_dir.mkdir(parents=True)
+        payload = payload_dir / "payload.py"
+        payload.write_text("VALUE = 1\n", encoding="utf-8")
+        executable = payload_dir / "worker"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        payload_dir.chmod(0o755)
+        payload.chmod(0o644)
+        executable.chmod(0o755)
+        control = runtime_root / "active.json"
+        control.write_text("{}\n", encoding="utf-8")
+        control.chmod(0o666)
+        trust_dir = runtime_root / "trust"
+        trust_dir.mkdir()
+        trust_dir.chmod(0o777)
+        trust_record = trust_dir / f"{'d' * 64}.json"
+        trust_record.write_text("{}\n", encoding="utf-8")
+        trust_record.chmod(0o666)
+        prepare_lock = runtime_root / "releases" / f".prepare-{'d' * 64}.lock"
+        prepare_lock.write_text("", encoding="utf-8")
+        prepare_lock.chmod(0o666)
+        entrypoint = _load_entrypoint()
+        runtime_uid = os.getuid()
+        runtime_gid = os.getgid()
+        generation_inodes = {
+            candidate.stat(follow_symlinks=False).st_ino
+            for candidate in (generation, payload_dir, payload, executable)
+        }
+        real_fchown = entrypoint.os.fchown
+        real_fchmod = entrypoint.os.fchmod
+        real_open = entrypoint.os.open
+        mutated_generation = []
+        write_opened_generation = []
+
+        def reject_generation_chown(file_descriptor, uid, gid):
+            if os.fstat(file_descriptor).st_ino in generation_inodes:
+                mutated_generation.append(("chown", os.fstat(file_descriptor).st_ino))
+                raise AssertionError("signed generation ownership was mutated")
+            return real_fchown(file_descriptor, uid, gid)
+
+        def reject_generation_chmod(file_descriptor, mode):
+            if os.fstat(file_descriptor).st_ino in generation_inodes:
+                mutated_generation.append(("chmod", os.fstat(file_descriptor).st_ino))
+                raise AssertionError("signed generation mode was mutated")
+            return real_fchmod(file_descriptor, mode)
+
+        def reject_generation_write_open(name, flags, *args, **kwargs):
+            directory_fd = kwargs.get("dir_fd")
+            if directory_fd is not None:
+                opened_parent = Path(f"/proc/self/fd/{directory_fd}").resolve()
+                try:
+                    opened_parent.relative_to(generation)
+                except ValueError:
+                    pass
+                else:
+                    if flags & (os.O_RDWR | os.O_WRONLY) or str(name).startswith(
+                        ".channelwatch-access-"
+                    ):
+                        write_opened_generation.append((opened_parent, name, flags))
+                        raise AssertionError("signed generation was opened for mutation")
+            return real_open(name, flags, *args, **kwargs)
+
+        monkeypatch.setattr(entrypoint.os, "fchown", reject_generation_chown)
+        monkeypatch.setattr(entrypoint.os, "fchmod", reject_generation_chmod)
+        entrypoint.validate_config_tree(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_root,
+        )
+        entrypoint.chown_tree(
+            config_dir,
+            runtime_uid,
+            runtime_gid,
+            trusted_runtime_root=runtime_root,
+        )
+        entrypoint.chmod_config_tree(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_root,
+        )
+        monkeypatch.setattr(entrypoint.os, "open", reject_generation_write_open)
+        entrypoint.verify_config_tree_writable(
+            config_dir,
+            trusted_runtime_uid=runtime_uid,
+            trusted_runtime_root=runtime_root,
+        )
+
+        assert mutated_generation == []
+        assert write_opened_generation == []
+        assert stat.S_IMODE(payload_dir.stat().st_mode) == 0o755
+        assert stat.S_IMODE(payload.stat().st_mode) == 0o644
+        assert stat.S_IMODE(executable.stat().st_mode) == 0o755
+        assert stat.S_IMODE(control.stat().st_mode) == 0o640
+        assert stat.S_IMODE(trust_dir.stat().st_mode) == 0o700
+        assert stat.S_IMODE(trust_record.stat().st_mode) == 0o600
+        assert stat.S_IMODE(prepare_lock.stat().st_mode) == 0o600
+        assert list(generation.rglob(".channelwatch-access-*")) == []
+
+    @pytest.mark.parametrize("unsafe_kind", ["symlink", "hardlink"])
+    def test_runtime_generation_preservation_still_rejects_unsafe_payload_entries(
+        self, tmp_path, unsafe_kind
+    ):
+        config_dir = tmp_path / "config"
+        runtime_root = config_dir / "channelwatch-runtime"
+        generation = runtime_root / "releases" / ("e" * 64)
+        payload = generation / "app" / "unsafe"
+        payload.parent.mkdir(parents=True)
+        external = tmp_path / "external"
+        external.write_text("outside\n", encoding="utf-8")
+        if unsafe_kind == "symlink":
+            payload.symlink_to(external)
+            expected = "symbolic link"
+        else:
+            os.link(external, payload)
+            expected = "hard-linked"
+        original = external.stat()
+        entrypoint = _load_entrypoint()
+        runtime_uid = os.getuid()
+
+        for operation in (
+            lambda: entrypoint.validate_config_tree(
+                config_dir,
+                trusted_runtime_uid=runtime_uid,
+                trusted_runtime_root=runtime_root,
+            ),
+            lambda: entrypoint.chown_tree(
+                config_dir,
+                runtime_uid,
+                os.getgid(),
+                trusted_runtime_root=runtime_root,
+            ),
+            lambda: entrypoint.chmod_config_tree(
+                config_dir,
+                trusted_runtime_uid=runtime_uid,
+                trusted_runtime_root=runtime_root,
+            ),
+            lambda: entrypoint.verify_config_tree_writable(
+                config_dir,
+                trusted_runtime_uid=runtime_uid,
+                trusted_runtime_root=runtime_root,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match=expected):
+                operation()
+
+        assert external.read_text(encoding="utf-8") == "outside\n"
+        assert external.stat() == original
+
+    def test_config_walk_does_not_trust_releases_tree_without_runtime_root_binding(
+        self, tmp_path
+    ):
+        arbitrary_root = tmp_path / "operator-data"
+        python_link = (
+            arbitrary_root
+            / "releases"
+            / ("c" * 64)
+            / "environment"
+            / "bin"
+            / "python"
+        )
+        python_link.parent.mkdir(parents=True)
+        python_link.symlink_to(Path(sys.executable).resolve(strict=True))
+        entrypoint = _load_entrypoint()
+
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            entrypoint.validate_config_tree(
+                arbitrary_root, trusted_runtime_uid=python_link.lstat().st_uid
+            )
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            Path("channelwatch-runtime/releases") / ("a" * 63) / "environment/bin/python",
+            Path("channelwatch-runtime/releases") / ("a" * 64) / "environment/bin/python3",
+            Path("channelwatch-runtime/trust") / ("a" * 64) / "environment/bin/python",
+        ],
+    )
+    def test_config_walk_rejects_image_interpreter_link_outside_exact_generation_path(
+        self, tmp_path, relative
+    ):
+        config_dir = tmp_path / "config"
+        unsafe = config_dir / relative
+        unsafe.parent.mkdir(parents=True)
+        unsafe.symlink_to(Path(sys.executable).resolve(strict=True))
+        entrypoint = _load_entrypoint()
+
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            entrypoint.validate_config_tree(
+                config_dir,
+                trusted_runtime_uid=unsafe.lstat().st_uid,
+                trusted_runtime_root=config_dir / "channelwatch-runtime",
+            )
+
+    def test_config_walk_rejects_generated_runtime_interpreter_link_to_other_target(
+        self, tmp_path
+    ):
+        config_dir = tmp_path / "config"
+        python_link = (
+            config_dir
+            / "channelwatch-runtime"
+            / "releases"
+            / ("a" * 64)
+            / "environment"
+            / "bin"
+            / "python"
+        )
+        python_link.parent.mkdir(parents=True)
+        other = tmp_path / "other-python"
+        other.write_text("not an interpreter", encoding="utf-8")
+        python_link.symlink_to(other)
+        entrypoint = _load_entrypoint()
+
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            entrypoint.validate_config_tree(
+                config_dir,
+                trusted_runtime_uid=python_link.lstat().st_uid,
+                trusted_runtime_root=config_dir / "channelwatch-runtime",
+            )
+
     def test_config_walk_retries_transient_virtiofs_identity_until_it_converges(
         self, tmp_path, monkeypatch
     ):
@@ -1123,6 +1825,11 @@ class TestEntrypointWritesSupervisorSocketConfig:
         monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", runtime_dir / "supervisor.sock")
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
+        monkeypatch.setattr(
+            entrypoint,
+            "CHANNELWATCH_RUNTIME_DIR",
+            tmp_path / "channelwatch-runtime",
+        )
 
         with pytest.raises(RuntimeError, match="non-regular atomic-write target"):
             entrypoint.render_supervisor_config(1000, 1000)
@@ -1286,6 +1993,11 @@ class TestEntrypointDoesNotExportEnvVars:
         monkeypatch.setattr(entrypoint, "SUPERVISOR_SOCKET", socket_file)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_TEMPLATE", _CONF_TEMPLATE)
         monkeypatch.setattr(entrypoint, "SUPERVISOR_CONF", conf_file)
+        monkeypatch.setattr(
+            entrypoint,
+            "CHANNELWATCH_RUNTIME_DIR",
+            tmp_path / "channelwatch-runtime",
+        )
 
         entrypoint.render_supervisor_config(1000, 1000)
 

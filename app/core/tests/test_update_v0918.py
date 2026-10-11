@@ -199,50 +199,6 @@ def _mixed_image_and_app_catalog(
     ).encode()
 
 
-def _future_image_protocol_catalog(
-    private: Ed25519PrivateKey,
-    bundle: bytes,
-) -> bytes:
-    app_release = json.loads(
-        _catalog(
-            private,
-            bundle,
-            version="1.4.3",
-            sources=["1.4.0", "1.4.1", "1.4.2"],
-            launchers=[1, 2, 3],
-        )
-    )["payload"]["releases"][0]
-    image_release = json.loads(
-        _catalog(
-            private,
-            bundle,
-            version="1.5.0",
-            sources=["1.4.3"],
-            launchers=[4],
-        )
-    )["payload"]["releases"][0]
-    image_release["delivery_mode"] = "image_required"
-    image_release["updater_protocol"] = 4
-    payload = {
-        "channel": "stable",
-        "published_at": "2026-10-12T00:00:00Z",
-        "releases": [image_release, app_release],
-    }
-    return json.dumps(
-        {
-            "schema": 2,
-            "payload": payload,
-            "signature": {
-                "alg": "ed25519",
-                "key_id": "test-key",
-                "value": base64.b64encode(
-                    private.sign(canonical_payload_bytes(payload))
-                ).decode("ascii"),
-            },
-        }
-    ).encode()
-
-
 def test_schema_two_catalog_preserves_canonical_contract_and_selects_protocol_one():
     private, public = _key_pair()
     bundle = _bundle("0.9.19")
@@ -430,26 +386,6 @@ def test_update_document_exposes_app_target_and_image_recommendation_separately(
     assert document["catalog"]["compatible_app_release"]["version"] == "1.2.1"
     assert document["catalog"]["latest_compatible_release"]["version"] == "1.3.0"
     assert document["catalog"]["latest_compatible_release"]["image_required"] is True
-
-
-@pytest.mark.parametrize("current_version", ["1.4.0", "1.4.1", "1.4.2"])
-def test_protocol_three_clients_keep_143_app_update_below_150_image_announcement(
-    current_version,
-):
-    private, public = _key_pair()
-    document = read_update_document_bytes(
-        _future_image_protocol_catalog(private, _bundle("1.4.3")),
-        public_keys=public,
-        current_version=current_version,
-        runtime_abi=RUNTIME_ABI,
-        settings_schema_version=7,
-        launcher_protocol=3,
-    )
-
-    assert document["payload"]["version"] == "1.4.3"
-    assert document["payload"]["image_required"] is False
-    assert document["catalog"]["compatible_app_release"]["version"] == "1.4.3"
-    assert document["catalog"]["latest_compatible_release"]["version"] == "1.4.3"
 
 
 def test_update_document_uses_image_release_when_no_forward_app_update_exists():
@@ -3044,3 +2980,67 @@ def test_update_status_reports_only_a_valid_selected_app_bundle(tmp_path: Path):
     active["path"] = str(tmp_path / "outside-runtime")
     manager.active_path.write_text(json.dumps(active), encoding="utf-8")
     assert manager.status()["runtime_source"] == "image"
+
+
+def _future_image_protocol_catalog(
+    private: Ed25519PrivateKey,
+    bundle: bytes,
+) -> bytes:
+    app_release = json.loads(
+        _catalog(
+            private,
+            bundle,
+            version="1.4.3",
+            sources=["1.4.0", "1.4.1", "1.4.2"],
+            launchers=[1, 2, 3],
+        )
+    )["payload"]["releases"][0]
+    image_release = json.loads(
+        _catalog(
+            private,
+            bundle,
+            version="1.5.0",
+            sources=["1.4.3"],
+            launchers=[4],
+        )
+    )["payload"]["releases"][0]
+    image_release["delivery_mode"] = "image_required"
+    image_release["updater_protocol"] = 4
+    payload = {
+        "channel": "stable",
+        "published_at": "2026-10-12T00:00:00Z",
+        "releases": [image_release, app_release],
+    }
+    return json.dumps(
+        {
+            "schema": 2,
+            "payload": payload,
+            "signature": {
+                "alg": "ed25519",
+                "key_id": "test-key",
+                "value": base64.b64encode(
+                    private.sign(canonical_payload_bytes(payload))
+                ).decode("ascii"),
+            },
+        }
+    ).encode()
+
+
+@pytest.mark.parametrize("current_version", ["1.4.0", "1.4.1", "1.4.2"])
+def test_protocol_three_clients_keep_143_app_update_below_150_image_announcement(
+    current_version,
+):
+    private, public = _key_pair()
+    document = read_update_document_bytes(
+        _future_image_protocol_catalog(private, _bundle("1.4.3")),
+        public_keys=public,
+        current_version=current_version,
+        runtime_abi=RUNTIME_ABI,
+        settings_schema_version=7,
+        launcher_protocol=3,
+    )
+
+    assert document["payload"]["version"] == "1.4.3"
+    assert document["payload"]["image_required"] is False
+    assert document["catalog"]["compatible_app_release"]["version"] == "1.4.3"
+    assert document["catalog"]["latest_compatible_release"]["version"] == "1.4.3"

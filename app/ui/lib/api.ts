@@ -412,6 +412,9 @@ export interface UpdateJob {
   job_id: string
   operation: "check" | "apply" | "rollback" | string
   status: string
+  phase?: string | null
+  phase_budget_seconds?: number | null
+  phase_deadline_at?: string | null
   version?: string | null
   message?: string | null
   updated_at?: string | null
@@ -427,6 +430,16 @@ export interface UpdateStatus {
   runtime_abi: string
   launcher_protocol?: number | null
   runtime_source?: "image" | "app_bundle" | string
+  worker_runtime?: {
+    python_version: string
+    python_executable: string
+    verified_generation?: {
+      path: string
+      runtime_generation_id: string
+      runtime_descriptor_sha256: string
+      dependency_inventory_sha256: string
+    } | null
+  }
   delivery_mode?: UpdateDeliveryMode
   image_refresh_recommended?: boolean
   settings_schema_version: number

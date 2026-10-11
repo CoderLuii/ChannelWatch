@@ -1,8 +1,9 @@
 """Validate ChannelWatch release numbering and delivery policy.
 
-Starting with v1.0.0, every minor line has one image milestone followed by at
-most nine in-app releases. Historical v0.9 releases are grandfathered because
-their already-published identifiers cannot be rewritten.
+Starting with v1.0.0, each minor line defaults to one image milestone followed
+by at most nine in-app releases. A prospective minor line may retain a proven
+protocol-4 image floor at v1.5.0 or newer. Historical declarations keep their
+original rules because published identifiers cannot be rewritten.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ class ReleaseVersionPolicy(NamedTuple):
     version: str
     image_milestone: bool
     minimum_image_version: str
+    retained_capability_floor: bool = False
 
 
 def release_version_policy(version: str) -> ReleaseVersionPolicy | None:
@@ -53,15 +55,117 @@ def validate_release_config(config: dict[str, object]) -> ReleaseVersionPolicy |
     image_required = config.get("image_required")
     minimum_image_version = str(config.get("minimum_image_version") or "").lstrip("v")
     if minimum_image_version != policy.minimum_image_version:
-        raise ValueError(
-            "release-config minimum_image_version must equal the current minor-line "
-            f"image milestone ({policy.minimum_image_version})."
+        try:
+            floor_parts = tuple(int(part) for part in minimum_image_version.split("."))
+            version_parts = tuple(int(part) for part in policy.version.split("."))
+        except ValueError as exc:
+            raise ValueError(
+                "release-config minimum_image_version must use numeric X.Y.Z format."
+            ) from exc
+        if len(floor_parts) != 3 or minimum_image_version != ".".join(
+            str(part) for part in floor_parts
+        ):
+            raise ValueError(
+                "release-config minimum_image_version must use canonical numeric "
+                "X.Y.Z format."
+            )
+        if floor_parts < (1, 5, 0):
+            raise ValueError(
+                "A retained dependency-runtime image floor must be v1.5.0 or newer."
+            )
+        if floor_parts > version_parts:
+            raise ValueError(
+                "A retained dependency-runtime image floor cannot exceed the release."
+            )
+        if floor_parts[0] != version_parts[0] or floor_parts[2] != 0:
+            raise ValueError(
+                "A retained dependency-runtime image floor must be an X.Y.0 "
+                "milestone in the same major release line."
+            )
+        if (
+            config.get("runtime_generation_required") is not True
+            or config.get("minimum_launcher_protocol") != 4
+            or config.get("compatible_launcher_protocols") != [4]
+        ):
+            raise ValueError(
+                "A retained image floor requires the protocol-4 runtime generation "
+                "contract."
+            )
+        bootstrap_sha256 = config.get("runtime_bootstrap_sha256")
+        if (
+            not isinstance(bootstrap_sha256, str)
+            or len(bootstrap_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in bootstrap_sha256)
+        ):
+            raise ValueError(
+                "A retained image floor requires the exact immutable protocol-4 "
+                "bootstrap SHA-256."
+            )
+        if image_required is not False or delivery_mode == "image_required":
+            raise ValueError(
+                "A retained protocol-4 image floor is valid only for an in-app release."
+            )
+        policy = ReleaseVersionPolicy(
+            version=policy.version,
+            image_milestone=False,
+            minimum_image_version=minimum_image_version,
+            retained_capability_floor=True,
         )
+    version_parts = tuple(int(part) for part in policy.version.split("."))
+    if version_parts >= (1, 5, 0) and not policy.image_milestone:
+        if (
+            config.get("updater_protocol") != 4
+            or config.get("runtime_generation_required") is not True
+            or config.get("minimum_launcher_protocol") != 4
+            or config.get("compatible_launcher_protocols") != [4]
+        ):
+            raise ValueError(
+                "Post-bootstrap in-app releases require the protocol-4 runtime "
+                "generation contract, including unchanged dependencies."
+            )
+        bootstrap_sha256 = config.get("runtime_bootstrap_sha256")
+        if (
+            not isinstance(bootstrap_sha256, str)
+            or len(bootstrap_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in bootstrap_sha256)
+        ):
+            raise ValueError(
+                "Post-bootstrap in-app releases require the exact immutable "
+                "protocol-4 bootstrap SHA-256."
+            )
+        if config.get("minimum_image_sha256") != f"sha256:{bootstrap_sha256}":
+            raise ValueError(
+                "The protocol-4 bootstrap SHA-256 must match the immutable "
+                "minimum image index digest."
+            )
     if policy.image_milestone:
         if image_required is not True or delivery_mode != "image_required":
             raise ValueError(
                 "X.Y.0 releases must require the matching ChannelWatch container image."
             )
+        if version_parts >= (1, 5, 0):
+            if (
+                config.get("updater_protocol") != 4
+                or config.get("minimum_launcher_protocol") != 4
+                or config.get("compatible_launcher_protocols") != [4]
+                or config.get("runtime_generation_required") is not False
+            ):
+                raise ValueError(
+                    "A v1.5.0 or newer protocol-4 image milestone requires the "
+                    "exact image bootstrap launcher contract."
+                )
+            if any(
+                field in config
+                for field in (
+                    "runtime_bootstrap_sha256",
+                    "runtime_variants",
+                    "runtime_descriptor",
+                )
+            ):
+                raise ValueError(
+                    "A v1.5.0 or newer protocol-4 image milestone cannot declare "
+                    "runtime generation fields."
+                )
         if config.get("automatic_install_allowed") is not False:
             raise ValueError(
                 "X.Y.0 image milestones cannot allow automatic in-app installation."

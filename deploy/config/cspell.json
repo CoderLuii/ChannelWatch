@@ -166,6 +166,7 @@
     "NFS",
     "nfs",
     "noauth",
+    "noexec",
     "nosniff",
     "ntfy",
     "ntfys",

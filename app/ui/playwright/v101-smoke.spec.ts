@@ -699,9 +699,11 @@ test("Update Center keeps a compatible app update visible below a newer image re
   await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
 })
 
-test("a successful in-app update hard-refreshes onto the dashboard", async ({ page }) => {
+test("a successful in-app update shows dependency progress and hard-refreshes once", async ({ page }, testInfo) => {
   let statusChecks = 0
   let submittedJobId: string | null = null
+  let applyRequests = 0
+  let jobChecks = 0
   const targetStatus = {
     current_version: "1.0.8",
     image_version: "1.0.0",
@@ -754,24 +756,67 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
     } : { ...targetStatus, last_job: successfulJob() })
   })
   await page.route("**/api/v1/update/apply", (route) => {
+    applyRequests += 1
     submittedJobId = (route.request().postDataJSON() as { job_id: string }).job_id
     return fulfillJson(route, {
       job_id: submittedJobId,
       operation: "apply",
-      status: "restarting",
+      status: "downloading",
       version: "1.0.8",
-      message: "Update installed. Restarting ChannelWatch to activate it.",
+      message: "Downloading the trusted update.",
       restart_required: true,
     })
   })
-  await page.route("**/api/v1/update/jobs/*", (route) => fulfillJson(route, successfulJob()))
+  await page.route("**/api/v1/update/jobs/*", (route) => {
+    jobChecks += 1
+    if (jobChecks === 1) {
+      return fulfillJson(route, {
+        job_id: submittedJobId,
+        operation: "apply",
+        status: "downloading",
+        version: "1.0.8",
+        message: "Downloading the trusted update.",
+        restart_required: true,
+      })
+    }
+    if (jobChecks === 2) {
+      return fulfillJson(route, {
+        job_id: submittedJobId,
+        operation: "apply",
+        status: "applying",
+        phase: "preparing",
+        phase_budget_seconds: 600,
+        phase_deadline_at: new Date(Date.now() + 600_000).toISOString(),
+        version: "1.0.8",
+        message: "Preparing runtime dependencies.",
+        restart_required: true,
+      })
+    }
+    if (jobChecks === 3) {
+      return fulfillJson(route, {
+        job_id: submittedJobId,
+        operation: "apply",
+        status: "restarting",
+        version: "1.0.8",
+        message: "Restarting ChannelWatch.",
+        restart_required: true,
+      })
+    }
+    return fulfillJson(route, successfulJob())
+  })
 
   await page.goto("/#settings:updates")
   await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
   await page.getByRole("button", { name: "Apply update" }).click()
 
+  await expect(page.getByText("Downloading", { exact: true })).toBeVisible()
+  await expect(page.getByText("Preparing dependencies", { exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath("update-preparing-dependencies.png"), fullPage: true })
+  await expect(page.getByText("Restarting", { exact: true })).toBeVisible()
+  await expect(page.getByText("Checking the update", { exact: true })).toBeVisible()
   await expect(page).toHaveURL(/#overview$/, { timeout: 10_000 })
   await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  expect(applyRequests).toBe(1)
 })
 
 test("a retry restart disconnect follows the activated runtime instead of showing an error", async ({ page }) => {

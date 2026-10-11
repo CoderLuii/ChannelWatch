@@ -122,6 +122,84 @@ describe("waitForUpdatedRuntime", () => {
     expect(onJob).toHaveBeenCalledTimes(3)
   })
 
+  it("does not spend the activation attempt budget while dependencies are preparing", async () => {
+    const preparing = {
+      job_id: "browser-job-preparing",
+      status: "applying",
+      phase: "preparing",
+      phase_budget_seconds: 600,
+      phase_deadline_at: new Date(Date.now() + 600_000).toISOString(),
+      version: "1.4.2",
+    }
+    const fetchJob = vi.fn()
+      .mockResolvedValueOnce(preparing)
+      .mockResolvedValueOnce(preparing)
+      .mockResolvedValueOnce(preparing)
+      .mockResolvedValue({
+        job_id: "browser-job-preparing",
+        status: "success",
+        version: "1.4.2",
+      })
+    const fetchStatus = vi.fn().mockResolvedValue(status("1.4.2"))
+    const onJob = vi.fn()
+
+    await expect(waitForUpdatedRuntime("1.4.2", {
+      fetchStatus,
+      fetchJob,
+      jobId: "browser-job-preparing",
+      onJob,
+      wait: vi.fn().mockResolvedValue(undefined),
+      maxAttempts: 2,
+      intervalMs: 1,
+      requiredStableChecks: 1,
+    })).resolves.toMatchObject({ current_version: "1.4.2" })
+
+    expect(fetchJob).toHaveBeenCalledTimes(4)
+    expect(fetchStatus).toHaveBeenCalledTimes(1)
+    expect(onJob).toHaveBeenCalledWith(preparing)
+  })
+
+  it("uses the backend-enforced dependency preparation deadline without spending activation attempts", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-10T12:00:00Z"))
+    try {
+      const fetchJob = vi.fn()
+        .mockResolvedValueOnce({
+          job_id: "browser-job-budget",
+          status: "applying",
+          phase: "preparing",
+          phase_budget_seconds: 600,
+          phase_deadline_at: "2026-10-10T12:10:00Z",
+          version: "1.4.2",
+        })
+        .mockImplementation(() => new Promise(() => undefined))
+      let settled = false
+      const promise = waitForUpdatedRuntime("1.4.2", {
+        fetchStatus: vi.fn(),
+        fetchJob,
+        jobId: "browser-job-budget",
+        wait: vi.fn().mockResolvedValue(undefined),
+        maxAttempts: 1,
+      }).finally(() => {
+        settled = true
+      })
+      const rejection = expect(promise).rejects.toMatchObject({
+        name: "UpdatePreparationTimeoutError",
+        message: "Runtime preparation exceeded the 600-second limit.",
+      })
+
+      await vi.advanceTimersByTimeAsync(599_999)
+      expect(settled).toBe(false)
+      expect(fetchJob).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await rejection
+      expect(settled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("surfaces the matching job rollback message immediately", async () => {
     const fetchStatus = vi.fn().mockResolvedValue(status("0.9.16"))
 
@@ -413,6 +491,18 @@ describe("applyUpdateAndReconnect", () => {
 
     expect(isPendingUpdateJob({ status: undefined })).toBe(false)
     expect(requiresUpdateReconnect(legacyJob)).toBe(true)
+  })
+
+  it("keeps a restored dependency download active", () => {
+    const downloadingJob = {
+      job_id: "runtime-download-job",
+      status: "downloading",
+      version: "1.5.1",
+      restart_required: true,
+    }
+
+    expect(isPendingUpdateJob(downloadingJob)).toBe(true)
+    expect(requiresUpdateReconnect(downloadingJob)).toBe(true)
   })
 
   it("leaves non-restarting update jobs in the normal in-page flow", async () => {

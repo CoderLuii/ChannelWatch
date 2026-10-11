@@ -19,6 +19,7 @@ from .helpers.encryption import ENCRYPTION_KEY_FILE, bootstrap_encryption_key
 from .helpers.key_manager import wait_for_managed_key_ready
 from .helpers.maintenance_transaction import recover_maintenance_transactions
 from .helpers.runtime_preflight import inspect_runtime_preflight
+from .runtime_identity import get_verified_runtime_claim
 from .watchdog import (
     Watchdog,
     WATCHDOG_CHECK_INTERVAL_SECONDS,
@@ -1462,6 +1463,8 @@ def _record_update_core_ready(config_dir: str) -> None:
             running_version=__version__,
             activation_id=os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
             healthy=True,
+            running_app_path=Path(__file__).resolve().parent.parent,
+            verified_runtime_claim=get_verified_runtime_claim(),
         )
     except UpdateRestartError as exc:
         # Disk selection has already rolled back. Continuing this generation

@@ -39,6 +39,11 @@ EXACT_RUNTIME_PATHS = {
     "app/bin/channelwatch",
     "app/core/docker-entrypoint.py",
     "app/core/runtime_launcher.py",
+    "app/core/runtime_image_bootstrap.py",
+    "app/core/runtime_release_trust.py",
+    "app/core/runtime_generation.py",
+    "app/core/runtime_dependency_bridge.py",
+    "app/core/runtime_worker.py",
     "deploy/config/supervisor/supervisord.conf.template",
     "deploy/docker/Dockerfile.dockerignore",
 }
@@ -88,6 +93,11 @@ HISTORICAL_FAILURE_VARIANTS = {
 HISTORICAL_TAMPER_VERSIONS = ("0.9.15", "0.9.17")
 
 RUNTIME_PREFIXES = ("deploy/requirements/",)
+RUNTIME_CAPABILITY_EVIDENCE_TRIGGER = "runtime-capability-evidence"
+PROTOCOL_FOUR_MINIMUM_IMAGE = (1, 5, 0)
+PROTOCOL_FOUR_ARCHITECTURES = frozenset({"amd64", "arm64"})
+_HEX_40_RE = re.compile(r"[0-9a-f]{40}")
+_HEX_64_RE = re.compile(r"[0-9a-f]{64}")
 
 IMAGE_REFRESH_PATHS = {
     "app/core/helpers/atomic_io.py",
@@ -241,7 +251,7 @@ def classify_paths(paths: list[str]) -> ReleaseImpact:
 def apply_release_version_policy(
     result: ReleaseImpact, policy: object | None
 ) -> ReleaseImpact:
-    """Make a post-v1 minor milestone image-required regardless of path mix."""
+    """Enforce image milestones unless a validated capability floor is retained."""
     if policy is None or not bool(getattr(policy, "image_milestone", False)):
         return result
     return _impact(
@@ -877,6 +887,359 @@ def apply_verified_minimum_image_app_update(
     )
 
 
+def _version_tuple(value: object) -> tuple[int, int, int] | None:
+    text = str(value or "").strip().lstrip("v")
+    parts = text.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        return None
+    parsed = tuple(int(part) for part in parts)
+    if text != ".".join(str(part) for part in parsed):
+        return None
+    return parsed  # type: ignore[return-value]
+
+
+def _declares_dependency_runtime(config: dict[str, object]) -> bool:
+    return config.get("runtime_generation_required") is True and config.get(
+        "delivery_mode"
+    ) in {"app_update", "app_update_with_image_refresh"}
+
+
+def _protocol_four_runtime_contract_valid(config: dict[str, object]) -> bool:
+    floor = _version_tuple(config.get("minimum_image_version"))
+    return (
+        config.get("runtime_generation_required") is True
+        and config.get("updater_protocol") == 4
+        and config.get("minimum_launcher_protocol") == 4
+        and config.get("compatible_launcher_protocols") == [4]
+        and isinstance(config.get("runtime_bootstrap_sha256"), str)
+        and _HEX_64_RE.fullmatch(str(config["runtime_bootstrap_sha256"])) is not None
+        and config.get("minimum_image_sha256")
+        == "sha256:" + str(config["runtime_bootstrap_sha256"])
+        and floor is not None
+        and floor >= PROTOCOL_FOUR_MINIMUM_IMAGE
+        and config.get("delivery_mode") in {
+            "app_update",
+            "app_update_with_image_refresh",
+        }
+    )
+
+
+def _runtime_qualification_valid(
+    qualification: object, descriptor: dict[str, object], config: dict[str, object],
+    bundle_sha256: str,
+) -> bool:
+    """Require process and lifecycle receipts, not only summary booleans."""
+    if not isinstance(qualification, dict):
+        return False
+    for field in ("platform_manifest_digest", "pulled_image_id"):
+        value = qualification.get(field)
+        if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+            return False
+    generation = str(descriptor["generation_id"])
+    architecture = descriptor["architecture"]
+    encoded_index = qualification.get("bootstrap_index_base64")
+    if not isinstance(encoded_index, str) or len(encoded_index) > 2 * 1024 * 1024:
+        return False
+    try:
+        index_bytes = base64.b64decode(encoded_index, validate=True)
+        if "sha256:" + hashlib.sha256(index_bytes).hexdigest() != config.get("minimum_image_sha256"):
+            return False
+        index = json.loads(index_bytes)
+        manifests = index["manifests"]
+        if not isinstance(manifests, list) or any(not isinstance(item, dict) for item in manifests):
+            return False
+        matches = [item for item in manifests if item.get("platform", {}).get("os") == "linux" and item.get("platform", {}).get("architecture") == architecture]
+        if len(matches) != 1 or matches[0].get("digest") != qualification["platform_manifest_digest"]:
+            return False
+    except (ValueError, TypeError, KeyError):
+        return False
+    if qualification.get("native_host_architecture") != architecture or qualification.get("docker_engine_architecture") != architecture:
+        return False
+    identity = qualification.get("container_identity_before")
+    if not isinstance(identity, str) or not _HEX_64_RE.fullmatch(identity) or qualification.get("container_identity_after") != identity:
+        return False
+    generation_root = f"/config/channelwatch-runtime/releases/{generation}"
+    dependency_root = generation_root + "/dependencies/site-packages/"
+    for field in ("apply_job_id", "reapply_job_id"):
+        if not isinstance(qualification.get(field), str) or not re.fullmatch(r"[0-9a-f]{32}", qualification[field]):
+            return False
+    if qualification["apply_job_id"] == qualification["reapply_job_id"]:
+        return False
+    for field in ("apply_runtime_components", "reapply_runtime_components"):
+        components = qualification.get(field)
+        if not isinstance(components, dict) or set(components) != {"core", "ui"}:
+            return False
+        for component in components.values():
+            if not isinstance(component, dict) or any(component.get(key) != expected for key, expected in {
+                "runtime_generation_id": generation,
+                "runtime_descriptor_sha256": generation,
+                "dependency_inventory_sha256": descriptor["dependency_inventory_sha256"],
+            }.items()):
+                return False
+            process = component.get("process_runtime")
+            if not isinstance(process, dict) or type(process.get("pid")) is not int or process["pid"] <= 0:
+                return False
+            if process.get("python_executable") != generation_root + "/environment/bin/python" or process.get("python_prefix") != generation_root + "/environment":
+                return False
+            if process.get("python_version") != descriptor["python_version"]:
+                return False
+            dependencies = process.get("dependencies")
+            if not isinstance(dependencies, dict):
+                return False
+            for name in ("requests", "cryptography"):
+                if not isinstance(dependencies.get(name), dict) or dependencies[name].get("loaded") is not True:
+                    return False
+            for record in dependencies.values():
+                if not isinstance(record, dict) or (record.get("loaded") is True and not str(record.get("path", "")).startswith(dependency_root)):
+                    return False
+    imports = qualification.get("native_imports")
+    if not isinstance(imports, dict) or set(imports) != {"requests", "cryptography", "sqlmodel", "uvicorn", "pydantic_core"}:
+        return False
+    if any(not isinstance(record, dict) or not str(record.get("path", "")).startswith(dependency_root) for record in imports.values()):
+        return False
+    for field in ("supervisor_processes", "supervisor_processes_after_restart", "supervisor_processes_after_reapply"):
+        commands = qualification.get(field)
+        if not isinstance(commands, dict) or set(commands) != {"core", "ui"}:
+            return False
+        if any(not isinstance(command, str) or generation_root not in command or f"--mode {name}" not in command for name, command in commands.items()):
+            return False
+    preserved = qualification.get("preservation_before_sha256")
+    if not isinstance(preserved, dict) or set(preserved) != {"/config/settings.json", "/config/encryption.key", "/venv/pyvenv.cfg", "/venv/bin/python"}:
+        return False
+    if any(not isinstance(value, str) or not _HEX_64_RE.fullmatch(value) for value in preserved.values()):
+        return False
+    if any(qualification.get(field) != preserved for field in ("preservation_after_apply_sha256", "preservation_after_restart_sha256", "preservation_after_reapply_sha256")):
+        return False
+    initial = qualification.get("initial_status")
+    restart = qualification.get("container_restart")
+    checked = qualification.get("check")
+    rollback = qualification.get("rollback")
+    rollback_status = qualification.get("rollback_status")
+    if not isinstance(checked, dict) or checked.get("update_available") is not True or checked.get("image_required") is not False or checked.get("catalog_state") != "update_available":
+        return False
+    target = checked.get("trusted_target")
+    if not isinstance(target, dict) or target.get("version") != config["version"] or target.get("runtime_descriptor") != descriptor or target.get("bundle_sha256") != bundle_sha256:
+        return False
+    if not isinstance(rollback, dict) or rollback.get("operation") != "rollback" or rollback.get("status") not in {"restarting", "succeeded"} or rollback.get("rolled_back_from") != config["version"]:
+        return False
+    rollback_job = rollback.get("job_id")
+    if not isinstance(rollback_job, str) or not re.fullmatch(r"[0-9a-f]{32}", rollback_job) or rollback_job in {qualification["apply_job_id"], qualification["reapply_job_id"]}:
+        return False
+    if not isinstance(rollback_status, dict) or rollback_status.get("current_version") != config["minimum_image_version"] or rollback_status.get("launcher_protocol") != 4 or rollback_status.get("active_bundle") is not None or rollback_status.get("operation_busy") is not False:
+        return False
+    return (
+        isinstance(initial, dict)
+        and initial.get("launcher_protocol") == 4
+        and initial.get("current_version") == config["minimum_image_version"]
+        and isinstance(restart, dict)
+        and restart.get("status") == "passed"
+        and restart.get("current_version") == config["version"]
+    )
+
+
+def _read_protocol_four_runtime_evidence(
+    *,
+    config: dict[str, object],
+    catalog_path: Path,
+    evidence_path: Path,
+    expected_source_commit: str,
+    public_keys: dict[str, str] | None,
+) -> bool:
+    """Verify signed descriptors plus exact two-architecture native evidence."""
+
+    if not _protocol_four_runtime_contract_valid(config) or not _HEX_40_RE.fullmatch(
+        expected_source_commit
+    ):
+        return False
+    try:
+        if not 0 < catalog_path.stat().st_size <= 4 * 1024 * 1024:
+            return False
+        if not 0 < evidence_path.stat().st_size <= 8 * 1024 * 1024:
+            return False
+        catalog_bytes = catalog_path.read_bytes()
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        catalog = json.loads(catalog_bytes.decode("utf-8"))
+        from core.runtime_generation import (
+            descriptor_generation_id,
+            validate_runtime_descriptor_shape,
+        )
+        from core.update_center import (
+            UPDATE_PUBLIC_KEYS,
+            canonical_payload_bytes,
+            verify_ed25519_signature,
+        )
+
+        if not isinstance(catalog, dict) or catalog.get("schema") != 3:
+            return False
+        payload = catalog.get("payload")
+        signature = catalog.get("signature")
+        if not isinstance(payload, dict) or not isinstance(signature, dict):
+            return False
+        if signature.get("alg") != "ed25519":
+            return False
+        verify_ed25519_signature(
+            public_keys if public_keys is not None else UPDATE_PUBLIC_KEYS,
+            str(signature.get("key_id") or ""),
+            str(signature.get("value") or ""),
+            canonical_payload_bytes(payload),
+        )
+        releases = payload.get("releases")
+        if not isinstance(releases, list):
+            return False
+        matching = [
+            release
+            for release in releases
+            if isinstance(release, dict)
+            and release.get("version") == config.get("version")
+        ]
+        if len(matching) != 1:
+            return False
+        release = matching[0]
+        if (
+            release.get("minimum_image_version")
+            != config.get("minimum_image_version")
+            or release.get("compatible_launcher_protocols") != [4]
+        ):
+            return False
+        variants = release.get("runtime_variants")
+        if not isinstance(variants, list) or len(variants) != 2:
+            return False
+        descriptors: dict[str, dict[str, object]] = {}
+        bundle_hashes: dict[str, str] = {}
+        for variant in variants:
+            if not isinstance(variant, dict):
+                return False
+            descriptor = variant.get("runtime_descriptor")
+            if not isinstance(descriptor, dict):
+                return False
+            validate_runtime_descriptor_shape(descriptor)
+            architecture = descriptor.get("architecture")
+            if architecture not in PROTOCOL_FOUR_ARCHITECTURES:
+                return False
+            if architecture in descriptors:
+                return False
+            if (
+                descriptor.get("application_version") != config.get("version")
+                or descriptor.get("source_commit") != expected_source_commit
+                or descriptor.get("generation_id")
+                != descriptor_generation_id(descriptor)
+            ):
+                return False
+            descriptors[str(architecture)] = descriptor
+            bundle_hash = variant.get("bundle_sha256")
+            if not isinstance(bundle_hash, str) or not _HEX_64_RE.fullmatch(bundle_hash):
+                return False
+            bundle_hashes[str(architecture)] = bundle_hash
+        if set(descriptors) != PROTOCOL_FOUR_ARCHITECTURES:
+            return False
+
+        if not isinstance(evidence, dict):
+            return False
+        bootstrap = evidence.get("bootstrap")
+        if not isinstance(bootstrap, dict):
+            return False
+        expected_architectures = {}
+        for architecture, descriptor in descriptors.items():
+            descriptor_sha256 = hashlib.sha256(
+                canonical_payload_bytes(descriptor)
+            ).hexdigest()
+            expected_architectures[architecture] = {
+                "status": "passed",
+                "architecture": architecture,
+                "source_commit": expected_source_commit,
+                "descriptor_sha256": descriptor_sha256,
+                "runtime_generation_id": descriptor["generation_id"],
+                "dependency_inventory_sha256": descriptor[
+                    "dependency_inventory_sha256"
+                ],
+                "target_variant_bundle_sha256": bundle_hashes[architecture],
+                "python_implementation": descriptor["python_implementation"],
+                "python_version": descriptor["python_version"],
+                "python_cache_tag": descriptor["python_cache_tag"],
+                "os_family": descriptor["os_family"],
+                "libc_family": descriptor["libc_family"],
+                "minimum_libc_version": descriptor["minimum_libc_version"],
+                "interpreter_smoke": True,
+                "native_imports": True,
+                "system_libraries": True,
+                "persistent_restart": True,
+                "rollback": True,
+            }
+        expected_evidence = {
+            "schema": 2,
+            "status": "passed",
+            "target_application_version": config.get("version"),
+            "source_commit": expected_source_commit,
+            "signed_catalog_sha256": hashlib.sha256(catalog_bytes).hexdigest(),
+            "bootstrap": {
+                "status": "passed",
+                "minimum_image_version": config.get("minimum_image_version"),
+                "launcher_protocol": 4,
+                "immutable_bootstrap_sha256": config.get(
+                    "runtime_bootstrap_sha256"
+                ),
+                "image_index_digest": config.get("minimum_image_sha256"),
+            },
+        }
+        if any(evidence.get(key) != value for key, value in expected_evidence.items()):
+            return False
+        architectures = evidence.get("architectures")
+        if not isinstance(architectures, dict) or set(architectures) != PROTOCOL_FOUR_ARCHITECTURES:
+            return False
+        logs = evidence.get("native_logs_sha256")
+        if not isinstance(logs, dict) or set(logs) != PROTOCOL_FOUR_ARCHITECTURES:
+            return False
+        for architecture, expected in expected_architectures.items():
+            actual = architectures[architecture]
+            if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in expected.items()):
+                return False
+            if not _runtime_qualification_valid(actual.get("qualification"), descriptors[architecture], config, expected["target_variant_bundle_sha256"]):
+                return False
+            hashes = logs[architecture]
+            if not isinstance(hashes, dict) or set(hashes) != {"app", "feed"} or any(not isinstance(value, str) or not _HEX_64_RE.fullmatch(value) for value in hashes.values()):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def apply_verified_dependency_runtime(
+    result: ReleaseImpact,
+    *,
+    config: dict[str, object],
+    catalog_path: Path | None,
+    evidence_path: Path | None,
+    expected_source_commit: str,
+    public_keys: dict[str, str] | None = None,
+) -> ReleaseImpact:
+    """Require signed protocol-4 runtime proof for every in-app selection."""
+
+    if not _declares_dependency_runtime(config):
+        return result
+    valid = (
+        catalog_path is not None
+        and evidence_path is not None
+        and _read_protocol_four_runtime_evidence(
+            config=config,
+            catalog_path=catalog_path,
+            evidence_path=evidence_path,
+            expected_source_commit=expected_source_commit,
+            public_keys=public_keys,
+        )
+    )
+    if not valid:
+        return _impact(
+            set(result.triggering_paths) | {RUNTIME_CAPABILITY_EVIDENCE_TRIGGER},
+            set(result.refresh_paths),
+        )
+    remaining = {
+        path
+        for path in result.triggering_paths
+        if not any(path.startswith(prefix) for prefix in RUNTIME_PREFIXES)
+    }
+    return _impact(remaining, set(result.refresh_paths))
+
+
 def _normalized_package_runtime(content: str | None) -> object:
     if content is None:
         return None
@@ -1103,6 +1466,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--historical-image-evidence", type=Path)
     parser.add_argument("--minimum-image-app-update-evidence", type=Path)
     parser.add_argument("--minimum-image-app-update-bundle", type=Path)
+    parser.add_argument("--runtime-catalog", type=Path)
+    parser.add_argument("--runtime-capability-evidence", type=Path)
     parser.add_argument(
         "--public-key",
         action="append",
@@ -1182,6 +1547,22 @@ def main(argv: list[str] | None = None) -> int:
         config=config,
         evidence_path=args.minimum_image_app_update_evidence,
         bundle_path=args.minimum_image_app_update_bundle,
+    )
+    target_commit = ""
+    if _declares_dependency_runtime(config):
+        target_commit = subprocess.run(
+            ["git", "rev-parse", args.target_ref],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    result = apply_verified_dependency_runtime(
+        result,
+        config=config,
+        catalog_path=args.runtime_catalog,
+        evidence_path=args.runtime_capability_evidence,
+        expected_source_commit=target_commit,
+        public_keys=public_keys,
     )
     result = apply_release_version_policy(result, version_policy)
     verify_declared_impact(

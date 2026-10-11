@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
+## [1.5.0] - 2026-10-11
+
+### Important
+
+- Container image update required. Pull v1.5.0 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
+
+### Added
+
+- Let future compatible releases update the application and official Python packages together from **Settings > Updates**. ChannelWatch prepares, verifies, activates, and rolls back the complete signed runtime generation as one unit.
+
+### Changed
+
+- Keep Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates on the container image path.
+
+### Fixed
+
+- Make interrupted update preparation retryable after the current runtime starts again, while preserving the selected release and saved configuration.
+- Keep update policy button labels readable on smaller screens.
+
 ## [1.4.5] - 2026-10-11
 
 ### Important
@@ -909,7 +928,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.5...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.5...v1.5.0
 [1.4.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.2...v1.4.3

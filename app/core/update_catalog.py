@@ -16,8 +16,10 @@ from typing import Any
 
 CATALOG_SCHEMA_VERSION = 2
 MAX_CATALOG_RELEASES = 64
-DEFAULT_UPDATE_CATALOG_URL = "https://channelwatch.coderluii.dev/updates/v2/stable.json"
+LEGACY_UPDATE_CATALOG_URL = "https://channelwatch.coderluii.dev/updates/v2/stable.json"
+DEFAULT_UPDATE_CATALOG_URL = "https://channelwatch.coderluii.dev/updates/v3/stable.json"
 CURRENT_UPDATER_PROTOCOL = 2
+VERIFIED_DEPENDENCY_UPDATER_PROTOCOL = 4
 
 
 class DeliveryMode(StrEnum):
@@ -35,6 +37,13 @@ class LauncherProtocol(IntEnum):
     LEGACY_ADOPT = 1  # v0.9.10-v0.9.15: bundle selection, no readiness quorum
     ACTIVATION_QUORUM = 2  # v0.9.16-v0.9.17
     RECOVERY_CAPABLE = 3  # v0.9.18+
+    VERIFIED_DEPENDENCIES = 4  # image-owned generation verification
+
+
+def _expected_updater_protocol(launcher_protocol: int) -> int:
+    if int(launcher_protocol) >= int(LauncherProtocol.VERIFIED_DEPENDENCIES):
+        return VERIFIED_DEPENDENCY_UPDATER_PROTOCOL
+    return CURRENT_UPDATER_PROTOCOL
 
 
 @dataclass(frozen=True)
@@ -51,6 +60,8 @@ def launcher_protocol_for_image_version(image_version: str) -> LauncherProtocol:
         major, minor, patch = _parse_version(image_version)
     except (TypeError, ValueError):
         return LauncherProtocol.UNSAFE_LEGACY
+    if (major, minor, patch) >= (1, 5, 0):
+        return LauncherProtocol.VERIFIED_DEPENDENCIES
     if (major, minor) != (0, 9):
         return (
             LauncherProtocol.RECOVERY_CAPABLE
@@ -265,10 +276,13 @@ def normalize_catalog(
     verify_signature: Callable[[dict[str, str], str, str, bytes], None],
     canonical_payload: Callable[[dict[str, Any]], bytes],
     validate_url: Callable[[str], str],
+    runtime_platform: Any | None = None,
 ) -> dict[str, Any]:
-    """Validate a schema-2 catalog and its one authoritative signature."""
+    """Validate a signed catalog before any runtime-platform projection."""
 
-    if not isinstance(raw, dict) or raw.get("schema") != CATALOG_SCHEMA_VERSION:
+    if not isinstance(raw, dict) or raw.get("schema") not in (
+        {CATALOG_SCHEMA_VERSION, 3} if runtime_platform is not None else {CATALOG_SCHEMA_VERSION}
+    ):
         raise TypeError("Unsupported update catalog schema.")
     payload = raw.get("payload")
     signature = raw.get("signature")
@@ -290,10 +304,33 @@ def normalize_catalog(
         raise ValueError("Update catalog must contain at least one release.")
     if len(releases_raw) > MAX_CATALOG_RELEASES:
         raise ValueError("Update catalog contains too many releases.")
-    releases = [
-        normalize_catalog_release(item, validate_url=validate_url)
-        for item in releases_raw
-    ]
+    if raw["schema"] == 3:
+        from core.runtime_catalog import normalize_runtime_release
+
+        release_versions = []
+        for item in releases_raw:
+            if not isinstance(item, dict):
+                raise TypeError("Runtime catalog releases must be objects.")
+            release_versions.append(_parse_version(item.get("version")))
+        highest_version = max(release_versions)
+        releases = [
+            normalize_runtime_release(
+                item,
+                platform=runtime_platform,
+                validate_url=validate_url,
+                allow_incomplete_history=(release_versions[index] < highest_version),
+            )
+            for index, item in enumerate(releases_raw)
+        ]
+    else:
+        if any(isinstance(item, dict) and (
+            "runtime_variants" in item or "runtime_descriptor" in item
+        ) for item in releases_raw):
+            raise ValueError("Dependency releases require catalog schema 3.")
+        releases = [
+            normalize_catalog_release(item, validate_url=validate_url)
+            for item in releases_raw
+        ]
     versions = [release["version"] for release in releases]
     if len(versions) != len(set(versions)):
         raise ValueError("Update catalog contains a duplicate release version.")
@@ -302,7 +339,7 @@ def normalize_catalog(
     # publisher input ordering.
     releases.sort(key=lambda item: _parse_version(item["version"]), reverse=True)
     return {
-        "schema": CATALOG_SCHEMA_VERSION,
+        "schema": raw["schema"],
         "payload": {
             **payload,
             "channel": channel,
@@ -346,7 +383,11 @@ def _release_compatible(
         # Older launchers may display it when the release explicitly names their
         # source app version, even if the new image advances update protocols.
         return True
-    if int(release.get("updater_protocol") or 0) != CURRENT_UPDATER_PROTOCOL:
+    if release.get("runtime_compatible") is False:
+        return False
+    if int(release.get("updater_protocol") or 0) != _expected_updater_protocol(
+        launcher_protocol
+    ):
         return False
     if int(launcher_protocol) not in release["compatible_launcher_protocols"]:
         return False

@@ -1,0 +1,19 @@
+# Application runtime dependencies eligible for signed runtime generations.
+# Image-owned package management and Supervisor remain in runtime.txt only.
+requests>=2.34.2
+httpx>=0.28.1
+pytz>=2026.5
+pydantic>=2.14.0
+
+sqlmodel>=0.0.48
+bcrypt>=5.0.0
+cryptography>=50.0.2
+
+apprise>=1.13.1,<2
+oauthlib>=4.0.0
+
+fastapi>=0.143.0
+uvicorn[standard]>=0.54.0
+python-multipart>=0.0.32
+
+zeroconf>=0.151.5

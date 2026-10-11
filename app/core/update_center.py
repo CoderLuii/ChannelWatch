@@ -9,6 +9,8 @@ import json
 import os
 import shutil
 import stat as stat_module
+import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -16,11 +18,11 @@ import urllib.request
 import uuid
 import zipfile
 from collections.abc import Callable
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import urlparse
 
 try:
@@ -38,6 +40,14 @@ from core.helpers.atomic_io import (
     fsync_directory,
 )
 from core.image_metadata import resolve_image_metadata
+from core.runtime_identity import (
+    RUNTIME_IDENTITY_FIELDS,
+    activation_records_match,
+    attested_runtime_matches,
+    get_verified_runtime_claim,
+    readiness_marker_matches,
+    runtime_process_diagnostics,
+)
 from core.update_catalog import (
     CATALOG_SCHEMA_VERSION,
     DEFAULT_UPDATE_CATALOG_URL,
@@ -60,6 +70,8 @@ TRUSTED_UPDATE_HOSTS = {
 DEFAULT_IMAGE_APP_DIR = Path(os.environ.get("CHANNELWATCH_IMAGE_APP_DIR", "/app"))
 
 MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_RUNTIME_CATALOG_BYTES = 4 * 1024 * 1024
+MAX_RUNTIME_PROCESS_DIAGNOSTICS_BYTES = 16 * 1024
 MAX_BUNDLE_BYTES = 80 * 1024 * 1024
 MAX_BUNDLE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_BUNDLE_TOTAL_UNCOMPRESSED_BYTES = 180 * 1024 * 1024
@@ -105,6 +117,22 @@ RESTART_JOURNAL_FIELDS = {
     "created_at",
     "control",
 }
+
+
+def _runtime_active_metadata(
+    payload: dict[str, Any], runtime_descriptor: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep durable activation state independent of the full file inventory."""
+
+    version = str(payload.get("version") or "")
+    return {
+        "version": version,
+        "version_tag": str(payload.get("version_tag") or f"v{version}"),
+        "runtime_abi": str(payload.get("runtime_abi") or ""),
+        "settings_schema_version": int(payload.get("settings_schema_version") or 0),
+        "git_sha": runtime_descriptor["source_commit"],
+        "bundle_type": runtime_descriptor["bundle_format"],
+    }
 
 
 def _read_runtime_json_strict(path: Path, *, label: str) -> Any:
@@ -601,6 +629,7 @@ def read_update_document_bytes(
     settings_schema_version: int,
     launcher_protocol: int,
     recovery: bool = False,
+    runtime_platform: Any | None = None,
 ) -> dict[str, Any]:
     """Read either the immutable schema-1 bridge or a signed schema-2 catalog.
 
@@ -609,7 +638,10 @@ def read_update_document_bytes(
     provenance is additive under ``catalog``.
     """
 
-    if len(data) > MAX_MANIFEST_BYTES:
+    maximum_size = (
+        MAX_RUNTIME_CATALOG_BYTES if launcher_protocol >= 4 else MAX_MANIFEST_BYTES
+    )
+    if len(data) > maximum_size:
         raise UpdateManifestError("Update metadata exceeds size limit.")
     try:
         raw = json.loads(data.decode("utf-8"))
@@ -617,6 +649,8 @@ def read_update_document_bytes(
         raise UpdateManifestError("Update metadata is not valid JSON.") from exc
     if not isinstance(raw, dict):
         raise UpdateManifestError("Update metadata must be a JSON object.")
+    if raw.get("schema") != 3 and len(data) > MAX_MANIFEST_BYTES:
+        raise UpdateManifestError("Update metadata exceeds size limit.")
     if raw.get("schema") == MANIFEST_SCHEMA_VERSION:
         manifest = normalize_manifest(raw, public_keys)
         if recovery and manifest["payload"].get("recovery_compatible") is not True:
@@ -624,8 +658,14 @@ def read_update_document_bytes(
                 "The signed legacy update is not approved for recovery mode."
             )
         return manifest
-    if raw.get("schema") != CATALOG_SCHEMA_VERSION:
+    if raw.get("schema") not in {CATALOG_SCHEMA_VERSION, 3}:
         raise UpdateManifestError("Unsupported update metadata schema.")
+    if raw.get("schema") == 3 and runtime_platform is None:
+        from core.runtime_generation import detect_runtime_platform
+
+        runtime_platform = detect_runtime_platform(launcher_protocol=launcher_protocol)
+    if raw.get("schema") == 3 and launcher_protocol < int(LauncherProtocol.VERIFIED_DEPENDENCIES):
+        raise UpdateManifestError("Dependency catalog requires a compatible image launcher.")
     try:
         catalog = normalize_catalog(
             raw,
@@ -633,6 +673,7 @@ def read_update_document_bytes(
             verify_signature=verify_ed25519_signature,
             canonical_payload=canonical_payload_bytes,
             validate_url=validate_trusted_url,
+            **({"runtime_platform": runtime_platform} if raw["schema"] == 3 else {}),
         )
         selection = select_catalog_release(
             catalog,
@@ -663,7 +704,7 @@ def read_update_document_bytes(
     ):
         selected = app_selection
     return {
-        "schema": CATALOG_SCHEMA_VERSION,
+        "schema": raw["schema"],
         "payload": selected.release,
         "signature": catalog["signature"],
         "catalog": {
@@ -1115,6 +1156,7 @@ class UpdateManager:
         self.restart_callable = restart_callable
         self.healthcheck_callable = healthcheck_callable
         self.maintenance_lock = maintenance_lock
+        self._verified_catalog_bytes: bytes | None = None
 
     def _maintenance_context(
         self, *, already_held: bool = False
@@ -1320,6 +1362,11 @@ class UpdateManager:
 
     def _stage_restart_journal(self, journal: dict[str, Any]) -> Path:
         validated = self._validate_restart_journal(journal)
+        serialized = json.dumps(validated, indent=2).encode("utf-8")
+        if len(serialized) > RUNTIME_CONTROL_MAX_BYTES:
+            raise UpdateLockedError(
+                "The runtime transition journal exceeds the safe size limit."
+            )
         staged_path = self.restart_required_path.with_name(
             f".{self.restart_required_path.name}.candidate-{uuid.uuid4().hex}"
         )
@@ -1584,7 +1631,7 @@ class UpdateManager:
         Never replace either durable generation with a stale abort.
         """
 
-        if self.launcher_protocol != int(LauncherProtocol.RECOVERY_CAPABLE):
+        if self.launcher_protocol < int(LauncherProtocol.RECOVERY_CAPABLE):
             return None
         validated = self._validate_restart_journal(expected_journal)
         with self._restart_journal_lock():
@@ -1657,7 +1704,7 @@ class UpdateManager:
     ) -> bool:
         """Validate an exact post-barrier marker while the journal lock is held."""
 
-        if self.launcher_protocol != int(LauncherProtocol.RECOVERY_CAPABLE):
+        if self.launcher_protocol < int(LauncherProtocol.RECOVERY_CAPABLE):
             return False
         expected = self._validate_restart_journal(expected_journal)
         path = self.protocol_three_handoff_path
@@ -1847,10 +1894,7 @@ class UpdateManager:
     def _pending_matches_active(
         self, pending: dict[str, Any], active: dict[str, Any]
     ) -> bool:
-        return all(
-            str(pending.get(key) or "") == str(active.get(key) or "")
-            for key in ("activation_id", "version", "path")
-        ) and bool(str(active.get("activation_id") or ""))
+        return activation_records_match(pending, active)
 
     def _claim_pending_activation(
         self, pending: dict[str, Any], *, claimant: str
@@ -1865,10 +1909,7 @@ class UpdateManager:
             return None
         fsync_directory(self.runtime_dir)
         claimed = load_json(claim_path, None)
-        if not isinstance(claimed, dict) or any(
-            str(claimed.get(key) or "") != str(pending.get(key) or "")
-            for key in ("activation_id", "version", "path")
-        ):
+        if not activation_records_match(claimed, pending):
             # The caller lost a race to a different activation generation.
             # Preserve the unexpected claim for forensic recovery.
             return None
@@ -1966,16 +2007,120 @@ class UpdateManager:
         atomic_write_json(self.job_path, job)
         return job
 
+    def _pre_handoff_apply_failure_payload(
+        self,
+        current: Any,
+        *,
+        job_id: str,
+        scheduler_attempt_id: str,
+        version: str,
+        bundle_sha256: str,
+        error: str,
+    ) -> dict[str, Any] | None:
+        expected_version = str(version).strip().lstrip("v")
+        expected_digest = str(bundle_sha256).strip().lower()
+        if not isinstance(current, dict):
+            return None
+        if (
+            not job_id
+            or not scheduler_attempt_id
+            or not expected_version
+            or len(expected_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_digest
+            )
+            or str(current.get("job_id") or "") != job_id
+            or str(current.get("scheduler_attempt_id") or "")
+            != scheduler_attempt_id
+            or str(current.get("operation") or "") != "apply"
+            or str(current.get("status") or "").strip().lower()
+            not in {"backing_up", "downloading", "verifying", "applying"}
+            or str(current.get("version") or "").strip().lstrip("v")
+            != expected_version
+            or str(current.get("bundle_sha256") or "").strip().lower()
+            != expected_digest
+        ):
+            return None
+        message = str(error).strip()[:500] or "Update preparation failed."
+        failed_payload = {
+            key: value for key, value in current.items() if key != "updated_at"
+        }
+        failed_payload.update(
+            {
+                "status": "failed",
+                "message": (
+                    "Update stopped before activation handoff. "
+                    "The existing runtime remains selected."
+                ),
+                "error": message,
+                "failed_at": utc_now(),
+                "restart_required": False,
+                "rollback_applied": False,
+            }
+        )
+        return self._prepare_job(failed_payload)
+
+    def record_pre_handoff_apply_failure(
+        self,
+        *,
+        job_id: str,
+        scheduler_attempt_id: str,
+        version: str,
+        bundle_sha256: str,
+        error: str,
+    ) -> dict[str, Any] | None:
+        """Terminalize one exact failed apply before any activation handoff."""
+
+        with (
+            self._maintenance_context(),
+            self._activation_outcome_lock(wait=False),
+            UpdateOperationLock(self.lock_path),
+            UpdateOperationLock(self.activation_lock_path),
+            self._restart_journal_lock(),
+        ):
+            if self._restart_journal_present():
+                return None
+            protected_paths = (
+                self.protocol_three_handoff_path,
+                *self._activation_state_paths(),
+            )
+            for path in protected_paths:
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return None
+                else:
+                    return None
+            current = load_json(self.job_path, None)
+            failed = self._pre_handoff_apply_failure_payload(
+                current,
+                job_id=job_id,
+                scheduler_attempt_id=scheduler_attempt_id,
+                version=version,
+                bundle_sha256=bundle_sha256,
+                error=error,
+            )
+            if failed is None:
+                return None
+            atomic_write_json(self.job_path, failed)
+            return failed
+
     def _read_manifest_from_url(
         self, url: str | None = None, *, recovery: bool = False
     ) -> dict[str, Any]:
         target = url or self.manifest_url
-        data = (
-            self.fetcher(target, MAX_MANIFEST_BYTES)
-            if self.fetcher
-            else fetch_bytes(target, max_bytes=MAX_MANIFEST_BYTES)
+        maximum_size = (
+            MAX_RUNTIME_CATALOG_BYTES if self.launcher_protocol >= 4 else MAX_MANIFEST_BYTES
         )
-        return read_update_document_bytes(
+        data = (
+            self.fetcher(target, maximum_size)
+            if self.fetcher
+            else fetch_bytes(target, max_bytes=maximum_size)
+        )
+        document = read_update_document_bytes(
             data,
             self.public_keys,
             current_version=self.current_version,
@@ -1984,6 +2129,8 @@ class UpdateManager:
             launcher_protocol=self.launcher_protocol,
             recovery=recovery,
         )
+        self._verified_catalog_bytes = data if document["schema"] == 3 else None
+        return document
 
     def _fetch_bundle(self, url: str) -> bytes:
         return (
@@ -1994,6 +2141,10 @@ class UpdateManager:
 
     def _payload_requires_image(self, payload: dict[str, Any]) -> bool:
         if bool(payload.get("image_required", False)):
+            return True
+        if self.launcher_protocol >= 4 and not isinstance(
+            payload.get("runtime_descriptor"), dict
+        ):
             return True
         try:
             if (
@@ -2196,6 +2347,11 @@ class UpdateManager:
             "runtime_abi": self.runtime_abi,
             "settings_schema_version": self.settings_schema_version,
             "runtime_source": self._runtime_source(active),
+            "worker_runtime": {
+                "python_version": sys.version.split()[0],
+                "python_executable": sys.executable,
+                "verified_generation": get_verified_runtime_claim(),
+            },
             "active_bundle": (
                 active if isinstance(active, dict) and active.get("path") else None
             ),
@@ -2307,10 +2463,18 @@ class UpdateManager:
                 }
 
     def _verify_bundle_signature(
-        self, payload: dict[str, Any], bundle_bytes: bytes
+        self, payload: dict[str, Any], bundle_bytes: bytes | BinaryIO
     ) -> None:
         expected_hash = str(payload.get("bundle_sha256") or "").lower()
-        actual_hash = sha256_hex(bundle_bytes)
+        if isinstance(bundle_bytes, bytes):
+            actual_hash = sha256_hex(bundle_bytes)
+        else:
+            digest = hashlib.sha256()
+            bundle_bytes.seek(0)
+            while chunk := bundle_bytes.read(65_536):
+                digest.update(chunk)
+            bundle_bytes.seek(0)
+            actual_hash = digest.hexdigest()
         if not expected_hash or actual_hash != expected_hash:
             raise UpdateBundleError("Update bundle hash did not match manifest.")
         signature_b64 = str(payload.get("bundle_signature") or "")
@@ -2341,6 +2505,7 @@ class UpdateManager:
             self._activation_outcome_lock(wait=False),
             UpdateOperationLock(self.lock_path),
             UpdateOperationLock(self.activation_lock_path),
+            ExitStack() as downloads,
         ):
             self._require_restart_journal_absent()
             selected_active = load_json(self.active_path, None)
@@ -2481,6 +2646,23 @@ class UpdateManager:
                     }
                 )
 
+            if self.launcher_protocol >= 4 and not isinstance(
+                payload.get("runtime_descriptor"), dict
+            ):
+                return self._write_job(
+                    {
+                        "job_id": job_id,
+                        "operation": "apply",
+                        "status": "image_required",
+                        "version": target_version,
+                        **job_identity,
+                        "message": (
+                            "This release has no verified runtime bundle for this "
+                            "launcher. Update the container image instead."
+                        ),
+                    }
+                )
+
             self._write_job(
                 {
                     "job_id": job_id,
@@ -2543,18 +2725,20 @@ class UpdateManager:
                 raise UpdateManifestError(
                     "Update manifest does not include a bundle URL."
                 )
-            bundle_bytes = self._fetch_bundle(bundle_url)
-            self._verify_bundle_signature(payload, bundle_bytes)
-            metadata = validate_bundle_archive(
-                bundle_bytes,
-                expected_version=target_version,
-                expected_runtime_abi=self.runtime_abi,
-                expected_settings_schema_version=self.settings_schema_version,
-            )
+            runtime_descriptor = payload.get("runtime_descriptor")
+            if isinstance(runtime_descriptor, dict) and self.fetcher is None:
+                from core.runtime_download import fetch_runtime_bundle
 
-            destination = self.releases_dir / f"v{target_version}"
-            self._write_job(
-                {
+                bundle_bytes = downloads.enter_context(
+                    tempfile.TemporaryFile(mode="w+b", dir=self.runtime_dir)
+                )
+                fetch_runtime_bundle(
+                    bundle_url, bundle_bytes, max_bytes=MAX_BUNDLE_BYTES
+                )
+            else:
+                bundle_bytes = self._fetch_bundle(bundle_url)
+            self._verify_bundle_signature(payload, bundle_bytes)
+            applying_job = {
                     "job_id": job_id,
                     "operation": "apply",
                     "status": "applying",
@@ -2563,8 +2747,68 @@ class UpdateManager:
                     "backup_path": str(backup_path) if backup_path else None,
                     "message": "Installing verified update bundle.",
                 }
-            )
-            extract_bundle_archive(bundle_bytes, destination)
+            self._write_job(applying_job)
+            runtime_identity: dict[str, Any] = {}
+            if isinstance(runtime_descriptor, dict):
+                from core.runtime_generation import descriptor_generation_id
+                from core.runtime_preparation import (
+                    RUNTIME_PREPARATION_TIMEOUT_SECONDS,
+                    RuntimePreparationError,
+                    prepare_runtime_archive_bounded,
+                )
+
+                def preparation_started() -> None:
+                    self._write_job(
+                        {
+                            **applying_job,
+                            "phase": "preparing",
+                            "phase_budget_seconds": (
+                                RUNTIME_PREPARATION_TIMEOUT_SECONDS
+                            ),
+                            "phase_deadline_at": (
+                                datetime.now(timezone.utc)
+                                + timedelta(
+                                    seconds=RUNTIME_PREPARATION_TIMEOUT_SECONDS
+                                )
+                            ).isoformat().replace("+00:00", "Z"),
+                        }
+                    )
+
+                try:
+                    generation = prepare_runtime_archive_bounded(
+                        bundle_bytes,
+                        self.releases_dir,
+                        runtime_descriptor,
+                        on_started=preparation_started,
+                    )
+                except RuntimePreparationError as exc:
+                    raise UpdateBundleError(str(exc)) from exc
+                destination = generation.app_dir
+                metadata = _runtime_active_metadata(payload, runtime_descriptor)
+                runtime_identity = {
+                    "runtime_generation_id": generation.generation_id,
+                    "runtime_descriptor_sha256": descriptor_generation_id(
+                        runtime_descriptor
+                    ),
+                    "dependency_inventory_sha256": generation.dependency_digest,
+                }
+                from core.runtime_release_trust import persist_runtime_catalog
+
+                if self._verified_catalog_bytes is None:
+                    raise UpdateManifestError("The signed runtime catalog is unavailable.")
+                runtime_identity["runtime_trust_sha256"] = persist_runtime_catalog(
+                    self.runtime_dir, runtime_descriptor,
+                    self._verified_catalog_bytes, self.public_keys,
+                )
+            else:
+                metadata = validate_bundle_archive(
+                    bundle_bytes,
+                    expected_version=target_version,
+                    expected_runtime_abi=self.runtime_abi,
+                    expected_settings_schema_version=self.settings_schema_version,
+                )
+                destination = self.releases_dir / f"v{target_version}"
+                extract_bundle_archive(bundle_bytes, destination)
 
             previous_control = self._read_control_state()
             previous_active = previous_control["active.json"]
@@ -2575,6 +2819,7 @@ class UpdateManager:
                 "path": str(destination),
                 "runtime_abi": self.runtime_abi,
                 "settings_schema_version": self.settings_schema_version,
+                **runtime_identity,
                 "activated_at": utc_now(),
                 "manifest": {
                     "release_url": payload.get("release_url"),
@@ -2590,6 +2835,7 @@ class UpdateManager:
                 **job_identity,
                 "activation_id": next_active["activation_id"],
                 "path": str(destination),
+                **runtime_identity,
                 "started_at": utc_now(),
                 "launcher_protocol": self.launcher_protocol,
                 "deadline_at": (
@@ -3295,6 +3541,118 @@ class UpdateManager:
         )
         return True
 
+    def _terminalize_interrupted_pre_handoff_apply(self) -> bool:
+        """Fail one orphaned apply only after its former owner is gone."""
+
+        if self.launcher_protocol < int(LauncherProtocol.VERIFIED_DEPENDENCIES):
+            return False
+        candidate = load_json(self.job_path, None)
+        if not isinstance(candidate, dict):
+            return False
+        job_id = str(candidate.get("job_id") or "")
+        scheduler_attempt_id = str(candidate.get("scheduler_attempt_id") or "")
+        version = str(candidate.get("version") or "")
+        bundle_sha256 = str(candidate.get("bundle_sha256") or "")
+        if (
+            self._pre_handoff_apply_failure_payload(
+                candidate,
+                job_id=job_id,
+                scheduler_attempt_id=scheduler_attempt_id,
+                version=version,
+                bundle_sha256=bundle_sha256,
+                error=(
+                    "Update preparation was interrupted before activation handoff."
+                ),
+            )
+            is None
+        ):
+            return False
+        try:
+            with UpdateOperationLock(self.lock_path):
+                if self._restart_journal_present():
+                    return False
+                protected_paths = (
+                    self.protocol_three_handoff_path,
+                    *self._activation_state_paths(),
+                )
+                for path in protected_paths:
+                    try:
+                        path.lstat()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        return False
+                    else:
+                        return False
+                try:
+                    if any(self.runtime_dir.glob("activation-*.json")):
+                        return False
+                except OSError:
+                    return False
+
+                failed = self._pre_handoff_apply_failure_payload(
+                    load_json(self.job_path, None),
+                    job_id=job_id,
+                    scheduler_attempt_id=scheduler_attempt_id,
+                    version=version,
+                    bundle_sha256=bundle_sha256,
+                    error=(
+                        "Update preparation was interrupted before activation "
+                        "handoff."
+                    ),
+                )
+                if failed is None:
+                    return False
+                atomic_write_json(self.job_path, failed)
+                return True
+        except UpdateLockedError:
+            return False
+
+    def _image_startup_matches_interrupted_apply(
+        self,
+        *,
+        running_version: str,
+        activation_id: str,
+        healthy: bool,
+        running_app_path: Path | None,
+        verified_runtime_claim: dict[str, str] | None,
+    ) -> bool:
+        if (
+            not healthy
+            or activation_id
+            or verified_runtime_claim is not None
+            or running_app_path is None
+            or running_version.strip().lstrip("v") != self.current_version
+        ):
+            return False
+        try:
+            return running_app_path.resolve(
+                strict=True
+            ) == DEFAULT_IMAGE_APP_DIR.resolve(strict=True)
+        except OSError:
+            return False
+
+    @staticmethod
+    def _active_startup_matches_interrupted_apply(
+        active: dict[str, Any],
+        *,
+        running_version: str,
+        activation_id: str,
+        healthy: bool,
+        running_app_path: Path | None,
+        verified_runtime_claim: dict[str, str] | None,
+    ) -> bool:
+        return bool(
+            healthy
+            and activation_id
+            and activation_id == str(active.get("activation_id") or "")
+            and running_version.strip().lstrip("v")
+            == str(active.get("version") or "").strip().lstrip("v")
+            and attested_runtime_matches(
+                active, running_app_path, verified_runtime_claim
+            )
+        )
+
     def _record_manual_rollback_startup(
         self,
         *,
@@ -3413,6 +3771,8 @@ class UpdateManager:
         running_version: str,
         activation_id: str,
         healthy: bool,
+        running_app_path: Path | None = None,
+        verified_runtime_claim: dict[str, str] | None = None,
     ) -> None:
         """Record one component and complete only the matching healthy quorum."""
 
@@ -3442,11 +3802,20 @@ class UpdateManager:
                 ):
                     return
                 if not isinstance(active, dict):
-                    self._record_image_refresh_recovery_startup(
+                    if self._record_image_refresh_recovery_startup(
                         component=component,
                         running_version=running_version,
                         healthy=healthy,
-                    )
+                    ):
+                        return
+                    if self._image_startup_matches_interrupted_apply(
+                        running_version=running_version,
+                        activation_id=activation_id,
+                        healthy=healthy,
+                        running_app_path=running_app_path,
+                        verified_runtime_claim=verified_runtime_claim,
+                    ):
+                        self._terminalize_interrupted_pre_handoff_apply()
                     return
                 adoption = self._adopt_protocol_one_activation(
                     active, running_version=running_version
@@ -3463,6 +3832,15 @@ class UpdateManager:
                 self._recover_pending_activation(active)
                 pending = load_json(self.activation_pending_path, None)
                 if not isinstance(pending, dict):
+                    if self._active_startup_matches_interrupted_apply(
+                        active,
+                        running_version=running_version,
+                        activation_id=activation_id,
+                        healthy=healthy,
+                        running_app_path=running_app_path,
+                        verified_runtime_claim=verified_runtime_claim,
+                    ):
+                        self._terminalize_interrupted_pre_handoff_apply()
                     return
                 if not self._pending_matches_active(pending, active):
                     return
@@ -3520,6 +3898,9 @@ class UpdateManager:
                 effective_activation_id != expected_activation_id
                 or normalized_running_version != active_version
                 or not healthy
+                or not attested_runtime_matches(
+                    active, running_app_path, verified_runtime_claim
+                )
             ):
                 with self._restart_journal_lock():
                     if self._restart_journal_present():
@@ -3554,14 +3935,22 @@ class UpdateManager:
                         pass
                 restart_needed = True
             else:
+                runtime_identity = {
+                    field: active[field]
+                    for field in RUNTIME_IDENTITY_FIELDS
+                    if field in active
+                }
                 ready_payload = {
                     "component": component,
                     "version": active_version,
                     "activation_id": expected_activation_id,
                     "path": str(active.get("path") or ""),
+                    **runtime_identity,
                     "healthy": True,
                     "ready_at": utc_now(),
                 }
+                if runtime_identity:
+                    ready_payload["process_runtime"] = runtime_process_diagnostics()
                 with self._restart_journal_lock():
                     if self._restart_journal_present():
                         return
@@ -3569,22 +3958,13 @@ class UpdateManager:
                         self.activation_ready_path(component), ready_payload
                     )
 
-                expected_identity = {
-                    "version": active_version,
-                    "activation_id": expected_activation_id,
-                    "path": str(active.get("path") or ""),
-                    "healthy": True,
-                }
                 components_ready = all(
-                    isinstance(marker, dict)
-                    and all(
-                        marker.get(key) == value
-                        for key, value in expected_identity.items()
+                    readiness_marker_matches(
+                        load_json(self.activation_ready_path(name), {}),
+                        pending,
+                        component=name,
                     )
-                    for marker in (
-                        load_json(self.activation_ready_path("core"), {}),
-                        load_json(self.activation_ready_path("ui"), {}),
-                    )
+                    for name in ("core", "ui")
                 )
                 if not components_ready:
                     return
@@ -3659,6 +4039,39 @@ class UpdateManager:
                             != expected_activation_id
                         ):
                             return
+                        runtime_components: dict[str, dict[str, Any]] = {}
+                        if runtime_identity:
+                            for name in ("core", "ui"):
+                                marker = load_json(
+                                    self.activation_ready_path(name), None
+                                )
+                                if not readiness_marker_matches(
+                                    marker, current_pending, component=name
+                                ):
+                                    return
+                                process_runtime = marker.get("process_runtime")
+                                if not isinstance(process_runtime, dict):
+                                    return
+                                try:
+                                    serialized_runtime = json.dumps(
+                                        process_runtime,
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                    ).encode("utf-8")
+                                except (TypeError, ValueError):
+                                    return
+                                if (
+                                    len(serialized_runtime)
+                                    > MAX_RUNTIME_PROCESS_DIAGNOSTICS_BYTES
+                                ):
+                                    return
+                                runtime_components[name] = {
+                                    **{
+                                        field: marker[field]
+                                        for field in RUNTIME_IDENTITY_FIELDS
+                                    },
+                                    "process_runtime": process_runtime,
+                                }
                         completion_claim = self._claim_pending_activation(
                             current_pending,
                             claimant=f"completed-{component}-{os.getpid()}",
@@ -3681,8 +4094,7 @@ class UpdateManager:
                             # forensic/recovery record; never publish success.
                             return
                         try:
-                            self._write_job(
-                                {
+                            success_job = {
                                     "job_id": claimed_pending.get("job_id"),
                                     "operation": "apply",
                                     "version": active_version,
@@ -3698,8 +4110,33 @@ class UpdateManager:
                                     ),
                                     "validated_at": utc_now(),
                                 }
-                            )
+                            if runtime_components:
+                                success_job["runtime_components"] = runtime_components
+                            self._write_job(success_job)
                             self._clear_activation_state()
+                            cleanup_warnings: tuple[str, ...] = ()
+                            try:
+                                from core.runtime_retention import (
+                                    cleanup_runtime_generations,
+                                )
+
+                                cleanup_warnings = cleanup_runtime_generations(
+                                    self.runtime_dir, public_keys=self.public_keys
+                                ).warnings
+                            except Exception:
+                                cleanup_warnings = (
+                                    "Runtime generation cleanup could not be completed.",
+                                )
+                            if cleanup_warnings:
+                                try:
+                                    self._write_job(
+                                        {
+                                            **success_job,
+                                            "cleanup_warnings": list(cleanup_warnings),
+                                        }
+                                    )
+                                except Exception:
+                                    pass
                         except Exception:
                             # A crash leaves the claimant-specific file durable for
                             # startup recovery. For an ordinary write failure,

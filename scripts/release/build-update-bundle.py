@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
+import hashlib
 import importlib.util
+import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -31,6 +35,27 @@ from release_version_policy import validate_release_config
 from render_release_legal import render_files
 
 ROOT = Path(__file__).resolve().parents[2]
+APP_ROOT = ROOT / "app"
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
+
+from core.runtime_archive import (  # noqa: E402
+    MAX_BUNDLE_BYTES as MAX_RUNTIME_BUNDLE_BYTES,
+    MAX_BUNDLE_MEMBER_BYTES as MAX_RUNTIME_MEMBER_BYTES,
+    MAX_BUNDLE_MEMBER_COUNT as MAX_RUNTIME_MEMBER_COUNT,
+    _archive_files as _runtime_archive_files,
+)
+from core.runtime_generation import (  # noqa: E402
+    DEPENDENCY_INVENTORY_PATH,
+    DESCRIPTOR_FILENAME,
+    RuntimeGenerationError,
+    validate_runtime_descriptor_shape,
+)
+from core.runtime_catalog import validate_runtime_release_variants  # noqa: E402
+from core.update_center import (  # noqa: E402
+    MAX_RUNTIME_CATALOG_BYTES,
+    validate_trusted_url,
+)
 RUNTIME_ABI = "channelwatch-runtime-v1"
 SETTINGS_SCHEMA_VERSION = 7
 DEFAULT_KEY_ID = "channelwatch-update-ed25519-2026-06"
@@ -121,7 +146,7 @@ def load_catalog_history(
     *,
     path: Path = CATALOG_HISTORY_FILE,
 ) -> list[dict[str, object]]:
-    """Load deterministic prior v2 entries retained under source control."""
+    """Load deterministic prior signed entries retained under source control."""
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -160,6 +185,54 @@ def load_catalog_history(
         reverse=True,
     )
     return retained
+
+
+def project_catalog_history_v2(
+    catalog_history: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Copy full signed history into the schema-2 compatible record shape."""
+
+    projected = copy.deepcopy(catalog_history)
+    for release in projected:
+        if "runtime_descriptor" in release:
+            raise ValueError("A runtime descriptor requires signed platform variants.")
+        release.pop("runtime_variants", None)
+    return projected
+
+
+def _project_runtime_catalog_history(
+    catalog_history: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], str | None]:
+    """Keep only the newest prior full runtime fallback in a v3 catalog."""
+
+    projected = copy.deepcopy(catalog_history)
+    fallback_indexes: list[int] = []
+    for index, release in enumerate(projected):
+        if "runtime_descriptor" in release:
+            raise ValueError("A runtime descriptor requires signed platform variants.")
+        if (
+            "runtime_variants" in release
+            and release.get("updater_protocol") == 4
+            and release.get("delivery_mode") != "image_required"
+        ):
+            fallback_indexes.append(index)
+    retained_index = (
+        max(
+            fallback_indexes,
+            key=lambda index: _release_version(projected[index].get("version")),
+        )
+        if fallback_indexes
+        else None
+    )
+    for index, release in enumerate(projected):
+        if index != retained_index:
+            release.pop("runtime_variants", None)
+    retained_version = (
+        str(projected[retained_index].get("version"))
+        if retained_index is not None
+        else None
+    )
+    return projected, retained_version
 
 
 def _verify_tag_is_ancestor(tag: str, *, repo_root: Path) -> None:
@@ -296,7 +369,7 @@ def require_previous_catalog_release(
     history: list[dict[str, object]],
     published_tags: list[str],
     *,
-    unpublished_tags: object = None,
+    unpublished_predecessor_tags: object = None,
     repository: str = "",
     github_token: str = "",
     repo_root: Path = ROOT,
@@ -317,7 +390,11 @@ def require_previous_catalog_release(
         if _release_version(current_version) > INITIAL_V2_BRIDGE_VERSION:
             raise ValueError("Cannot verify catalog predecessor; fetch the complete release tags.")
         return
-    exceptions = [] if unpublished_tags is None else unpublished_tags
+    exceptions = (
+        []
+        if unpublished_predecessor_tags is None
+        else unpublished_predecessor_tags
+    )
     if not isinstance(exceptions, list) or any(
         not isinstance(tag, str) for tag in exceptions
     ):
@@ -553,18 +630,231 @@ def copy_copyleft_release_files(destination: Path) -> None:
     )
 
 
+def stage_runtime_application_payload(destination: Path, *, version: str) -> None:
+    """Stage the same image-shaped application payload used by app bundles."""
+
+    destination.mkdir(parents=True, exist_ok=True)
+    if any(destination.iterdir()):
+        raise ValueError("Runtime application staging directory must be empty.")
+    copy_release_legal_files(destination, version=version)
+    copy_copyleft_release_files(destination)
+    copy_tree(ROOT / "app" / "core", destination / "core")
+    copy_tree(ROOT / "app" / "ui" / "backend", destination / "ui" / "backend")
+
+    ui_out = ROOT / "app" / "ui" / "out"
+    if not ui_out.is_dir():
+        raise ValueError(
+            "app/ui/out is missing. Run the UI build before packaging the update bundle."
+        )
+    copy_tree(ui_out, destination / "ui" / "backend" / "static_ui")
+
+    image_dir = ROOT / "app" / "ui" / "public" / "images"
+    if image_dir.is_dir():
+        copy_tree(image_dir, destination / "ui" / "backend" / "static" / "images")
+
+
 def canonical_payload_bytes(payload: dict) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def sha256_bytes(path: Path) -> bytes:
-    import hashlib
-
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.digest()
+
+
+def _runtime_bundle_descriptor(bundle: bytes) -> dict[str, object]:
+    """Validate a prebuilt runtime archive without projecting it onto this host."""
+
+    if not bundle or len(bundle) > MAX_RUNTIME_BUNDLE_BYTES:
+        raise ValueError("Runtime bundle exceeds its bounded download size.")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(bundle), "r")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Runtime bundle is not a valid ZIP archive.") from exc
+    with archive:
+        members = archive.infolist()
+        if len(members) > MAX_RUNTIME_MEMBER_COUNT:
+            raise ValueError("Runtime bundle has too many members.")
+        descriptor_members = [
+            info for info in members if info.filename == DESCRIPTOR_FILENAME
+        ]
+        if len(descriptor_members) != 1 or not (
+            0 <= descriptor_members[0].file_size <= MAX_RUNTIME_MEMBER_BYTES
+        ):
+            raise ValueError("Runtime bundle descriptor member is invalid.")
+        try:
+            descriptor = json.loads(archive.read(DESCRIPTOR_FILENAME).decode("utf-8"))
+        except (KeyError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Runtime bundle descriptor is invalid.") from exc
+        if not isinstance(descriptor, dict):
+            raise ValueError("Runtime bundle descriptor must be an object.")
+        try:
+            validate_runtime_descriptor_shape(descriptor)
+        except RuntimeGenerationError as exc:
+            raise ValueError(str(exc)) from exc
+        selected = _runtime_archive_files(archive, descriptor)
+        if archive.testzip() is not None:
+            raise ValueError("Runtime bundle ZIP integrity check failed.")
+        embedded = json.loads(archive.read(selected[DESCRIPTOR_FILENAME]).decode("utf-8"))
+        if embedded != descriptor:
+            raise ValueError("Runtime bundle descriptor identity changed while reading.")
+        inventory = archive.read(selected[DEPENDENCY_INVENTORY_PATH])
+        if hashlib.sha256(inventory).hexdigest() != descriptor["dependency_inventory_sha256"]:
+            raise ValueError("Runtime bundle dependency inventory digest is invalid.")
+        expanded_size = len(inventory)
+        for record in descriptor["files"]:
+            content = archive.read(selected[record["path"]])
+            if len(content) != record["size"] or hashlib.sha256(content).hexdigest() != record["sha256"]:
+                raise ValueError("Runtime bundle payload digest is invalid.")
+            expanded_size += len(content)
+        if expanded_size != descriptor["expanded_size"]:
+            raise ValueError("Runtime bundle expanded size is invalid.")
+    return descriptor
+
+
+def build_runtime_catalog_v3(
+    *,
+    catalog_release: dict[str, object],
+    catalog_history: list[dict[str, object]],
+    runtime_bundles: dict[str, tuple[Path, str]],
+    expected_source_commit: str,
+    private_key: Ed25519PrivateKey,
+    key_id: str,
+    publication_time: str,
+) -> dict[str, object]:
+    """Build a signed protocol-4 catalog for bootstrap or runtime delivery."""
+
+    version = str(catalog_release.get("version") or "").strip().lstrip("v")
+    _release_version(version)
+    if catalog_release.get("compatible_launcher_protocols") != [4]:
+        raise ValueError(
+            "Runtime catalogs require an exact protocol-4 release."
+        )
+    image_bootstrap = catalog_release.get("delivery_mode") == "image_required"
+    if image_bootstrap:
+        if catalog_release.get("image_required") is not True:
+            raise ValueError("Image-only runtime catalog classification is inconsistent.")
+        if runtime_bundles:
+            raise ValueError("Image-only runtime catalogs cannot contain runtime generation assets.")
+    elif catalog_release.get("image_required") is not False:
+        raise ValueError("Runtime generation catalogs require a non-image release.")
+    elif set(runtime_bundles) != {"amd64", "arm64"}:
+        raise ValueError("Runtime generation packaging requires exactly amd64 and arm64 bundles.")
+    settings_schema = catalog_release.get("settings_schema_version")
+    if type(settings_schema) is not int:
+        raise ValueError("Runtime catalog settings schema must be an integer.")
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_source_commit):
+        raise ValueError("Runtime catalog source commit must be an exact lowercase Git SHA.")
+
+    variants: list[dict[str, object]] = []
+    interpreter_identity: tuple[object, ...] | None = None
+    for architecture in (() if image_bootstrap else ("amd64", "arm64")):
+        path, url = runtime_bundles[architecture]
+        if not isinstance(url, str) or not url:
+            raise ValueError(f"Runtime {architecture} bundle URL is missing.")
+        validate_trusted_url(url)
+        try:
+            bundle = Path(path).read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Runtime {architecture} bundle could not be read.") from exc
+        descriptor = _runtime_bundle_descriptor(bundle)
+        if descriptor["architecture"] != architecture:
+            raise ValueError(f"Runtime {architecture} bundle descriptor architecture does not match.")
+        if descriptor["application_version"] != version:
+            raise ValueError(f"Runtime {architecture} bundle version does not match the release.")
+        if descriptor["source_commit"] != expected_source_commit:
+            raise ValueError(f"Runtime {architecture} bundle source commit does not match.")
+        if descriptor["settings_schema_version"] != settings_schema:
+            raise ValueError(f"Runtime {architecture} bundle settings schema does not match.")
+        identity = (
+            descriptor["python_implementation"],
+            descriptor["python_cache_tag"],
+            descriptor["python_version"],
+            descriptor["os_family"],
+            descriptor["libc_family"],
+            tuple(descriptor["minimum_libc_version"]),
+        )
+        if interpreter_identity is None:
+            interpreter_identity = identity
+        elif identity != interpreter_identity:
+            raise ValueError("Runtime bundle interpreter and system bindings do not match.")
+        digest = hashlib.sha256(bundle).digest()
+        variants.append(
+            {
+                "bundle_url": url,
+                "bundle_sha256": digest.hex(),
+                "bundle_signature": base64.b64encode(private_key.sign(digest)).decode("ascii"),
+                "key_id": key_id,
+                "runtime_descriptor": descriptor,
+            }
+        )
+
+    runtime_release = copy.deepcopy(catalog_release)
+    if not image_bootstrap:
+        runtime_release["runtime_variants"] = variants
+    runtime_history, retained_fallback = _project_runtime_catalog_history(
+        catalog_history
+    )
+    for historical_release in runtime_history:
+        if "runtime_variants" in historical_release:
+            validate_runtime_release_variants(
+                historical_release, validate_url=validate_trusted_url
+            )
+
+    def signed_catalog(history: list[dict[str, object]]) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "channel": "stable",
+            "published_at": publication_time,
+            "releases": [runtime_release, *history],
+        }
+        return {
+            "schema": 3,
+            "payload": payload,
+            "signature": {
+                "alg": "ed25519",
+                "key_id": key_id,
+                "value": base64.b64encode(
+                    private_key.sign(canonical_payload_bytes(payload))
+                ).decode("ascii"),
+            },
+        }
+
+    catalog = signed_catalog(runtime_history)
+    serialized_size = len((json.dumps(catalog, indent=2) + "\n").encode("utf-8"))
+    if serialized_size > MAX_RUNTIME_CATALOG_BYTES and retained_fallback is not None:
+        for release in runtime_history:
+            if str(release.get("version")) == retained_fallback:
+                release.pop("runtime_variants", None)
+                break
+        catalog = signed_catalog(runtime_history)
+        serialized_size = len(
+            (json.dumps(catalog, indent=2) + "\n").encode("utf-8")
+        )
+    if serialized_size > MAX_RUNTIME_CATALOG_BYTES:
+        raise ValueError("Runtime update catalog exceeds the signed-catalog size limit.")
+    return catalog
+
+
+def _architecture_values(
+    values: list[str] | None, *, label: str
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values or []:
+        architecture, separator, item = value.partition("=")
+        if (
+            not separator
+            or architecture not in {"amd64", "arm64"}
+            or not item
+            or architecture in result
+        ):
+            raise ValueError(
+                f"{label} must provide one unique amd64=value and arm64=value pair."
+            )
+        result[architecture] = item
+    return result
 
 
 def main() -> int:
@@ -619,6 +909,16 @@ def main() -> int:
         default="true",
     )
     parser.add_argument("--signing-key-env", default="CHANNELWATCH_UPDATE_SIGNING_KEY")
+    parser.add_argument(
+        "--runtime-bundle",
+        action="append",
+        help="Prebuilt runtime archive as amd64=path or arm64=path.",
+    )
+    parser.add_argument(
+        "--runtime-bundle-url",
+        action="append",
+        help="Published runtime archive URL as amd64=url or arm64=url.",
+    )
     args = parser.parse_args()
 
     if args.image_required and args.delivery_mode is not None:
@@ -633,6 +933,7 @@ def main() -> int:
     configured_source_versions = None
     configured_launcher_protocols = None
     configured_unpublished_predecessor_tags = None
+    runtime_generation_required = False
     try:
         release_config = json.loads(
             (ROOT / "scripts" / "release" / "release-config.json").read_text(
@@ -660,6 +961,9 @@ def main() -> int:
             configured_unpublished_predecessor_tags = release_config.get(
                 "unpublished_predecessor_tags"
             )
+            runtime_generation_required = (
+                release_config.get("runtime_generation_required") is True
+            )
             if (
                 not isinstance(configured_publication_time, str)
                 or not configured_publication_time.strip()
@@ -682,6 +986,23 @@ def main() -> int:
         raise ValueError("release-config.json could not be read safely.") from exc
     if configured_delivery_mode not in {*DELIVERY_MODES, None}:
         raise ValueError("release-config.json delivery_mode is invalid.")
+    runtime_bundle_paths = _architecture_values(
+        args.runtime_bundle, label="--runtime-bundle"
+    )
+    runtime_bundle_urls = _architecture_values(
+        args.runtime_bundle_url, label="--runtime-bundle-url"
+    )
+    if runtime_generation_required:
+        if set(runtime_bundle_paths) != {"amd64", "arm64"} or set(
+            runtime_bundle_urls
+        ) != {"amd64", "arm64"}:
+            raise ValueError(
+                "runtime_generation_required needs both amd64 and arm64 runtime bundles and URLs."
+            )
+    elif runtime_bundle_paths or runtime_bundle_urls:
+        raise ValueError(
+            "Runtime bundles are allowed only when release-config enables runtime_generation_required."
+        )
     delivery_mode = (
         "image_required"
         if args.image_required
@@ -704,6 +1025,7 @@ def main() -> int:
     bundle_path = out_dir / bundle_name
     manifest_path = out_dir / f"channelwatch-update-v{version}.json"
     catalog_path = out_dir / f"channelwatch-catalog-v{version}.json"
+    runtime_catalog_path = out_dir / "channelwatch-update-catalog-v3.json"
     git_sha = run_git("rev-parse", "HEAD") or "unknown"
     source_date_epoch = _source_date_epoch()
     created_at = _format_utc(source_date_epoch)
@@ -723,12 +1045,20 @@ def main() -> int:
             configured_launcher_protocols=configured_launcher_protocols,
         )
     )
+    if (
+        delivery_mode != "image_required"
+        and 4 in compatible_launcher_protocols
+        and not runtime_generation_required
+    ):
+        raise ValueError(
+            "Every protocol-4 non-image release requires runtime_generation_required."
+        )
     catalog_history = load_catalog_history(version, path=args.catalog_history)
     require_previous_catalog_release(
         version,
         catalog_history,
         run_git("tag", "--merged", "HEAD", "--list").splitlines(),
-        unpublished_tags=configured_unpublished_predecessor_tags,
+        unpublished_predecessor_tags=configured_unpublished_predecessor_tags,
         repository=os.environ.get("GITHUB_REPOSITORY", ""),
         github_token=os.environ.get("GH_TOKEN", "")
         or os.environ.get("GITHUB_TOKEN", ""),
@@ -736,22 +1066,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as temp:
         staging = Path(temp) / "bundle"
-        staging.mkdir()
-        copy_release_legal_files(staging, version=version)
-        copy_copyleft_release_files(staging)
-        copy_tree(ROOT / "app" / "core", staging / "core")
-        copy_tree(ROOT / "app" / "ui" / "backend", staging / "ui" / "backend")
-
-        ui_out = ROOT / "app" / "ui" / "out"
-        if not ui_out.is_dir():
-            raise ValueError(
-                "app/ui/out is missing. Run the UI build before packaging the update bundle."
-            )
-        copy_tree(ui_out, staging / "ui" / "backend" / "static_ui")
-
-        image_dir = ROOT / "app" / "ui" / "public" / "images"
-        if image_dir.is_dir():
-            copy_tree(image_dir, staging / "ui" / "backend" / "static" / "images")
+        stage_runtime_application_payload(staging, version=version)
 
         metadata = {
             "version": version,
@@ -826,7 +1141,10 @@ def main() -> int:
     catalog_payload = {
         "channel": "stable",
         "published_at": publication_time,
-        "releases": [catalog_release, *catalog_history],
+        "releases": [
+            catalog_release,
+            *project_catalog_history_v2(catalog_history),
+        ],
     }
     catalog = {
         "schema": 2,
@@ -840,12 +1158,48 @@ def main() -> int:
         },
     }
     catalog_path.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+    runtime_catalog = None
+    runtime_catalog_required = compatible_launcher_protocols == [4] and (
+        runtime_generation_required or delivery_mode == "image_required"
+    )
+    if runtime_catalog_required:
+        if runtime_generation_required and delivery_mode == "image_required":
+            raise ValueError(
+                "Runtime generation catalogs require a non-image protocol-4 release."
+            )
+        runtime_catalog = build_runtime_catalog_v3(
+            catalog_release=catalog_release,
+            catalog_history=catalog_history,
+            runtime_bundles=(
+                {
+                    architecture: (
+                        Path(runtime_bundle_paths[architecture]),
+                        runtime_bundle_urls[architecture],
+                    )
+                    for architecture in ("amd64", "arm64")
+                }
+                if runtime_generation_required
+                else {}
+            ),
+            expected_source_commit=git_sha,
+            private_key=private_key,
+            key_id=args.key_id,
+            publication_time=publication_time,
+        )
+        runtime_catalog_path.write_text(
+            json.dumps(runtime_catalog, indent=2) + "\n", encoding="utf-8"
+        )
     print(
         json.dumps(
             {
                 "bundle": str(bundle_path),
                 "manifest": str(manifest_path),
                 "catalog": str(catalog_path),
+                **(
+                    {"runtime_catalog": str(runtime_catalog_path)}
+                    if runtime_catalog is not None
+                    else {}
+                ),
                 "sha256": digest.hex(),
             }
         )

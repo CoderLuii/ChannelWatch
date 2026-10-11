@@ -1,8 +1,8 @@
 # Update ChannelWatch
 
-ChannelWatch v1.4.5 is a signed in-app update for the v1.4.0 container image. Update Center now keeps the exact Apply or Retry job through temporary restart disconnects, resumes it after Settings reopens, and refreshes only when that job and the new runtime are ready. Install it from **Settings > Updates**. If your container image is older than v1.4.0, pull `coderluii/channelwatch:1.4.5` (or `ghcr.io/coderluii/channelwatch:1.4.5`) and recreate the container with the same `/config` volume and any external storage key configuration first.
+ChannelWatch v1.5.0 requires its matching container image. Pull `coderluii/channelwatch:1.5.0` (or `ghcr.io/coderluii/channelwatch:1.5.0`) and recreate the container with the same `/config` volume and any external storage key configuration.
 
-From any older image, update directly to v1.4.5 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume and any external storage key configuration when recreating the container. Do not re-enter saved DVRs or credentials merely to update.
+Every published v1.4.x image needs this one-time update to receive launcher protocol 4. Update directly to v1.5.0 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume. Do not re-enter saved DVRs or credentials merely to update.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. **Retry now** uses the same checks when a restart briefly disconnects the dashboard. Application and immutable container image versions are reported separately.
 
@@ -12,19 +12,19 @@ The updater waits for stable target-runtime and Settings checks, opens Dashboard
 
 Some v1.0.0 and v1.0.1 installations can repeatedly show `Another update operation is already running` even though no update is active. Refreshing or restarting only the ChannelWatch Core and UI processes may recreate the abandoned marker. Do not delete application data or repeatedly click Apply.
 
-Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.4.5`, and recreate the container once. The current image contains the v1.0.2 scheduler-lock repair, which replaces the old existence-based marker with an operating-system-held advisory lock and safely removes the abandoned legacy marker during startup. Saved DVRs, credentials, settings, history, and the application-managed encryption key remain under `/config`.
+Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.5.0`, and recreate the container once. The current image contains the v1.0.2 scheduler-lock repair, which replaces the old existence-based marker with an operating-system-held advisory lock and safely removes the abandoned legacy marker during startup. Saved DVRs, credentials, settings, history, and the application-managed encryption key remain under `/config`.
 
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
-The Update Center remains the normal path for routine releases. From v1.0.0 forward, `X.Y.0` releases require the matching image, while `X.Y.1` through `X.Y.9` install in-app. After `X.Y.9`, the next release is `X.(Y+1).0`.
+The Update Center remains the normal path for routine releases. Published v1.0.0 through v1.5.0 use `X.Y.0` as an image milestone, while `X.Y.1` through `X.Y.9` install in-app. A future `.0` release can retain the proven v1.5.0 image floor only after its full signed runtime generation passes the required compatibility, restart, and rollback checks on AMD64 and ARM64. After `X.Y.9`, the next release is `X.(Y+1).0`.
 
 If the catalog includes a newer image milestone and a compatible app update for your current image, Update Center shows both choices separately. You can install the highest compatible signed app update now, then refresh the container later. The image recommendation does not hide that forward app update, and the app update does not clear the image recommendation.
 
-If you are still on an immutable published v0.9.9 or v0.9.10 image, **do not use its old in-app bridge for this upgrade**. Preserve the existing `/config` volume and pull/recreate the v1.4.5 image. The new image repairs stale legacy update markers without discarding settings or invalidating protected credentials. Future compatible releases then use the improved Update Center normally.
+If you are still on an immutable published v0.9.9 or v0.9.10 image, **do not use its old in-app bridge for this upgrade**. Preserve the existing `/config` volume and pull/recreate the v1.5.0 image. The new image repairs stale legacy update markers without discarding settings or invalidating protected credentials. Future compatible releases then use the improved Update Center normally.
 
 Operational v0.9.11–v0.9.17 installations can upgrade directly to v0.9.18 through Update Center. This includes the common v0.9.15, v0.9.16, and v0.9.17 installations. The stable v0.9.18 manifest keeps runtime ABI `channelwatch-runtime-v1` and settings schema `7`, so those compatible images can verify and activate the new bundle without intermediate releases.
 
-An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v1.4.5, or restore the correct old key for one migration restart. Fresh installations using the current image do not need an encryption variable.
+An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v1.5.0, or restore the correct old key for one migration restart. Fresh installations using the current image do not need an encryption variable.
 
 If a future credential-protection problem blocks normal administrator navigation after v0.9.18 is installed, the setup/recovery shell can check and apply only the official signed stable recovery update. That narrow path requires same-origin anti-CSRF state and exact typed confirmation; it cannot accept a custom feed, upload, signing key, URL, or downgrade.
 
@@ -39,7 +39,7 @@ The default policy automatically installs verified compatible updates during the
 - inspect the application version, container image version, runtime source, ABI, and launcher protocol;
 - roll back to the previous compatible app runtime.
 
-Automatic policy never bypasses signature, digest, URL, archive, ABI, schema, backup, activation, or rollback checks. Releases that genuinely require a different operating system, interpreter, dependency set, entrypoint, Supervisor configuration, launcher protocol, or persistent schema remain container-image updates.
+Automatic policy never bypasses signature, digest, URL, archive, ABI, schema, backup, activation, or rollback checks. Releases that genuinely require a different operating system, interpreter, incompatible package set, entrypoint, Supervisor configuration, launcher protocol, image-owned verifier, or persistent schema remain container-image updates.
 
 ## Check for updates
 
@@ -83,20 +83,49 @@ When the UI is reachable, **Settings > Updates** also shows a **Roll back** butt
 
 Rollback does not restore old settings or database state. If you need to restore data, use **Settings > Backup** or a manual `/config` backup.
 
-## Container image update required
+## Install a dependency generation
+
+Dependency installation requires an image with launcher protocol 4. Published
+v1.4.x images need a one-time image update to get that launcher.
+Keep the same `/config` volume and external storage key configuration. The
+container update does not require re-entering DVRs or saved credentials.
+
+After that bootstrap, install a compatible signed release from
+**Settings > Updates**. ChannelWatch downloads and verifies the release,
+prepares its Python packages without changing the active environment, then
+restarts and checks the new core and UI. Keep the page open to watch progress,
+or return to Updates to inspect the same job. Do not submit Apply again while
+preparation is running. The dashboard refreshes after confirmed success.
+
+The application, frontend and packages roll back together if activation fails.
+Rollback does not restore settings or database contents. Keep normal backups.
+Generation storage must allow execution; a `noexec` `/config` mount cannot
+prepare this runtime. A storage or verification error leaves the previous
+selection in place and shows the reason in the update job.
+
+If the container stops during preparation, ChannelWatch keeps the selected
+release. After that runtime starts again, the interrupted job shows a failure
+and can be retried from Updates. A running installation keeps its existing job.
+
+Python interpreter updates and OS, glibc, Supervisor or image-verifier fixes
+still use the container update path. The in-app updater does not manage the
+host Docker socket or recreate containers on your behalf.
+
+## Other container image requirements
 
 Some releases cannot be safely applied inside the current image. ChannelWatch will show **container image update required** when a release changes:
 
-- Python dependencies;
+- Python dependencies unsupported by the installed launcher or platform;
+- Python interpreter;
 - base image or OS packages;
 - Supervisor or container startup behavior;
 - runtime ABI;
 - container entrypoint, Supervisor, privilege, or image-owned launcher behavior;
 - persistent settings schema.
 
-Starting with v1.0.0, every `X.Y.0` release is also an intentional image milestone even when its individual changes could fit in a bundle. This keeps one known container baseline for the following `X.Y.1` through `X.Y.9` in-app releases and makes the required update method clear from the version number.
+Published v1.0.0 through v1.5.0 use every `X.Y.0` release as an intentional image milestone. This keeps one known container baseline for the following `X.Y.1` through `X.Y.9` in-app releases and makes the required update method clear from the version number. A future `.0` release can retain the proven v1.5.0 floor only with a complete signed runtime generation and matching native AMD64 and ARM64 evidence.
 
-Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise ABI-compatible app bundle image-required. v1.4.0 changes the container base and dependencies and therefore requires its matching image on AMD64 or ARM64.
+Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise compatible runtime generation image-required. v1.5.0 changes the image-owned launcher and verifier and therefore requires its matching image on AMD64 or ARM64.
 
 When this appears, update the container using your normal Docker, Unraid, Compose, or Helm process. The in-app updater intentionally does not replace the Docker image.
 
@@ -116,5 +145,7 @@ Update Center runtime files live under `/config/channelwatch-runtime/`:
 | `update-job.json` | Last update/check/rollback operation state. |
 | `update.lock` | Single-flight update lock. Stale locks are discarded automatically. |
 | `releases/vX.Y.Z/` | Extracted verified app bundle. |
+| `releases/<generation-sha256>/` | Protocol-4 application and dependency generation. |
+| `trust/<generation-sha256>.json` | Retained signed catalog used by the image launcher. |
 
 Normal app backups do not include downloaded app bundles. Keep your normal `/config` backup routine for disaster recovery.

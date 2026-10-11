@@ -1019,6 +1019,56 @@
       ],
       "revocation_state": "active",
       "publication_time": "2026-10-10T19:10:00Z"
+    },
+    {
+      "version": "1.4.5",
+      "version_tag": "v1.4.5",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.4.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.4.5",
+      "automatic_install_allowed": false,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.4.5",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.4.5/channelwatch-app-v1.4.5.zip",
+      "bundle_sha256": "d354ea7d424e4a7c8af623fad2408665f8e536b7ec171979da8bed4afed9f362",
+      "bundle_signature": "RoiJKbIKdvE14WDfq5TnSXAuO8VQn7JUgJH1qKFPGtHnClfbhkuekA1EAyHdnE8p6Qy2E0rF27ymnacdYv9VCg==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-10-11T05:45:00Z",
+      "highlights": [
+        "Signed in-app update for the v1.4.0 image. You can install it from **Settings > Updates** without recreating the container.",
+        "Keep the exact Apply or Retry job through temporary restart disconnects, resume it after Settings reopens, and refresh only when that job and the new runtime are ready.",
+        "Show a compatible signed future image-required release as an announcement without treating its runtime bundle as an installable app update.",
+        "Write the candidate transport context as exact canonical JSON bytes so the isolated signer can seal and hand off the verified release candidate.",
+        "Verify that the failed v1.4.4, v1.4.3, and v1.4.2 tags have no GitHub releases before retaining v1.4.1 as the signed catalog predecessor.",
+        "Check the exact versioned OpenVEX security document before publishing update assets."
+      ],
+      "automatic_install_after": "2026-10-18T05:45:00Z",
+      "compatible_source_application_versions": [
+        "1.4.0",
+        "1.4.1",
+        "1.4.2",
+        "1.4.3",
+        "1.4.4"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        1,
+        2,
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-10-11T05:45:00Z"
     }
   ]
 }

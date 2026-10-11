@@ -21,12 +21,16 @@ export type RestartJob = {
   job_id?: string | null
   restart_required?: boolean
   status?: string | null
+  phase?: string | null
+  phase_budget_seconds?: number | null
+  phase_deadline_at?: string | null
   version?: string | null
   message?: string | null
 }
 
 const PENDING_UPDATE_JOB_STATUSES = new Set([
   "backing_up",
+  "downloading",
   "verifying",
   "applying",
   "restarting",
@@ -86,6 +90,13 @@ export class UpdateTransactionUnconfirmedError extends Error {
       + "Refresh Update Center and review the current job before trying again.",
     )
     this.name = "UpdateTransactionUnconfirmedError"
+  }
+}
+
+export class UpdatePreparationTimeoutError extends Error {
+  constructor(budgetSeconds: number) {
+    super(`Runtime preparation exceeded the ${budgetSeconds}-second limit.`)
+    this.name = "UpdatePreparationTimeoutError"
   }
 }
 
@@ -219,6 +230,76 @@ function waitWithinReconnect<T>(
   })
 }
 
+function waitUntilSettledOrAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  throwIfAborted(signal)
+  if (!signal) return promise
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const cleanup = () => signal.removeEventListener("abort", onAbort)
+    const resolveOnce = (value: T) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+    const rejectOnce = (error: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    const onAbort = () => rejectOnce(abortReason(signal))
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(resolveOnce, rejectOnce)
+  })
+}
+
+function preparationBudget(job: RestartJob | null): { deadline: number; seconds: number } | null {
+  const seconds = job?.phase_budget_seconds
+  const deadline = Date.parse(job?.phase_deadline_at ?? "")
+  if (!Number.isInteger(seconds) || (seconds ?? 0) <= 0 || !Number.isFinite(deadline)) return null
+  return { deadline, seconds: seconds! }
+}
+
+function waitWithinPreparationBudget<T>(
+  promise: Promise<T>,
+  deadline: number,
+  budgetSeconds: number,
+  signal?: AbortSignal,
+): Promise<T> {
+  throwIfAborted(signal)
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof globalThis.setTimeout>
+    const cleanup = () => {
+      globalThis.clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+    }
+    const resolveOnce = (value: T) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+    const rejectOnce = (error: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    const onAbort = () => rejectOnce(abortReason(signal!))
+    timer = globalThis.setTimeout(
+      () => rejectOnce(new UpdatePreparationTimeoutError(budgetSeconds)),
+      Math.max(0, deadline - Date.now()),
+    )
+
+    signal?.addEventListener("abort", onAbort, { once: true })
+    promise.then(resolveOnce, rejectOnce)
+  })
+}
+
 function matchingJob(
   job: RestartJob | null | undefined,
   jobId: string,
@@ -262,36 +343,73 @@ export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
   const attempts = Math.max(1, maxAttempts)
   const stableChecksRequired = Math.max(1, requiredStableChecks)
   const trackedJobId = jobId?.trim() || null
-  const deadline = Date.now() + Math.max(1, attempts * Math.max(1, intervalMs))
+  const reconnectWindowMs = Math.max(1, attempts * Math.max(1, intervalMs))
+  let deadline: number | null = Date.now() + reconnectWindowMs
+  let activationAttempts = 0
+  let preparingDependencies = false
+  let preparationDeadline: number | null = null
+  let preparationBudgetSeconds: number | null = null
   let stableChecks = 0
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  while (activationAttempts < attempts) {
     throwIfAborted(signal)
+    let chargedAttempt = false
     try {
       let job: RestartJob | null = null
       let jobLookupPending = false
       if (trackedJobId && fetchJob) {
         let fetchedJob: RestartJob | null = null
         try {
-          fetchedJob = await waitWithinReconnect(
-            fetchJob(trackedJobId),
-            deadline,
-            targetVersion,
-            signal,
-          )
+          const lookup = fetchJob(trackedJobId)
+          fetchedJob = preparingDependencies
+            ? preparationDeadline !== null && preparationBudgetSeconds !== null
+              ? await waitWithinPreparationBudget(
+                  lookup,
+                  preparationDeadline,
+                  preparationBudgetSeconds,
+                  signal,
+                )
+              : await waitUntilSettledOrAborted(lookup, signal)
+            : await waitWithinReconnect(lookup, deadline!, targetVersion, signal)
         } catch (error) {
           if (!(error instanceof UpdateJobPendingError)) throw error
           jobLookupPending = true
           stableChecks = 0
+          if (!preparingDependencies) {
+            activationAttempts += 1
+            chargedAttempt = true
+          }
         }
         if (!jobLookupPending) {
           job = observeJob(matchingJob(fetchedJob, trackedJobId, targetVersion), onJob)
           throwIfImageRequired(job)
+          preparingDependencies = job?.status?.trim().toLowerCase() === "applying"
+            && job.phase?.trim().toLowerCase() === "preparing"
+          if (preparingDependencies) {
+            const budget = preparationBudget(job)
+            preparationDeadline = budget?.deadline ?? null
+            preparationBudgetSeconds = budget?.seconds ?? null
+            if (
+              preparationDeadline !== null
+              && preparationBudgetSeconds !== null
+              && preparationDeadline <= Date.now()
+            ) {
+              throw new UpdatePreparationTimeoutError(preparationBudgetSeconds)
+            }
+            deadline = null
+            stableChecks = 0
+          } else if (deadline === null) {
+            preparationDeadline = null
+            preparationBudgetSeconds = null
+            deadline = Date.now() + reconnectWindowMs
+          }
         }
       }
 
-      if (!jobLookupPending) {
-        const status = await waitWithinReconnect(fetchStatus(), deadline, targetVersion, signal)
+      if (!jobLookupPending && !preparingDependencies) {
+        activationAttempts += 1
+        chargedAttempt = true
+        const status = await waitWithinReconnect(fetchStatus(), deadline!, targetVersion, signal)
         if (trackedJobId && !fetchJob) {
           job = observeJob(matchingJob(status.last_job, trackedJobId, targetVersion), onJob)
           throwIfImageRequired(job)
@@ -303,7 +421,7 @@ export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
         if (durableJobSucceeded && isTargetRuntimeActive(status, targetVersion)) {
           try {
             if (verifyReady) {
-              await waitWithinReconnect(verifyReady(), deadline, targetVersion, signal)
+              await waitWithinReconnect(verifyReady(), deadline!, targetVersion, signal)
             }
             stableChecks += 1
             if (stableChecks >= stableChecksRequired) return status
@@ -322,10 +440,25 @@ export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
       if (error instanceof UpdateJobError || !isReconnectDisconnect(error)) throw error
       // A short disconnect is expected while the backend restarts.
       stableChecks = 0
+      if (!preparingDependencies && !chargedAttempt) activationAttempts += 1
     }
 
-    if (attempt < attempts) {
-      await waitWithinReconnect(wait(intervalMs), deadline, targetVersion, signal)
+    if (preparingDependencies || activationAttempts < attempts) {
+      const pause = wait(intervalMs)
+      if (preparingDependencies) {
+        if (preparationDeadline !== null && preparationBudgetSeconds !== null) {
+          await waitWithinPreparationBudget(
+            pause,
+            preparationDeadline,
+            preparationBudgetSeconds,
+            signal,
+          )
+        } else {
+          await waitUntilSettledOrAborted(pause, signal)
+        }
+      } else {
+        await waitWithinReconnect(pause, deadline!, targetVersion, signal)
+      }
       throwIfAborted(signal)
     }
   }

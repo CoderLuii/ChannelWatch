@@ -50,7 +50,7 @@ FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.4.5
+ARG VERSION=1.5.0
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1
@@ -71,7 +71,7 @@ ENV CONFIG_PATH="/config"
 ENV CHANNELWATCH_IMAGE_APP_DIR="/app"
 ENV CHANNELWATCH_RUNTIME_ABI="${RUNTIME_ABI}"
 ENV CHANNELWATCH_IMAGE_VERSION="${VERSION}"
-ENV CHANNELWATCH_LAUNCHER_PROTOCOL="3"
+ENV CHANNELWATCH_LAUNCHER_PROTOCOL="4"
 ENV CHANNELWATCH_REPORT_MODE="live"
 ENV CHANNELWATCH_REPORT_ENDPOINT="https://channelwatch.coderluii.dev/api/reports"
 ENV CHANNELWATCH_REPORT_PORTAL_URL="https://channelwatch.coderluii.dev/report"

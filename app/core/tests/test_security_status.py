@@ -1,8 +1,11 @@
 import json
+import os
+from base64 import urlsafe_b64encode
 from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlmodel import SQLModel
 from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
@@ -48,6 +51,31 @@ def _make_settings_file(
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps(data))
     return settings_file
+
+
+def _persist_encrypted_dvr_key(
+    settings_file,
+    *,
+    persisted_key: bytes | None = None,
+    token_key: bytes | None = None,
+    token: str | None = None,
+    key_mode: int = 0o600,
+):
+    persisted_key = persisted_key or os.urandom(32)
+    token_key = token_key or persisted_key
+    encrypted = token or (
+        "fernet:"
+        + Fernet(urlsafe_b64encode(token_key))
+        .encrypt(b"persisted-dvr-secret")
+        .decode("ascii")
+    )
+    payload = json.loads(settings_file.read_text())
+    payload["dvr_servers"] = [{"id": "dvr_main", "api_key": encrypted}]
+    settings_file.write_text(json.dumps(payload))
+    key_file = settings_file.parent / "encryption.key"
+    key_file.write_bytes(persisted_key)
+    key_file.chmod(key_mode)
+    return key_file
 
 
 def _canonical_auth_slice(payload):
@@ -358,6 +386,140 @@ class TestSecurityStatusEndpoint:
 
         assert response.status_code == 200
         assert response.json()["encrypted_dvr_api_keys_at_rest"] is False
+
+    def test_reports_encryption_at_rest_true_for_valid_persisted_ciphertext(
+        self, tmp_path
+    ):
+        settings_file = _make_settings_file(
+            tmp_path, rbac_enabled=False, api_key="shared-key"
+        )
+        _persist_encrypted_dvr_key(settings_file)
+
+        with _make_client(
+            settings_file,
+            api_key_cache="shared-key",
+            rbac_enabled=False,
+            auth_disabled=False,
+        ) as client:
+            response = client.get("/api/v1/security/status")
+
+        assert response.status_code == 200
+        assert response.json()["encrypted_dvr_api_keys_at_rest"] is True
+
+    @pytest.mark.parametrize(
+        ("case", "key_mode"),
+        [
+            ("corrupt", 0o600),
+            ("missing", 0o600),
+            ("short", 0o600),
+            ("wrong", 0o600),
+        ],
+    )
+    def test_reports_encryption_at_rest_false_for_invalid_persisted_state(
+        self, tmp_path, case, key_mode
+    ):
+        settings_file = _make_settings_file(
+            tmp_path, rbac_enabled=False, api_key="shared-key"
+        )
+        if case == "corrupt":
+            _persist_encrypted_dvr_key(
+                settings_file,
+                token="fernet:not-a-valid-token",
+            )
+        elif case == "short":
+            _persist_encrypted_dvr_key(
+                settings_file,
+                persisted_key=b"x" * 31,
+                token_key=os.urandom(32),
+            )
+        elif case == "wrong":
+            _persist_encrypted_dvr_key(
+                settings_file,
+                persisted_key=os.urandom(32),
+                token_key=os.urandom(32),
+            )
+        else:
+            key_file = _persist_encrypted_dvr_key(
+                settings_file,
+                key_mode=key_mode,
+            )
+            if case == "missing":
+                key_file.unlink()
+
+        with _make_client(
+            settings_file,
+            api_key_cache="shared-key",
+            rbac_enabled=False,
+            auth_disabled=False,
+        ) as client:
+            response = client.get("/api/v1/security/status")
+
+        assert response.status_code == 200
+        assert response.json()["encrypted_dvr_api_keys_at_rest"] is False
+
+    def test_encryption_at_rest_rejects_loose_key_permissions(self, tmp_path):
+        from ui.backend import main as backend_main
+
+        settings_file = _make_settings_file(
+            tmp_path, rbac_enabled=False, api_key="shared-key"
+        )
+        _persist_encrypted_dvr_key(settings_file, key_mode=0o644)
+
+        with patch("ui.backend.config.CONFIG_FILE", settings_file):
+            assert backend_main._dvr_api_keys_encrypted_at_rest() is False
+
+    @pytest.mark.parametrize("unsafe_path", ["settings", "key"])
+    def test_encryption_at_rest_rejects_unsafe_paths(
+        self, tmp_path, unsafe_path
+    ):
+        from ui.backend import main as backend_main
+
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        real_settings = _make_settings_file(
+            real_dir, rbac_enabled=False, api_key="shared-key"
+        )
+        _persist_encrypted_dvr_key(real_settings)
+        settings_file = real_settings
+        if unsafe_path == "settings":
+            settings_file = tmp_path / "settings.json"
+            settings_file.symlink_to(real_settings)
+        else:
+            key_file = real_settings.parent / "encryption.key"
+            key_target = real_settings.parent / "real-encryption.key"
+            key_file.rename(key_target)
+            key_file.symlink_to(key_target)
+
+        with (
+            patch("ui.backend.config.CONFIG_FILE", settings_file),
+            patch("ui.backend.config.CONFIG_DIR", settings_file.parent),
+        ):
+            assert backend_main._dvr_api_keys_encrypted_at_rest() is False
+
+    def test_encryption_at_rest_rejects_malformed_persisted_settings(self, tmp_path):
+        from ui.backend import main as backend_main
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("not-json")
+        with (
+            patch("ui.backend.config.CONFIG_FILE", settings_file),
+            patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        ):
+            assert backend_main._dvr_api_keys_encrypted_at_rest() is False
+
+    def test_encryption_at_rest_is_vacuously_true_without_dvr_credentials(
+        self, tmp_path
+    ):
+        from ui.backend import main as backend_main
+
+        settings_file = _make_settings_file(
+            tmp_path, rbac_enabled=False, api_key="shared-key"
+        )
+        with (
+            patch("ui.backend.config.CONFIG_FILE", settings_file),
+            patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        ):
+            assert backend_main._dvr_api_keys_encrypted_at_rest() is True
 
     def test_reports_rbac_with_api_key_fallback_when_both_exist(
         self, tmp_path, auth_engine

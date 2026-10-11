@@ -392,8 +392,11 @@ export function UpdateCenterSection() {
 
   const updateStage = useMemo(() => {
     if (!["applying", "retrying", "polling"].includes(busy)) return null
-    if (busy === "applying" || busy === "retrying" || ["backing_up", "verifying", "applying"].includes(job?.status ?? "")) {
-      return t("updates.progress.installing")
+    if (job?.status === "applying" && job.phase === "preparing") {
+      return t("updates.progress.preparingDependencies")
+    }
+    if (busy === "applying" || busy === "retrying" || ["downloading", "backing_up", "verifying", "applying"].includes(job?.status ?? "")) {
+      return t("updates.progress.downloading")
     }
     if (job?.status === "restarting" || (busy === "polling" && !job)) {
       return t("updates.progress.restarting")
@@ -522,6 +525,7 @@ export function UpdateCenterSection() {
                 disabled={controlsBusy || !policyFieldsValid}
                 aria-pressed={(policy?.mode ?? "automatic") === "automatic"}
                 onClick={() => handlePolicyMode("automatic")}
+                className="h-auto min-h-10 min-w-0 whitespace-normal"
               >
                 {t("updates.policy.automatic")}
               </Button>
@@ -531,6 +535,7 @@ export function UpdateCenterSection() {
                 disabled={controlsBusy || !policyFieldsValid}
                 aria-pressed={policy?.mode === "notify_only"}
                 onClick={() => handlePolicyMode("notify_only")}
+                className="h-auto min-h-10 min-w-0 whitespace-normal"
               >
                 {t("updates.policy.notifyOnly")}
               </Button>

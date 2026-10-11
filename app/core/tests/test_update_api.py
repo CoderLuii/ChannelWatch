@@ -195,61 +195,6 @@ def test_update_apply_image_required_maps_to_structured_error(tmp_path: Path):
     assert resp.json()["detail"]["code"] == "ERR_UPDATE_IMAGE_REQUIRED"
 
 
-def test_protocol_three_143_api_shows_150_image_and_apply_never_downloads_bundle(
-    tmp_path: Path,
-):
-    import ui.backend.main as ui_main
-    from core.tests.test_update_manager import _bundle, _key_pair
-    from core.tests.test_update_v0918 import _future_image_protocol_catalog
-    from core.update_center import UpdateManager
-
-    private, public = _key_pair()
-    bundle = _bundle("1.4.3")
-    catalog = _future_image_protocol_catalog(private, bundle)
-    fetched = []
-
-    def fetcher(url, _limit):
-        fetched.append(url)
-        if url.endswith(".zip"):
-            pytest.fail("Image-required announcements must never download an app bundle")
-        return catalog
-
-    manager = UpdateManager(
-        config_dir=tmp_path,
-        current_version="1.4.3",
-        image_version="1.4.0",
-        launcher_protocol=3,
-        public_keys=public,
-        fetcher=fetcher,
-    )
-    checked = manager.check()
-    assert checked["latest"]["version"] == "1.5.0"
-    assert checked["image_required"] is True
-    assert checked["update_available"] is True
-
-    settings_file = _settings(tmp_path)
-    with (
-        patch("ui.backend.config.CONFIG_FILE", settings_file),
-        patch("ui.backend.config.CONFIG_DIR", tmp_path),
-        patch.object(ui_main, "CONFIG_DIR", tmp_path),
-        patch.object(ui_main, "CW_DISABLE_AUTH", True),
-        patch.object(
-            ui_main,
-            "_get_update_automation_service",
-            return_value=SimpleNamespace(apply_release=manager.apply),
-        ),
-    ):
-        client = TestClient(ui_main.app, raise_server_exceptions=False)
-        response = client.post(
-            "/api/v1/update/apply",
-            json={"version": "1.5.0"},
-        )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "ERR_UPDATE_IMAGE_REQUIRED"
-    assert fetched and all(not url.endswith(".zip") for url in fetched)
-
-
 def test_update_apply_passes_browser_assigned_job_identity(tmp_path: Path):
     import ui.backend.main as ui_main
 
@@ -1053,3 +998,58 @@ def test_recovery_csrf_and_rate_limit_prune_expired_clients(monkeypatch):
 
     ui_main._RECOVERY_CSRF_TOKENS.clear()
     ui_main._RECOVERY_WRITE_ATTEMPTS.clear()
+
+
+def test_protocol_three_143_api_shows_150_image_and_apply_never_downloads_bundle(
+    tmp_path: Path,
+):
+    import ui.backend.main as ui_main
+    from core.tests.test_update_manager import _bundle, _key_pair
+    from core.tests.test_update_v0918 import _future_image_protocol_catalog
+    from core.update_center import UpdateManager
+
+    private, public = _key_pair()
+    bundle = _bundle("1.4.3")
+    catalog = _future_image_protocol_catalog(private, bundle)
+    fetched = []
+
+    def fetcher(url, _limit):
+        fetched.append(url)
+        if url.endswith(".zip"):
+            pytest.fail("Image-required announcements must never download an app bundle")
+        return catalog
+
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.4.3",
+        image_version="1.4.0",
+        launcher_protocol=3,
+        public_keys=public,
+        fetcher=fetcher,
+    )
+    checked = manager.check()
+    assert checked["latest"]["version"] == "1.5.0"
+    assert checked["image_required"] is True
+    assert checked["update_available"] is True
+
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(
+            ui_main,
+            "_get_update_automation_service",
+            return_value=SimpleNamespace(apply_release=manager.apply),
+        ),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        response = client.post(
+            "/api/v1/update/apply",
+            json={"version": "1.5.0"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ERR_UPDATE_IMAGE_REQUIRED"
+    assert fetched and all(not url.endswith(".zip") for url in fetched)

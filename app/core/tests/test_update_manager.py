@@ -1995,6 +1995,296 @@ def test_startup_success_marks_restarting_job_success(tmp_path: Path):
     assert job["validated_at"]
 
 
+def _write_interrupted_preparation_job(
+    manager: UpdateManager,
+    *,
+    status: str = "applying",
+    phase: str | None = "preparing",
+) -> bytes:
+    job = {
+        "job_id": "a" * 32,
+        "operation": "apply",
+        "status": status,
+        "version": "1.5.3",
+        "bundle_sha256": "b" * 64,
+        "scheduler_attempt_id": "manual-apply@test",
+        "message": "Installing verified update bundle.",
+    }
+    if phase is not None:
+        job["phase"] = phase
+    manager._write_job(job)
+    return manager.job_path.read_bytes()
+
+
+def test_healthy_image_startup_terminalizes_interrupted_preparation(
+    tmp_path: Path, monkeypatch
+):
+    image_dir = tmp_path / "image-app"
+    image_dir.mkdir()
+    monkeypatch.setattr(update_center, "DEFAULT_IMAGE_APP_DIR", image_dir)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.5.2",
+        image_version="1.5.2",
+        launcher_protocol=4,
+    )
+    _write_interrupted_preparation_job(manager)
+    manager.lock_path.write_text(
+        json.dumps({"pid": 2_147_483_647, "process_identity": "dead-owner"})
+    )
+
+    manager.record_startup_success(
+        component="core",
+        running_version="1.5.2",
+        activation_id="",
+        healthy=True,
+        running_app_path=image_dir,
+        verified_runtime_claim=None,
+    )
+
+    failed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert failed["job_id"] == "a" * 32
+    assert failed["scheduler_attempt_id"] == "manual-apply@test"
+    assert failed["bundle_sha256"] == "b" * 64
+    assert failed["status"] == "failed"
+    assert failed["phase"] == "preparing"
+    assert failed["restart_required"] is False
+    assert failed["rollback_applied"] is False
+    assert "interrupted" in failed["error"].lower()
+    assert not manager.active_path.exists()
+    assert not manager.lock_path.exists()
+
+
+@pytest.mark.parametrize("status", ["backing_up", "downloading", "verifying"])
+def test_healthy_image_startup_terminalizes_neighboring_pre_handoff_state(
+    tmp_path: Path, monkeypatch, status: str
+):
+    image_dir = tmp_path / "image-app"
+    image_dir.mkdir()
+    monkeypatch.setattr(update_center, "DEFAULT_IMAGE_APP_DIR", image_dir)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.5.2",
+        image_version="1.5.2",
+        launcher_protocol=4,
+    )
+    _write_interrupted_preparation_job(manager, status=status, phase=None)
+
+    manager.record_startup_success(
+        component="core",
+        running_version="1.5.2",
+        activation_id="",
+        healthy=True,
+        running_app_path=image_dir,
+    )
+
+    failed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert failed["status"] == "failed"
+    assert failed["job_id"] == "a" * 32
+    assert "phase" not in failed
+
+
+def test_healthy_selected_generation_terminalizes_interrupted_preparation(
+    tmp_path: Path, monkeypatch
+):
+    selected = tmp_path / "channelwatch-runtime" / "releases" / ("c" * 64) / "app"
+    selected.mkdir(parents=True)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.5.2",
+        image_version="1.5.0",
+        launcher_protocol=4,
+    )
+    active = {
+        "activation_id": "selected-activation",
+        "activation_protocol": 4,
+        "version": "1.5.2",
+        "path": str(selected),
+        "descriptor_sha256": "d" * 64,
+        "inventory_sha256": "e" * 64,
+        "environment_sha256": "f" * 64,
+    }
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    manager.active_path.write_text(json.dumps(active), encoding="utf-8")
+    active_before = manager.active_path.read_bytes()
+    _write_interrupted_preparation_job(manager)
+    monkeypatch.setattr(update_center, "attested_runtime_matches", lambda *_args: True)
+
+    manager.record_startup_success(
+        component="ui",
+        running_version="1.5.2",
+        activation_id="selected-activation",
+        healthy=True,
+        running_app_path=selected,
+        verified_runtime_claim={
+            "path": str(selected),
+            "descriptor_sha256": "d" * 64,
+            "inventory_sha256": "e" * 64,
+            "environment_sha256": "f" * 64,
+        },
+    )
+
+    failed = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert failed["status"] == "failed"
+    assert failed["phase"] == "preparing"
+    assert manager.active_path.read_bytes() == active_before
+
+
+@pytest.mark.parametrize(
+    ("running_version", "activation_id", "healthy", "attested"),
+    [
+        ("1.5.1", "selected-activation", True, True),
+        ("1.5.2", "foreign-activation", True, True),
+        ("1.5.2", "selected-activation", False, True),
+        ("1.5.2", "selected-activation", True, False),
+    ],
+)
+def test_stale_or_unhealthy_startup_cannot_terminalize_interrupted_preparation(
+    tmp_path: Path,
+    monkeypatch,
+    running_version: str,
+    activation_id: str,
+    healthy: bool,
+    attested: bool,
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    manager = UpdateManager(
+        config_dir=tmp_path, current_version="1.5.2", launcher_protocol=4
+    )
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    manager.active_path.write_text(
+        json.dumps(
+            {
+                "activation_id": "selected-activation",
+                "version": "1.5.2",
+                "path": str(selected),
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = _write_interrupted_preparation_job(manager)
+    monkeypatch.setattr(
+        update_center, "attested_runtime_matches", lambda *_args: attested
+    )
+
+    manager.record_startup_success(
+        component="core",
+        running_version=running_version,
+        activation_id=activation_id,
+        healthy=healthy,
+        running_app_path=selected,
+    )
+
+    assert manager.job_path.read_bytes() == original
+
+
+def test_live_apply_owner_blocks_interrupted_preparation_recovery(
+    tmp_path: Path, monkeypatch
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    manager = UpdateManager(
+        config_dir=tmp_path, current_version="1.5.2", launcher_protocol=4
+    )
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    manager.active_path.write_text(
+        json.dumps(
+            {
+                "activation_id": "selected-activation",
+                "version": "1.5.2",
+                "path": str(selected),
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = _write_interrupted_preparation_job(manager)
+    monkeypatch.setattr(update_center, "attested_runtime_matches", lambda *_args: True)
+
+    with UpdateOperationLock(manager.lock_path):
+        manager.record_startup_success(
+            component="core",
+            running_version="1.5.2",
+            activation_id="selected-activation",
+            healthy=True,
+            running_app_path=selected,
+        )
+
+    assert manager.job_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("barrier", ["pending", "journal", "handoff", "claim"])
+def test_handoff_state_blocks_interrupted_preparation_recovery(
+    tmp_path: Path, monkeypatch, barrier: str
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    manager = UpdateManager(
+        config_dir=tmp_path, current_version="1.5.2", launcher_protocol=4
+    )
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    active = {
+        "activation_id": "selected-activation",
+        "version": "1.5.2",
+        "path": str(selected),
+    }
+    manager.active_path.write_text(json.dumps(active), encoding="utf-8")
+    original = _write_interrupted_preparation_job(manager)
+    monkeypatch.setattr(update_center, "attested_runtime_matches", lambda *_args: True)
+    if barrier == "pending":
+        manager.activation_pending_path.write_text(json.dumps(active), encoding="utf-8")
+    elif barrier == "journal":
+        manager.restart_required_path.write_text("{}", encoding="utf-8")
+    elif barrier == "handoff":
+        manager.protocol_three_handoff_path.write_text("{}", encoding="utf-8")
+    else:
+        (manager.runtime_dir / "activation-foreign.json").write_text(
+            json.dumps(active), encoding="utf-8"
+        )
+
+    manager.record_startup_success(
+        component="core",
+        running_version="1.5.2",
+        activation_id="selected-activation",
+        healthy=True,
+        running_app_path=selected,
+    )
+
+    assert manager.job_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "missing_field", ["job_id", "scheduler_attempt_id", "version", "bundle_sha256"]
+)
+def test_incomplete_pre_handoff_job_is_not_terminalized_by_startup(
+    tmp_path: Path, monkeypatch, missing_field: str
+):
+    image_dir = tmp_path / "image-app"
+    image_dir.mkdir()
+    monkeypatch.setattr(update_center, "DEFAULT_IMAGE_APP_DIR", image_dir)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.5.2",
+        image_version="1.5.2",
+        launcher_protocol=4,
+    )
+    _write_interrupted_preparation_job(manager)
+    job = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    job.pop(missing_field)
+    manager.job_path.write_text(json.dumps(job), encoding="utf-8")
+    original = manager.job_path.read_bytes()
+
+    manager.record_startup_success(
+        component="core",
+        running_version="1.5.2",
+        activation_id="",
+        healthy=True,
+        running_app_path=image_dir,
+    )
+
+    assert manager.job_path.read_bytes() == original
+
+
 def test_concurrent_component_readiness_completes_one_activation(tmp_path: Path):
     private, public = _key_pair()
     bundle = _bundle()
@@ -2540,6 +2830,8 @@ def test_core_ready_propagates_terminal_update_restart_failure(
             "running_version": main_mod.__version__,
             "activation_id": os.environ.get("CHANNELWATCH_ACTIVATION_ID", ""),
             "healthy": True,
+            "running_app_path": Path(main_mod.__file__).resolve().parent.parent,
+            "verified_runtime_claim": None,
         }
     ]
 

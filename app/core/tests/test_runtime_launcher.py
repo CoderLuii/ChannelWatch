@@ -20,6 +20,51 @@ from core.update_center import (
 _START_RESTART_REQUIRED_WATCHDOG = runtime_launcher.start_restart_required_watchdog
 
 
+def test_image_launcher_imports_image_core_before_inherited_selected_pythonpath(
+    tmp_path: Path,
+):
+    selected = tmp_path / "selected"
+    marker = tmp_path / "untrusted-import-ran"
+    (selected / "core").mkdir(parents=True)
+    (selected / "core" / "__init__.py").write_text(
+        "raise RuntimeError('selected core imported before dependency validation')\n",
+        encoding="utf-8",
+    )
+    for name in ("sitecustomize.py", "json.py"):
+        (selected / name).write_text(
+            f"from pathlib import Path; Path({str(marker)!r}).write_text({name!r})\n",
+            encoding="utf-8",
+        )
+
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name != "CHANNELWATCH_APP_DIR"
+    }
+    environment.update(
+        PYTHONPATH=str(selected),
+        CHANNELWATCH_IMAGE_APP_DIR=str(Path.cwd() / "app"),
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            str(Path.cwd() / "app/core/runtime_launcher.py"),
+            "--help",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "selected core imported" not in completed.stderr
+    assert not marker.exists()
+
+
 def test_selected_bundle_replaces_image_owned_sqlmodel_registry(tmp_path: Path):
     """A protocol-3 bundle can import models after image-side update lookup."""
 
@@ -1457,6 +1502,8 @@ def test_protocol_three_recovery_hold_uses_exact_version_and_digest(
         ("0.9.12", 1),
         ("0.9.16", 2),
         ("0.9.18", runtime_launcher.LAUNCHER_PROTOCOL_RECOVERY_CAPABLE),
+        ("1.4.4", runtime_launcher.LAUNCHER_PROTOCOL_RECOVERY_CAPABLE),
+        ("1.5.0", runtime_launcher.LAUNCHER_PROTOCOL_VERIFIED_DEPENDENCIES),
     ],
 )
 def test_image_launcher_protocol_boundaries(version, protocol):
@@ -1758,6 +1805,46 @@ def test_protocol_three_restart_reports_sanitized_failure_category(
 
     assert exc_info.value.diagnostic == expected_diagnostic
     assert "private" not in str(exc_info.value).lower()
+
+
+def test_protocol_four_restart_helper_uses_isolated_image_interpreter(monkeypatch):
+    observed = {}
+    monkeypatch.setattr(runtime_launcher, "image_launcher_protocol", lambda: 4)
+    monkeypatch.setenv("PYTHONPATH", "/selected/app")
+    monkeypatch.setenv("PYTHONHOME", "/selected/environment")
+    monkeypatch.setenv("VIRTUAL_ENV", "/selected/environment")
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", "/selected/app")
+    monkeypatch.setenv("LD_PRELOAD", "/selected/native.so")
+
+    def spawn(command, **kwargs):
+        observed.update(command=command, kwargs=kwargs)
+        return object()
+
+    monkeypatch.setattr(runtime_launcher.subprocess, "Popen", spawn)
+    monkeypatch.setattr(
+        runtime_launcher.select, "select", lambda *_args: ([object()], [], [])
+    )
+    monkeypatch.setattr(runtime_launcher.os, "read", lambda *_args: b"ready\n")
+
+    runtime_launcher.request_container_restart()
+
+    assert observed["command"][:5] == [
+        "/venv/bin/python",
+        "-I",
+        "-B",
+        "-S",
+        str(runtime_launcher.IMAGE_APP_DIR / "core" / "runtime_launcher.py"),
+    ]
+    assert observed["kwargs"]["cwd"] == str(runtime_launcher.IMAGE_APP_DIR)
+    environment = observed["kwargs"]["env"]
+    for name in (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+        "CHANNELWATCH_APP_DIR",
+        "LD_PRELOAD",
+    ):
+        assert name not in environment
 
 
 def test_protocol_three_restart_uses_image_owned_helper(monkeypatch):
@@ -2200,6 +2287,57 @@ def test_restart_helper_lock_rejects_duplicate_owner(tmp_path: Path):
         with pytest.raises(RuntimeError, match="already active"):
             with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
                 pytest.fail("a duplicate helper must never acquire ownership")
+
+
+def test_duplicate_restart_helper_acknowledges_active_journal_owner(
+    tmp_path: Path,
+    monkeypatch,
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    socket_path = supervisor_runtime / "supervisor.sock"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "_validated_supervisor_proxy",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("a duplicate must not signal Supervisor")
+        ),
+    )
+    read_fd, write_fd = os.pipe()
+
+    with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
+        result = runtime_launcher.restart_supervisor_services(
+            socket_path=socket_path,
+            ack_fd=write_fd,
+        )
+
+    assert result == 0
+    assert os.read(read_fd, 64) == b"ready\n"
+    os.close(read_fd)
+    assert runtime_launcher.restart_journal_present()
+    assert not runtime_launcher.protocol_three_handoff_present()
+
+
+def test_duplicate_ordinary_restart_helper_remains_rejected(tmp_path: Path):
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    socket_path = supervisor_runtime / "supervisor.sock"
+    read_fd, write_fd = os.pipe()
+
+    with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
+        result = runtime_launcher.restart_supervisor_services(
+            socket_path=socket_path,
+            ack_fd=write_fd,
+        )
+
+    assert result == 1
+    assert os.read(read_fd, 64) == b"error:RuntimeError\n"
+    os.close(read_fd)
 
 
 @pytest.mark.parametrize("lock_kind", ["symlink", "hardlink"])

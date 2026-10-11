@@ -1727,8 +1727,112 @@ class _VirtualizedConfigIdentityMismatch(RuntimeError):
     """VirtioFS returned inconsistent identity metadata for an otherwise safe fd."""
 
 
+def _is_runtime_generation_path(
+    trusted_runtime_root: Path | None, candidate: Path
+) -> bool:
+    """Return whether a path is inside one exact digest-named generation."""
+
+    if trusted_runtime_root is None:
+        return False
+    try:
+        parts = candidate.relative_to(trusted_runtime_root).parts
+    except ValueError:
+        return False
+    return (
+        len(parts) >= 2
+        and parts[0] == "releases"
+        and re.fullmatch(r"[0-9a-f]{64}", parts[1]) is not None
+    )
+
+
+def _is_runtime_generation_prepare_lock(
+    trusted_runtime_root: Path | None, candidate: Path
+) -> bool:
+    """Match only the mutable private lock beside digest-named generations."""
+
+    if trusted_runtime_root is None:
+        return False
+    try:
+        parts = candidate.relative_to(trusted_runtime_root).parts
+    except ValueError:
+        return False
+    return (
+        len(parts) == 2
+        and parts[0] == "releases"
+        and re.fullmatch(r"\.prepare-[0-9a-f]{64}\.lock", parts[1]) is not None
+    )
+
+
+def _is_runtime_trust_path(
+    trusted_runtime_root: Path | None, candidate: Path
+) -> bool:
+    """Match the canonical private retained-catalog subtree."""
+
+    if trusted_runtime_root is None:
+        return False
+    try:
+        parts = candidate.relative_to(trusted_runtime_root).parts
+    except ValueError:
+        return False
+    return bool(parts and parts[0] == "trust")
+
+
+def _is_generated_runtime_interpreter_link(
+    trusted_runtime_root: Path | None,
+    directory_fd: int,
+    child_path: Path,
+    name: str,
+    listed_metadata: os.stat_result,
+    trusted_runtime_uid: int | None,
+) -> bool:
+    """Accept the one normalized venv link without following config-tree links."""
+
+    if trusted_runtime_root is None:
+        return False
+    try:
+        relative = child_path.relative_to(trusted_runtime_root)
+    except ValueError:
+        return False
+    parts = relative.parts
+    if (
+        len(parts) != 5
+        or parts[0] != "releases"
+        or re.fullmatch(r"[0-9a-f]{64}", parts[1]) is None
+        or parts[2:] != ("environment", "bin", "python")
+        or listed_metadata.st_nlink != 1
+    ):
+        return False
+    expected_uid = (
+        trusted_runtime_uid
+        if trusted_runtime_uid is not None
+        else os.geteuid() if hasattr(os, "geteuid") else listed_metadata.st_uid
+    )
+    if listed_metadata.st_uid != expected_uid:
+        return False
+    try:
+        expected_target = Path(sys.executable).resolve(strict=True)
+        target = os.readlink(name, dir_fd=directory_fd)
+        after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except (OSError, RuntimeError):
+        return False
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size")
+    return (
+        Path(target) == expected_target
+        and all(
+            getattr(listed_metadata, field) == getattr(after, field)
+            for field in stable_fields
+        )
+    )
+
+
 def _walk_config_tree_no_follow_once(
-    path: Path, visitor, *, writable_regular_files: bool = False
+    path: Path,
+    visitor,
+    *,
+    writable_regular_files: bool = False,
+    preserve_runtime_generations: bool = False,
+    trusted_runtime_uid: int | None = None,
+    trusted_runtime_root: Path | None = None,
 ) -> None:
     """Perform one no-follow walk of real directories and regular files."""
 
@@ -1736,13 +1840,17 @@ def _walk_config_tree_no_follow_once(
 
     def visit_directory(directory_fd: int, display_path: Path) -> None:
         directory_metadata = os.fstat(directory_fd)
-        visitor(
-            directory_fd,
-            directory_metadata,
-            display_path,
-            True,
-            display_path.name,
+        preserve_path = preserve_runtime_generations and _is_runtime_generation_path(
+            trusted_runtime_root, display_path
         )
+        if not preserve_path:
+            visitor(
+                directory_fd,
+                directory_metadata,
+                display_path,
+                True,
+                display_path.name,
+            )
         try:
             with os.scandir(directory_fd) as iterator:
                 entries = sorted(
@@ -1758,6 +1866,15 @@ def _walk_config_tree_no_follow_once(
         for name, listed_metadata in entries:
             child_path = display_path / name
             if stat_module.S_ISLNK(listed_metadata.st_mode):
+                if _is_generated_runtime_interpreter_link(
+                    trusted_runtime_root,
+                    directory_fd,
+                    child_path,
+                    name,
+                    listed_metadata,
+                    trusted_runtime_uid,
+                ):
+                    continue
                 raise RuntimeError(
                     f"Refusing symbolic link inside configuration directory: {child_path}"
                 )
@@ -1772,7 +1889,15 @@ def _walk_config_tree_no_follow_once(
                     f"Refusing hard-linked file inside configuration directory: {child_path}"
                 )
 
-            flags = os.O_RDWR if writable_regular_files and is_regular else os.O_RDONLY
+            preserve_child = (
+                preserve_runtime_generations
+                and _is_runtime_generation_path(trusted_runtime_root, child_path)
+            )
+            flags = (
+                os.O_RDWR
+                if writable_regular_files and is_regular and not preserve_child
+                else os.O_RDONLY
+            )
             flags |= getattr(os, "O_CLOEXEC", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
             flags |= getattr(os, "O_NONBLOCK", 0)
@@ -1814,7 +1939,7 @@ def _walk_config_tree_no_follow_once(
                     )
                 if is_directory:
                     visit_directory(child_fd, child_path)
-                else:
+                elif not preserve_child:
                     visitor(
                         child_fd,
                         opened_metadata,
@@ -1832,7 +1957,13 @@ def _walk_config_tree_no_follow_once(
 
 
 def _walk_config_tree_no_follow(
-    path: Path, visitor, *, writable_regular_files: bool = False
+    path: Path,
+    visitor,
+    *,
+    writable_regular_files: bool = False,
+    preserve_runtime_generations: bool = False,
+    trusted_runtime_uid: int | None = None,
+    trusted_runtime_root: Path | None = None,
 ) -> None:
     """Visit a safe config tree, retrying transient VirtioFS identities only."""
 
@@ -1845,6 +1976,9 @@ def _walk_config_tree_no_follow(
                 path,
                 visitor,
                 writable_regular_files=writable_regular_files,
+                preserve_runtime_generations=preserve_runtime_generations,
+                trusted_runtime_uid=trusted_runtime_uid,
+                trusted_runtime_root=trusted_runtime_root,
             )
         except _VirtualizedConfigIdentityMismatch as exc:
             last_mismatch = exc
@@ -1863,11 +1997,26 @@ def _walk_config_tree_no_follow(
     ) from last_mismatch
 
 
-def validate_config_tree(path: Path) -> None:
-    _walk_config_tree_no_follow(path, lambda *_args: None)
+def validate_config_tree(
+    path: Path,
+    *,
+    trusted_runtime_uid: int | None = None,
+    trusted_runtime_root: Path | None = None,
+) -> None:
+    _walk_config_tree_no_follow(
+        path,
+        lambda *_args: None,
+        trusted_runtime_uid=trusted_runtime_uid,
+        trusted_runtime_root=trusted_runtime_root,
+    )
 
 
-def chmod_config_tree(path: Path) -> None:
+def chmod_config_tree(
+    path: Path,
+    *,
+    trusted_runtime_uid: int | None = None,
+    trusted_runtime_root: Path | None = None,
+) -> None:
     started_as_root = running_as_root()
     effective_uid = os.geteuid() if hasattr(os, "geteuid") else None
 
@@ -1893,11 +2042,19 @@ def chmod_config_tree(path: Path) -> None:
         )
         mode = (
             0o700
-            if is_directory and private_tree
+            if is_directory
+            and (
+                private_tree
+                or _is_runtime_trust_path(trusted_runtime_root, display_path)
+            )
             else 0o750
             if is_directory
             else 0o600
             if private_tree
+            or _is_runtime_generation_prepare_lock(
+                trusted_runtime_root, display_path
+            )
+            or _is_runtime_trust_path(trusted_runtime_root, display_path)
             else 0o600
             if name
             in {
@@ -1919,10 +2076,22 @@ def chmod_config_tree(path: Path) -> None:
                 f"Failed to verify mode {mode:o} on configuration path {display_path}"
             )
 
-    _walk_config_tree_no_follow(path, apply_mode)
+    _walk_config_tree_no_follow(
+        path,
+        apply_mode,
+        preserve_runtime_generations=True,
+        trusted_runtime_uid=trusted_runtime_uid,
+        trusted_runtime_root=trusted_runtime_root,
+    )
 
 
-def chown_tree(path: Path, uid: int, gid: int) -> None:
+def chown_tree(
+    path: Path,
+    uid: int,
+    gid: int,
+    *,
+    trusted_runtime_root: Path | None = None,
+) -> None:
     started_as_root = running_as_root()
     virtualized_mismatches: list[Path] = []
 
@@ -1949,7 +2118,13 @@ def chown_tree(path: Path, uid: int, gid: int) -> None:
                 f"expected {uid}:{gid}, got {actual.st_uid}:{actual.st_gid}"
             )
 
-    _walk_config_tree_no_follow(path, apply_owner)
+    _walk_config_tree_no_follow(
+        path,
+        apply_owner,
+        preserve_runtime_generations=True,
+        trusted_runtime_uid=uid,
+        trusted_runtime_root=trusted_runtime_root,
+    )
     if virtualized_mismatches:
         warning(
             "Ownership metadata remained virtualized for "
@@ -1958,7 +2133,36 @@ def chown_tree(path: Path, uid: int, gid: int) -> None:
         )
 
 
-def verify_config_tree_writable(path: Path) -> None:
+def _normalize_runtime_tree_if_present(app_uid: int, app_gid: int) -> None:
+    try:
+        CHANNELWATCH_RUNTIME_DIR.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise RuntimeError(
+            "Could not inspect runtime state directory "
+            f"{CHANNELWATCH_RUNTIME_DIR}: {exc}"
+        ) from exc
+
+    chown_tree(
+        CHANNELWATCH_RUNTIME_DIR,
+        app_uid,
+        app_gid,
+        trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+    )
+    chmod_config_tree(
+        CHANNELWATCH_RUNTIME_DIR,
+        trusted_runtime_uid=app_uid,
+        trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+    )
+
+
+def verify_config_tree_writable(
+    path: Path,
+    *,
+    trusted_runtime_uid: int | None = None,
+    trusted_runtime_root: Path | None = None,
+) -> None:
     """Prove the dropped runtime identity can update every config path safely."""
 
     def verify_access(
@@ -2020,6 +2224,9 @@ def verify_config_tree_writable(path: Path) -> None:
         path,
         verify_access,
         writable_regular_files=True,
+        preserve_runtime_generations=True,
+        trusted_runtime_uid=trusted_runtime_uid,
+        trusted_runtime_root=trusted_runtime_root,
     )
 
 
@@ -2392,8 +2599,17 @@ def render_supervisor_config(
     if restart_journal is not None:
         # Replay writes occur after main's initial ownership pass. Normalize the
         # newly published control records before the journal can be cleared.
-        chown_tree(CHANNELWATCH_RUNTIME_DIR, app_uid, app_gid)
-        chmod_config_tree(CHANNELWATCH_RUNTIME_DIR)
+        chown_tree(
+            CHANNELWATCH_RUNTIME_DIR,
+            app_uid,
+            app_gid,
+            trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+        )
+        chmod_config_tree(
+            CHANNELWATCH_RUNTIME_DIR,
+            trusted_runtime_uid=app_uid,
+            trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+        )
     if not SUPERVISOR_TEMPLATE.is_file():
         warning(f"supervisord.conf.template not found at {SUPERVISOR_TEMPLATE}")
         return
@@ -2401,6 +2617,8 @@ def render_supervisor_config(
     _prepare_supervisor_runtime_dir()
 
     selected_app_dir = select_app_runtime_dir(config_read_only=config_read_only)
+    if not config_read_only:
+        _normalize_runtime_tree_if_present(app_uid, app_gid)
     static_ui_dir = selected_app_dir / "ui" / "backend" / "static_ui"
     template = SUPERVISOR_TEMPLATE.read_text(encoding="utf-8")
     rendered = (
@@ -2525,7 +2743,11 @@ def main() -> None:
             cleanup_restart_journal_candidates_before_validation()
         # Reject links, FIFOs, devices, sockets, and traversal races before any
         # settings/bootstrap/runtime file is read or replaced as root.
-        validate_config_tree(CONFIG_DIR)
+        validate_config_tree(
+            CONFIG_DIR,
+            trusted_runtime_uid=uid,
+            trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+        )
         if config_read_only:
             validate_read_only_runtime_state()
         settings_created = ensure_settings(uid, gid, read_only=config_read_only)
@@ -2539,8 +2761,17 @@ def main() -> None:
                     "ownership repair is skipped."
                 )
         if not config_read_only:
-            chown_tree(CONFIG_DIR, uid, gid)
-            chmod_config_tree(CONFIG_DIR)
+            chown_tree(
+                CONFIG_DIR,
+                uid,
+                gid,
+                trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+            )
+            chmod_config_tree(
+                CONFIG_DIR,
+                trusted_runtime_uid=uid,
+                trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+            )
         render_supervisor_config(uid, gid, config_read_only=config_read_only)
         prepare_standard_streams()
 
@@ -2555,7 +2786,11 @@ def main() -> None:
             # privileges so child launch fails once instead of restart-looping.
             validate_read_only_runtime_state()
         else:
-            verify_config_tree_writable(CONFIG_DIR)
+            verify_config_tree_writable(
+                CONFIG_DIR,
+                trusted_runtime_uid=uid,
+                trusted_runtime_root=CHANNELWATCH_RUNTIME_DIR,
+            )
         set_runtime_umask()
         verify_container_instance_lock(instance_lock_fd, CONFIG_DIR)
         # Container argv is operator-controlled, is executed without a shell,

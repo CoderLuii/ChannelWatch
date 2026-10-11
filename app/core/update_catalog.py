@@ -333,26 +333,30 @@ def _release_compatible(
         return False
     if release.get("revocation_state") != "active":
         return False
-    if int(release.get("updater_protocol") or 0) != CURRENT_UPDATER_PROTOCOL:
-        return False
     if (
         current_version.strip().lstrip("v")
         not in release["compatible_source_application_versions"]
         and _parse_version(release["version"]) != current
     ):
         return False
-    if int(launcher_protocol) not in release["compatible_launcher_protocols"]:
-        return False
     if recovery and not bool(release.get("recovery_compatible")):
         return False
-    if release["delivery_mode"] != DeliveryMode.IMAGE_REQUIRED.value:
-        if runtime_abi not in release["compatible_runtime_abis"]:
-            return False
-        if (
-            int(settings_schema_version)
-            not in release["compatible_settings_schema_versions"]
-        ):
-            return False
+    if release["delivery_mode"] == DeliveryMode.IMAGE_REQUIRED.value:
+        # An image release is a signed announcement, not an app-install target.
+        # Older launchers may display it when the release explicitly names their
+        # source app version, even if the new image advances update protocols.
+        return True
+    if int(release.get("updater_protocol") or 0) != CURRENT_UPDATER_PROTOCOL:
+        return False
+    if int(launcher_protocol) not in release["compatible_launcher_protocols"]:
+        return False
+    if runtime_abi not in release["compatible_runtime_abis"]:
+        return False
+    if (
+        int(settings_schema_version)
+        not in release["compatible_settings_schema_versions"]
+    ):
+        return False
     return True
 
 

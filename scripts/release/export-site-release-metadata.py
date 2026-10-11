@@ -107,6 +107,15 @@ def parse_changelog(version: str, tree_ref: str | None = None) -> dict[str, obje
             if source_match:
                 known_limits_source = source_match.group("version")
 
+    release_config = json.loads(read_text("scripts/release/release-config.json", tree_ref))
+    unpublished_tags = release_config.get("unpublished_release_tags", [])
+    if not isinstance(unpublished_tags, list) or any(
+        not isinstance(tag, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag)
+        for tag in unpublished_tags
+    ):
+        raise ValueError("release-config.json has invalid unpublished release tags.")
+    unpublished_versions = {tag.removeprefix("v") for tag in unpublished_tags}
+
     previous_releases: list[dict[str, object]] = []
     for item in re.finditer(
         r"^## \[(?P<version>\d+\.\d+\.\d+)\] - (?P<date>\d{4}-\d{2}-\d{2})\s*$",
@@ -117,6 +126,8 @@ def parse_changelog(version: str, tree_ref: str | None = None) -> dict[str, obje
         if item_version == version:
             continue
         if item_version == "Unreleased":
+            continue
+        if item_version in unpublished_versions:
             continue
         previous_releases.append(
             {

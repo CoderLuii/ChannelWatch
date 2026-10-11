@@ -407,6 +407,375 @@ def test_update_bundle_retains_deterministic_v2_catalog_history(tmp_path):
     assert module.load_catalog_history("0.9.18", path=history) == []
 
 
+def test_catalog_predecessor_allows_only_verified_unpublished_ancestor(tmp_path):
+    module = _load_script(
+        "build_update_bundle_unpublished_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.3":
+            git("tag", f"v{version}")
+
+    requests = []
+
+    def release_not_found(request, *, timeout):
+        requests.append((request, timeout))
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b"[]",
+            close=lambda: None,
+        )
+
+    module.require_previous_catalog_release(
+        "1.4.3",
+        [{"version": "1.4.1"}],
+        ["v1.4.1", "v1.4.2"],
+        unpublished_tags=["v1.4.2"],
+        repository="CoderLuii/ChannelWatch",
+        github_token="authenticated-test-token",
+        repo_root=repo,
+        urlopen=release_not_found,
+    )
+
+    assert len(requests) == 2
+    tag_request, tag_timeout = requests[0]
+    assert tag_request.full_url.endswith(
+        "/repos/CoderLuii/ChannelWatch/releases/tags/v1.4.2"
+    )
+    list_request, list_timeout = requests[1]
+    assert list_request.full_url.endswith(
+        "/repos/CoderLuii/ChannelWatch/releases?per_page=100"
+    )
+    for request in (tag_request, list_request):
+        assert request.get_header("Authorization") == "Bearer authenticated-test-token"
+    assert tag_timeout == list_timeout == 15
+
+
+def test_catalog_predecessor_unpublished_exception_rejects_draft_release(tmp_path):
+    module = _load_script(
+        "build_update_bundle_unpublished_draft_predecessor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.3":
+            git("tag", f"v{version}")
+
+    def release_lookup(request, *, timeout):
+        assert timeout == 15
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: json.dumps(
+                [{"tag_name": "v1.4.2", "draft": True}]
+            ).encode("utf-8"),
+            close=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="because a release exists"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_lookup,
+        )
+
+
+@pytest.mark.parametrize("malformed_release", [None, {}, {"tag_name": ""}])
+def test_catalog_predecessor_unpublished_exception_rejects_malformed_release_list(
+    tmp_path, malformed_release
+):
+    module = _load_script(
+        "build_update_bundle_unpublished_malformed_release_list",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.3":
+            git("tag", f"v{version}")
+
+    def release_lookup(request, *, timeout):
+        assert timeout == 15
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: json.dumps([malformed_release]).encode("utf-8"),
+            close=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="release list was malformed"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_lookup,
+        )
+
+
+@pytest.mark.parametrize("status", [200, 403])
+def test_catalog_predecessor_unpublished_exception_fails_closed(
+    tmp_path, status
+):
+    module = _load_script(
+        f"build_update_bundle_unpublished_predecessor_{status}",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("1.4.2", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=ChannelWatch Test",
+            "-c",
+            "user.email=channelwatch-test@example.invalid",
+            "commit",
+            "-m",
+            "1.4.2",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
+
+    def release_response(request, *, timeout):
+        if status == 403:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                status,
+                "Forbidden",
+                {},
+                io.BytesIO(b'{"message":"Forbidden"}'),
+            )
+        return SimpleNamespace(status=status, close=lambda: None)
+
+    with pytest.raises(ValueError, match="GitHub release absence"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_response,
+        )
+
+
+def test_catalog_predecessor_unpublished_exception_rejects_network_failure(
+    tmp_path,
+):
+    module = _load_script(
+        "build_update_bundle_unpublished_network_failure",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("1.4.2", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=ChannelWatch Test",
+            "-c",
+            "user.email=channelwatch-test@example.invalid",
+            "commit",
+            "-m",
+            "1.4.2",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
+
+    with pytest.raises(ValueError, match="GitHub release absence"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                urllib.error.URLError("network unavailable")
+            ),
+        )
+
+
+def test_catalog_predecessor_exception_requires_tag_ancestor(tmp_path):
+    module = _load_script(
+        "build_update_bundle_unpublished_nonancestor",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("base", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    commit = [
+        "git",
+        "-c",
+        "user.name=ChannelWatch Test",
+        "-c",
+        "user.email=channelwatch-test@example.invalid",
+        "commit",
+        "-m",
+        "commit",
+    ]
+    subprocess.run(commit, cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "switch", "-c", "unpublished"], cwd=repo, check=True)
+    tracked.write_text("unpublished", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(commit, cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "tag", "v1.4.2"], cwd=repo, check=True)
+    subprocess.run(["git", "switch", "main"], cwd=repo, check=True)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        module.require_previous_catalog_release(
+            "1.4.3",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2"],
+            unpublished_tags=["v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=lambda *_args, **_kwargs: pytest.fail(
+                "GitHub must not be queried for a non-ancestor tag"
+            ),
+        )
+
+
 def test_future_release_verifier_requires_the_exact_pinned_v1_bridge():
     module = _load_script(
         "verify_pinned_v1_bridge",
@@ -906,29 +1275,45 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_142_in_app_release_on_140_image():
+def test_release_config_declares_143_in_app_release_on_140_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.4.2"
+    assert config["version"] == "1.4.3"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.4.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.4.2"
+    assert config["recommended_image_version"] == "1.4.3"
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.4.0", "1.4.1"]
+    assert config["compatible_source_application_versions"] == [
+        "1.4.0",
+        "1.4.1",
+        "1.4.2",
+    ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
+    assert config["unpublished_predecessor_tags"] == ["v1.4.2"]
+    assert config["unpublished_release_tags"] == ["v1.4.2"]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.4.2 - Reliable update reconnects"
+        "# ChannelWatch v1.4.3 - Verified release signing"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
     automatic = datetime.fromisoformat(
         config["automatic_install_after"].replace("Z", "+00:00")
     )
-    assert automatic >= publication + timedelta(hours=48)
+    assert automatic >= publication + timedelta(days=7)
+    history = json.loads(
+        (ROOT / "scripts/release/update-catalog-history.json").read_text(
+            encoding="utf-8"
+        )
+    )["releases"]
+    release_141 = next(release for release in history if release["version"] == "1.4.1")
+    assert release_141["bundle_sha256"] == (
+        "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
+    )
+    assert release_141["published_at"] == "2026-10-10T19:10:00Z"
 
 
 def test_release_version_policy_enforces_single_digit_patch_cadence():
@@ -999,7 +1384,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_142_release():
+def test_release_version_surfaces_use_143_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1010,11 +1395,71 @@ def test_release_version_surfaces_use_142_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.4.2"
-    assert metadata["versionTag"] == "v1.4.2"
-    assert metadata["dockerTag"] == "1.4.2"
-    assert metadata["helmChartVersion"] == "1.4.2"
-    assert metadata["helmAppVersion"] == "1.4.2"
+    assert metadata["version"] == "1.4.3"
+    assert metadata["versionTag"] == "v1.4.3"
+    assert metadata["dockerTag"] == "1.4.3"
+    assert metadata["helmChartVersion"] == "1.4.3"
+    assert metadata["helmAppVersion"] == "1.4.3"
+    assert [release["version"] for release in metadata["previousReleases"]] == [
+        "1.4.1",
+        "1.4.0",
+        "1.3.0",
+        "1.2.1",
+    ]
+
+
+def test_future_metadata_keeps_failed_142_excluded_and_pre_catalog_history(
+    monkeypatch,
+):
+    module = _load_script(
+        "export_release_metadata_future_history",
+        "scripts/release/export-site-release-metadata.py",
+    )
+    changelog = """\
+## [1.5.0] - 2026-10-20
+
+### Added
+- Image update.
+
+## [1.4.3] - 2026-10-11
+
+### Fixed
+- App update.
+
+## [1.4.2] - 2026-10-10
+
+### Important
+- Publishing failed.
+
+## [1.4.1] - 2026-10-10
+
+### Fixed
+- Earlier app update.
+
+## [0.9.17] - 2026-01-01
+
+### Fixed
+- Pre-catalog release.
+"""
+    files = {
+        "docs/releases/CHANGELOG.md": changelog,
+        "scripts/release/release-config.json": json.dumps(
+            {"unpublished_release_tags": ["v1.4.2"]}
+        ),
+    }
+    monkeypatch.setattr(
+        module,
+        "read_text",
+        lambda relative, tree_ref=None: files[relative],
+    )
+
+    parsed = module.parse_changelog("1.5.0")
+
+    assert [release["version"] for release in parsed["previousReleases"]] == [
+        "1.4.3",
+        "1.4.1",
+        "0.9.17",
+    ]
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3272,6 +3717,40 @@ def test_ci_python_job_disables_cross_trust_dependency_caching():
     assert "fetch-depth: 0" in python_job
     assert "cache: pip" not in python_job
     assert "cache-dependency-path:" not in python_job
+
+
+def test_candidate_signer_checkout_fetches_complete_release_history():
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    checkout = next(
+        step
+        for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Checkout exact audited signer"
+    )
+
+    assert checkout["with"] == {
+        "ref": "${{ github.sha }}",
+        "fetch-depth": 0,
+        "persist-credentials": False,
+    }
+    signing_step = next(
+        step
+        for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Sign, verify, and seal immutable candidate inputs"
+    )
+    assert signing_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    comparison_step = next(
+        step
+        for step in workflow["jobs"]["candidate-qualification"]["steps"]
+        if step.get("name") == "Rebuild and compare the complete application payload"
+    )
+    assert comparison_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert workflow["jobs"]["candidate-qualification"]["permissions"] == {
+        "contents": "read"
+    }
 
 
 def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():

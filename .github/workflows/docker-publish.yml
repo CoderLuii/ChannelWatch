@@ -370,6 +370,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up pinned Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -388,6 +389,7 @@ jobs:
       - name: Sign, verify, and seal immutable candidate inputs
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -440,6 +442,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout exact candidate
@@ -577,6 +581,8 @@ jobs:
           pnpm exec playwright test
 
       - name: Rebuild and compare the complete application payload
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail

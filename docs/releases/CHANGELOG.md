@@ -8,11 +8,23 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
-## [1.4.2] - 2026-10-10
+## [1.4.3] - 2026-10-11
 
 ### Important
 
 - Signed in-app update for the v1.4.0 image. You can install it from **Settings > Updates** without recreating the container.
+
+### Fixed
+
+- Keep the exact Apply or Retry job through temporary restart disconnects, resume it after Settings reopens, and refresh only when that job and the new runtime are ready.
+- Show a compatible signed future image-required release as an announcement without treating its runtime bundle as an installable app update.
+- Fetch complete release history in the signing job and verify that the failed v1.4.2 tag has no GitHub release before retaining v1.4.1 as the signed catalog predecessor.
+
+## [1.4.2] - 2026-10-10
+
+### Important
+
+- Publishing failed before any v1.4.2 app bundle, catalog, container image, or GitHub release was published. Use v1.4.3 instead.
 
 ### Fixed
 
@@ -870,7 +882,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.3...HEAD
+[1.4.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.3.0...v1.4.0

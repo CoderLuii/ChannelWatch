@@ -13,6 +13,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -159,8 +162,145 @@ def load_catalog_history(
     return retained
 
 
+def _verify_tag_is_ancestor(tag: str, *, repo_root: Path) -> None:
+    try:
+        resolved = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "rev-parse",
+                "--verify",
+                f"refs/tags/{tag}^{{commit}}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "merge-base",
+                "--is-ancestor",
+                resolved,
+                "HEAD",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(
+            f"Unpublished predecessor exception {tag} must resolve to an ancestor of HEAD."
+        ) from exc
+
+
+def _verify_github_release_absence(
+    tag: str,
+    *,
+    repository: str,
+    github_token: str,
+    urlopen=urllib.request.urlopen,
+) -> None:
+    if not repository or repository.count("/") != 1:
+        raise ValueError(
+            "GITHUB_REPOSITORY is required to verify GitHub release absence."
+        )
+    if not github_token:
+        raise ValueError(
+            "An authenticated GitHub token is required to verify release absence."
+        )
+    api_root = "https://api.github.com"
+    repository_path = urllib.parse.quote(repository, safe="/")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {github_token}",
+        "User-Agent": "channelwatch-release-predecessor-verifier",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    url = (
+        f"{api_root}/repos/{repository_path}/releases/tags/"
+        f"{urllib.parse.quote(tag, safe='')}"
+    )
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        response = urlopen(request, timeout=15)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        exc.close()
+        if status != 404:
+            raise ValueError(
+                "GitHub release absence for "
+                f"{tag} could not be verified (HTTP {status})."
+            ) from exc
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise ValueError(
+            f"GitHub release absence for {tag} could not be verified."
+        ) from exc
+    else:
+        try:
+            status = getattr(response, "status", None)
+        finally:
+            response.close()
+        if status == 200:
+            raise ValueError(
+                f"GitHub release absence for {tag} was not verified because a release exists."
+            )
+        raise ValueError(
+            f"GitHub release absence for {tag} could not be verified (HTTP {status})."
+        )
+
+    # GitHub's release-by-tag endpoint can hide drafts. The authenticated list
+    # must independently prove that no draft or published release uses the tag.
+    list_request = urllib.request.Request(
+        f"{api_root}/repos/{repository_path}/releases?per_page=100",
+        headers=headers,
+    )
+    try:
+        listed = urlopen(list_request, timeout=15)
+        try:
+            if getattr(listed, "status", None) != 200:
+                raise ValueError("GitHub release list returned an unexpected status.")
+            raw = listed.read(2 * 1024 * 1024 + 1)
+        finally:
+            listed.close()
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise ValueError(
+            f"GitHub release absence for {tag} could not be verified."
+        ) from exc
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("GitHub release list exceeded the verification limit.")
+    try:
+        releases = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("GitHub release list was malformed.") from exc
+    if not isinstance(releases, list) or len(releases) >= 100:
+        raise ValueError("GitHub release list coverage could not be verified.")
+    if any(
+        not isinstance(release, dict)
+        or not isinstance(release.get("tag_name"), str)
+        or not release["tag_name"].strip()
+        for release in releases
+    ):
+        raise ValueError("GitHub release list was malformed.")
+    if any(release["tag_name"] == tag for release in releases):
+        raise ValueError(
+            f"GitHub release absence for {tag} was not verified because a release exists."
+        )
+
+
 def require_previous_catalog_release(
-    current_version: str, history: list[dict[str, object]], published_tags: list[str]
+    current_version: str,
+    history: list[dict[str, object]],
+    published_tags: list[str],
+    *,
+    unpublished_tags: object = None,
+    repository: str = "",
+    github_token: str = "",
+    repo_root: Path = ROOT,
+    urlopen=urllib.request.urlopen,
 ) -> None:
     """Do not publish a new feed that silently drops its immediate predecessor."""
     previous = []
@@ -177,9 +317,42 @@ def require_previous_catalog_release(
         if _release_version(current_version) > INITIAL_V2_BRIDGE_VERSION:
             raise ValueError("Cannot verify catalog predecessor; fetch the complete release tags.")
         return
-    version = ".".join(map(str, max(previous)))
-    if not any(release.get("version") == version for release in history):
+    exceptions = [] if unpublished_tags is None else unpublished_tags
+    if not isinstance(exceptions, list) or any(
+        not isinstance(tag, str) for tag in exceptions
+    ):
+        raise ValueError("unpublished_predecessor_tags must be a list of tag strings.")
+    if len(exceptions) != len(set(exceptions)):
+        raise ValueError("unpublished_predecessor_tags cannot contain duplicates.")
+
+    ordered = sorted(set(previous), reverse=True)
+    version = ".".join(map(str, ordered[0]))
+    expected_tag = f"v{version}"
+    retained_versions = {str(release.get("version") or "") for release in history}
+    if version in retained_versions:
+        if exceptions:
+            raise ValueError(
+                "unpublished_predecessor_tags may only name the missing immediate predecessor."
+            )
+        return
+    if exceptions != [expected_tag]:
         raise ValueError(f"Signed-catalog history must retain the previous release {version}.")
+
+    _verify_tag_is_ancestor(expected_tag, repo_root=repo_root)
+    _verify_github_release_absence(
+        expected_tag,
+        repository=repository,
+        github_token=github_token,
+        urlopen=urlopen,
+    )
+    if len(ordered) < 2:
+        raise ValueError("Cannot verify catalog predecessor; fetch the complete release tags.")
+    retained_predecessor = ".".join(map(str, ordered[1]))
+    if retained_predecessor not in retained_versions:
+        raise ValueError(
+            "Signed-catalog history must retain the nearest published predecessor "
+            f"{retained_predecessor}."
+        )
 
 
 def run_git(*args: str) -> str:
@@ -455,6 +628,7 @@ def main() -> int:
     configured_automatic_install_allowed = None
     configured_source_versions = None
     configured_launcher_protocols = None
+    configured_unpublished_predecessor_tags = None
     try:
         release_config = json.loads(
             (ROOT / "scripts" / "release" / "release-config.json").read_text(
@@ -478,6 +652,9 @@ def main() -> int:
             )
             configured_launcher_protocols = release_config.get(
                 "compatible_launcher_protocols"
+            )
+            configured_unpublished_predecessor_tags = release_config.get(
+                "unpublished_predecessor_tags"
             )
             if (
                 not isinstance(configured_publication_time, str)
@@ -543,7 +720,15 @@ def main() -> int:
         )
     )
     catalog_history = load_catalog_history(version, path=args.catalog_history)
-    require_previous_catalog_release(version, catalog_history, run_git("tag", "--merged", "HEAD", "--list").splitlines())
+    require_previous_catalog_release(
+        version,
+        catalog_history,
+        run_git("tag", "--merged", "HEAD", "--list").splitlines(),
+        unpublished_tags=configured_unpublished_predecessor_tags,
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        github_token=os.environ.get("GH_TOKEN", "")
+        or os.environ.get("GITHUB_TOKEN", ""),
+    )
 
     with tempfile.TemporaryDirectory() as temp:
         staging = Path(temp) / "bundle"

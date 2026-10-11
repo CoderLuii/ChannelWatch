@@ -1,8 +1,8 @@
 # Update ChannelWatch
 
-ChannelWatch v1.4.2 is a signed in-app update for the v1.4.0 container image. Install it from **Settings > Updates**. If your container image is older than v1.4.0, pull `coderluii/channelwatch:1.4.2` (or `ghcr.io/coderluii/channelwatch:1.4.2`) and recreate the container with the same `/config` volume and any external storage key configuration first.
+ChannelWatch v1.4.3 is a signed in-app update for the v1.4.0 container image. Update Center now keeps the exact Apply or Retry job through temporary restart disconnects, resumes it after Settings reopens, and refreshes only when that job and the new runtime are ready. Install it from **Settings > Updates**. If your container image is older than v1.4.0, pull `coderluii/channelwatch:1.4.3` (or `ghcr.io/coderluii/channelwatch:1.4.3`) and recreate the container with the same `/config` volume and any external storage key configuration first.
 
-From any older image, update directly to v1.4.2 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume and any external storage key configuration when recreating the container. Do not re-enter saved DVRs or credentials merely to update.
+From any older image, update directly to v1.4.3 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume and any external storage key configuration when recreating the container. Do not re-enter saved DVRs or credentials merely to update.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. **Retry now** uses the same checks when a restart briefly disconnects the dashboard. Application and immutable container image versions are reported separately.
 
@@ -12,7 +12,7 @@ The updater waits for stable target-runtime and Settings checks, opens Dashboard
 
 Some v1.0.0 and v1.0.1 installations can repeatedly show `Another update operation is already running` even though no update is active. Refreshing or restarting only the ChannelWatch Core and UI processes may recreate the abandoned marker. Do not delete application data or repeatedly click Apply.
 
-Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.4.2`, and recreate the container once. The current image contains the v1.0.2 scheduler-lock repair, which replaces the old existence-based marker with an operating-system-held advisory lock and safely removes the abandoned legacy marker during startup. Saved DVRs, credentials, settings, history, and the application-managed encryption key remain under `/config`.
+Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.4.3`, and recreate the container once. The current image contains the v1.0.2 scheduler-lock repair, which replaces the old existence-based marker with an operating-system-held advisory lock and safely removes the abandoned legacy marker during startup. Saved DVRs, credentials, settings, history, and the application-managed encryption key remain under `/config`.
 
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
@@ -20,11 +20,11 @@ The Update Center remains the normal path for routine releases. From v1.0.0 forw
 
 If the catalog includes a newer image milestone and a compatible app update for your current image, Update Center shows both choices separately. You can install the highest compatible signed app update now, then refresh the container later. The image recommendation does not hide that forward app update, and the app update does not clear the image recommendation.
 
-If you are still on an immutable published v0.9.9 or v0.9.10 image, **do not use its old in-app bridge for this upgrade**. Preserve the existing `/config` volume and pull/recreate the v1.4.2 image. The new image repairs stale legacy update markers without discarding settings or invalidating protected credentials. Future compatible releases then use the improved Update Center normally.
+If you are still on an immutable published v0.9.9 or v0.9.10 image, **do not use its old in-app bridge for this upgrade**. Preserve the existing `/config` volume and pull/recreate the v1.4.3 image. The new image repairs stale legacy update markers without discarding settings or invalidating protected credentials. Future compatible releases then use the improved Update Center normally.
 
 Operational v0.9.11–v0.9.17 installations can upgrade directly to v0.9.18 through Update Center. This includes the common v0.9.15, v0.9.16, and v0.9.17 installations. The stable v0.9.18 manifest keeps runtime ABI `channelwatch-runtime-v1` and settings schema `7`, so those compatible images can verify and activate the new bundle without intermediate releases.
 
-An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v1.4.2, or restore the correct old key for one migration restart. Fresh installations using the current image do not need an encryption variable.
+An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v1.4.3, or restore the correct old key for one migration restart. Fresh installations using the current image do not need an encryption variable.
 
 If a future credential-protection problem blocks normal administrator navigation after v0.9.18 is installed, the setup/recovery shell can check and apply only the official signed stable recovery update. That narrow path requires same-origin anti-CSRF state and exact typed confirmation; it cannot accept a custom feed, upload, signing key, URL, or downgrade.
 
@@ -67,13 +67,13 @@ ChannelWatch versions that include the reconnect improvement wait for the target
 
 ### Wait through a restart
 
-In v1.4.2, Update Center follows the saved update job for up to three minutes while Core and UI restart and validate the installation. A brief lost connection during this wait does not mean the update failed. Leave the page open; it refreshes once the matching job succeeds and the new runtime and Settings checks pass.
+The reconnect code was written for v1.4.2, whose publication failed before any release assets were published, and first ships in v1.4.3. Update Center follows the saved update job for up to three minutes while Core and UI restart and validate the installation. A brief lost connection during this wait does not mean the update failed. Leave the page open; it refreshes once the matching job succeeds and the new runtime and Settings checks pass.
 
 If you reopen Settings during an update, Update Center resumes watching that job without submitting another installation. Apply and Retry stay disabled while it waits. A failed or rolled-back installation shows the recorded failure instead of refreshing as though it succeeded.
 
 If the wait expires, check Update Center again before retrying. A browser timeout does not cancel an installation already running on the server. Keep your existing `/config` volume and storage key configuration; a compatible app update does not require recreating the container or re-entering DVR settings.
 
-This improvement runs in the browser code supplied by v1.4.2. When installing v1.4.2 from an older version, the page initially uses that older version's reconnect behavior until the new frontend loads.
+This improvement runs in the browser code supplied by v1.4.3. When installing v1.4.3 from an older version, the page initially uses that older version's reconnect behavior until the new frontend loads.
 
 ## Roll back
 

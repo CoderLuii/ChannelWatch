@@ -1,13 +1,13 @@
 {
-  "version": "1.5.2",
+  "version": "1.5.3",
   "image_required": true,
   "delivery_mode": "image_required",
-  "minimum_image_version": "1.5.2",
+  "minimum_image_version": "1.5.3",
   "updater_protocol": 4,
   "minimum_launcher_protocol": 4,
-  "recommended_image_version": "1.5.2",
-  "publication_time": "2026-10-11T14:50:00Z",
-  "automatic_install_after": "2026-10-18T14:50:00Z",
+  "recommended_image_version": "1.5.3",
+  "publication_time": "2026-10-11T18:19:42Z",
+  "automatic_install_after": "2026-10-18T18:19:42Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.4.0",
@@ -22,10 +22,11 @@
   ],
   "runtime_generation_required": false,
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.5.2 - Dependency update foundation",
+  "release_heading": "# ChannelWatch v1.5.3 - Dependency update foundation",
   "verification_assets": true,
   "recovers_unpublished_image_milestone": "1.5.0",
   "unpublished_predecessor_tags": [
+    "v1.5.2",
     "v1.5.1",
     "v1.5.0"
   ],
@@ -34,6 +35,7 @@
     "v1.4.3",
     "v1.4.4",
     "v1.5.0",
-    "v1.5.1"
+    "v1.5.1",
+    "v1.5.2"
   ]
 }

@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,6 +43,7 @@ class TestDoctorCliParser:
 
         assert parser.parse_args(["diagnose"]).command == "diagnose"
         assert parser.parse_args(["config-check"]).command == "config-check"
+        assert parser.parse_args(["runtime-info"]).command == "runtime-info"
         assert (
             parser.parse_args(["rotate-encryption-key"]).command
             == "rotate-encryption-key"
@@ -50,6 +52,91 @@ class TestDoctorCliParser:
             parser.parse_args(["reset-admin-password", "--username", "admin"]).command
             == "reset-admin-password"
         )
+
+
+class TestDoctorRuntimeInfo:
+    def test_runtime_info_reports_image_process_and_verified_generation(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        from core.cli.doctor import run
+
+        process = {
+            "pid": 123,
+            "python_executable": "/venv/bin/python",
+            "python_version": "3.14.8",
+            "python_prefix": "/venv",
+            "dependencies": {"requests": {"loaded": True, "path": "/venv/requests.py"}},
+        }
+        claim = {
+            "path": "/config/channelwatch-runtime/releases/v1.5.4",
+            "runtime_generation_id": "a" * 64,
+            "runtime_descriptor_sha256": "b" * 64,
+            "dependency_inventory_sha256": "c" * 64,
+        }
+        monkeypatch.setenv("CHANNELWATCH_IMAGE_APP_DIR", str(tmp_path / "image"))
+        with (
+            patch("core.cli.doctor.core.__file__", str(tmp_path / "image/core/__init__.py")),
+            patch("core.cli.doctor.core.__version__", "1.5.3"),
+            patch("core.cli.doctor.runtime_process_diagnostics", return_value=process),
+            patch("core.cli.doctor.get_verified_runtime_claim", return_value=claim),
+        ):
+            run(["runtime-info"])
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload == {
+            "diagnostic_source": "image",
+            "application_dir": str((tmp_path / "image").resolve()),
+            "application_version": "1.5.3",
+            "process_runtime": process,
+            "verified_generation": claim,
+        }
+
+    def test_runtime_info_does_not_infer_generation_from_selected_app(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        from core.cli.doctor import core as loaded_core
+        from core.cli.doctor import run
+
+        monkeypatch.setenv(
+            "CHANNELWATCH_IMAGE_APP_DIR",
+            str(Path(loaded_core.__file__).resolve().parents[1]),
+        )
+        monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(tmp_path / "selected"))
+        with (
+            patch("core.cli.doctor.runtime_process_diagnostics", return_value={}),
+            patch("core.cli.doctor.get_verified_runtime_claim", return_value=None),
+        ):
+            run(["runtime-info"])
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["diagnostic_source"] == "image"
+        assert payload["verified_generation"] is None
+        assert "selected" not in json.dumps(payload)
+
+    def test_runtime_info_labels_loaded_selected_application_origin(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        from core.cli.doctor import run
+
+        image_app = tmp_path / "image"
+        selected_app = tmp_path / "runtime" / "releases" / "v1.5.4"
+        monkeypatch.setenv("CHANNELWATCH_IMAGE_APP_DIR", str(image_app))
+        monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(selected_app))
+        with (
+            patch(
+                "core.cli.doctor.core.__file__",
+                str(selected_app / "core" / "__init__.py"),
+            ),
+            patch("core.cli.doctor.core.__version__", "1.5.4"),
+            patch("core.cli.doctor.runtime_process_diagnostics", return_value={}),
+            patch("core.cli.doctor.get_verified_runtime_claim", return_value=None),
+        ):
+            run(["runtime-info"])
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["diagnostic_source"] == "selected_application"
+        assert payload["application_dir"] == str(selected_app.resolve())
+        assert payload["application_version"] == "1.5.4"
 
 
 class TestDoctorDiagnose:

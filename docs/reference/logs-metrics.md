@@ -129,7 +129,7 @@ The bundle generator is `app/core/helpers/debug_bundle.py`. It writes a timestam
 
 | Artifact | Contents |
 | --- | --- |
-| `manifest.json` | Bundle schema, creation time, app version, architecture, DVR count, privacy note, and artifact list. |
+| `manifest.json` | Bundle schema, creation time, app version, architecture, DVR count, privacy note, artifact list, process runtime, and any process-verified runtime generation. |
 | `settings_sanitized.json` | Sanitized settings from `/config/settings.json`. |
 | `logs/app.log` | Last 500 lines from `/config/channelwatch.log` after line level redaction. |
 | `health_snapshot.json` | Offline health summary with enabled DVR count. |
@@ -144,6 +144,11 @@ Sanitization rules:
 | Log IPv4 addresses | Replaced with `[REDACTED_IP]`. |
 | Full HTTP(S) URL tokens in logs | Replaced with `[REDACTED_URL]`. |
 | `/config/encryption.key`, `/config/channelwatch.db`, raw session state files | Excluded. |
+
+The `process_runtime` and `verified_generation` entries can contain absolute
+container paths for the running interpreter, loaded Python packages,
+application code, and runtime generation. Review those paths before sharing a
+debug bundle outside your support team.
 
 For privacy boundaries, third-party notification destinations, debug-bundle masking, and GDPR / UK GDPR controller responsibilities in multi-user deployments, see [`../project/PRIVACY.md`](../project/PRIVACY.md).
 

@@ -18,7 +18,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 
@@ -41,6 +41,7 @@ SHA256_PREFIXED = re.compile(r"sha256:[0-9a-f]{64}")
 SHA40 = re.compile(r"[0-9a-f]{40}")
 JOB_ID = re.compile(r"[0-9a-f]{32}")
 SERVER_ASSIGNED_JOB_ID_IMAGES = frozenset({"1.4.0", "1.4.1"})
+IMAGE_PYTHON_VERSION = "3.14.8"
 
 
 class ImageUpgradeError(RuntimeError):
@@ -247,6 +248,7 @@ def _load_candidate(
         "index_digest": str(descriptor["image_index"]["digest"]),
         "manifest_digest": str(platform_row["manifest"]["digest"]),
         "config_digest": str(platform_row["config"]["digest"]),
+        "python_version": candidate_python_version(inspection),
     }
 
 
@@ -474,6 +476,151 @@ const {chromium}=require(process.argv[2]);
     if evidence != {"title": "ChannelWatch", "hydrated": True}:
         raise ImageUpgradeError("Headless browser did not prove the hydrated UI.")
     return hashlib.sha256(result.stdout.encode()).hexdigest()
+
+
+def candidate_python_version(inspection: dict[str, Any]) -> str:
+    environment = inspection.get("Config", {}).get("Env")
+    if not isinstance(environment, list) or any(
+        not isinstance(value, str) for value in environment
+    ):
+        raise ImageUpgradeError("Candidate image Python version is invalid.")
+    versions = [
+        value.partition("=")[2]
+        for value in environment
+        if value.startswith("PYTHON_VERSION=")
+    ]
+    if versions != [IMAGE_PYTHON_VERSION]:
+        raise ImageUpgradeError("Candidate image Python version is invalid.")
+    return versions[0]
+
+
+def validate_cli_runtime_info(
+    output: str, *, candidate_version: str, expected_python_version: str
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(output)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ImageUpgradeError("Candidate runtime-info output is not valid JSON.") from exc
+    if not isinstance(payload, dict) or set(payload) != {
+        "diagnostic_source",
+        "application_dir",
+        "application_version",
+        "process_runtime",
+        "verified_generation",
+    }:
+        raise ImageUpgradeError("Candidate runtime-info fields are invalid.")
+    process = payload.get("process_runtime")
+    if not isinstance(process, dict) or set(process) != {
+        "pid",
+        "python_executable",
+        "python_version",
+        "python_prefix",
+        "dependencies",
+    }:
+        raise ImageUpgradeError("Candidate runtime-info process fields are invalid.")
+    dependencies = process.get("dependencies")
+    expected_dependencies = {
+        "requests",
+        "cryptography",
+        "sqlmodel",
+        "uvicorn",
+        "pydantic_core",
+    }
+    if not isinstance(dependencies, dict) or set(dependencies) != expected_dependencies:
+        raise ImageUpgradeError("Candidate runtime-info dependency fields are invalid.")
+    required_dependencies = {"cryptography", "sqlmodel", "pydantic_core"}
+    for name, dependency in dependencies.items():
+        if not isinstance(dependency, dict) or not isinstance(
+            dependency.get("loaded"), bool
+        ):
+            raise ImageUpgradeError(
+                f"Candidate runtime-info dependency {name} is invalid."
+            )
+        if not dependency["loaded"]:
+            if set(dependency) != {"loaded"}:
+                raise ImageUpgradeError(
+                    f"Candidate runtime-info dependency {name} is invalid."
+                )
+            continue
+        path = dependency.get("path")
+        version = dependency.get("version")
+        normalized_path = PurePosixPath(path) if isinstance(path, str) else None
+        if (
+            set(dependency) != {"loaded", "path", "version"}
+            or not isinstance(path, str)
+            or not path.startswith("/venv/")
+            or ".." in normalized_path.parts
+            or str(normalized_path) != path
+            or not isinstance(version, str)
+        ):
+            raise ImageUpgradeError(
+                f"Candidate runtime-info dependency {name} is not image-owned."
+            )
+    if any(dependencies[name]["loaded"] is not True for name in required_dependencies):
+        raise ImageUpgradeError(
+            "Candidate runtime-info mandatory image dependencies are not loaded."
+        )
+    if (
+        payload.get("diagnostic_source") != "image"
+        or payload.get("application_dir") != "/app"
+        or payload.get("application_version") != candidate_version
+        or payload.get("verified_generation") is not None
+        or type(process.get("pid")) is not int
+        or process["pid"] <= 0
+        or process.get("python_executable") != "/venv/bin/python"
+        or process.get("python_prefix") != "/venv"
+        or process.get("python_version") != expected_python_version
+    ):
+        raise ImageUpgradeError(
+            "Candidate runtime-info did not prove the immutable image CLI identity."
+        )
+    return payload
+
+
+def verify_cli_runtime_info(
+    container: str,
+    *,
+    candidate_version: str,
+    expected_python_version: str,
+    evidence_path: Path,
+) -> dict[str, Any]:
+    result = run(
+        [
+            "docker",
+            "exec",
+            container,
+            "/usr/local/bin/channelwatch",
+            "doctor",
+            "runtime-info",
+        ],
+        timeout=60,
+    )
+    payload = validate_cli_runtime_info(
+        result.stdout,
+        candidate_version=candidate_version,
+        expected_python_version=expected_python_version,
+    )
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    process = payload["process_runtime"]
+    return {
+        "sha256": sha256_file(evidence_path),
+        "identity": {
+            "diagnostic_source": payload["diagnostic_source"],
+            "application_dir": payload["application_dir"],
+            "application_version": payload["application_version"],
+            "python_executable": process["python_executable"],
+            "python_version": process["python_version"],
+            "mandatory_dependencies": {
+                name: process["dependencies"][name]["path"]
+                for name in ("cryptography", "pydantic_core", "sqlmodel")
+            },
+            "verified_generation": payload["verified_generation"],
+        },
+    }
 
 
 def validate_upgrade_state(
@@ -1108,6 +1255,13 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
             ["docker", "exec", candidate, "/usr/local/bin/channelwatch", "doctor", "config-check"],
             timeout=60,
         )
+        replacement_cli_runtime = verify_cli_runtime_info(
+            candidate,
+            candidate_version=args.candidate_version,
+            expected_python_version=candidate_image["python_version"],
+            evidence_path=args.log_directory
+            / "candidate-runtime-info-after-replace.json",
+        )
         run(["docker", "restart", candidate], timeout=120)
         candidate_client.set_base_url(published_base_url(candidate))
         wait_until(
@@ -1127,6 +1281,13 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
             raise ImageUpgradeError(
                 "Candidate restart could not read the encrypted DVR credential."
             )
+        restarted_cli_runtime = verify_cli_runtime_info(
+            candidate,
+            candidate_version=args.candidate_version,
+            expected_python_version=candidate_image["python_version"],
+            evidence_path=args.log_directory
+            / "candidate-runtime-info-after-restart.json",
+        )
         resolved_deactivated_active = deactivated_active(candidate)
         browser_output_sha256 = browser_smoke(
             int(candidate_client.base_url.rsplit(":", 1)[1])
@@ -1166,6 +1327,10 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
                 "preservation_after_restart_sha256": after_restart,
                 "external_storage_key_sha256": expected_external_hash,
                 "cli_output_sha256": hashlib.sha256(cli.stdout.encode()).hexdigest(),
+                "cli_runtime_info": {
+                    "after_replace": replacement_cli_runtime,
+                    "after_restart": restarted_cli_runtime,
+                },
                 "browser_output_sha256": browser_output_sha256,
                 "api_health": True,
                 "headless_browser": True,

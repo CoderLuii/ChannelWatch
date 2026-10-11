@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "candidate_version": "1.5.2",
+  "candidate_version": "1.5.3",
   "recovers_unpublished_image_milestone": "1.5.0",
   "repository": "coderluii/channelwatch",
   "signed_app": {

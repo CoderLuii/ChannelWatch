@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.error
 import zipfile
 from datetime import date, datetime, timedelta, timezone
@@ -955,7 +956,7 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_152_replacement_dependency_image_bootstrap():
+def test_release_config_declares_153_replacement_dependency_image_bootstrap():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -964,15 +965,15 @@ def test_release_config_declares_152_replacement_dependency_image_bootstrap():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.5.2"
+    assert config["version"] == "1.5.3"
     assert config["image_required"] is True
     assert config["delivery_mode"] == "image_required"
-    assert config["minimum_image_version"] == "1.5.2"
+    assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.5.2"
-    assert config["publication_time"] == "2026-10-11T14:50:00Z"
-    assert config["automatic_install_after"] == "2026-10-18T14:50:00Z"
+    assert config["recommended_image_version"] == "1.5.3"
+    assert config["publication_time"].endswith("Z")
+    assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
     assert config["compatible_source_application_versions"] == [
         "1.4.0",
@@ -990,21 +991,22 @@ def test_release_config_declares_152_replacement_dependency_image_bootstrap():
     assert not config.get("minimum_image_sha256")
     assert config["runtime_compatibility_evidence"] == {}
     assert config["recovers_unpublished_image_milestone"] == "1.5.0"
-    assert config["unpublished_predecessor_tags"] == ["v1.5.1", "v1.5.0"]
+    assert config["unpublished_predecessor_tags"] == ["v1.5.2", "v1.5.1", "v1.5.0"]
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
         "v1.4.4",
         "v1.5.0",
         "v1.5.1",
+        "v1.5.2",
     ]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.5.2 - Dependency update foundation"
+        "# ChannelWatch v1.5.3 - Dependency update foundation"
     )
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is True
-    assert policy.minimum_image_version == "1.5.2"
+    assert policy.minimum_image_version == "1.5.3"
     history = json.loads(
         (ROOT / "scripts/release/update-catalog-history.json").read_text(
             encoding="utf-8"
@@ -1018,11 +1020,15 @@ def test_release_config_declares_152_replacement_dependency_image_bootstrap():
         "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
     )
     assert release_141["published_at"] == "2026-10-10T19:10:00Z"
-    publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
-    automatic = datetime.fromisoformat(
-        config["automatic_install_after"].replace("Z", "+00:00")
+    publication = datetime.fromisoformat(
+        config["publication_time"].removesuffix("Z") + "+00:00"
     )
-    assert automatic >= publication + timedelta(hours=48)
+    automatic = datetime.fromisoformat(
+        config["automatic_install_after"].removesuffix("Z") + "+00:00"
+    )
+    assert publication.tzinfo == timezone.utc
+    assert automatic.tzinfo == timezone.utc
+    assert automatic - publication == timedelta(days=7)
 
 
 def test_release_version_policy_enforces_single_digit_patch_cadence():
@@ -1129,7 +1135,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_152_release():
+def test_release_version_surfaces_use_153_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1140,11 +1146,11 @@ def test_release_version_surfaces_use_152_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.5.2"
-    assert metadata["versionTag"] == "v1.5.2"
-    assert metadata["dockerTag"] == "1.5.2"
-    assert metadata["helmChartVersion"] == "1.5.2"
-    assert metadata["helmAppVersion"] == "1.5.2"
+    assert metadata["version"] == "1.5.3"
+    assert metadata["versionTag"] == "v1.5.3"
+    assert metadata["dockerTag"] == "1.5.3"
+    assert metadata["helmChartVersion"] == "1.5.3"
+    assert metadata["helmAppVersion"] == "1.5.3"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3063,13 +3069,27 @@ def test_every_release_verifier_installs_pinned_runtime_dependencies_first():
         for verifier in (
             "scripts/release/verify-pinned-v1-bridge.py",
             "scripts/release/verify-update-assets.py",
+            "scripts/release/verify-image-upgrade.py",
         ):
             for invocation in re.finditer(re.escape(verifier), block):
                 prefix = block[: invocation.start()]
                 assert "actions/setup-python@" in prefix, job_name
                 assert "python-version: '3.14'" in prefix, job_name
-                assert "-c deploy/requirements/runtime.constraints.txt" in prefix, job_name
-                assert "-r deploy/requirements/runtime.txt" in prefix, job_name
+                if verifier == "scripts/release/verify-image-upgrade.py":
+                    assert "Download the native verifier dependency closure" in prefix, job_name
+                    assert "Prepare the native verifier dependency closure" in prefix, job_name
+                    assert (
+                        "runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}"
+                        in prefix
+                    ), job_name
+                    assert "sha256sum --check" in prefix, job_name
+                    assert (
+                        "PYTHONPATH=${dependency_root}/dependencies/site-packages"
+                        in prefix
+                    ), job_name
+                else:
+                    assert "-c deploy/requirements/runtime.constraints.txt" in prefix, job_name
+                    assert "-r deploy/requirements/runtime.txt" in prefix, job_name
                 checked.append((job_name, verifier))
 
     assert checked
@@ -3756,7 +3776,7 @@ def test_native_image_qualification_uses_exact_sealed_oci_on_native_hosts():
     )
     job = workflow["jobs"]["native-image-qualification"]
     text = str(job)
-    assert job["needs"] == "signed-candidate"
+    assert job["needs"] == ["signed-candidate", "runtime-dependencies"]
     assert "verify-native-image.py" in text
     assert "channelwatch-image-${tag}.oci.tar" in text
     assert "channelwatch-image-${tag}.json" in text
@@ -3805,6 +3825,168 @@ def test_native_signer_requirements_cover_both_linux_architectures():
     )
     native_job = workflow["jobs"]["native-image-qualification"]
     assert "-r scripts/release/signer-requirements.txt" in str(native_job)
+
+
+def test_native_image_upgrade_uses_verified_runtime_closure_after_key_scope():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["native-image-qualification"]["steps"]
+    assert workflow["jobs"]["native-image-qualification"]["needs"] == [
+        "signed-candidate",
+        "runtime-dependencies",
+    ]
+    names = [step.get("name") for step in steps]
+    download_index = names.index("Download the native verifier dependency closure")
+    open_index = names.index("Open exact candidate before native qualification")
+    prepare_index = names.index("Prepare the native verifier dependency closure")
+    qualify_index = names.index(
+        "Qualify published older installations on the foundation image"
+    )
+
+    assert download_index < open_index < prepare_index < qualify_index
+    download = steps[download_index]
+    assert download["with"]["name"] == (
+        "runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}"
+    )
+    prepare = steps[prepare_index]
+    prepare_text = prepare["run"]
+    assert "sha256sum --check" in prepare_text
+    assert "tarfile.open" in prepare_text
+    assert "member.issym()" in prepare_text
+    assert "member.islnk()" in prepare_text
+    assert "member.isdev()" in prepare_text
+    assert "max_members = 10_000" in prepare_text
+    assert "max_total_size = 512 * 1024 * 1024" in prepare_text
+    assert 'set(inventory) != {' in prepare_text
+    assert '"builder_image_digest": builder_digest' in prepare_text
+    assert '"architecture": architecture' in prepare_text
+    assert '"wheel_platform": wheel_platform' in prepare_text
+    assert '"httpx" not in requirements["direct"]' in prepare_text
+    assert "sha256.fullmatch(value) is None" in prepare_text
+    assert "archive_files != set(expected_files)" in prepare_text
+    assert "Runtime dependency archive has untracked directories." in prepare_text
+    assert "Extracted runtime dependency content is invalid." in prepare_text
+    assert "dependencies/site-packages" in prepare_text
+    assert 'echo "PYTHONPATH=${dependency_root}/dependencies/site-packages"' in prepare_text
+    assert "CHANNELWATCH_UPDATE_SIGNING_KEY" not in str(steps[prepare_index:])
+
+    qualify_text = steps[qualify_index]["run"]
+    for helper in (
+        "ASSET_VERIFIER",
+        "NATIVE_VERIFIER",
+        "CAPABILITY_VERIFIER",
+    ):
+        assert helper in qualify_text
+    assert "verify_signed_baseline_assets" in qualify_text
+    assert "scripts/release/image-upgrade-baselines.json" in qualify_text
+
+    runtime_build = next(
+        step
+        for step in workflow["jobs"]["runtime-dependencies"]["steps"]
+        if step.get("name") == "Build and execute deterministic native dependency closure twice"
+    )["run"]
+    assert 'python -I -B - "/work/runtime-${ARCHITECTURE}-one/dependencies/site-packages"' in runtime_build
+
+
+@pytest.mark.parametrize("unsafe_member", [None, "extra.py", "symlink"])
+def test_native_verifier_runtime_closure_accepts_inventory_and_rejects_unsafe_members(
+    tmp_path, unsafe_member
+):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    prepare = next(
+        step
+        for step in workflow["jobs"]["native-image-qualification"]["steps"]
+        if step.get("name") == "Prepare the native verifier dependency closure"
+    )["run"]
+    validator = prepare.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    payload = b"verified runtime dependency\n"
+    payload_path = "dependencies/site-packages/probe.py"
+    digest = hashlib.sha256(payload).hexdigest()
+    builder_digest = "sha256:" + "4" * 64
+    inventory = {
+        "schema": 1,
+        "build": {
+            "builder_image_digest": builder_digest,
+            "pip_version": "26.2.1",
+            "python_version": "3.14.8",
+        },
+        "platform": {
+            "architecture": "amd64",
+            "python_implementation": "cpython",
+            "python_cache_tag": "cpython-314",
+            "python_version": "3.14.8",
+            "os_family": "linux",
+            "libc_family": "glibc",
+            "minimum_libc_version": "2.36",
+            "wheel_platform": "manylinux_2_36_x86_64",
+        },
+        "requirements": {
+            "direct": ["httpx"],
+            "locked": [{"name": "httpx", "version": "0.28.1", "hashes": ["5" * 64]}],
+        },
+        "artifacts": [],
+        "dependencies": [],
+        "files": [
+            {"path": payload_path, "sha256": digest, "size": len(payload), "mode": "0644"}
+        ],
+        "counts": {"files": 1, "bytes": len(payload)},
+    }
+    archive = tmp_path / "runtime.tar"
+    with tarfile.open(archive, "w") as handle:
+        for name in (".", "dependencies", "dependencies/site-packages"):
+            row = tarfile.TarInfo(name)
+            row.type = tarfile.DIRTYPE
+            row.mode = 0o755
+            handle.addfile(row)
+        inventory_bytes = (json.dumps(inventory, sort_keys=True) + "\n").encode()
+        row = tarfile.TarInfo("dependencies/inventory.json")
+        row.size = len(inventory_bytes)
+        row.mode = 0o644
+        handle.addfile(row, io.BytesIO(inventory_bytes))
+        row = tarfile.TarInfo(payload_path)
+        row.size = len(payload)
+        row.mode = 0o644
+        handle.addfile(row, io.BytesIO(payload))
+        if unsafe_member == "extra.py":
+            row = tarfile.TarInfo("dependencies/site-packages/extra.py")
+            row.size = 1
+            row.mode = 0o644
+            handle.addfile(row, io.BytesIO(b"x"))
+        elif unsafe_member == "symlink":
+            row = tarfile.TarInfo("dependencies/site-packages/link.py")
+            row.type = tarfile.SYMTYPE
+            row.linkname = "probe.py"
+            handle.addfile(row)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            validator,
+            str(archive),
+            str(tmp_path / "extract"),
+            "amd64",
+            builder_digest,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    if unsafe_member is None:
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / "extract" / payload_path).read_bytes() == payload
+        return
+    assert result.returncode != 0
+    expected = (
+        "Runtime dependency archive and inventory differ."
+        if unsafe_member == "extra.py"
+        else "Runtime dependency archive contains an unsafe member type."
+    )
+    assert expected in result.stderr
 
 
 def test_release_workflow_builds_native_runtime_generations_and_seals_exact_assets():

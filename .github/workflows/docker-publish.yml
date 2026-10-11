@@ -380,7 +380,7 @@ jobs:
               done
               diff -ru "/work/runtime-${ARCHITECTURE}-one" \
                 "/work/runtime-${ARCHITECTURE}-two"
-              python -I - "/work/runtime-${ARCHITECTURE}-one/dependencies/site-packages" \
+              python -I -B - "/work/runtime-${ARCHITECTURE}-one/dependencies/site-packages" \
                 "${EXPECTED_MACHINE}" <<"PY"
           import platform
           import sys
@@ -1651,7 +1651,7 @@ jobs:
 
   native-image-qualification:
     name: Native image qualification (${{ matrix.architecture }})
-    needs: signed-candidate
+    needs: [signed-candidate, runtime-dependencies]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -1686,6 +1686,11 @@ jobs:
         with:
           artifact-ids: ${{ needs.signed-candidate.outputs.artifact_id }}
           path: ${{ runner.temp }}/native-candidate
+      - name: Download the native verifier dependency closure
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-verifier-runtime
       - name: Open exact candidate before native qualification
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
@@ -1702,6 +1707,211 @@ jobs:
           tar -xf "${RUNNER_TEMP}/native-candidate.tar" -C "${candidate_dir}"
           rm -f "${RUNNER_TEMP}/native-candidate.tar" "${candidate_dir}"/*.sealed
           (cd "${candidate_dir}" && sha256sum --check SHA256SUMS.txt)
+      - name: Prepare the native verifier dependency closure
+        env:
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+          RUNTIME_BUILDER_DIGEST: sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_root="${RUNNER_TEMP}/native-verifier-runtime"
+          archive="channelwatch-runtime-dependencies-${NATIVE_ARCHITECTURE}.tar"
+          (cd "${runtime_root}" && sha256sum --check "${archive}.sha256")
+          dependency_root="${RUNNER_TEMP}/native-verifier-dependencies"
+          test ! -e "${dependency_root}"
+          install -d -m 0700 "${dependency_root}"
+          python - "${runtime_root}/${archive}" "${dependency_root}" \
+            "${NATIVE_ARCHITECTURE}" "${RUNTIME_BUILDER_DIGEST}" <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import stat
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2]).resolve()
+          architecture = sys.argv[3]
+          builder_digest = sys.argv[4]
+          wheel_platform = {
+              "amd64": "manylinux_2_36_x86_64",
+              "arm64": "manylinux_2_36_aarch64",
+          }.get(architecture)
+          if wheel_platform is None:
+              raise SystemExit("Unsupported runtime dependency architecture.")
+          max_members = 10_000
+          max_file_size = 128 * 1024 * 1024
+          max_total_size = 512 * 1024 * 1024
+          sha256 = re.compile(r"[0-9a-f]{64}")
+
+          def normalized(member: tarfile.TarInfo) -> str:
+              if "\\" in member.name or "\x00" in member.name or member.name.startswith("/"):
+                  raise SystemExit("Runtime dependency archive contains an unsafe path.")
+              path = PurePosixPath(member.name)
+              if any(part == ".." for part in path.parts):
+                  raise SystemExit("Runtime dependency archive contains an unsafe path.")
+              value = str(path)
+              if value != "." and value != "dependencies" and not value.startswith("dependencies/"):
+                  raise SystemExit("Runtime dependency archive contains an unexpected path.")
+              return value
+
+          with tarfile.open(archive, "r:") as handle:
+              members = handle.getmembers()
+              if not members or len(members) > max_members:
+                  raise SystemExit("Runtime dependency archive member count is invalid.")
+              rows = {}
+              total_size = 0
+              for member in members:
+                  name = normalized(member)
+                  if name in rows:
+                      raise SystemExit("Runtime dependency archive has duplicate paths.")
+                  if (
+                      member.issym()
+                      or member.islnk()
+                      or member.isdev()
+                      or not (member.isfile() or member.isdir())
+                  ):
+                      raise SystemExit("Runtime dependency archive contains an unsafe member type.")
+                  if member.size < 0 or member.size > max_file_size:
+                      raise SystemExit("Runtime dependency archive member size is invalid.")
+                  total_size += member.size
+                  if total_size > max_total_size:
+                      raise SystemExit("Runtime dependency archive is too large.")
+                  rows[name] = member
+
+              inventory_member = rows.get("dependencies/inventory.json")
+              if inventory_member is None or not inventory_member.isfile():
+                  raise SystemExit("Runtime dependency inventory is missing.")
+              inventory_file = handle.extractfile(inventory_member)
+              if inventory_file is None:
+                  raise SystemExit("Runtime dependency inventory cannot be read.")
+              inventory = json.load(inventory_file)
+              if set(inventory) != {
+                  "schema", "build", "platform", "requirements", "artifacts",
+                  "dependencies", "files", "counts",
+              } or inventory["schema"] != 1:
+                  raise SystemExit("Runtime dependency inventory schema is invalid.")
+              if inventory["build"] != {
+                  "builder_image_digest": builder_digest,
+                  "pip_version": "26.2.1",
+                  "python_version": "3.14.8",
+              }:
+                  raise SystemExit("Runtime dependency build identity is invalid.")
+              if inventory["platform"] != {
+                  "architecture": architecture,
+                  "python_implementation": "cpython",
+                  "python_cache_tag": "cpython-314",
+                  "python_version": "3.14.8",
+                  "os_family": "linux",
+                  "libc_family": "glibc",
+                  "minimum_libc_version": "2.36",
+                  "wheel_platform": wheel_platform,
+              }:
+                  raise SystemExit("Runtime dependency platform is invalid.")
+              requirements = inventory["requirements"]
+              if not isinstance(requirements, dict) or set(requirements) != {"direct", "locked"}:
+                  raise SystemExit("Runtime dependency requirements are invalid.")
+              if not isinstance(requirements["direct"], list) or "httpx" not in requirements["direct"]:
+                  raise SystemExit("Runtime dependency direct requirements are invalid.")
+              locked = requirements["locked"]
+              if not isinstance(locked, list) or not locked:
+                  raise SystemExit("Runtime dependency lock is empty.")
+              locked_names = set()
+              for row in locked:
+                  if not isinstance(row, dict) or set(row) != {"name", "version", "hashes"}:
+                      raise SystemExit("Runtime dependency lock row is invalid.")
+                  hashes = row["hashes"]
+                  if (
+                      not isinstance(row["name"], str)
+                      or not row["name"]
+                      or row["name"] in locked_names
+                      or not isinstance(row["version"], str)
+                      or not row["version"]
+                      or not isinstance(hashes, list)
+                      or not hashes
+                      or any(not isinstance(value, str) or sha256.fullmatch(value) is None for value in hashes)
+                  ):
+                      raise SystemExit("Runtime dependency lock row is invalid.")
+                  locked_names.add(row["name"])
+              if not isinstance(inventory["artifacts"], list) or not isinstance(inventory["dependencies"], list):
+                  raise SystemExit("Runtime dependency inventory metadata is invalid.")
+
+              inventory_rows = inventory["files"]
+              if not isinstance(inventory_rows, list) or not inventory_rows:
+                  raise SystemExit("Runtime dependency file inventory is empty.")
+              expected_files = {}
+              for row in inventory_rows:
+                  if not isinstance(row, dict) or set(row) != {"path", "sha256", "size", "mode"}:
+                      raise SystemExit("Runtime dependency file row is invalid.")
+                  path = row["path"]
+                  if (
+                      not isinstance(path, str)
+                      or not path.startswith("dependencies/site-packages/")
+                      or path in expected_files
+                      or not isinstance(row["size"], int)
+                      or row["size"] < 0
+                      or row["size"] > max_file_size
+                      or row["mode"] not in {"0644", "0755"}
+                      or not isinstance(row["sha256"], str)
+                      or sha256.fullmatch(row["sha256"]) is None
+                  ):
+                      raise SystemExit("Runtime dependency file row is invalid.")
+                  expected_files[path] = row
+              archive_files = {
+                  name for name, member in rows.items()
+                  if member.isfile() and name != "dependencies/inventory.json"
+              }
+              if archive_files != set(expected_files):
+                  raise SystemExit("Runtime dependency archive and inventory differ.")
+              expected_directories = {".", "dependencies", "dependencies/site-packages"}
+              for path in expected_files:
+                  parent = PurePosixPath(path).parent
+                  while str(parent) not in {"", "."}:
+                      expected_directories.add(str(parent))
+                      parent = parent.parent
+              if {name for name, member in rows.items() if member.isdir()} != expected_directories:
+                  raise SystemExit("Runtime dependency archive has untracked directories.")
+              if inventory["counts"] != {
+                  "files": len(expected_files),
+                  "bytes": sum(row["size"] for row in expected_files.values()),
+              }:
+                  raise SystemExit("Runtime dependency inventory counts are invalid.")
+
+              for name, member in rows.items():
+                  target = destination if name == "." else destination.joinpath(*PurePosixPath(name).parts)
+                  if destination not in (target, *target.parents):
+                      raise SystemExit("Runtime dependency extraction escaped its destination.")
+                  if member.isdir():
+                      target.mkdir(mode=0o755, parents=True, exist_ok=True)
+                      continue
+                  target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                  source = handle.extractfile(member)
+                  if source is None:
+                      raise SystemExit("Runtime dependency archive member cannot be read.")
+                  flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                  if hasattr(os, "O_NOFOLLOW"):
+                      flags |= os.O_NOFOLLOW
+                  descriptor = os.open(target, flags, 0o600)
+                  with source, os.fdopen(descriptor, "wb") as output:
+                      shutil.copyfileobj(source, output, length=1024 * 1024)
+                  if name == "dependencies/inventory.json":
+                      os.chmod(target, 0o600)
+                      continue
+                  row = expected_files[name]
+                  digest = hashlib.sha256()
+                  with target.open("rb") as extracted:
+                      while chunk := extracted.read(1024 * 1024):
+                          digest.update(chunk)
+                  if target.stat().st_size != row["size"] or digest.hexdigest() != row["sha256"]:
+                      raise SystemExit("Extracted runtime dependency content is invalid.")
+                  os.chmod(target, int(row["mode"], 8))
+                  if stat.S_IMODE(target.stat().st_mode) != int(row["mode"], 8):
+                      raise SystemExit("Extracted runtime dependency mode is invalid.")
+          PY
+          echo "PYTHONPATH=${dependency_root}/dependencies/site-packages" >> "${GITHUB_ENV}"
       - name: Set up pinned Node.js after the signing key is removed
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1773,6 +1983,36 @@ jobs:
             "$(jq -r '.signed_app.bundle_url' "${fixtures}")" --output "${bundle}"
           printf '%s  %s\n' "$(jq -r '.signed_app.catalog_sha256' "${fixtures}")" "${catalog}" \
             "$(jq -r '.signed_app.bundle_sha256' "${fixtures}")" "${bundle}" | sha256sum --check
+          python - "${fixtures}" "${catalog}" "${bundle}" <<'PY'
+          import importlib.util
+          import json
+          import sys
+          from pathlib import Path
+
+          script = Path("scripts/release/verify-image-upgrade.py").resolve()
+          spec = importlib.util.spec_from_file_location("image_upgrade_dependency_preflight", script)
+          if spec is None or spec.loader is None:
+              raise SystemExit("Could not load the image-upgrade verifier.")
+          verifier = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(verifier)
+          for index, attribute in enumerate(
+              ("ASSET_VERIFIER", "NATIVE_VERIFIER", "CAPABILITY_VERIFIER"), start=1
+          ):
+              verifier._load_script(
+                  getattr(verifier, attribute), f"image_upgrade_dependency_preflight_{index}"
+              )
+          fixtures = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          release, bundle_url = verifier.verify_signed_baseline_assets(
+              Path(sys.argv[2]),
+              Path(sys.argv[3]),
+              version=fixtures["signed_app"]["version"],
+              source_commit=fixtures["signed_app"]["source_commit"],
+          )
+          if release.get("version") != fixtures["signed_app"]["version"]:
+              raise SystemExit("The signed baseline release version does not match.")
+          if bundle_url != fixtures["signed_app"]["bundle_url"]:
+              raise SystemExit("The signed baseline bundle URL does not match.")
+          PY
           candidate_dir="${RUNNER_TEMP}/native-candidate"
           archive="${candidate_dir}/channelwatch-image-v${version}.oci.tar"
           descriptor="${candidate_dir}/channelwatch-image-v${version}.json"

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import core
 from ui.backend import config as ui_config
 
 from core.dvr_client import check_version_compatibility
@@ -17,6 +18,10 @@ from core.helpers.dvr_connection import build_dvr_base_url
 from core.helpers.dvr_target import build_safe_dvr_request
 from core.helpers.encryption import ENCRYPTION_KEY_FILE
 from core.helpers.initialize import check_server_connectivity
+from core.runtime_identity import (
+    get_verified_runtime_claim,
+    runtime_process_diagnostics,
+)
 
 
 def _config_dir() -> Path:
@@ -140,6 +145,31 @@ def _cmd_debug_bundle(args: argparse.Namespace) -> int:
     out_path = Path(args.output)
     out_path.write_bytes(create_debug_bundle(config_dir))
     print(f"Debug bundle written to {out_path}")
+    return 0
+
+
+def _diagnostic_source(app_dir: Path) -> str:
+    image_app_dir = Path(os.getenv("CHANNELWATCH_IMAGE_APP_DIR", "/app")).resolve()
+    if app_dir == image_app_dir:
+        return "image"
+
+    selected_app = os.getenv("CHANNELWATCH_APP_DIR", "").strip()
+    if selected_app and app_dir == Path(selected_app).resolve():
+        return "selected_application"
+    return "application"
+
+
+def _cmd_runtime_info(args: argparse.Namespace) -> int:
+    del args
+    app_dir = Path(core.__file__).resolve().parents[1]
+    payload = {
+        "diagnostic_source": _diagnostic_source(app_dir),
+        "application_dir": str(app_dir),
+        "application_version": core.__version__,
+        "process_runtime": runtime_process_diagnostics(),
+        "verified_generation": get_verified_runtime_claim(),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
@@ -346,6 +376,12 @@ def build_parser() -> argparse.ArgumentParser:
         "config-check", help="Dry-run settings validation against real loaders"
     )
     config_parser.set_defaults(handler=_cmd_config_check)
+
+    runtime_parser = sub.add_parser(
+        "runtime-info",
+        help="Print the image CLI process identity and verified runtime generation",
+    )
+    runtime_parser.set_defaults(handler=_cmd_runtime_info)
 
     rotate_parser = sub.add_parser(
         "rotate-encryption-key",

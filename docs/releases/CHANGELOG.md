@@ -8,12 +8,12 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
-## [1.5.2] - 2026-10-11
+## [1.5.3] - 2026-10-11
 
 ### Important
 
-- Container image update required. Pull v1.5.2 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
-- v1.5.2 supplies the image foundation. It does not publish a runtime-generation payload. Future compatible releases can deliver a complete signed application and official Python package generation through **Settings > Updates** in the same container.
+- Container image update required. Pull v1.5.3 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
+- v1.5.3 supplies the image foundation. It does not publish a runtime-generation payload. Future compatible releases can deliver a complete signed application and official Python package generation through **Settings > Updates** in the same container.
 
 ### Added
 
@@ -26,23 +26,33 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- Keep `channelwatch doctor` on the image-owned application and Python environment, isolate it from selected-generation import paths, and report the actual diagnostic runtime identity.
 - Keep runtime security tests independent of the hosted test interpreter's writable permissions while continuing to reject unsafe interpreter paths.
 - Verify unpublished milestone recovery before publishing the replacement image and its four native migration reports.
 - Make interrupted update preparation retryable after the current runtime starts again, while preserving the selected release and saved configuration.
 - Keep update policy button labels readable on smaller screens.
-- Keep the older-client restart report in issue #22 open because its cause remains unproven.
+
+### Known issues
+
+- The older-client restart report in issue #22 remains open. Its cause has not been proven, and v1.5.3 does not claim to resolve it.
+
+## [1.5.2] - 2026-10-11
+
+### Important
+
+- Publishing failed during native migration qualification because the release verifier environment lacked `httpx`. No v1.5.2 GitHub release, release assets, or container image was published. Use v1.5.3 instead. The original tag remains unchanged.
 
 ## [1.5.1] - 2026-10-11
 
 ### Important
 
-- Publishing failed during candidate signing because the configured publication time preceded the candidate commit. No v1.5.1 GitHub release, release assets, or container image was published. Use v1.5.2 instead. The original tag remains unchanged.
+- Publishing failed during candidate signing because the configured publication time preceded the candidate commit. No v1.5.1 GitHub release, release assets, or container image was published. Use v1.5.3 instead. The original tag remains unchanged.
 
 ## [1.5.0] - 2026-10-11
 
 ### Important
 
-- Publishing failed in the source tests before any v1.5.0 release assets, container image, or GitHub release was published. Use v1.5.2 instead. The original tag remains unchanged.
+- Publishing failed in the source tests before any v1.5.0 release assets, container image, or GitHub release was published. Use v1.5.3 instead. The original tag remains unchanged.
 
 ## [1.4.5] - 2026-10-11
 
@@ -945,7 +955,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.5...v1.5.0

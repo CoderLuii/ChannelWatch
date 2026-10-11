@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -17,6 +17,8 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 ARCHITECTURES = ("amd64", "arm64")
 BASELINE_VERSIONS = ("1.4.0", "1.4.1")
+CLI_RUNTIME_STAGES = ("after_replace", "after_restart")
+MANDATORY_IMAGE_DEPENDENCIES = ("cryptography", "pydantic_core", "sqlmodel")
 
 
 def require(condition: bool, message: str) -> None:
@@ -30,6 +32,141 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def verify_cli_runtime_info(
+    receipt: dict[str, Any], *, log_directory: Path, candidate_version: str
+) -> None:
+    evidence = receipt.get("cli_runtime_info")
+    require(
+        isinstance(evidence, dict) and set(evidence) == set(CLI_RUNTIME_STAGES),
+        "Image CLI runtime identity evidence is incomplete.",
+    )
+    for stage in CLI_RUNTIME_STAGES:
+        row = evidence[stage]
+        require(
+            isinstance(row, dict) and set(row) == {"sha256", "identity"},
+            "Image CLI runtime identity evidence is invalid.",
+        )
+        path = log_directory / f"candidate-runtime-info-{stage.replace('_', '-')}.json"
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise ValueError("Image CLI runtime identity bytes are unavailable.") from exc
+        require(
+            not path.is_symlink()
+            and path.is_file()
+            and 0 < len(raw) <= 1024 * 1024
+            and SHA256.fullmatch(row.get("sha256", "")) is not None
+            and hashlib.sha256(raw).hexdigest() == row["sha256"],
+            "Image CLI runtime identity bytes are missing or changed.",
+        )
+        try:
+            payload = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Image CLI runtime identity JSON is invalid.") from exc
+        require(
+            isinstance(payload, dict)
+            and set(payload)
+            == {
+                "diagnostic_source",
+                "application_dir",
+                "application_version",
+                "process_runtime",
+                "verified_generation",
+            },
+            "Image CLI runtime identity fields are invalid.",
+        )
+        process = payload["process_runtime"]
+        require(
+            isinstance(process, dict)
+            and set(process)
+            == {
+                "pid",
+                "python_executable",
+                "python_version",
+                "python_prefix",
+                "dependencies",
+            }
+            and type(process["pid"]) is int
+            and process["pid"] > 0
+            and process["python_executable"] == "/venv/bin/python"
+            and process["python_version"] == "3.14.8"
+            and process["python_prefix"] == "/venv",
+            "Image CLI runtime process identity is invalid.",
+        )
+        dependencies = process["dependencies"]
+        expected_dependencies = {
+            "requests",
+            "cryptography",
+            "sqlmodel",
+            "uvicorn",
+            "pydantic_core",
+        }
+        require(
+            isinstance(dependencies, dict)
+            and set(dependencies) == expected_dependencies,
+            "Image CLI runtime dependency fields are invalid.",
+        )
+        for name, dependency in dependencies.items():
+            require(
+                isinstance(dependency, dict)
+                and type(dependency.get("loaded")) is bool,
+                f"Image CLI runtime dependency {name} is invalid.",
+            )
+            if dependency["loaded"]:
+                dependency_path = dependency.get("path")
+                require(
+                    set(dependency) == {"loaded", "path", "version"}
+                    and isinstance(dependency_path, str)
+                    and dependency_path.startswith("/venv/")
+                    and ".." not in PurePosixPath(dependency_path).parts
+                    and str(PurePosixPath(dependency_path)) == dependency_path
+                    and isinstance(dependency.get("version"), str),
+                    f"Image CLI runtime dependency {name} is not image-owned.",
+                )
+            else:
+                require(
+                    set(dependency) == {"loaded"},
+                    f"Image CLI runtime dependency {name} is invalid.",
+                )
+        require(
+            all(dependencies[name]["loaded"] is True for name in MANDATORY_IMAGE_DEPENDENCIES),
+            "Mandatory image CLI runtime dependencies are not loaded.",
+        )
+        mandatory = {
+            name: dependencies[name]["path"]
+            for name in MANDATORY_IMAGE_DEPENDENCIES
+        }
+        identity = {
+            "diagnostic_source": payload.get("diagnostic_source"),
+            "application_dir": payload.get("application_dir"),
+            "application_version": payload.get("application_version"),
+            "python_executable": process.get("python_executable"),
+            "python_version": process.get("python_version"),
+            "mandatory_dependencies": mandatory,
+            "verified_generation": payload.get("verified_generation"),
+        }
+        require(row["identity"] == identity, "Image CLI runtime receipt identity changed.")
+        require(
+            identity["diagnostic_source"] == "image"
+            and identity["application_dir"] == "/app"
+            and identity["application_version"] == candidate_version
+            and identity["python_executable"] == "/venv/bin/python"
+            and identity["python_version"] == "3.14.8"
+            and identity["verified_generation"] is None,
+            "Image CLI runtime identity is not the sealed image runtime.",
+        )
+        require(
+            all(
+                isinstance(path_value, str)
+                and path_value.startswith("/venv/")
+                and ".." not in PurePosixPath(path_value).parts
+                and str(PurePosixPath(path_value)) == path_value
+                for path_value in mandatory.values()
+            ),
+            "Image CLI dependency origin is not image-owned.",
+        )
 
 
 def aggregate(
@@ -152,6 +289,12 @@ def aggregate(
         for field in ("api_health", "headless_browser", "cli", "runtime_ready", "different_container_on_image_upgrade",
                       "same_container_on_candidate_restart", "encrypted_settings_usable"):
             require(receipt.get(field) is True, "A required migration check did not pass.")
+        verify_cli_runtime_info(
+            receipt,
+            log_directory=evidence_directory
+            / f"native-image-upgrade-{architecture}-{version}-logs",
+            candidate_version=candidate_version,
+        )
         require(receipt.get("cleanup") == {"status": "passed", "failures": []}, "Migration cleanup did not pass.")
         logs = receipt.get("logs_sha256", {})
         require(isinstance(logs, dict) and len(logs) == 3, "All migration container logs are required.")

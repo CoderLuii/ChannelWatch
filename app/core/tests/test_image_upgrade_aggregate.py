@@ -50,6 +50,57 @@ def evidence(tmp_path):
                 data = f"{component} healthy\n".encode()
                 (log_dir / (name + ".log")).write_bytes(data)
                 logs[name] = hashlib.sha256(data).hexdigest()
+            cli_runtime_info = {}
+            mandatory_dependencies = {
+                dependency: (
+                    "/venv/lib/python3.14/site-packages/"
+                    f"{dependency}/__init__.py"
+                )
+                for dependency in ("cryptography", "pydantic_core", "sqlmodel")
+            }
+            process_runtime = {
+                "pid": 123,
+                "python_executable": "/venv/bin/python",
+                "python_version": "3.14.8",
+                "python_prefix": "/venv",
+                "dependencies": {
+                    "requests": {"loaded": False},
+                    "uvicorn": {"loaded": False},
+                    **{
+                        name: {"loaded": True, "path": path, "version": "test"}
+                        for name, path in mandatory_dependencies.items()
+                    },
+                },
+            }
+            for stage in ("after_replace", "after_restart"):
+                name = f"candidate-runtime-info-{stage.replace('_', '-')}.json"
+                data = (
+                    json.dumps(
+                        {
+                            "application_dir": "/app",
+                            "application_version": candidate_version,
+                            "diagnostic_source": "image",
+                            "process_runtime": process_runtime,
+                            "verified_generation": None,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode()
+                (log_dir / name).write_bytes(data)
+                cli_runtime_info[stage] = {
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "identity": {
+                        "diagnostic_source": "image",
+                        "application_dir": "/app",
+                        "application_version": candidate_version,
+                        "python_executable": "/venv/bin/python",
+                        "python_version": "3.14.8",
+                        "mandatory_dependencies": mandatory_dependencies,
+                        "verified_generation": None,
+                    },
+                }
             app = baselines["signed_app"]
             platform = next(row for row in descriptor["platforms"] if row["platform"] == "linux/" + arch)
             receipt = {
@@ -91,6 +142,7 @@ def evidence(tmp_path):
                 "external_storage_key_sha256": "7" * 64,
                 "credential_api_semantics": {"after_baseline": True, "after_replace": True, "after_restart": True},
                 "cli_output_sha256": "8" * 64, "browser_output_sha256": "9" * 64,
+                "cli_runtime_info": cli_runtime_info,
                 "logs_sha256": logs, "cleanup": {"status": "passed", "failures": []},
             }
             for name in ("api_health", "headless_browser", "cli", "runtime_ready",
@@ -109,6 +161,22 @@ def run_aggregate(evidence):
                                    descriptor_sha256="4" * 64, evidence_directory=directory)
 
 
+def rewrite_cli_runtime_info(evidence, *, mutation):
+    receipt = evidence[3][("arm64", "1.4.0")]
+    path = (
+        evidence[4]
+        / "native-image-upgrade-arm64-1.4.0-logs"
+        / "candidate-runtime-info-after-restart.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutation(payload)
+    data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    path.write_bytes(data)
+    receipt["cli_runtime_info"]["after_restart"]["sha256"] = hashlib.sha256(
+        data
+    ).hexdigest()
+
+
 def test_complete_native_migration_matrix_is_bound_to_candidate(evidence):
     records = evidence[3]
     assert records[("amd64", "1.4.0")]["candidate"]["image_id"] != (
@@ -119,7 +187,7 @@ def test_complete_native_migration_matrix_is_bound_to_candidate(evidence):
     )
     result = run_aggregate(evidence)
     assert result["status"] == "passed"
-    assert result["candidate_version"] == "1.5.2"
+    assert result["candidate_version"] == "1.5.3"
     assert result["recovers_unpublished_image_milestone"] == "1.5.0"
     assert [(row["architecture"], row["baseline_image_version"]) for row in result["migrations"]] == [
         ("amd64", "1.4.0"), ("amd64", "1.4.1"), ("arm64", "1.4.0"), ("arm64", "1.4.1")
@@ -142,13 +210,31 @@ def test_candidate_version_must_match_the_recovery_fixture(evidence):
 
 
 def test_later_patch_can_recover_the_same_canonical_image_milestone(evidence):
-    baselines, _descriptor, _source, records, _directory = evidence
+    baselines, _descriptor, _source, records, directory = evidence
     baselines["candidate_version"] = "2.7.3"
     baselines["recovers_unpublished_image_milestone"] = "2.7.0"
-    for receipt in records.values():
+    for (architecture, baseline_version), receipt in records.items():
         receipt["candidate_version"] = "2.7.3"
         receipt["candidate_status"]["current_version"] = "2.7.3"
         receipt["candidate_status"]["image_version"] = "2.7.3"
+        for stage in ("after_replace", "after_restart"):
+            path = (
+                directory
+                / f"native-image-upgrade-{architecture}-{baseline_version}-logs"
+                / f"candidate-runtime-info-{stage.replace('_', '-')}.json"
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["application_version"] = "2.7.3"
+            data = (
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+            path.write_bytes(data)
+            receipt["cli_runtime_info"][stage]["sha256"] = hashlib.sha256(
+                data
+            ).hexdigest()
+            receipt["cli_runtime_info"][stage]["identity"][
+                "application_version"
+            ] = "2.7.3"
 
     result = run_aggregate(evidence)
 
@@ -189,7 +275,13 @@ def test_docker_image_id_may_equal_oci_config_digest(evidence):
                                   "descriptor", "image-id-missing", "image-id-malformed",
                                   "image-id-inconsistent", "baseline", "app", "key", "external-key",
                                   "old-id", "restart-id", "old-runtime", "active", "deactivated",
-                                  "command", "boolean", "cleanup", "log", "decrypt"])
+                                  "command", "boolean", "cleanup", "log", "decrypt",
+                                  "cli-runtime-missing", "cli-runtime-digest",
+                                  "cli-runtime-identity", "cli-runtime-file",
+                                  "cli-runtime-schema", "cli-runtime-bool-pid",
+                                  "cli-runtime-prefix", "cli-runtime-unloaded-required",
+                                  "cli-runtime-loaded-origin",
+                                  "cli-runtime-minimal-dependency"])
 def test_incomplete_or_unbound_migration_proof_is_rejected(evidence, case):
     records = evidence[3]
     row = records[("arm64", "1.4.0")]
@@ -254,8 +346,84 @@ def test_incomplete_or_unbound_migration_proof_is_rejected(evidence, case):
         (evidence[4] / "native-image-upgrade-arm64-1.4.0-logs" / (name + ".log")).write_text("tampered")
     elif case == "decrypt":
         row["credential_api_semantics"]["after_restart"] = False
+    elif case == "cli-runtime-missing":
+        row.pop("cli_runtime_info")
+    elif case == "cli-runtime-digest":
+        row["cli_runtime_info"]["after_restart"]["sha256"] = "0" * 64
+    elif case == "cli-runtime-identity":
+        row["cli_runtime_info"]["after_replace"]["identity"][
+            "diagnostic_source"
+        ] = "selected_application"
+    elif case == "cli-runtime-file":
+        path = (
+            evidence[4]
+            / "native-image-upgrade-arm64-1.4.0-logs"
+            / "candidate-runtime-info-after-restart.json"
+        )
+        path.write_text("{}\n", encoding="utf-8")
+    elif case == "cli-runtime-schema":
+        rewrite_cli_runtime_info(
+            evidence, mutation=lambda payload: payload.update(unexpected=True)
+        )
+    elif case == "cli-runtime-bool-pid":
+        rewrite_cli_runtime_info(
+            evidence,
+            mutation=lambda payload: payload["process_runtime"].update(pid=True),
+        )
+    elif case == "cli-runtime-prefix":
+        rewrite_cli_runtime_info(
+            evidence,
+            mutation=lambda payload: payload["process_runtime"].update(
+                python_prefix="/config/channelwatch-runtime"
+            ),
+        )
+    elif case == "cli-runtime-unloaded-required":
+        rewrite_cli_runtime_info(
+            evidence,
+            mutation=lambda payload: payload["process_runtime"]["dependencies"][
+                "cryptography"
+            ].update(loaded=False),
+        )
+    elif case == "cli-runtime-loaded-origin":
+        rewrite_cli_runtime_info(
+            evidence,
+            mutation=lambda payload: payload["process_runtime"]["dependencies"].update(
+                requests={
+                    "loaded": True,
+                    "path": "/config/selected/requests/__init__.py",
+                    "version": "test",
+                }
+            ),
+        )
+    elif case == "cli-runtime-minimal-dependency":
+        rewrite_cli_runtime_info(
+            evidence,
+            mutation=lambda payload: payload["process_runtime"]["dependencies"].update(
+                cryptography={
+                    "path": "/venv/lib/python3.14/site-packages/cryptography/__init__.py"
+                }
+            ),
+        )
     with pytest.raises(ValueError):
         run_aggregate(evidence)
+
+
+def test_runtime_info_bytes_are_read_once_for_hash_and_schema_validation(
+    evidence, monkeypatch
+):
+    original_read_bytes = Path.read_bytes
+    reads: dict[Path, int] = {}
+
+    def tracked_read_bytes(path):
+        if path.name.startswith("candidate-runtime-info-"):
+            reads[path] = reads.get(path, 0) + 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+
+    assert run_aggregate(evidence)["status"] == "passed"
+    assert len(reads) == 8
+    assert set(reads.values()) == {1}
 
 
 def test_real_supervisor_commands_from_helper_are_accepted(evidence, monkeypatch):

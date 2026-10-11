@@ -18,6 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.runtime_identity import (
+    get_verified_runtime_claim,
+    runtime_process_diagnostics,
+)
+
 _MASKED = "****"
 
 _SENSITIVE_TOP_FIELDS: frozenset[str] = frozenset(
@@ -168,6 +173,8 @@ def create_debug_bundle(config_dir: Path) -> bytes:
         "created_by": "channelwatch",
         "app_version": __version__,
         "arch": platform.machine(),
+        "process_runtime": runtime_process_diagnostics(),
+        "verified_generation": get_verified_runtime_claim(),
         "dvr_count": health["dvr_count"],
         "privacy_note": (
             "This bundle contains ONLY sanitized data. "

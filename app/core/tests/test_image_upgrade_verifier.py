@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import subprocess
 import urllib.error
@@ -45,6 +46,185 @@ def _deactivated_active() -> dict:
         "deactivated_at": "2026-10-11T00:00:00Z",
         "deactivated_reason": "image-version-is-current-or-newer",
     }
+
+
+def _runtime_info() -> dict:
+    return {
+        "diagnostic_source": "image",
+        "application_dir": "/app",
+        "application_version": "1.5.3",
+        "process_runtime": {
+            "pid": 123,
+            "python_executable": "/venv/bin/python",
+            "python_version": "3.14.8",
+            "python_prefix": "/venv",
+            "dependencies": {
+                "requests": {"loaded": False},
+                "cryptography": {
+                    "loaded": True,
+                    "path": "/venv/lib/python3.14/site-packages/cryptography/__init__.py",
+                    "version": "46.0.5",
+                },
+                "sqlmodel": {
+                    "loaded": True,
+                    "path": "/venv/lib/python3.14/site-packages/sqlmodel/__init__.py",
+                    "version": "0.0.31",
+                },
+                "pydantic_core": {
+                    "loaded": True,
+                    "path": "/venv/lib/python3.14/site-packages/pydantic_core/__init__.py",
+                    "version": "2.41.5",
+                },
+                "uvicorn": {"loaded": False},
+            },
+        },
+        "verified_generation": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"diagnostic_source": "selected_generation"},
+        {"application_dir": "/config/channelwatch-runtime/releases/" + "a" * 64},
+        {"application_version": "1.5.2"},
+        {"process_runtime": {"python_executable": "/tmp/python"}},
+        {
+            "process_runtime": {
+                **_runtime_info()["process_runtime"],
+                "pid": True,
+            }
+        },
+        {
+            "process_runtime": {
+                **_runtime_info()["process_runtime"],
+                "python_version": "3.14.7",
+            }
+        },
+        {
+            "process_runtime": {
+                **_runtime_info()["process_runtime"],
+                "dependencies": {
+                    **_runtime_info()["process_runtime"]["dependencies"],
+                    "cryptography": {
+                        "loaded": True,
+                        "path": "/venv/lib/python3.14/site-packages/../selected/cryptography.py",
+                        "version": "46.0.5",
+                    },
+                },
+            }
+        },
+        {
+            "process_runtime": {
+                **_runtime_info()["process_runtime"],
+                "dependencies": {
+                    name: {"loaded": False}
+                    for name in _runtime_info()["process_runtime"]["dependencies"]
+                },
+            }
+        },
+        {"verified_generation": {"runtime_generation_id": "a" * 64}},
+    ],
+)
+def test_cli_runtime_info_rejects_non_image_identity(mutation: dict):
+    verifier = _load()
+    payload = {**_runtime_info(), **mutation}
+
+    with pytest.raises(verifier.ImageUpgradeError, match="runtime-info"):
+        verifier.validate_cli_runtime_info(
+            json.dumps(payload),
+            candidate_version="1.5.3",
+            expected_python_version="3.14.8",
+        )
+
+
+def test_cli_runtime_info_runs_image_doctor_and_retains_canonical_evidence(
+    monkeypatch, tmp_path: Path
+):
+    verifier = _load()
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(stdout=json.dumps(_runtime_info()))
+
+    monkeypatch.setattr(verifier, "run", fake_run)
+    evidence = tmp_path / "runtime-info.json"
+
+    result = verifier.verify_cli_runtime_info(
+        "candidate",
+        candidate_version="1.5.3",
+        expected_python_version="3.14.8",
+        evidence_path=evidence,
+    )
+
+    assert commands == [
+        [
+            "docker",
+            "exec",
+            "candidate",
+            "/usr/local/bin/channelwatch",
+            "doctor",
+            "runtime-info",
+        ]
+    ]
+    assert json.loads(evidence.read_text(encoding="utf-8")) == _runtime_info()
+    assert result == {
+        "sha256": verifier.sha256_file(evidence),
+        "identity": {
+            "diagnostic_source": "image",
+            "application_dir": "/app",
+            "application_version": "1.5.3",
+            "python_executable": "/venv/bin/python",
+            "python_version": "3.14.8",
+            "mandatory_dependencies": {
+                "cryptography": "/venv/lib/python3.14/site-packages/cryptography/__init__.py",
+                "pydantic_core": "/venv/lib/python3.14/site-packages/pydantic_core/__init__.py",
+                "sqlmodel": "/venv/lib/python3.14/site-packages/sqlmodel/__init__.py",
+            },
+            "verified_generation": None,
+        },
+    }
+
+
+def test_qualification_checks_cli_identity_before_and_after_restart():
+    verifier = _load()
+    source = inspect.getsource(verifier.qualify)
+
+    replacement = source.index('"candidate-runtime-info-after-replace.json"')
+    restart = source.index('["docker", "restart", candidate]')
+    restarted = source.index('"candidate-runtime-info-after-restart.json"')
+
+    assert replacement < restart < restarted
+    assert source.count("verify_cli_runtime_info(") == 2
+    assert '"cli_runtime_info": {' in source
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        [],
+        ["PYTHON_VERSION=3.14.7"],
+        ["PYTHON_VERSION=3.14.8", "PYTHON_VERSION=3.14.8"],
+        ["PYTHON_VERSION=3.14.8", 42],
+    ],
+)
+def test_candidate_python_version_requires_exact_sealed_image_environment(environment):
+    verifier = _load()
+
+    with pytest.raises(verifier.ImageUpgradeError, match="Python version"):
+        verifier.candidate_python_version({"Config": {"Env": environment}})
+
+
+def test_candidate_python_version_accepts_configured_image_runtime():
+    verifier = _load()
+
+    assert (
+        verifier.candidate_python_version(
+            {"Config": {"Env": ["PATH=/venv/bin:/usr/bin", "PYTHON_VERSION=3.14.8"]}}
+        )
+        == "3.14.8"
+    )
 
 
 def test_upgrade_requires_new_container_then_stable_candidate_restart():
@@ -424,6 +604,23 @@ def test_signed_app_bundle_is_bound_to_public_source_commit(monkeypatch, tmp_pat
         verifier.verify_signed_baseline_assets(
             catalog, bundle, version=version, source_commit="b" * 40
         )
+
+
+def test_dependency_preflight_loads_every_real_helper_without_docker():
+    verifier = _load()
+
+    loaded = {
+        name: verifier._load_script(path, f"dependency_preflight_{name}")
+        for name, path in (
+            ("assets", verifier.ASSET_VERIFIER),
+            ("native", verifier.NATIVE_VERIFIER),
+            ("capability", verifier.CAPABILITY_VERIFIER),
+        )
+    }
+
+    assert callable(loaded["assets"].verify_update_catalog)
+    assert callable(loaded["native"]._safe_extract)
+    assert callable(loaded["capability"].pinned_native_image)
 
 
 @pytest.mark.parametrize(

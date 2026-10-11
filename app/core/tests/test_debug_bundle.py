@@ -134,6 +134,48 @@ class TestManifestContract:
         assert isinstance(m["arch"], str)
         assert len(m["arch"]) > 0
 
+    def test_manifest_has_actual_process_runtime_identity(self, tmp_path):
+        process = {
+            "pid": 123,
+            "python_executable": "/venv/bin/python",
+            "python_version": "3.14.8",
+            "python_prefix": "/venv",
+            "dependencies": {},
+        }
+        claim = {
+            "path": "/config/channelwatch-runtime/releases/v1.5.4",
+            "runtime_generation_id": "a" * 64,
+            "runtime_descriptor_sha256": "b" * 64,
+            "dependency_inventory_sha256": "c" * 64,
+        }
+        with (
+            patch(
+                "core.helpers.debug_bundle.runtime_process_diagnostics",
+                return_value=process,
+            ),
+            patch(
+                "core.helpers.debug_bundle.get_verified_runtime_claim",
+                return_value=claim,
+            ),
+        ):
+            manifest = _read_manifest(_make_config_dir(tmp_path))
+
+        assert manifest["process_runtime"] == process
+        assert manifest["verified_generation"] == claim
+
+    def test_manifest_does_not_infer_generation_from_environment(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "CHANNELWATCH_APP_DIR", "/config/channelwatch-runtime/releases/v1.5.4"
+        )
+        with patch(
+            "core.helpers.debug_bundle.get_verified_runtime_claim", return_value=None
+        ):
+            manifest = _read_manifest(_make_config_dir(tmp_path))
+
+        assert manifest["verified_generation"] is None
+
     def test_manifest_has_dvr_count(self, tmp_path):
         m = _read_manifest(_make_config_dir(tmp_path))
         assert "dvr_count" in m

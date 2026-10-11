@@ -216,19 +216,19 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:1.5.2` for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use `coderluii/channelwatch:1.5.3` for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
 
-ChannelWatch v1.5.2 requires a container image update. Every published v1.4.x installation needs this one-time recreation to receive launcher protocol 4. Keep the same `/config` volume; saved DVRs, credentials, settings, history, and the application-managed encryption key remain there.
+ChannelWatch v1.5.3 requires a container image update. Every published v1.4.x installation needs this one-time recreation to receive launcher protocol 4. Keep the same `/config` volume; saved DVRs, credentials, settings, history, and the application-managed encryption key remain there.
 
-After v1.5.2 is running, **Settings > Updates** can install a future compatible application and its official Python packages as one complete signed runtime generation in the same container. ChannelWatch prepares the generation away from the active runtime, restarts, verifies the matching core and UI, and rolls the application and packages back together if startup fails. v1.5.2 supplies the image foundation; it does not publish a runtime-generation payload. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
+After v1.5.3 is running, **Settings > Updates** can install a future compatible application and its official Python packages as one complete signed runtime generation in the same container. ChannelWatch prepares the generation away from the active runtime, restarts, verifies the matching core and UI, and rolls the application and packages back together if startup fails. v1.5.3 supplies the image foundation; it does not publish a runtime-generation payload. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 
-Published v1.0.0 through v1.4.x use `X.Y.0` as a container-image milestone, while compatible `X.Y.1` through `X.Y.9` releases install through the signed Update Center. v1.5.0 failed in source testing, and v1.5.1 failed during candidate signing because its publication time preceded the candidate commit. Neither tag produced a GitHub release, release assets, or container image; both original tags remain unchanged. v1.5.2 delivers that image foundation instead. A future `.0` release can retain the proven v1.5.2 image floor only when its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. After `X.Y.9`, ChannelWatch advances to `X.(Y+1).0` rather than publishing patch 10.
+Published v1.0.0 through v1.4.x use `X.Y.0` as a container-image milestone, while compatible `X.Y.1` through `X.Y.9` releases install through the signed Update Center. v1.5.0 failed in source testing, v1.5.1 failed during candidate signing because its publication time preceded the candidate commit, and v1.5.2 failed during native migration qualification because the release verifier environment lacked `httpx`. None produced a GitHub release, release assets, or container image; all three original tags remain unchanged. v1.5.3 delivers that image foundation instead. A future `.0` release can retain the proven v1.5.3 image floor only when its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. After `X.Y.9`, ChannelWatch advances to `X.(Y+1).0` rather than publishing patch 10.
 
-**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve the existing `/config` volume and any external storage key configuration, then pull/recreate the v1.5.2 image directly. The current image repairs stale legacy update markers without discarding the preserved configuration. Future compatible releases use the improved Update Center normally.
+**Still on v0.9.9 or v0.9.10? Do not use the old in-app bridge for this upgrade.** Preserve the existing `/config` volume and any external storage key configuration, then pull/recreate the v1.5.3 image directly. The current image repairs stale legacy update markers without discarding the preserved configuration. Future compatible releases use the improved Update Center normally.
 
-The older-client restart report in [issue #22](https://github.com/CoderLuii/ChannelWatch/issues/22) remains open. Its cause has not been proven, and v1.5.2 does not present it as resolved.
+The older-client restart report in [issue #22](https://github.com/CoderLuii/ChannelWatch/issues/22) remains open. Its cause has not been proven, and v1.5.3 does not present it as resolved.
 
 Once v0.9.18 or newer is installed, its setup and legacy-recovery shell can use only the official signed stable recovery channel before normal administrator navigation is available. The narrow recovery action uses same-origin anti-CSRF state and exact typed confirmation; it cannot accept custom feeds, URLs, uploads, signing keys, or downgrades.
 
@@ -242,7 +242,7 @@ Some releases still require a normal container image update. ChannelWatch will s
 
 Fresh v1.0.0 Project One-Click installations do not need a template variable for encryption. ChannelWatch creates its key automatically under the persistent `/config` volume.
 
-If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first restart on a migration-capable image (v0.9.18 or newer), including v1.5.2. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. For v0.9.9 and v0.9.10, keep those inputs when recreating directly with v1.5.2; their preserved envelopes migrate when the new image starts.
+If an older v0.9.5–v0.9.17 installation already has a legacy envelope, leave its existing `CHANNELWATCH_SECRET_STORAGE_KEY` or key-file input in place for the first restart on a migration-capable image (v0.9.18 or newer), including v1.5.3. ChannelWatch preserves the same logical key, converts it atomically to managed local storage, and then stops depending on that variable. For v0.9.9 and v0.9.10, keep those inputs when recreating directly with v1.5.3; their preserved envelopes migrate when the new image starts.
 
 If the old value is unavailable or incorrect, ChannelWatch does not overwrite the protected data. Sign in and open **Settings > Security** to retry migration after restoring the value, or explicitly reset only the unrecoverable DVR API keys and custom webhook URLs/secrets while preserving other settings and history. The third-party Project One-Click repository is not modified or redistributed by ChannelWatch.
 
@@ -257,8 +257,11 @@ Useful in-container checks:
 ```sh
 docker exec -it channelwatch channelwatch doctor config-check
 docker exec -it channelwatch channelwatch doctor diagnose
+docker exec -it channelwatch channelwatch doctor runtime-info
 docker exec -it channelwatch channelwatch doctor reset-admin-password --username <admin>
 ```
+
+`runtime-info` reports the image-owned diagnostic process and any runtime generation verified in that process. The CLI deliberately uses the container image's application code and Python environment, even when the web workers are running a newer signed generation.
 
 For UI-based diagnostics, open ChannelWatch and use the Diagnostics page. It can test DVR connectivity, API behavior, notification delivery, disk checks, debug-bundle generation, and the in-app **Report a Problem** flow.
 

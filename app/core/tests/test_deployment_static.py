@@ -104,7 +104,7 @@ def test_container_helper_uses_the_shipped_virtual_environment():
         encoding="utf-8"
     )
 
-    assert helper.startswith("#!/venv/bin/python\n")
+    assert helper.startswith("#!/venv/bin/python -I\n")
 
 
 def test_dockerfile_builds_static_ui_on_native_build_platform():

@@ -143,13 +143,17 @@ Invoke it inside a running container:
 ```sh
 docker exec <container_name_or_id> channelwatch doctor config-check
 docker exec <container_name_or_id> channelwatch doctor diagnose
+docker exec <container_name_or_id> channelwatch doctor runtime-info
 docker exec <container_name_or_id> channelwatch doctor debug bundle --output /config/channelwatch_debug_bundle.zip
 ```
+
+The wrapper always launches the doctor with the image-owned application and Python interpreter. It does not import a selected runtime generation or inherit its Python and loader paths. Configuration commands still read the normal persisted `/config` data.
 
 Available commands:
 
 * `config-check` dry runs settings validation through both the core loader and UI schema loader. It reports how many DVRs each loader accepted.
 * `diagnose` validates configured, enabled, non deleted DVRs. It checks TCP connectivity, reads each DVR `/status` response, checks DVR version compatibility, and verifies `/api/v1/channels` authentication behavior with the configured DVR API key when present.
+* `runtime-info` prints JSON for the actual diagnostic process. `diagnostic_source` identifies whether the loaded application is the container image, a selected application, or another application. `application_dir` and `application_version` describe that loaded code; `process_runtime` describes the interpreter and loaded dependency origins; and `verified_generation` is present only when that process has verified a runtime generation. It does not infer a generation from an active pointer or environment variable. The installed `channelwatch` wrapper deliberately launches the image application and therefore reports `diagnostic_source` as `image`.
 * `debug bundle` writes a sanitized debug bundle zip to the requested output path. The default output path is `channelwatch_debug_bundle.zip` in the current working directory.
 * `rotate-encryption-key` rotates the local encryption key and re-encrypts stored DVR API keys plus protected webhook URLs and secrets in one transaction.
 * `reset-admin-password` resets an RBAC admin password when secure login is active. Pass `--password` for automation, or omit it to enter the new password through a hidden prompt.

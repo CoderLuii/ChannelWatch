@@ -5,6 +5,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -293,6 +294,112 @@ def _patch_two_recovery_config(**overrides):
     )
     config.update(overrides)
     return config
+
+
+def _patch_three_recovery_config(**overrides):
+    config = _recovery_config(
+        version="1.5.3",
+        minimum_image_version="1.5.3",
+        recommended_image_version="1.5.3",
+        unpublished_predecessor_tags=["v1.5.2", "v1.5.1", "v1.5.0"],
+        unpublished_release_tags=[
+            "v1.4.2",
+            "v1.4.3",
+            "v1.4.4",
+            "v1.5.0",
+            "v1.5.1",
+            "v1.5.2",
+        ],
+    )
+    config.update(overrides)
+    return config
+
+
+def test_patch_three_recovery_accepts_the_exact_descending_predecessor_chain():
+    module = _load_script(
+        "release_version_policy_patch_three_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+
+    policy = module.validate_release_config(_patch_three_recovery_config())
+
+    assert policy.image_milestone is True
+    assert policy.minimum_image_version == "1.5.3"
+    assert policy.retained_capability_floor is False
+
+
+def test_current_release_config_declares_the_patch_three_recovery_contract():
+    module = _load_script(
+        "release_version_policy_current_patch_three_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+    config = json.loads(
+        (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
+    )
+
+    policy = module.validate_release_config(config)
+
+    assert config["version"] == "1.5.3"
+    assert config["minimum_image_version"] == "1.5.3"
+    assert config["recommended_image_version"] == "1.5.3"
+    assert config["publication_time"].endswith("Z")
+    assert config["automatic_install_after"].endswith("Z")
+    publication = datetime.fromisoformat(
+        config["publication_time"].removesuffix("Z") + "+00:00"
+    )
+    automatic = datetime.fromisoformat(
+        config["automatic_install_after"].removesuffix("Z") + "+00:00"
+    )
+    assert publication.tzinfo == timezone.utc
+    assert automatic.tzinfo == timezone.utc
+    assert automatic - publication == timedelta(days=7)
+    assert config["automatic_install_allowed"] is False
+    assert config["compatible_source_application_versions"] == [
+        "1.4.0",
+        "1.4.1",
+        "1.4.2",
+        "1.4.3",
+        "1.4.4",
+        "1.4.5",
+    ]
+    assert config["runtime_generation_required"] is False
+    assert config["runtime_compatibility_evidence"] == {}
+    assert config["recovers_unpublished_image_milestone"] == "1.5.0"
+    assert config["unpublished_predecessor_tags"] == [
+        "v1.5.2",
+        "v1.5.1",
+        "v1.5.0",
+    ]
+    assert config["unpublished_release_tags"] == [
+        "v1.4.2",
+        "v1.4.3",
+        "v1.4.4",
+        "v1.5.0",
+        "v1.5.1",
+        "v1.5.2",
+    ]
+    assert policy.image_milestone is True
+    assert policy.minimum_image_version == "1.5.3"
+    assert policy.retained_capability_floor is False
+
+
+@pytest.mark.parametrize(
+    "predecessors",
+    [
+        ["v1.5.1", "v1.5.0"],
+        ["v1.5.0", "v1.5.1", "v1.5.2"],
+    ],
+)
+def test_patch_three_recovery_rejects_missing_or_reversed_predecessors(predecessors):
+    module = _load_script(
+        "release_version_policy_invalid_patch_three_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+
+    with pytest.raises(ValueError, match="exact contiguous unpublished predecessors"):
+        module.validate_release_config(
+            _patch_three_recovery_config(unpublished_predecessor_tags=predecessors)
+        )
 
 
 def test_patch_two_recovery_accepts_the_exact_descending_predecessor_chain():

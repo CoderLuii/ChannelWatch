@@ -116,12 +116,75 @@ def test_runtime_archive_accepts_stream_without_closing_it(monkeypatch):
 def test_worker_diagnostics_do_not_treat_environment_as_verified_claim(tmp_path, monkeypatch):
     import sys
 
+    from core import update_center
+
     monkeypatch.setattr(sys, "_channelwatch_runtime_generation_identity", None, raising=False)
     monkeypatch.setenv("CHANNELWATCH_RUNTIME_GENERATION_ID", "a" * 64)
+    diagnostics = {
+        "pid": 101,
+        "python_version": sys.version.split()[0],
+        "python_executable": sys.executable,
+        "python_prefix": sys.prefix,
+        "dependencies": {"sqlalchemy": {"loaded": False}},
+    }
+    monkeypatch.setattr(update_center, "runtime_process_diagnostics", lambda: diagnostics)
     manager = UpdateManager(config_dir=tmp_path, current_version="1.5.0")
     worker = manager.status()["worker_runtime"]
     assert worker == {
-        "python_version": sys.version.split()[0],
-        "python_executable": sys.executable,
+        **diagnostics,
         "verified_generation": None,
+    }
+
+
+def test_worker_status_binds_selected_control_identity_and_process_diagnostics(
+    tmp_path, monkeypatch
+):
+    import sys
+
+    from core import update_center
+
+    generation = (tmp_path / "channelwatch-runtime" / "releases" / ("a" * 64))
+    generation.mkdir(parents=True)
+    identity = {
+        "path": str(generation.resolve()),
+        "runtime_generation_id": "a" * 64,
+        "runtime_descriptor_sha256": "b" * 64,
+        "dependency_inventory_sha256": "c" * 64,
+    }
+    active = {
+        "version": "1.5.4",
+        "activation_id": "activation-1",
+        **identity,
+    }
+    diagnostics = {
+        "pid": 202,
+        "python_version": "3.14.1",
+        "python_executable": f"{generation}/environment/bin/python",
+        "python_prefix": f"{generation}/environment",
+        "dependencies": {
+            "sqlalchemy": {
+                "loaded": True,
+                "path": f"{generation}/dependencies/site-packages/sqlalchemy/__init__.py",
+                "version": "2.1.4",
+            }
+        },
+    }
+    monkeypatch.setattr(
+        sys, "_channelwatch_runtime_generation_identity", identity, raising=False
+    )
+    monkeypatch.setattr(update_center, "runtime_process_diagnostics", lambda: diagnostics)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="1.5.4",
+        image_version="1.5.3",
+        launcher_protocol=4,
+    )
+    manager.active_path.write_text(json.dumps(active), encoding="utf-8")
+
+    status = manager.status()
+
+    assert status["active_bundle"] == active
+    assert status["worker_runtime"] == {
+        **diagnostics,
+        "verified_generation": identity,
     }

@@ -1069,6 +1069,60 @@
       ],
       "revocation_state": "active",
       "publication_time": "2026-10-11T05:45:00Z"
+    },
+    {
+      "version": "1.5.3",
+      "version_tag": "v1.5.3",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": true,
+      "delivery_mode": "image_required",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.5.3",
+      "updater_protocol": 4,
+      "recommended_image_version": "1.5.3",
+      "automatic_install_allowed": false,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.5.3",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.5.3/channelwatch-app-v1.5.3.zip",
+      "bundle_sha256": "292591f6aecacade15e1180a4681aed196fa49d166cdff7f1effe63d99b91f93",
+      "bundle_signature": "N8yNeYRKgxvp9kaO1ySKWsXn9e7XnFPMdmCUbc8M2DVH10AgIgk0Pu92+yVRqJ1xj6s3CtkN4Bp+KkynWAmFBQ==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-10-11T18:19:42Z",
+      "highlights": [
+        "Container image update required. Pull v1.5.3 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.",
+        "v1.5.3 supplies the image foundation. It does not publish a runtime-generation payload. Future compatible releases can deliver a complete signed application and official Python package generation through **Settings > Updates** in the same container.",
+        "Let future compatible releases update the application and official Python packages together from **Settings > Updates**. ChannelWatch prepares, verifies, activates, and rolls back the complete signed runtime generation as one unit.",
+        "Keep Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates on the container image path.",
+        "Require future image-floor retention to pass compatibility, restart, and rollback checks on both native AMD64 and native ARM64.",
+        "Keep `channelwatch doctor` on the image-owned application and Python environment, isolate it from selected-generation import paths, and report the actual diagnostic runtime identity.",
+        "Keep runtime security tests independent of the hosted test interpreter's writable permissions while continuing to reject unsafe interpreter paths.",
+        "Verify unpublished milestone recovery before publishing the replacement image and its four native migration reports.",
+        "Make interrupted update preparation retryable after the current runtime starts again, while preserving the selected release and saved configuration.",
+        "Keep update policy button labels readable on smaller screens.",
+        "The older-client restart report in issue #22 remains open. Its cause has not been proven, and v1.5.3 does not claim to resolve it."
+      ],
+      "automatic_install_after": "2026-10-18T18:19:42Z",
+      "compatible_source_application_versions": [
+        "1.4.0",
+        "1.4.1",
+        "1.4.2",
+        "1.4.3",
+        "1.4.4",
+        "1.4.5"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        4
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-10-11T18:19:42Z"
     }
   ]
 }

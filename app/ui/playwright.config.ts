@@ -6,7 +6,7 @@ const baseURL = externalBaseURL || `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: "./playwright",
-  testIgnore: /.*auth-bootstrap-live\.spec\.ts/,
+  testIgnore: /.*(?:auth-bootstrap-live|runtime-update-live-smoke)\.spec\.ts/,
   // Browser text rasterization and line wrapping differ slightly between the
   // macOS review host and GitHub's Linux runners. Keep reviewed baselines for
   // each platform instead of weakening the visual-diff threshold.

@@ -21,6 +21,7 @@ The following components are licensed under the Apache License, Version 2.0:
   - cryptography (https://github.com/pyca/cryptography)
   - bcrypt (https://github.com/pyca/bcrypt)
   - python-multipart (https://github.com/andrew-d/python-multipart)
+  - opentelemetry-api (https://github.com/open-telemetry/opentelemetry-python)
 
 This product also includes software licensed under the GNU Lesser General
 Public License v2.1 (LGPL 2.1):

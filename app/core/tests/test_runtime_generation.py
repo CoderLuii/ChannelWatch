@@ -118,7 +118,11 @@ def _descriptor_payload(
 ) -> dict:
     selected_platform = platform_value or _platform()
     dependency_files = [
-        _file_record(root, "dependencies/site-packages/example_package/__init__.py")
+        _file_record(root, "dependencies/site-packages/example_package/__init__.py"),
+        _file_record(
+            root,
+            "dependencies/site-packages/example_package/native_extension.so",
+        ),
     ]
     inventory = _inventory(root, dependency_files)
     inventory_bytes = _json_bytes(inventory)
@@ -164,6 +168,7 @@ def _generation_tree(tmp_path: Path, *, platform_value=None):
         "core/main.py": b"print('core')\n",
         "ui/backend/main.py": b"print('ui')\n",
         "dependencies/site-packages/example_package/__init__.py": b"VERSION = '1.0.0'\n",
+        "dependencies/site-packages/example_package/native_extension.so": b"signed-native-extension\n",
         "dependencies/licenses/example-package/LICENSE": b"MIT\n",
     }.items():
         path = staging / relative
@@ -933,7 +938,16 @@ def test_executable_storage_probe_rejects_real_noexec_mount():
         _assert_executable_directory(Path(noexec_dir))
 
 
-def test_verify_rejects_tampering_after_preparation(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "dependencies/site-packages/example_package/__init__.py",
+        "dependencies/site-packages/example_package/native_extension.so",
+    ],
+)
+def test_verify_rejects_signed_dependency_tampering_after_preparation(
+    tmp_path, monkeypatch, relative_path
+):
     from core import runtime_generation
 
     generation_dir, descriptor = _generation_tree(tmp_path)
@@ -941,12 +955,16 @@ def test_verify_rejects_tampering_after_preparation(tmp_path, monkeypatch):
     generation = runtime_generation.prepare_runtime_generation(
         generation_dir, descriptor
     )
-    (generation_dir / "dependencies/site-packages/example_package/__init__.py").write_text(
-        "VERSION = 'evil'\n", encoding="utf-8"
-    )
+    active_path = tmp_path / "channelwatch-runtime/active.json"
+    active_path.parent.mkdir(parents=True)
+    active_before = b'{"path":"/previous/app","version":"1.4.3"}\n'
+    active_path.write_bytes(active_before)
+    (generation_dir / relative_path).write_bytes(b"tampered-after-preparation\n")
 
     with pytest.raises(RuntimeGenerationError):
         runtime_generation.verify_runtime_generation(generation)
+
+    assert active_path.read_bytes() == active_before
 
 
 def test_verify_rejects_tampered_receipt(tmp_path, monkeypatch):
@@ -1088,6 +1106,28 @@ def test_verify_rejects_replaced_environment_interpreter_link(tmp_path, monkeypa
 
     with pytest.raises(RuntimeGenerationError):
         runtime_generation.verify_runtime_generation(generation)
+
+
+def test_verify_rejects_deleted_prepared_interpreter_without_changing_selection(
+    tmp_path, monkeypatch
+):
+    from core import runtime_generation
+
+    generation_dir, descriptor = _generation_tree(tmp_path)
+    monkeypatch.setattr(runtime_generation, "detect_runtime_platform", _platform)
+    generation = runtime_generation.prepare_runtime_generation(
+        generation_dir, descriptor
+    )
+    active_path = tmp_path / "channelwatch-runtime/active.json"
+    active_path.parent.mkdir(parents=True)
+    active_before = b'{"path":"/previous/app","version":"1.4.3"}\n'
+    active_path.write_bytes(active_before)
+    generation.python_executable.unlink()
+
+    with pytest.raises(RuntimeGenerationError):
+        runtime_generation.verify_runtime_generation(generation)
+
+    assert active_path.read_bytes() == active_before
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink hard links are POSIX-only")

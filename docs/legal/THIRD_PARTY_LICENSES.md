@@ -1,5 +1,7 @@
 # Third-Party Licenses
 
+<!-- cspell:ignore httptools pycparser cffi -->
+
 ChannelWatch is built on open-source software. This file lists the major runtime dependencies, their versions, and their licenses. The dependency manifests in `deploy/requirements/runtime.txt`, `app/ui/package.json`, and `app/ui/pnpm-lock.yaml` are the authoritative dependency lists.
 
 ---
@@ -13,32 +15,41 @@ ChannelWatch is built on open-source software. This file lists the major runtime
 | [requests](https://requests.readthedocs.io/) | >=2.34.2 | Apache 2.0 | HTTP client |
 | [httpx](https://www.python-httpx.org/) | >=0.28.1 | BSD 3-Clause | Async HTTP client |
 | [pytz](https://pythonhosted.org/pytz/) | >=2026.5 | MIT | Timezone support |
-| [pydantic](https://docs.pydantic.dev/) | >=2.13.5 | MIT | Data validation and settings |
-| [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.47 | MIT | SQLite models and persistence |
+| [pydantic](https://docs.pydantic.dev/) | >=2.14.0 | MIT | Data validation and settings |
+| [SQLModel](https://sqlmodel.tiangolo.com/) | >=0.0.48 | MIT | SQLite models and persistence |
 | [bcrypt](https://github.com/pyca/bcrypt/) | >=5.0.0 | Apache 2.0 | Password hashing |
 | [cryptography](https://cryptography.io/) | >=50.0.2 | Apache 2.0 / BSD | Per-DVR API-key encryption and TLS helpers |
 | [apprise](https://github.com/caronc/apprise) | >=1.13.1, <2 | MIT | Multi-provider notification delivery |
 | [oauthlib](https://github.com/oauthlib/oauthlib) | >=4.0.0 | BSD 3-Clause | OAuth request signing used by notification providers |
-| [fastapi](https://fastapi.tiangolo.com/) | >=0.142.2 | MIT | Web API framework |
+| [fastapi](https://fastapi.tiangolo.com/) | >=0.143.0 | MIT | Web API framework |
 | [uvicorn](https://uvicorn.dev/) | >=0.54.0 | BSD 3-Clause | ASGI server |
 | [python-multipart](https://github.com/Kludex/python-multipart) | >=0.0.32 | Apache 2.0 | Multipart form parsing for FastAPI uploads |
 | [zeroconf](https://github.com/python-zeroconf/python-zeroconf) | >=0.151.5 | LGPL 2.1 | mDNS/Bonjour DVR discovery |
 | [supervisor](http://supervisord.org/) | >=4.3.0 | BSD-derived (Repoze) | Process manager inside container |
 
-### Transitive dependencies (selected)
+### Runtime generation dependencies (selected)
 
-The packages above pull in additional transitive dependencies. Key ones with notable licenses:
+The packages above pull in additional dependencies. This table records the exact versions in `deploy/requirements/runtime-update.lock` for selected runtime-generation packages and packages with notable licenses:
 
-| Package | License | Notes |
-|---------|---------|-------|
-| [starlette](https://www.starlette.io/) | BSD 3-Clause | ASGI toolkit (FastAPI dependency) |
-| [anyio](https://anyio.readthedocs.io/) | MIT | Async compatibility layer |
-| [certifi](https://github.com/certifi/python-certifi) | MPL 2.0 | CA certificate bundle |
-| [charset-normalizer](https://github.com/Ousret/charset_normalizer) | MIT | Character encoding detection |
-| [idna](https://github.com/kjd/idna) | BSD-like | Internationalized domain names |
-| [urllib3](https://urllib3.readthedocs.io/) | MIT | HTTP connection pooling |
-| [click](https://click.palletsprojects.com/) | BSD 3-Clause | CLI framework (uvicorn) |
-| [h11](https://github.com/python-hyper/h11) | MIT | HTTP/1.1 implementation |
+| Package | Locked version | License | Notes |
+|---------|----------------|---------|-------|
+| [anyio](https://anyio.readthedocs.io/) | 4.15.1 | MIT | Async compatibility layer |
+| [certifi](https://github.com/certifi/python-certifi) | 2026.7.22 | MPL 2.0 | CA certificate bundle |
+| [charset-normalizer](https://github.com/jawah/charset_normalizer) | 3.5.2 | MIT | Character encoding detection |
+| [click](https://click.palletsprojects.com/) | 8.5.0 | BSD 3-Clause | CLI framework used by uvicorn |
+| [h11](https://github.com/python-hyper/h11) | 0.16.0 | MIT | HTTP/1.1 implementation |
+| [httptools](https://github.com/MagicStack/httptools) | 0.9.0 | MIT | HTTP protocol parser used by uvicorn |
+| [idna](https://github.com/kjd/idna) | 3.20 | BSD-like | Internationalized domain names |
+| [Markdown](https://github.com/Python-Markdown/markdown) | 3.11 | BSD 3-Clause | Markdown processing used by Apprise |
+| [opentelemetry-api](https://github.com/open-telemetry/opentelemetry-python) | 1.45.1 | Apache 2.0 | Observability API used by FastAPI |
+| [pycparser](https://github.com/eliben/pycparser) | 3.11 | BSD 3-Clause | C parser used by cffi |
+| [python-dotenv](https://github.com/theskumar/python-dotenv) | 1.2.4 | BSD 3-Clause | Environment-file support used by uvicorn |
+| [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy) | 2.1.4 | MIT | Database toolkit used by SQLModel |
+| [starlette](https://www.starlette.io/) | 1.7.0 | BSD 3-Clause | ASGI toolkit used by FastAPI |
+| [urllib3](https://urllib3.readthedocs.io/) | 2.8.0 | MIT | HTTP connection pooling |
+| [websockets](https://github.com/python-websockets/websockets) | 17.2 | BSD 3-Clause | WebSocket implementation used by uvicorn |
+
+The locked runtime generation contains 40 packages. SQLAlchemy 2.1.4 does not add `greenlet` to this closure.
 
 ---
 
@@ -107,4 +118,4 @@ Dependencies with one of these licenses need to be replaced or reviewed before t
 
 ---
 
-Inventory review: 2026-10-05 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `app/ui/package.json`, the pinned container inputs above, and the refreshed runtime package inventory. Release SBOMs remain the authoritative exact inventory.
+Inventory review: 2026-10-11 against `deploy/requirements/runtime.txt`, `deploy/requirements/runtime.constraints.txt`, `deploy/requirements/runtime-update.lock`, `app/ui/package.json`, the pinned container inputs above, and the refreshed runtime package inventory. Release SBOMs remain the authoritative exact inventory.

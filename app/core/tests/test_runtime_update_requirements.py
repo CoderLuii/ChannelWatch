@@ -68,13 +68,15 @@ def test_runtime_update_lock_matches_existing_closure_versions_without_managemen
     expected = pins(CONSTRAINTS)
     for name in EXCLUDED:
         expected.pop(name)
-    assert len(expected) == 41
+    assert len(expected) == 40
+    assert expected["sqlalchemy"] == "2.1.4"
+    assert "greenlet" not in expected
     assert pins(LOCK) == expected
 
 
 def test_runtime_update_lock_is_exact_hash_only_binary_input():
     lines = logical_lock_lines()
-    assert len(lines) == 41
+    assert len(lines) == 40
     hash_counts = []
     for line in lines:
         assert re.fullmatch(
@@ -82,8 +84,8 @@ def test_runtime_update_lock_is_exact_hash_only_binary_input():
             line,
         ), line
         hash_counts.append(line.count("--hash=sha256:"))
-    assert sum(hash_counts) == 54
-    assert hash_counts.count(2) == 13
+    assert sum(hash_counts) == 52
+    assert hash_counts.count(2) == 12
     assert hash_counts.count(1) == 28
     text = LOCK.read_text(encoding="utf-8").lower()
     assert "http://" not in text
@@ -97,4 +99,7 @@ def test_runtime_update_lock_is_exact_hash_only_binary_input():
 def test_runtime_dependency_builder_accepts_release_inputs():
     builder = load_dependency_builder()
     assert len(builder.parse_requested_requirements(REQ)) == 13
-    assert len(builder.parse_locked_requirements(LOCK)) == 41
+    locked = builder.parse_locked_requirements(LOCK)
+    assert len(locked) == 40
+    assert {item.name: item.version for item in locked}["sqlalchemy"] == "2.1.4"
+    assert all(item.name != "greenlet" for item in locked)

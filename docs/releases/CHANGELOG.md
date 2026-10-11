@@ -1,5 +1,7 @@
 # Changelog
 
+<!-- cspell:ignore httptools pycparser -->
+
 All notable changes to this project will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
@@ -7,6 +9,29 @@ All notable changes to this project will be documented in this file. The format 
 ### Changed
 
 - Keep this section for changes that have landed after the latest drafted release entry.
+
+## [1.5.4] - 2026-10-11
+
+### Important
+
+- Install the v1.5.3 container image once before using this update. Keep the existing `/config` volume and external storage key configuration.
+- On a compatible v1.5.3 image, install v1.5.4 from **Settings > Updates**. ChannelWatch prepares the signed application and Python packages, then restarts its processes inside the same container.
+- Automatic installation is disabled for this first package release. Install it manually from Update Center.
+- Python itself, operating-system libraries, Supervisor and image-owned startup and verification tools still use the container image update path.
+
+### Added
+
+- Install signed application and Python package updates together from **Settings > Updates** on compatible v1.5.3 images.
+- Report the responding selected worker's package versions, loaded state and paths in update diagnostics without importing unloaded optional modules.
+
+### Changed
+
+- Update charset-normalizer to 3.5.2, httptools to 0.9.0, Markdown to 3.11, opentelemetry-api to 1.45.1, pycparser to 3.11, python-dotenv to 1.2.4, SQLAlchemy to 2.1.4 and websockets to 17.2.
+- Sign and validate the complete 40-package official Python closure with the application, including the eight updated packages.
+
+### Known issues
+
+- The older-client restart report in [issue #22](https://github.com/CoderLuii/ChannelWatch/issues/22) remains open. This release does not establish its cause or claim to resolve it.
 
 ## [1.5.3] - 2026-10-11
 
@@ -955,7 +980,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...v1.5.1

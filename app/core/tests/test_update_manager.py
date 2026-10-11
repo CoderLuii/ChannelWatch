@@ -2640,7 +2640,10 @@ def test_startup_success_rejects_stale_activation_generation(tmp_path: Path):
     assert not (runtime_dir / "active.json").exists()
 
 
-def test_unhealthy_component_cannot_complete_activation(tmp_path: Path):
+@pytest.mark.parametrize("unhealthy_component", ["core", "ui"])
+def test_unhealthy_component_restores_exact_prior_identity_once(
+    tmp_path: Path, unhealthy_component: str
+):
     private, public = _key_pair()
     bundle = _bundle()
     manifest = _manifest(private, bundle)
@@ -2652,24 +2655,50 @@ def test_unhealthy_component_cannot_complete_activation(tmp_path: Path):
         fetcher=lambda url, max_bytes: bundle if url.endswith(".zip") else manifest,
         restart_callable=lambda: not restarts.append(True),
     )
+    previous_dir = tmp_path / "previous-app"
+    previous_dir.mkdir()
+    previous_identity = {
+        "version": "0.9.9",
+        "path": str(previous_dir),
+        "runtime_abi": RUNTIME_ABI,
+        "settings_schema_version": 7,
+        "runtime_generation_id": "a" * 64,
+        "runtime_descriptor_sha256": "b" * 64,
+        "dependency_inventory_sha256": "c" * 64,
+    }
+    manager.runtime_dir.mkdir(parents=True, exist_ok=True)
+    manager.active_path.write_text(json.dumps(previous_identity), encoding="utf-8")
     manager.check()
     manager.apply()
     _acknowledge_entrypoint_handoff(manager)
     active = json.loads((tmp_path / "channelwatch-runtime" / "active.json").read_text())
 
     manager.record_startup_success(
-        component="ui",
+        component=unhealthy_component,
         running_version="0.9.10",
         activation_id=active["activation_id"],
         healthy=False,
     )
 
-    job = json.loads(
-        (tmp_path / "channelwatch-runtime" / "update-job.json").read_text()
-    )
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    job = json.loads((runtime_dir / "update-job.json").read_text())
     assert job["status"] == "failed"
     assert job["rollback_applied"] is True
+    assert json.loads(manager.active_path.read_text(encoding="utf-8")) == (
+        previous_identity
+    )
     assert restarts == [True, True]
+
+    manager.record_startup_success(
+        component="ui" if unhealthy_component == "core" else "core",
+        running_version="0.9.10",
+        activation_id=active["activation_id"],
+        healthy=True,
+    )
+
+    assert json.loads((runtime_dir / "update-job.json").read_text()) == job
+    assert restarts == [True, True]
+    assert not (runtime_dir / "activation-pending.json").exists()
 
 
 def test_activation_rollback_records_and_raises_when_restart_is_rejected(

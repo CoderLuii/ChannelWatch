@@ -956,42 +956,37 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_153_replacement_dependency_image_bootstrap():
+def test_release_config_declares_154_dependency_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
     policy_module = _load_script(
-        "release_version_policy_current_recovery",
+        "release_version_policy_current_dependency_update",
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.5.3"
-    assert config["image_required"] is True
-    assert config["delivery_mode"] == "image_required"
+    assert config["version"] == "1.5.4"
+    assert config["image_required"] is False
+    assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.5.3"
+    assert config["recommended_image_version"] == "1.5.4"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == [
-        "1.4.0",
-        "1.4.1",
-        "1.4.2",
-        "1.4.3",
-        "1.4.4",
-        "1.4.5",
-    ]
+    assert config["compatible_source_application_versions"] == ["1.5.3"]
     assert config["compatible_launcher_protocols"] == [4]
-    assert config["runtime_generation_required"] is False
+    assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
-    assert not config.get("runtime_bootstrap_sha256")
+    assert re.fullmatch(r"[0-9a-f]{64}", config["runtime_bootstrap_sha256"])
     assert not config.get("runtime_descriptor")
-    assert not config.get("minimum_image_sha256")
+    assert config["minimum_image_sha256"] == (
+        "sha256:" + config["runtime_bootstrap_sha256"]
+    )
     assert config["runtime_compatibility_evidence"] == {}
-    assert config["recovers_unpublished_image_milestone"] == "1.5.0"
-    assert config["unpublished_predecessor_tags"] == ["v1.5.2", "v1.5.1", "v1.5.0"]
+    assert "recovers_unpublished_image_milestone" not in config
+    assert "unpublished_predecessor_tags" not in config
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
@@ -1001,11 +996,12 @@ def test_release_config_declares_153_replacement_dependency_image_bootstrap():
         "v1.5.2",
     ]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.5.3 - Dependency update foundation"
+        "# ChannelWatch v1.5.4 - In-app package updates"
     )
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
-    assert policy.image_milestone is True
+    assert policy.image_milestone is False
+    assert policy.retained_capability_floor is True
     assert policy.minimum_image_version == "1.5.3"
     history = json.loads(
         (ROOT / "scripts/release/update-catalog-history.json").read_text(
@@ -1015,6 +1011,11 @@ def test_release_config_declares_153_replacement_dependency_image_bootstrap():
     assert "1.5.0" not in {release["version"] for release in history}
     assert "1.5.1" not in {release["version"] for release in history}
     assert "1.5.2" not in {release["version"] for release in history}
+    foundation = next(release for release in history if release["version"] == "1.5.3")
+    assert foundation["image_required"] is True
+    assert foundation["delivery_mode"] == "image_required"
+    assert foundation["minimum_image_version"] == "1.5.3"
+    assert foundation["updater_protocol"] == 4
     release_141 = next(release for release in history if release["version"] == "1.4.1")
     assert release_141["bundle_sha256"] == (
         "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
@@ -1135,7 +1136,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_153_release():
+def test_release_version_surfaces_use_154_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1146,11 +1147,11 @@ def test_release_version_surfaces_use_153_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.5.3"
-    assert metadata["versionTag"] == "v1.5.3"
-    assert metadata["dockerTag"] == "1.5.3"
-    assert metadata["helmChartVersion"] == "1.5.3"
-    assert metadata["helmAppVersion"] == "1.5.3"
+    assert metadata["version"] == "1.5.4"
+    assert metadata["versionTag"] == "v1.5.4"
+    assert metadata["dockerTag"] == "1.5.4"
+    assert metadata["helmChartVersion"] == "1.5.4"
+    assert metadata["helmAppVersion"] == "1.5.4"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3757,10 +3758,26 @@ def test_production_signing_key_isolated_to_first_shell_step_on_fresh_runners():
         assert len(secret_steps) == 1
         secret_index, secret_step = secret_steps[0]
         earlier_runs = [step for step in steps[:secret_index] if "run" in step]
-        if earlier_runs:
+        if name == "runtime-capability":
             assert len(earlier_runs) == 1
+            assert earlier_runs[0]["name"] == "Install the existing headless Chromium harness"
+            assert earlier_runs[0]["run"] == (
+                "corepack enable\n"
+                'test "$(pnpm --version)" = "11.28.5"\n'
+                "pnpm install --frozen-lockfile\n"
+                "pnpm exec playwright install --with-deps chromium\n"
+            )
+        elif name == "native-image-qualification":
+            assert len(earlier_runs) == 1
+            assert earlier_runs[0]["name"] == "Install exact binary opener dependencies"
             assert "--only-binary=:all: --require-hashes" in earlier_runs[0]["run"]
-        assert "cache" not in str(steps[: secret_index]).lower()
+        else:
+            assert earlier_runs == []
+        for earlier_step in steps[:secret_index]:
+            assert "cache" not in str(earlier_step.get("uses", "")).lower()
+            for key, value in earlier_step.get("with", {}).items():
+                if "cache" in str(key).lower():
+                    assert value is False
         assert secret_step.get("run")
         assert "unset CHANNELWATCH_UPDATE_SIGNING_KEY" in secret_step["run"]
         assert all(
@@ -4087,6 +4104,26 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert set(conditional_steps.values()) == {
         "needs.candidate-source-gates.outputs.runtime_generation_required == 'true'"
     }
+    browser_steps = [step for step in capability_job["steps"] if step["name"] in {
+        "Set up Node for headless live Update Center verification",
+        "Install the existing headless Chromium harness",
+    }]
+    assert len(browser_steps) == 2
+    assert all(step["if"] == (
+        "needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'"
+    ) for step in browser_steps)
+    assert browser_steps[0]["with"]["node-version"] == "24.21.0"
+    assert 'test "$(pnpm --version)" = "11.28.5"' in browser_steps[1]["run"]
+    assert "pnpm install --frozen-lockfile" in browser_steps[1]["run"]
+    assert "pnpm exec playwright install --with-deps chromium" in browser_steps[1]["run"]
+    native_step = next(step for step in capability_job["steps"] if step["name"] == "Run the native protocol-4 lifecycle verifier")
+    assert native_step["env"]["CI"] == "true"
+    assert native_step["env"]["BROWSER"] == "none"
+    assert native_step["env"]["PLAYWRIGHT_HTML_OPEN"] == "never"
+    retention = next(step for step in capability_job["steps"] if step["name"] == "Retain native runtime capability evidence")
+    assert retention["if"] == "needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && always()"
+    assert retention["with"]["path"] == "${{ runner.temp }}/runtime-capability/"
+    assert retention["with"]["if-no-files-found"] == "error"
     assert "aggregate-runtime-capability.py" in candidate
     assert "scan-runtime-artifacts.py" in candidate
     assert "syft-version: v1.54.1" in candidate

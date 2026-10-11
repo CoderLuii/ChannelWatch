@@ -7,6 +7,7 @@ import re
 import sys
 import threading
 from collections.abc import Mapping
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,15 @@ _CLAIM_FIELDS = frozenset({"path", *RUNTIME_IDENTITY_FIELDS})
 _RUNTIME_TRUST_FIELD = "runtime_trust_sha256"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _PROCESS_CLAIM_ATTRIBUTE = "_channelwatch_runtime_generation_identity"
+_RUNTIME_DEPENDENCY_DISTRIBUTIONS = {
+    "requests": "requests",
+    "cryptography": "cryptography",
+    "sqlmodel": "sqlmodel",
+    "uvicorn": "uvicorn",
+    "pydantic_core": "pydantic-core",
+    "sqlalchemy": "sqlalchemy",
+    "httptools": "httptools",
+}
 _claim_lock = threading.Lock()
 
 
@@ -27,16 +37,27 @@ def runtime_process_diagnostics() -> dict[str, Any]:
     """Describe this worker's interpreter and loaded dependency origins."""
 
     dependencies = {}
-    for name in ("requests", "cryptography", "sqlmodel", "uvicorn", "pydantic_core"):
+    for name, distribution in _RUNTIME_DEPENDENCY_DISTRIBUTIONS.items():
         module = sys.modules.get(name)
         if module is None:
             dependencies[name] = {"loaded": False}
             continue
-        dependencies[name] = {
+        version = getattr(module, "__version__", "")
+        version = version.strip() if isinstance(version, str) else ""
+        record = {
             "loaded": True,
             "path": str(getattr(module, "__file__", "") or ""),
-            "version": str(getattr(module, "__version__", "") or ""),
+            "version": version,
         }
+        if not version:
+            try:
+                resolved = importlib_metadata.version(distribution)
+                if not isinstance(resolved, str) or not resolved.strip():
+                    raise ValueError("Distribution version is unavailable")
+                record["version"] = resolved.strip()
+            except Exception:
+                record["version_error"] = "distribution_metadata_unavailable"
+        dependencies[name] = record
     return {
         "pid": os.getpid(),
         "python_executable": sys.executable,

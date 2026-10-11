@@ -393,6 +393,58 @@ def test_runtime_archive_rejects_writable_storage_ancestry(
         runtime_archive.install_runtime_archive(bundle, releases, descriptor)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="read-only mode validation is POSIX-only")
+def test_runtime_archive_rejects_read_only_releases_without_control_mutation(
+    tmp_path: Path,
+):
+    descriptor, inventory_raw, payloads = _runtime_fixture()
+    bundle = _runtime_bundle(descriptor, inventory_raw, payloads)
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    releases = runtime_dir / "releases"
+    releases.mkdir(parents=True)
+    active_path = runtime_dir / "active.json"
+    rollback_path = runtime_dir / "rollback.json"
+    active_before = b'{"version":"1.4.3","path":"/previous"}\n'
+    rollback_before = b'{"previous_active":null}\n'
+    active_path.write_bytes(active_before)
+    rollback_path.write_bytes(rollback_before)
+    releases.chmod(0o555)
+
+    try:
+        with pytest.raises(PermissionError):
+            runtime_archive.install_runtime_archive(bundle, releases, descriptor)
+    finally:
+        releases.chmod(0o755)
+
+    assert list(releases.iterdir()) == []
+    assert active_path.read_bytes() == active_before
+    assert rollback_path.read_bytes() == rollback_before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="owner validation is POSIX-only")
+def test_runtime_archive_rejects_wrong_owner_ancestry_without_control_mutation(
+    tmp_path: Path, monkeypatch
+):
+    from core import runtime_generation
+
+    descriptor, inventory_raw, payloads = _runtime_fixture()
+    bundle = _runtime_bundle(descriptor, inventory_raw, payloads)
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    releases = runtime_dir / "releases"
+    releases.mkdir(parents=True)
+    active_path = runtime_dir / "active.json"
+    active_before = b'{"version":"1.4.3","path":"/previous"}\n'
+    active_path.write_bytes(active_before)
+    current_uid = os.geteuid()
+    monkeypatch.setattr(runtime_generation.os, "geteuid", lambda: current_uid + 1)
+
+    with pytest.raises(UpdateBundleError, match="trusted|protected"):
+        runtime_archive.install_runtime_archive(bundle, releases, descriptor)
+
+    assert list(releases.iterdir()) == []
+    assert active_path.read_bytes() == active_before
+
+
 @pytest.mark.skipif(os.name == "nt", reason="symlink validation is POSIX-only")
 def test_runtime_archive_rejects_original_symlinked_releases_path(tmp_path: Path):
     descriptor, inventory_raw, payloads = _runtime_fixture()

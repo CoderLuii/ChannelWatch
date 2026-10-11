@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -94,6 +95,32 @@ HISTORICAL_TAMPER_VERSIONS = ("0.9.15", "0.9.17")
 
 RUNTIME_PREFIXES = ("deploy/requirements/",)
 RUNTIME_CAPABILITY_EVIDENCE_TRIGGER = "runtime-capability-evidence"
+MAX_DEPENDENCY_INVENTORY_BYTES = 2 * 1024 * 1024
+MAX_IMAGE_INVENTORY_PATHS = 100000
+MAX_IMAGE_INVENTORY_BYTES = 512 * 1024 * 1024
+TRACKED_RUNTIME_DISTRIBUTIONS = {
+    "requests": "requests",
+    "cryptography": "cryptography",
+    "sqlmodel": "sqlmodel",
+    "uvicorn": "uvicorn",
+    "pydantic_core": "pydantic-core",
+    "sqlalchemy": "sqlalchemy",
+    "httptools": "httptools",
+}
+IMAGE_BOOTSTRAP_PATHS = frozenset(
+    {
+        "/usr/local/bin/channelwatch",
+        "/app/channelwatch-image.json",
+        "/app/core/docker-entrypoint.py",
+        "/app/core/runtime_launcher.py",
+        "/app/core/runtime_image_bootstrap.py",
+        "/app/core/runtime_release_trust.py",
+        "/app/core/runtime_generation.py",
+        "/app/core/runtime_dependency_bridge.py",
+        "/app/core/runtime_worker.py",
+        "/etc/supervisor/conf.d/supervisord.conf.template",
+    }
+)
 PROTOCOL_FOUR_MINIMUM_IMAGE = (1, 5, 0)
 PROTOCOL_FOUR_ARCHITECTURES = frozenset({"amd64", "arm64"})
 _HEX_40_RE = re.compile(r"[0-9a-f]{40}")
@@ -924,11 +951,662 @@ def _protocol_four_runtime_contract_valid(config: dict[str, object]) -> bool:
     )
 
 
+def _normalized_distribution_name(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return re.sub(r"[-_.]+", "-", value.strip().lower())
+
+
+def _signed_dependency_inventory(
+    qualification: dict[str, object], descriptor: dict[str, object]
+) -> tuple[dict[str, str], dict[str, dict[str, object]]] | None:
+    evidence = qualification.get("signed_dependency_inventory")
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "sha256",
+        "size",
+        "json_base64",
+    }:
+        return None
+    encoded = evidence["json_base64"]
+    if not isinstance(encoded, str) or len(encoded) > 3 * MAX_DEPENDENCY_INVENTORY_BYTES:
+        return None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+        if (
+            not raw
+            or len(raw) > MAX_DEPENDENCY_INVENTORY_BYTES
+            or evidence["size"] != len(raw)
+            or evidence["sha256"] != hashlib.sha256(raw).hexdigest()
+            or evidence["sha256"] != descriptor["dependency_inventory_sha256"]
+        ):
+            return None
+        inventory = json.loads(raw.decode("utf-8"))
+        if not isinstance(inventory, dict):
+            return None
+        from core.runtime_generation import RuntimePlatform, _validate_inventory
+
+        minimum_libc = descriptor["minimum_libc_version"]
+        if (
+            not isinstance(minimum_libc, list)
+            or len(minimum_libc) != 2
+            or any(type(part) is not int for part in minimum_libc)
+        ):
+            return None
+        platform_value = RuntimePlatform(
+            architecture=str(descriptor["architecture"]),
+            python_cache_tag=str(descriptor["python_cache_tag"]),
+            libc_family=str(descriptor["libc_family"]),
+            libc_version=(minimum_libc[0], minimum_libc[1]),
+            launcher_capabilities=frozenset(),
+        )
+        records = _validate_inventory(inventory, descriptor, platform_value)
+    except Exception:
+        return None
+    packages: dict[str, str] = {}
+    for item in inventory.get("dependencies", []):
+        if not isinstance(item, dict):
+            return None
+        name = _normalized_distribution_name(item.get("name"))
+        version = item.get("version")
+        if name is None or name in packages or not isinstance(version, str) or not version:
+            return None
+        packages[name] = version
+    if not set(TRACKED_RUNTIME_DISTRIBUTIONS.values()).issubset(packages):
+        return None
+    return packages, {str(item["path"]): item for item in records}
+
+
+def _selected_process_valid(
+    process: object,
+    *,
+    descriptor: dict[str, object],
+    generation_root: str,
+    packages: dict[str, str],
+    files: dict[str, dict[str, object]],
+) -> bool:
+    if (
+        not isinstance(process, dict)
+        or type(process.get("pid")) is not int
+        or process["pid"] <= 0
+        or process.get("python_executable")
+        != generation_root + "/environment/bin/python"
+        or process.get("python_prefix") != generation_root + "/environment"
+        or process.get("python_version") != descriptor["python_version"]
+    ):
+        return False
+    dependencies = process.get("dependencies")
+    if not isinstance(dependencies, dict) or set(dependencies) != set(
+        TRACKED_RUNTIME_DISTRIBUTIONS
+    ):
+        return False
+    for required in ("requests", "cryptography", "sqlalchemy"):
+        record = dependencies[required]
+        if not isinstance(record, dict) or record.get("loaded") is not True:
+            return False
+    prefix = generation_root + "/"
+    for module, distribution in TRACKED_RUNTIME_DISTRIBUTIONS.items():
+        record = dependencies[module]
+        if not isinstance(record, dict):
+            return False
+        if record.get("loaded") is False:
+            if set(record) != {"loaded"}:
+                return False
+            continue
+        path = record.get("path")
+        if (
+            set(record) != {"loaded", "path", "version"}
+            or record.get("loaded") is not True
+            or record.get("version") != packages[distribution]
+            or not isinstance(path, str)
+            or not path.startswith(
+                prefix + f"dependencies/site-packages/{module}/"
+            )
+            or path.removeprefix(prefix) not in files
+        ):
+            return False
+    return True
+
+
+def _selected_imports_valid(
+    value: object,
+    *,
+    generation_root: str,
+    packages: dict[str, str],
+    files: dict[str, dict[str, object]],
+) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "sqlalchemy",
+        "httptools",
+        "httptools.parser.parser",
+    }:
+        return False
+    for module, distribution in (("sqlalchemy", "sqlalchemy"), ("httptools", "httptools")):
+        record = value[module]
+        relative = f"dependencies/site-packages/{module}/__init__.py"
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "version"}
+            or record.get("path") != generation_root + "/" + relative
+            or record.get("version") != packages[distribution]
+            or relative not in files
+        ):
+            return False
+    parser = value["httptools.parser.parser"]
+    if not isinstance(parser, dict) or set(parser) != {"path", "version", "sha256"}:
+        return False
+    parser_path = parser.get("path")
+    if (
+        not isinstance(parser_path, str)
+        or not parser_path.startswith(
+            generation_root + "/dependencies/site-packages/httptools/parser/parser"
+        )
+        or not parser_path.endswith(".so")
+        or parser_path == value["httptools"]["path"]
+        or parser.get("version") != packages["httptools"]
+    ):
+        return False
+    signed = files.get(parser_path.removeprefix(generation_root + "/"))
+    return isinstance(signed, dict) and parser.get("sha256") == signed.get("sha256")
+
+
+def _resolved_posix_link(path: str, target: str) -> str | None:
+    if "\\" in target or "\x00" in target:
+        return None
+    candidate = PurePosixPath(target)
+    parts: list[str] = []
+    source = candidate if candidate.is_absolute() else PurePosixPath(path).parent / candidate
+    for part in source.parts:
+        if part in {"", "/", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    return "/" + "/".join(parts)
+
+
+def _selected_supervisor_command_valid(
+    command: object, *, component: str, generation_root: str, descriptor_sha256: str
+) -> bool:
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    prefix = [
+        generation_root + "/environment/bin/python",
+        "-I",
+        "-B",
+        "-S",
+        "/app/core/runtime_worker.py",
+        "--image-app-dir",
+        "/app",
+        "--mode",
+        component,
+        "--generation",
+        generation_root,
+        "--activation-id",
+    ]
+    if tokens[: len(prefix)] != prefix or len(tokens) <= len(prefix):
+        return False
+    activation_id = tokens[len(prefix)]
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", activation_id) is None:
+        return False
+    suffix = tokens[len(prefix) + 1 :]
+    expected = ["--descriptor-sha256", descriptor_sha256]
+    if component == "core":
+        expected.extend(["--", "--stay-alive"])
+    else:
+        expected.extend(
+            [
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8501",
+                "--log-level",
+                "warning",
+                "--",
+            ]
+        )
+    return suffix == expected
+
+
+def _image_supervisor_command_valid(command: object, *, component: str) -> bool:
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    expected = [
+        "/venv/bin/python",
+        "-u",
+        "/app/core/runtime_launcher.py",
+        component,
+    ]
+    if component == "core":
+        expected.append("--stay-alive")
+    else:
+        expected.extend(
+            [
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8501",
+                "--log-level",
+                "warning",
+            ]
+        )
+    return tokens == expected
+
+
+def _verified_generation_valid(
+    value: object, *, descriptor: dict[str, object], generation_root: str
+) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value)
+        == {
+            "path",
+            "runtime_generation_id",
+            "runtime_descriptor_sha256",
+            "dependency_inventory_sha256",
+        }
+        and value.get("path") == generation_root
+        and value.get("runtime_generation_id") == descriptor["generation_id"]
+        and value.get("runtime_descriptor_sha256") == descriptor["generation_id"]
+        and value.get("dependency_inventory_sha256")
+        == descriptor["dependency_inventory_sha256"]
+    )
+
+
+def _ready_health_valid(value: object) -> bool:
+    return value == {
+        "startup": {"status": "ready"},
+        "ready": {"status": "ready", "ready": True},
+    }
+
+
+def _image_operational_state_valid(
+    value: object,
+    *,
+    descriptor: dict[str, object],
+    image_records: dict[str, dict[str, object]],
+    expected_worker: object,
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "status_worker_scope",
+            "status_worker",
+            "commands",
+            "processes",
+            "services",
+            "health",
+        }
+        or value.get("status_worker_scope")
+        != "frozen_image_ui_status_interpreter_only"
+        or value.get("status_worker") != expected_worker
+        or not _image_status_worker_valid(value.get("status_worker"), descriptor)
+        or not _ready_health_valid(value.get("health"))
+    ):
+        return False
+    commands = value.get("commands")
+    processes = value.get("processes")
+    services = value.get("services")
+    if any(
+        not isinstance(records, dict) or set(records) != {"core", "ui"}
+        for records in (commands, processes, services)
+    ):
+        return False
+    pids: set[int] = set()
+    for component in ("core", "ui"):
+        process = processes[component]
+        service = services[component]
+        if (
+            not _image_supervisor_command_valid(
+                commands[component], component=component
+            )
+            or not isinstance(process, dict)
+            or set(process) != {"pid", "command"}
+            or type(process.get("pid")) is not int
+            or process["pid"] <= 0
+            or process.get("command") != commands[component]
+            or not isinstance(service, dict)
+            or set(service) != {"status", "pid", "uptime"}
+            or service.get("status") != "RUNNING"
+            or service.get("pid") != process["pid"]
+            or not isinstance(service.get("uptime"), str)
+            or not service["uptime"].strip()
+        ):
+            return False
+        pids.add(process["pid"])
+    return len(pids) == 2
+
+
+def _selected_operational_state_valid(
+    value: object,
+    *,
+    descriptor: dict[str, object],
+    generation_root: str,
+    packages: dict[str, str],
+    files: dict[str, dict[str, object]],
+    expected_components: object,
+    expected_commands: object,
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "runtime_components",
+            "status_worker_scope",
+            "status_worker",
+            "commands",
+            "processes",
+            "launchers",
+            "services",
+            "health",
+        }
+        or value.get("runtime_components") != expected_components
+        or value.get("status_worker_scope") != "ui_status_handler_only"
+        or value.get("commands") != expected_commands
+        or not _ready_health_valid(value.get("health"))
+        or not _selected_process_valid(
+            value.get("status_worker"),
+            descriptor=descriptor,
+            generation_root=generation_root,
+            packages=packages,
+            files=files,
+        )
+        or not _verified_generation_valid(
+            value["status_worker"].get("verified_generation"),
+            descriptor=descriptor,
+            generation_root=generation_root,
+        )
+    ):
+        return False
+    commands = value["commands"]
+    processes = value.get("processes")
+    launchers = value.get("launchers")
+    services = value.get("services")
+    if any(
+        not isinstance(records, dict) or set(records) != {"core", "ui"}
+        for records in (commands, processes, launchers, services)
+    ):
+        return False
+    worker_pids: set[int] = set()
+    launcher_pids: set[int] = set()
+    for component in ("core", "ui"):
+        process = processes[component]
+        launcher = launchers[component]
+        service = services[component]
+        if (
+            not _selected_supervisor_command_valid(
+                commands[component],
+                component=component,
+                generation_root=generation_root,
+                descriptor_sha256=str(descriptor["generation_id"]),
+            )
+            or not isinstance(process, dict)
+            or set(process) != {"pid", "ppid", "command"}
+            or type(process.get("pid")) is not int
+            or process["pid"] <= 0
+            or type(process.get("ppid")) is not int
+            or process["ppid"] <= 0
+            or process.get("command") != commands[component]
+            or not isinstance(launcher, dict)
+            or set(launcher) != {"pid", "command"}
+            or type(launcher.get("pid")) is not int
+            or launcher["pid"] <= 0
+            or not _image_supervisor_command_valid(
+                launcher.get("command"), component=component
+            )
+            or process["ppid"] != launcher["pid"]
+            or not isinstance(service, dict)
+            or set(service) != {"status", "pid", "uptime"}
+            or service.get("status") != "RUNNING"
+            or service.get("pid") != launcher["pid"]
+            or not isinstance(service.get("uptime"), str)
+            or not service["uptime"].strip()
+        ):
+            return False
+        worker_pids.add(process["pid"])
+        launcher_pids.add(launcher["pid"])
+        if expected_components is not None:
+            component_runtime = expected_components[component].get("process_runtime")
+            if (
+                component_runtime.get("pid") != process["pid"]
+                or not _verified_generation_valid(
+                    component_runtime.get("verified_generation"),
+                    descriptor=descriptor,
+                    generation_root=generation_root,
+                )
+            ):
+                return False
+    return (
+        len(worker_pids) == 2
+        and len(launcher_pids) == 2
+        and worker_pids.isdisjoint(launcher_pids)
+        and value["status_worker"]["pid"] == processes["ui"]["pid"]
+        and (
+            expected_components is None
+            or value["status_worker"]
+            == expected_components["ui"]["process_runtime"]
+        )
+    )
+
+
+def _image_inventory_valid(value: object) -> dict[str, dict[str, object]] | None:
+    if not isinstance(value, dict) or set(value) != {
+        "sha256",
+        "path_count",
+        "regular_file_bytes",
+        "entries",
+    }:
+        return None
+    entries = value["entries"]
+    if (
+        not isinstance(entries, list)
+        or not entries
+        or len(entries) > MAX_IMAGE_INVENTORY_PATHS
+        or value["path_count"] != len(entries)
+    ):
+        return None
+    paths: list[str] = []
+    regular_bytes = 0
+    records: dict[str, dict[str, object]] = {}
+    allowed_links = {
+        f"/venv/bin/{name}": f"/usr/local/bin/{name}"
+        for name in ("python", "python3", "python3.14")
+    }
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        path = entry.get("path")
+        kind = entry.get("type")
+        mode = entry.get("mode")
+        size = entry.get("size")
+        if (
+            not isinstance(path, str)
+            or not PurePosixPath(path).is_absolute()
+            or str(PurePosixPath(path)) != path
+            or ".." in PurePosixPath(path).parts
+            or "\\" in path
+            or not (
+                path == "/venv"
+                or path.startswith("/venv/")
+                or path in IMAGE_BOOTSTRAP_PATHS
+            )
+            or path in records
+            or not isinstance(mode, str)
+            or re.fullmatch(r"0[0-7]{3}", mode) is None
+            or type(size) is not int
+            or size < 0
+        ):
+            return None
+        expected_fields = {"path", "type", "mode", "size"}
+        if kind == "file":
+            expected_fields.add("sha256")
+            if not isinstance(entry.get("sha256"), str) or not _HEX_64_RE.fullmatch(
+                str(entry["sha256"])
+            ):
+                return None
+            regular_bytes += size
+        elif kind == "symlink":
+            expected_fields.add("link_target")
+            target = entry.get("link_target")
+            if not isinstance(target, str):
+                return None
+            resolved = _resolved_posix_link(path, target)
+            if resolved is None:
+                return None
+            if path.startswith("/venv/") and not (
+                resolved == "/venv"
+                or resolved.startswith("/venv/")
+                or allowed_links.get(path) == resolved
+            ):
+                return None
+        elif kind != "directory":
+            return None
+        if set(entry) != expected_fields:
+            return None
+        paths.append(path)
+        records[path] = entry
+    if (
+        paths != sorted(paths)
+        or regular_bytes > MAX_IMAGE_INVENTORY_BYTES
+        or value["regular_file_bytes"] != regular_bytes
+        or not IMAGE_BOOTSTRAP_PATHS.issubset(records)
+        or any(records[path].get("type") != "file" for path in IMAGE_BOOTSTRAP_PATHS)
+    ):
+        return None
+    encoded = json.dumps(
+        entries,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    if value.get("sha256") != hashlib.sha256(encoded).hexdigest():
+        return None
+    return records
+
+
+def _image_imports_valid(
+    value: object, image_records: dict[str, dict[str, object]]
+) -> bool:
+    expected_versions = {"sqlalchemy": "2.0.54", "httptools": "0.8.0"}
+    if not isinstance(value, dict) or set(value) != {
+        "sqlalchemy",
+        "httptools",
+        "httptools.parser.parser",
+    }:
+        return False
+    for module, version in expected_versions.items():
+        record = value[module]
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "version"}
+            or record.get("version") != version
+            or not str(record.get("path") or "").startswith(
+                f"/venv/lib/python3.14/site-packages/{module}/"
+            )
+            or image_records.get(str(record["path"]), {}).get("type") != "file"
+        ):
+            return False
+    parser = value["httptools.parser.parser"]
+    parser_path = parser.get("path") if isinstance(parser, dict) else None
+    parser_file = image_records.get(str(parser_path), {})
+    return (
+        isinstance(parser, dict)
+        and set(parser) == {"path", "version", "sha256"}
+        and parser.get("version") == "0.8.0"
+        and isinstance(parser_path, str)
+        and parser_path.startswith(
+            "/venv/lib/python3.14/site-packages/httptools/parser/parser"
+        )
+        and parser_path.endswith(".so")
+        and parser_path != value["httptools"]["path"]
+        and parser_file.get("type") == "file"
+        and parser.get("sha256") == parser_file.get("sha256")
+    )
+
+
+def _image_status_worker_valid(
+    value: object, descriptor: dict[str, object]
+) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value)
+        == {"python_executable", "python_version", "verified_generation"}
+        and value.get("python_executable") == "/venv/bin/python"
+        and value.get("python_version") == descriptor["python_version"]
+        and value.get("verified_generation") is None
+    )
+
+
+def _image_process_diagnostics_valid(
+    value: object,
+    *,
+    descriptor: dict[str, object],
+    image_records: dict[str, dict[str, object]],
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "pid",
+            "python_executable",
+            "python_prefix",
+            "python_version",
+            "dependencies",
+        }
+        or type(value.get("pid")) is not int
+        or value["pid"] <= 0
+        or value.get("python_executable") != "/venv/bin/python"
+        or value.get("python_prefix") != "/venv"
+        or value.get("python_version") != descriptor["python_version"]
+    ):
+        return False
+    dependencies = value.get("dependencies")
+    frozen_modules = {
+        "requests", "cryptography", "sqlmodel", "uvicorn", "pydantic_core"
+    }
+    if not isinstance(dependencies, dict) or set(dependencies) != frozen_modules:
+        return False
+    for module, record in dependencies.items():
+        if not isinstance(record, dict):
+            return False
+        if record.get("loaded") is False:
+            if set(record) != {"loaded"}:
+                return False
+            continue
+        path = record.get("path")
+        if (
+            set(record) != {"loaded", "path", "version"}
+            or record.get("loaded") is not True
+            or not isinstance(path, str)
+            or not path.startswith(
+                f"/venv/lib/python3.14/site-packages/{module}/"
+            )
+            or image_records.get(path, {}).get("type") != "file"
+            or not isinstance(record.get("version"), str)
+        ):
+            return False
+    return True
+
+
 def _runtime_qualification_valid(
-    qualification: object, descriptor: dict[str, object], config: dict[str, object],
+    qualification: object,
+    descriptor: dict[str, object],
+    config: dict[str, object],
     bundle_sha256: str,
 ) -> bool:
-    """Require process and lifecycle receipts, not only summary booleans."""
+    """Require deterministic native identity and lifecycle receipts."""
     if not isinstance(qualification, dict):
         return False
     for field in ("platform_manifest_digest", "pulled_image_id"):
@@ -942,26 +1620,49 @@ def _runtime_qualification_valid(
         return False
     try:
         index_bytes = base64.b64decode(encoded_index, validate=True)
-        if "sha256:" + hashlib.sha256(index_bytes).hexdigest() != config.get("minimum_image_sha256"):
+        if "sha256:" + hashlib.sha256(index_bytes).hexdigest() != config.get(
+            "minimum_image_sha256"
+        ):
             return False
-        index = json.loads(index_bytes)
-        manifests = index["manifests"]
-        if not isinstance(manifests, list) or any(not isinstance(item, dict) for item in manifests):
+        manifests = json.loads(index_bytes)["manifests"]
+        if not isinstance(manifests, list) or any(
+            not isinstance(item, dict) for item in manifests
+        ):
             return False
-        matches = [item for item in manifests if item.get("platform", {}).get("os") == "linux" and item.get("platform", {}).get("architecture") == architecture]
-        if len(matches) != 1 or matches[0].get("digest") != qualification["platform_manifest_digest"]:
+        matches = [
+            item
+            for item in manifests
+            if item.get("platform", {}).get("os") == "linux"
+            and item.get("platform", {}).get("architecture") == architecture
+        ]
+        if (
+            len(matches) != 1
+            or matches[0].get("digest") != qualification["platform_manifest_digest"]
+        ):
             return False
     except (ValueError, TypeError, KeyError):
         return False
-    if qualification.get("native_host_architecture") != architecture or qualification.get("docker_engine_architecture") != architecture:
+    if (
+        qualification.get("native_host_architecture") != architecture
+        or qualification.get("docker_engine_architecture") != architecture
+    ):
         return False
     identity = qualification.get("container_identity_before")
-    if not isinstance(identity, str) or not _HEX_64_RE.fullmatch(identity) or qualification.get("container_identity_after") != identity:
+    if (
+        not isinstance(identity, str)
+        or not _HEX_64_RE.fullmatch(identity)
+        or qualification.get("container_identity_after") != identity
+    ):
         return False
+    signed = _signed_dependency_inventory(qualification, descriptor)
+    if signed is None:
+        return False
+    packages, files = signed
     generation_root = f"/config/channelwatch-runtime/releases/{generation}"
-    dependency_root = generation_root + "/dependencies/site-packages/"
     for field in ("apply_job_id", "reapply_job_id"):
-        if not isinstance(qualification.get(field), str) or not re.fullmatch(r"[0-9a-f]{32}", qualification[field]):
+        if not isinstance(qualification.get(field), str) or not re.fullmatch(
+            r"[0-9a-f]{32}", str(qualification[field])
+        ):
             return False
     if qualification["apply_job_id"] == qualification["reapply_job_id"]:
         return False
@@ -970,63 +1671,248 @@ def _runtime_qualification_valid(
         if not isinstance(components, dict) or set(components) != {"core", "ui"}:
             return False
         for component in components.values():
-            if not isinstance(component, dict) or any(component.get(key) != expected for key, expected in {
-                "runtime_generation_id": generation,
-                "runtime_descriptor_sha256": generation,
-                "dependency_inventory_sha256": descriptor["dependency_inventory_sha256"],
-            }.items()):
+            if not isinstance(component, dict) or any(
+                component.get(key) != expected
+                for key, expected in {
+                    "runtime_generation_id": generation,
+                    "runtime_descriptor_sha256": generation,
+                    "dependency_inventory_sha256": descriptor[
+                        "dependency_inventory_sha256"
+                    ],
+                }.items()
+            ):
                 return False
-            process = component.get("process_runtime")
-            if not isinstance(process, dict) or type(process.get("pid")) is not int or process["pid"] <= 0:
+            if not _selected_process_valid(
+                component.get("process_runtime"),
+                descriptor=descriptor,
+                generation_root=generation_root,
+                packages=packages,
+                files=files,
+            ):
                 return False
-            if process.get("python_executable") != generation_root + "/environment/bin/python" or process.get("python_prefix") != generation_root + "/environment":
-                return False
-            if process.get("python_version") != descriptor["python_version"]:
-                return False
-            dependencies = process.get("dependencies")
-            if not isinstance(dependencies, dict):
-                return False
-            for name in ("requests", "cryptography"):
-                if not isinstance(dependencies.get(name), dict) or dependencies[name].get("loaded") is not True:
-                    return False
-            for record in dependencies.values():
-                if not isinstance(record, dict) or (record.get("loaded") is True and not str(record.get("path", "")).startswith(dependency_root)):
-                    return False
-    imports = qualification.get("native_imports")
-    if not isinstance(imports, dict) or set(imports) != {"requests", "cryptography", "sqlmodel", "uvicorn", "pydantic_core"}:
+    selected_imports = qualification.get("selected_native_imports")
+    if not _selected_imports_valid(
+        selected_imports,
+        generation_root=generation_root,
+        packages=packages,
+        files=files,
+    ) or any(
+        qualification.get(field) != selected_imports
+        for field in (
+            "selected_native_imports_after_restart",
+            "selected_native_imports_after_reapply",
+        )
+    ):
         return False
-    if any(not isinstance(record, dict) or not str(record.get("path", "")).startswith(dependency_root) for record in imports.values()):
-        return False
-    for field in ("supervisor_processes", "supervisor_processes_after_restart", "supervisor_processes_after_reapply"):
+    for field in (
+        "supervisor_processes",
+        "supervisor_processes_after_restart",
+        "supervisor_processes_after_reapply",
+    ):
         commands = qualification.get(field)
         if not isinstance(commands, dict) or set(commands) != {"core", "ui"}:
             return False
-        if any(not isinstance(command, str) or generation_root not in command or f"--mode {name}" not in command for name, command in commands.items()):
+        if any(
+            not _selected_supervisor_command_valid(
+                command,
+                component=name,
+                generation_root=generation_root,
+                descriptor_sha256=generation,
+            )
+            for name, command in commands.items()
+        ):
             return False
-    preserved = qualification.get("preservation_before_sha256")
-    if not isinstance(preserved, dict) or set(preserved) != {"/config/settings.json", "/config/encryption.key", "/venv/pyvenv.cfg", "/venv/bin/python"}:
-        return False
-    if any(not isinstance(value, str) or not _HEX_64_RE.fullmatch(value) for value in preserved.values()):
-        return False
-    if any(qualification.get(field) != preserved for field in ("preservation_after_apply_sha256", "preservation_after_restart_sha256", "preservation_after_reapply_sha256")):
+    image_records = _image_inventory_valid(qualification.get("image_inventory_before"))
+    if image_records is None:
         return False
     initial = qualification.get("initial_status")
-    restart = qualification.get("container_restart")
+    if (
+        not isinstance(initial, dict)
+        or not _image_operational_state_valid(
+            qualification.get("initial_operational_state"),
+            descriptor=descriptor,
+            image_records=image_records,
+            expected_worker=initial.get("worker_runtime"),
+        )
+        or not _selected_operational_state_valid(
+            qualification.get("apply_operational_state"),
+            descriptor=descriptor,
+            generation_root=generation_root,
+            packages=packages,
+            files=files,
+            expected_components=qualification.get("apply_runtime_components"),
+            expected_commands=qualification.get("supervisor_processes"),
+        )
+        or not _selected_operational_state_valid(
+            qualification.get("restart_operational_state"),
+            descriptor=descriptor,
+            generation_root=generation_root,
+            packages=packages,
+            files=files,
+            expected_components=None,
+            expected_commands=qualification.get("supervisor_processes_after_restart"),
+        )
+        or not _selected_operational_state_valid(
+            qualification.get("reapply_operational_state"),
+            descriptor=descriptor,
+            generation_root=generation_root,
+            packages=packages,
+            files=files,
+            expected_components=qualification.get("reapply_runtime_components"),
+            expected_commands=qualification.get("supervisor_processes_after_reapply"),
+        )
+    ):
+        return False
+    inventory_summary = {
+        key: qualification["image_inventory_before"][key]
+        for key in ("sha256", "path_count", "regular_file_bytes")
+    }
+    if any(
+        qualification.get("image_inventory_" + stage) != inventory_summary
+        for stage in ("after_apply", "after_restart", "after_rollback", "after_reapply")
+    ):
+        return False
+    image_imports = qualification.get("image_imports_before")
+    if not _image_imports_valid(image_imports, image_records) or qualification.get(
+        "image_imports_after_rollback"
+    ) != image_imports:
+        return False
+    preserved = qualification.get("persistent_hashes_before")
+    if (
+        not isinstance(preserved, dict)
+        or set(preserved) != {"/config/settings.json", "/config/encryption.key"}
+        or any(
+            not isinstance(value, str) or not _HEX_64_RE.fullmatch(value)
+            for value in preserved.values()
+        )
+        or any(
+            qualification.get("persistent_hashes_" + stage) != preserved
+            for stage in ("after_apply", "after_restart", "after_rollback", "after_reapply")
+        )
+    ):
+        return False
     checked = qualification.get("check")
+    target = checked.get("trusted_target") if isinstance(checked, dict) else None
+    if (
+        not isinstance(checked, dict)
+        or checked.get("update_available") is not True
+        or checked.get("image_required") is not False
+        or checked.get("catalog_state") != "update_available"
+        or not isinstance(target, dict)
+        or target.get("version") != config["version"]
+        or target.get("runtime_descriptor") != descriptor
+        or target.get("bundle_sha256") != bundle_sha256
+    ):
+        return False
     rollback = qualification.get("rollback")
+    rollback_job = rollback.get("job_id") if isinstance(rollback, dict) else None
+    if (
+        not isinstance(rollback, dict)
+        or rollback.get("operation") != "rollback"
+        or rollback.get("status") not in {"restarting", "succeeded"}
+        or rollback.get("rolled_back_from") != config["version"]
+        or not isinstance(rollback_job, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", rollback_job)
+        or rollback_job
+        in {qualification["apply_job_id"], qualification["reapply_job_id"]}
+    ):
+        return False
     rollback_status = qualification.get("rollback_status")
-    if not isinstance(checked, dict) or checked.get("update_available") is not True or checked.get("image_required") is not False or checked.get("catalog_state") != "update_available":
+    rollback_worker = (
+        rollback_status.get("worker_runtime")
+        if isinstance(rollback_status, dict)
+        else None
+    )
+    rollback_components = qualification.get("rollback_runtime_components")
+    if (
+        not isinstance(rollback_status, dict)
+        or rollback_status.get("current_version") != config["minimum_image_version"]
+        or rollback_status.get("launcher_protocol") != 4
+        or rollback_status.get("active_bundle") is not None
+        or rollback_status.get("operation_busy") is not False
+        or not _image_status_worker_valid(rollback_worker, descriptor)
+        or not isinstance(rollback_components, dict)
+        or rollback_components != {"ui": rollback_worker}
+    ):
         return False
-    target = checked.get("trusted_target")
-    if not isinstance(target, dict) or target.get("version") != config["version"] or target.get("runtime_descriptor") != descriptor or target.get("bundle_sha256") != bundle_sha256:
+    rollback_commands = qualification.get("rollback_supervisor_processes")
+    if (
+        not isinstance(rollback_commands, dict)
+        or set(rollback_commands) != {"core", "ui"}
+        or any(
+            not _image_supervisor_command_valid(command, component=name)
+            for name, command in rollback_commands.items()
+        )
+    ):
         return False
-    if not isinstance(rollback, dict) or rollback.get("operation") != "rollback" or rollback.get("status") not in {"restarting", "succeeded"} or rollback.get("rolled_back_from") != config["version"]:
+    process_identities = qualification.get("rollback_supervisor_process_identities")
+    if (
+        not isinstance(process_identities, dict)
+        or set(process_identities) != {"core", "ui"}
+    ):
         return False
-    rollback_job = rollback.get("job_id")
-    if not isinstance(rollback_job, str) or not re.fullmatch(r"[0-9a-f]{32}", rollback_job) or rollback_job in {qualification["apply_job_id"], qualification["reapply_job_id"]}:
+    process_ids: set[int] = set()
+    for component, identity_record in process_identities.items():
+        if (
+            not isinstance(identity_record, dict)
+            or set(identity_record) != {"pid", "command"}
+            or type(identity_record.get("pid")) is not int
+            or identity_record["pid"] <= 0
+            or identity_record.get("command") != rollback_commands[component]
+        ):
+            return False
+        process_ids.add(identity_record["pid"])
+    if len(process_ids) != 2:
         return False
-    if not isinstance(rollback_status, dict) or rollback_status.get("current_version") != config["minimum_image_version"] or rollback_status.get("launcher_protocol") != 4 or rollback_status.get("active_bundle") is not None or rollback_status.get("operation_busy") is not False:
+    supervisor_services = qualification.get("rollback_supervisor_services")
+    if (
+        not isinstance(supervisor_services, dict)
+        or set(supervisor_services) != {"core", "ui"}
+    ):
         return False
+    for component, service in supervisor_services.items():
+        if (
+            not isinstance(service, dict)
+            or set(service) != {"status", "pid", "uptime"}
+            or service.get("status") != "RUNNING"
+            or service.get("pid") != process_identities[component]["pid"]
+            or not isinstance(service.get("uptime"), str)
+            or not service["uptime"].strip()
+        ):
+            return False
+    rollback_health = qualification.get("rollback_health")
+    if (
+        not isinstance(rollback_health, dict)
+        or set(rollback_health) != {"startup", "ready"}
+        or any(
+            not isinstance(rollback_health[field], dict)
+            or rollback_health[field].get("status") != "ready"
+            for field in ("startup", "ready")
+        )
+        or rollback_health["ready"].get("ready") is not True
+        or qualification.get("rollback_runtime_component_scope")
+        != "frozen_image_ui_status_interpreter_only"
+    ):
+        return False
+    runtime_info = qualification.get("rollback_runtime_info")
+    if (
+        not isinstance(runtime_info, dict)
+        or runtime_info.get("diagnostic_source") != "image"
+        or runtime_info.get("application_dir") != "/app"
+        or runtime_info.get("application_version") != config["minimum_image_version"]
+        or runtime_info.get("verified_generation") is not None
+    ):
+        return False
+    info_process = runtime_info.get("process_runtime")
+    if not isinstance(info_process, dict):
+        return False
+    if not _image_process_diagnostics_valid(
+        info_process,
+        descriptor=descriptor,
+        image_records=image_records,
+    ):
+        return False
+    restart = qualification.get("container_restart")
     return (
         isinstance(initial, dict)
         and initial.get("launcher_protocol") == 4

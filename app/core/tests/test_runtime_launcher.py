@@ -474,6 +474,100 @@ def test_bundle_startup_failure_requests_whole_container_restart(
     assert (runtime_dir / "restart-required.json").is_file()
 
 
+@pytest.mark.parametrize(
+    "verification_error",
+    [
+        "Prepared runtime interpreter is missing.",
+        "Signed native extension digest does not match.",
+    ],
+)
+def test_protocol_four_verification_failure_falls_back_before_selected_import(
+    tmp_path: Path, monkeypatch, verification_error: str
+):
+    from core import runtime_image_bootstrap
+
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    selected_dir = _bundle(tmp_path, "1.5.4")
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    _write_pending_activation(runtime_dir, selected_dir, image_dir)
+    active_path = runtime_dir / "active.json"
+    selected_identity = json.loads(active_path.read_text(encoding="utf-8"))
+    selected_identity.update(
+        runtime_generation_id="a" * 64,
+        runtime_descriptor_sha256="b" * 64,
+        dependency_inventory_sha256="c" * 64,
+    )
+    active_path.write_text(json.dumps(selected_identity), encoding="utf-8")
+    pending_path = runtime_dir / "activation-pending.json"
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending.update(
+        runtime_generation_id=selected_identity["runtime_generation_id"],
+        runtime_descriptor_sha256=selected_identity[
+            "runtime_descriptor_sha256"
+        ],
+        dependency_inventory_sha256=selected_identity[
+            "dependency_inventory_sha256"
+        ],
+    )
+    pending_path.write_text(json.dumps(pending), encoding="utf-8")
+    rollback = json.loads(
+        (runtime_dir / "rollback.json").read_text(encoding="utf-8")
+    )
+    rollback["previous_active"] = None
+    (runtime_dir / "rollback.json").write_text(
+        json.dumps(rollback), encoding="utf-8"
+    )
+    restart_requests: list[bool] = []
+
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_VERSION", "1.5.3")
+    monkeypatch.setattr(runtime_launcher, "IMAGE_APP_DIR", image_dir)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "selected_app_dir", lambda: selected_dir)
+    monkeypatch.setattr(
+        runtime_launcher,
+        "prepare_import_path",
+        lambda _path: pytest.fail(
+            "selected import paths must not be installed before verification"
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "run_core",
+        lambda _args: pytest.fail("selected application must not import"),
+    )
+    monkeypatch.setattr(
+        runtime_image_bootstrap,
+        "maybe_supervise",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError(verification_error)),
+    )
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: restart_requests.append(True),
+    )
+
+    assert runtime_launcher.main(["core"]) == 1
+
+    assert restart_requests == [True]
+    assert not active_path.exists()
+    assert resolve_active_app_dir(
+        config_dir=tmp_path,
+        image_app_dir=image_dir,
+        image_version="1.5.3",
+        settings_schema_version=7,
+    ).app_dir == image_dir
+    job = json.loads((runtime_dir / "update-job.json").read_text(encoding="utf-8"))
+    assert job["status"] == "failed"
+    assert job["rollback_applied"] is True
+    assert job["rolled_back_to"] == "image"
+    journal = json.loads(
+        (runtime_dir / "restart-required.json").read_text(encoding="utf-8")
+    )
+    assert journal["source_active"] == selected_identity
+    assert len(list(runtime_dir.glob("restart-required*.json"))) == 1
+
+
 def test_restart_required_sentinel_blocks_and_retries_each_child_launch(
     tmp_path: Path, monkeypatch
 ):

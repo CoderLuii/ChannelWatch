@@ -14,7 +14,7 @@ The Dashboard also suggests maintenance windows from known recording jobs, with 
 Recommended tags:
 
 - `latest` for the newest stable image
-- `1.5.3` for the current release
+- `1.5.4` for the current release
 
 ## Quick Start
 
@@ -38,11 +38,11 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.5.3 for the current release, or `latest` for the newest stable image. Preserve `/config` and any external storage key configuration when recreating the container.
+Use v1.5.4 for a new installation, or `latest` for the newest stable image. Existing v1.5.3 containers can install v1.5.4 from **Settings > Updates** without recreation. Preserve `/config` and any external storage key configuration whenever you update an image.
 
 ChannelWatch v1.5.3 requires a container image update. Every published v1.4.x installation needs this one-time recreation to receive launcher protocol 4. Keep the same `/config` volume; saved DVRs, credentials, settings, history, and the application-managed encryption key remain there.
 
-After v1.5.3 is running, **Settings > Updates** can install a future compatible application and its official Python packages as one complete signed runtime generation in the same container. The application and packages roll back together if startup fails. v1.5.3 supplies the image foundation; it does not publish a runtime-generation payload. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
+After v1.5.3 is running, **Settings > Updates** can install v1.5.4 and its official Python packages as one complete signed runtime generation in the same container. Install this release manually; automatic installation is disabled for v1.5.4. The application and packages roll back together if initial activation fails. v1.5.3 supplies the image foundation; it does not publish a runtime-generation payload. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
 
 Published v1.0.0 through v1.4.x use `X.Y.0` as a container-image milestone. v1.5.0 failed in source testing, v1.5.1 failed during candidate signing because its publication time preceded the candidate commit, and v1.5.2 failed during native migration qualification because the release verifier environment lacked `httpx`. None produced a GitHub release, release assets, or container image; all three original tags remain unchanged. v1.5.3 delivers that image foundation instead. A future `.0` release can keep the proven v1.5.3 image floor only after its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. Compatible releases install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

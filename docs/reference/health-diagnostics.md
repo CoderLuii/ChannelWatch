@@ -1,5 +1,7 @@
 # Health checks and diagnostics reference
 
+<!-- cspell:ignore httptools sqlalchemy -->
+
 ChannelWatch exposes lightweight probe endpoints, operator diagnostics in the web UI, and a `channelwatch doctor` CLI for container troubleshooting. This page describes the behavior implemented in `app/ui/backend/main.py`, `app/core/cli/doctor.py`, `app/core/helpers/debug_bundle.py`, and `app/ui/components/diagnostics-panel.tsx`.
 
 ## Probe endpoints
@@ -90,10 +92,19 @@ What it does not check directly:
 
 Update status reports `current_version` separately from `image_version`.
 `worker_runtime` reports the interpreter version and executable used by the
-responding process. Its `verified_generation` is present only when an
-image-verified dependency worker supplied a process-local generation claim.
-The claim includes the application path, generation descriptor digest and
-dependency inventory digest; it is not accepted from environment variables.
+responding UI backend. On the v1.5.3 image fallback, this is the image
+interpreter identity and a null `verified_generation`. When a v1.5.4 selected
+generation is running, the status also reports the worker process ID, Python
+prefix, loaded state, version and origin for `requests`, `cryptography`,
+`sqlmodel`, `uvicorn`, `pydantic_core`, `sqlalchemy` and `httptools`, plus the
+process-local verified generation claim. Unloaded optional modules remain
+reported as unloaded; diagnostics do not import them merely to identify them.
+
+The verified generation claim includes the application path, generation
+descriptor digest and dependency inventory digest. It is accepted only from
+the image-owned launcher's verified process state, never from environment
+variables. The reported package paths describe the actual selected worker, so
+they can be compared with the signed generation when diagnosing an update.
 
 An updated application or worker package does not mean the container image,
 Python interpreter, operating system or image-owned verification packages
@@ -147,7 +158,7 @@ docker exec <container_name_or_id> channelwatch doctor runtime-info
 docker exec <container_name_or_id> channelwatch doctor debug bundle --output /config/channelwatch_debug_bundle.zip
 ```
 
-The wrapper always launches the doctor with the image-owned application and Python interpreter. It does not import a selected runtime generation or inherit its Python and loader paths. Configuration commands still read the normal persisted `/config` data.
+The wrapper always launches the doctor with the image-owned application and Python interpreter. It does not import a selected runtime generation or inherit its Python and loader paths. Its package versions and paths therefore describe the image copy, while Update Center status describes the responding selected worker when v1.5.4 is active. Configuration commands still read the normal persisted `/config` data.
 
 Available commands:
 

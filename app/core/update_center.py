@@ -2348,8 +2348,7 @@ class UpdateManager:
             "settings_schema_version": self.settings_schema_version,
             "runtime_source": self._runtime_source(active),
             "worker_runtime": {
-                "python_version": sys.version.split()[0],
-                "python_executable": sys.executable,
+                **runtime_process_diagnostics(),
                 "verified_generation": get_verified_runtime_claim(),
             },
             "active_bundle": (

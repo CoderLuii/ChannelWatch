@@ -1,6 +1,8 @@
 # Update ChannelWatch
 
-ChannelWatch v1.5.3 requires its matching container image. Pull `coderluii/channelwatch:1.5.3` (or `ghcr.io/coderluii/channelwatch:1.5.3`) and recreate the container with the same `/config` volume and any external storage key configuration.
+ChannelWatch v1.5.4 installs in-app on the v1.5.3 container image. If you have not installed that image, pull `coderluii/channelwatch:1.5.3` (or `ghcr.io/coderluii/channelwatch:1.5.3`) and recreate the container once with the same `/config` volume and any external storage key configuration. Then install v1.5.4 from **Settings > Updates**.
+
+Install v1.5.4 manually from Update Center. Automatic installation is disabled for this first package release.
 
 Every published v1.4.x image needs this one-time update to receive launcher protocol 4. Update directly to v1.5.3 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume. Do not re-enter saved DVRs or credentials merely to update.
 
@@ -16,7 +18,7 @@ Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.5.3`, and 
 
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
-The Update Center remains the normal path for routine releases. Published v1.0.0 through v1.4.x use `X.Y.0` as an image milestone, while compatible `X.Y.1` through `X.Y.9` releases install in-app. v1.5.0 failed in source testing, v1.5.1 failed during candidate signing because its publication time preceded the candidate commit, and v1.5.2 failed during native migration qualification because the release verifier environment lacked `httpx`. None produced a GitHub release, release assets, or container image; all three original tags remain unchanged. v1.5.3 delivers that image foundation instead. A future `.0` release can retain the proven v1.5.3 image floor only after its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. After `X.Y.9`, the next release is `X.(Y+1).0`.
+The Update Center remains the normal path for routine releases. Published v1.0.0 through v1.4.x use `X.Y.0` as an image milestone, while compatible `X.Y.1` through `X.Y.9` releases install in-app. v1.5.3 provides the image foundation, and v1.5.4 is its first signed application-and-package generation. A future `.0` release can retain the proven v1.5.3 image floor only after its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. After `X.Y.9`, the next release is `X.(Y+1).0`.
 
 If the catalog includes a newer image milestone and a compatible app update for your current image, Update Center shows both choices separately. You can install the highest compatible signed app update now, then refresh the container later. The image recommendation does not hide that forward app update, and the app update does not clear the image recommendation.
 
@@ -79,7 +81,7 @@ This improvement runs in the browser code supplied by v1.4.5. When installing v1
 
 ## Roll back
 
-If a newly activated app bundle fails during startup, the image-stable launcher records the failure and rolls back to the previous runtime or the image copy.
+If initial activation fails, ChannelWatch records the failure and restores the previous generation or the image copy. If a generation fails on a later restart after activation already succeeded, ChannelWatch runs the signed image copy in recovery mode and keeps **Roll back** available so an administrator can remove the damaged selection.
 
 When the UI is reachable, **Settings > Updates** also shows a **Roll back** button when rollback metadata is available. Rollback changes the active runtime pointer and restarts ChannelWatch.
 
@@ -93,8 +95,9 @@ Keep the same `/config` volume and external storage key configuration. The
 container update does not require re-entering DVRs or saved credentials.
 
 v1.5.3 supplies this bootstrap and does not publish a runtime-generation
-payload. After that bootstrap, install a future compatible signed release from
-**Settings > Updates**. ChannelWatch downloads and verifies the release,
+payload. After that bootstrap, install v1.5.4 from **Settings > Updates**.
+ChannelWatch downloads and verifies the signed application and complete
+40-package official Python closure,
 prepares its Python packages without changing the active environment, then
 restarts and checks the new core and UI. Keep the page open to watch progress,
 or return to Updates to inspect the same job. Do not submit Apply again while
@@ -103,8 +106,9 @@ preparation is running. The dashboard refreshes after confirmed success.
 The application, frontend and packages roll back together if activation fails.
 Rollback does not restore settings or database contents. Keep normal backups.
 Generation storage must allow execution; a `noexec` `/config` mount cannot
-prepare this runtime. A storage or verification error leaves the previous
-selection in place and shows the reason in the update job.
+prepare this runtime. ChannelWatch refuses the update before selection changes,
+leaves the previous runtime and saved data in place, and shows the reason in
+the update job.
 
 If the container stops during preparation, ChannelWatch keeps the selected
 release. After that runtime starts again, the interrupted job shows a failure
@@ -126,7 +130,7 @@ Some releases cannot be safely applied inside the current image. ChannelWatch wi
 - container entrypoint, Supervisor, privilege, or image-owned launcher behavior;
 - persistent settings schema.
 
-Published v1.0.0 through v1.4.x use every `X.Y.0` release as an intentional image milestone. v1.5.3 recovers the v1.5.0 milestone after v1.5.0 and v1.5.1 failed before publication and v1.5.2 failed during native migration qualification because the release verifier environment lacked `httpx`. None produced a GitHub release, release assets, or container image. It becomes the actual image baseline for future compatible in-app releases. Failed tags keep their original commits; those versions stay out of signed update catalog history. A future `.0` release can retain the proven v1.5.3 floor only with a complete signed runtime generation and compatibility, restart, and rollback evidence on both native AMD64 and native ARM64.
+v1.5.3 is the image baseline for the compatible v1.5.4 in-app generation. A future `.0` release can retain this image floor only with a complete signed runtime generation and compatibility, restart, and rollback evidence on both native AMD64 and native ARM64.
 
 Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise compatible runtime generation image-required. v1.5.3 changes the image-owned launcher and verifier and therefore requires its matching image on AMD64 or ARM64.
 

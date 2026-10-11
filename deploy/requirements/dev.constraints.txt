@@ -25,7 +25,7 @@ certifi==2026.7.22
     #   requests
 cffi==2.1.1
     # via cryptography
-charset-normalizer==3.5.1
+charset-normalizer==3.5.2
     # via requests
 click==8.5.0
     # via
@@ -37,15 +37,13 @@ fastapi==0.143.0
     # via -r deploy/requirements/runtime.txt
 freezegun==1.5.5
     # via -r deploy/requirements/dev.txt
-greenlet==3.5.6
-    # via sqlalchemy
 h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httptools==0.8.0
+httptools==0.9.0
     # via uvicorn
 httpx==0.28.1
     # via
@@ -60,19 +58,19 @@ ifaddr==0.2.0
     # via zeroconf
 iniconfig==2.3.0
     # via pytest
-markdown==3.10.3
+markdown==3.11
     # via apprise
 oauthlib==4.0.0
     # via
     #   -r deploy/requirements/runtime.txt
     #   requests-oauthlib
-opentelemetry-api==1.45.0
+opentelemetry-api==1.45.1
     # via fastapi
 packaging==26.3
     # via pytest
 pluggy==1.6.0
     # via pytest
-pycparser==3.0
+pycparser==3.11
     # via cffi
 pydantic==2.14.0
     # via
@@ -91,7 +89,7 @@ pytest-asyncio==1.4.0
     # via -r deploy/requirements/dev.txt
 python-dateutil==2.9.0.post0
     # via freezegun
-python-dotenv==1.2.3
+python-dotenv==1.2.4
     # via uvicorn
 python-multipart==0.0.32
     # via -r deploy/requirements/runtime.txt
@@ -110,7 +108,7 @@ requests-oauthlib==2.0.0
     # via apprise
 six==1.17.0
     # via python-dateutil
-sqlalchemy==2.0.54
+sqlalchemy==2.1.4
     # via sqlmodel
 sqlmodel==0.0.48
     # via -r deploy/requirements/runtime.txt
@@ -142,7 +140,7 @@ uvloop==0.23.0
     # via uvicorn
 watchfiles==1.3.0
     # via uvicorn
-websockets==17.1
+websockets==17.2
     # via uvicorn
 zeroconf==0.151.5
     # via -r deploy/requirements/runtime.txt

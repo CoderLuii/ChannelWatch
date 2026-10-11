@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import base64
 import copy
+import datetime as datetime_module
 import hashlib
 import importlib.util
 import json
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,36 @@ BOOTSTRAP_INDEX = json.dumps({"schemaVersion": 2, "manifests": [
     for architecture in ("amd64", "arm64")
 ]}).encode()
 BOOTSTRAP_SHA256 = hashlib.sha256(BOOTSTRAP_INDEX).hexdigest()
+TRACKED_DISTRIBUTIONS = {
+    "requests": "requests",
+    "cryptography": "cryptography",
+    "sqlmodel": "sqlmodel",
+    "uvicorn": "uvicorn",
+    "pydantic_core": "pydantic-core",
+    "sqlalchemy": "sqlalchemy",
+    "httptools": "httptools",
+}
+SELECTED_VERSIONS = {
+    "requests": "2.34.0",
+    "cryptography": "46.0.5",
+    "sqlmodel": "0.0.37",
+    "uvicorn": "0.41.0",
+    "pydantic-core": "2.42.0",
+    "sqlalchemy": "2.1.4",
+    "httptools": "0.9.0",
+}
+IMAGE_BOOTSTRAP_PATHS = (
+    "/usr/local/bin/channelwatch",
+    "/app/channelwatch-image.json",
+    "/app/core/docker-entrypoint.py",
+    "/app/core/runtime_launcher.py",
+    "/app/core/runtime_image_bootstrap.py",
+    "/app/core/runtime_release_trust.py",
+    "/app/core/runtime_generation.py",
+    "/app/core/runtime_dependency_bridge.py",
+    "/app/core/runtime_worker.py",
+    "/etc/supervisor/conf.d/supervisord.conf.template",
+)
 
 
 def _load_script(name: str, relative_path: str):
@@ -52,6 +82,101 @@ def _config(**overrides):
     }
 
 
+def _file_record(path: str) -> dict:
+    return {
+        "path": path,
+        "sha256": hashlib.sha256(path.encode()).hexdigest(),
+        "mode": "0644",
+        "size": len(path.encode()),
+    }
+
+
+def _descriptor_and_inventory(architecture: str) -> tuple[dict, bytes]:
+    descriptor = _descriptor(architecture)
+    native_suffix = (
+        "x86_64-linux-gnu.so" if architecture == "amd64" else "aarch64-linux-gnu.so"
+    )
+    dependency_paths = [
+        f"dependencies/site-packages/{module}/__init__.py"
+        for module in TRACKED_DISTRIBUTIONS
+    ] + [
+        "dependencies/site-packages/httptools/parser/"
+        f"parser.cpython-314-{native_suffix}"
+    ]
+    descriptor["files"] = sorted(
+        [
+            _file_record("core/main.py"),
+            _file_record("ui/backend/main.py"),
+            *(_file_record(path) for path in dependency_paths),
+        ],
+        key=lambda item: item["path"],
+    )
+    descriptor["expanded_size"] = sum(item["size"] for item in descriptor["files"])
+    locked_names = sorted(SELECTED_VERSIONS)
+    inventory_files = [
+        item for item in descriptor["files"] if item["path"].startswith("dependencies/")
+    ]
+    inventory = {
+        "schema": 1,
+        "build": {
+            "builder_image_digest": "sha256:" + "9" * 64,
+            "python_version": descriptor["python_version"],
+            "pip_version": "26.0.1",
+        },
+        "platform": {
+            "architecture": architecture,
+            "python_implementation": descriptor["python_implementation"],
+            "python_cache_tag": descriptor["python_cache_tag"],
+            "python_version": descriptor["python_version"],
+            "os_family": descriptor["os_family"],
+            "libc_family": descriptor["libc_family"],
+            "minimum_libc_version": ".".join(
+                str(part) for part in descriptor["minimum_libc_version"]
+            ),
+            "wheel_platform": f"manylinux_2_36_{architecture}",
+        },
+        "requirements": {
+            "direct": locked_names,
+            "locked": [
+                {
+                    "name": name,
+                    "version": SELECTED_VERSIONS[name],
+                    "hashes": [hashlib.sha256((name + architecture).encode()).hexdigest()],
+                }
+                for name in locked_names
+            ],
+        },
+        "artifacts": [
+            {
+                "filename": f"dependencies-{architecture}.whl",
+                "sha256": hashlib.sha256(architecture.encode()).hexdigest(),
+                "size": 1,
+                "source": f"https://example.invalid/dependencies-{architecture}.whl",
+            }
+        ],
+        "dependencies": [
+            {
+                "name": name,
+                "version": SELECTED_VERSIONS[name],
+                "license_expression": "MIT",
+                "license_files": [],
+            }
+            for name in locked_names
+        ],
+        "files": inventory_files,
+        "counts": {
+            "files": len(inventory_files),
+            "bytes": sum(item["size"] for item in inventory_files),
+        },
+    }
+    raw = canonical_payload_bytes(inventory)
+    descriptor["dependency_inventory_sha256"] = hashlib.sha256(raw).hexdigest()
+    descriptor["application_version"] = "1.6.0"
+    descriptor["source_commit"] = SOURCE_COMMIT
+    descriptor["generation_id"] = descriptor_generation_id(descriptor)
+    return descriptor, raw
+
+
 def _signed_catalog(tmp_path: Path):
     private = Ed25519PrivateKey.generate()
     public = base64.b64encode(
@@ -62,12 +187,11 @@ def _signed_catalog(tmp_path: Path):
     ).decode("ascii")
     variants = []
     descriptors = {}
+    inventories = {}
     for architecture in ("amd64", "arm64"):
-        descriptor = _descriptor(architecture)
-        descriptor["application_version"] = "1.6.0"
-        descriptor["source_commit"] = SOURCE_COMMIT
-        descriptor["generation_id"] = descriptor_generation_id(descriptor)
+        descriptor, inventory_raw = _descriptor_and_inventory(architecture)
         descriptors[architecture] = descriptor
+        inventories[architecture] = inventory_raw
         variants.append(
             {
                 "bundle_url": f"https://example.invalid/{architecture}.zip",
@@ -102,10 +226,82 @@ def _signed_catalog(tmp_path: Path):
     }
     path = tmp_path / "catalog.json"
     path.write_text(json.dumps(catalog), encoding="utf-8")
-    return path, {"test-key": public}, descriptors
+    return path, {"test-key": public}, descriptors, inventories
 
 
-def _evidence(catalog_path: Path, descriptors: dict[str, dict]):
+def _image_inventory(architecture: str) -> dict:
+    entries = []
+    directories = {
+        "/venv",
+        "/venv/bin",
+        "/venv/lib",
+        "/venv/lib/python3.14",
+        "/venv/lib/python3.14/site-packages",
+        *(
+            "/venv/lib/python3.14/site-packages/" + module
+            for module in TRACKED_DISTRIBUTIONS
+        ),
+        "/venv/lib/python3.14/site-packages/httptools/parser",
+    }
+    for path in directories:
+        entries.append({"path": path, "type": "directory", "mode": "0755", "size": 1})
+    for path in IMAGE_BOOTSTRAP_PATHS:
+        entries.append({**_file_record(path), "type": "file"})
+    for module in TRACKED_DISTRIBUTIONS:
+        path = f"/venv/lib/python3.14/site-packages/{module}/__init__.py"
+        entries.append({**_file_record(path), "type": "file"})
+    native_suffix = (
+        "x86_64-linux-gnu.so" if architecture == "amd64" else "aarch64-linux-gnu.so"
+    )
+    parser_path = (
+        "/venv/lib/python3.14/site-packages/httptools/parser/"
+        f"parser.cpython-314-{native_suffix}"
+    )
+    entries.append({**_file_record(parser_path), "type": "file"})
+    for name in ("python", "python3", "python3.14"):
+        entries.append(
+            {
+                "path": f"/venv/bin/{name}",
+                "type": "symlink",
+                "mode": "0777",
+                "size": len(f"/usr/local/bin/{name}"),
+                "link_target": f"/usr/local/bin/{name}",
+            }
+        )
+    entries.sort(key=lambda item: item["path"])
+    encoded = canonical_payload_bytes(entries)
+    return {
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "path_count": len(entries),
+        "regular_file_bytes": sum(
+            item["size"] for item in entries if item["type"] == "file"
+        ),
+        "entries": entries,
+    }
+
+
+def _refresh_image_inventory(qualification: dict, mutate) -> None:
+    inventory = qualification["image_inventory_before"]
+    mutate(inventory["entries"])
+    inventory["path_count"] = len(inventory["entries"])
+    inventory["regular_file_bytes"] = sum(
+        item["size"] for item in inventory["entries"] if item.get("type") == "file"
+    )
+    inventory["sha256"] = hashlib.sha256(
+        canonical_payload_bytes(inventory["entries"])
+    ).hexdigest()
+    summary = {
+        key: inventory[key] for key in ("sha256", "path_count", "regular_file_bytes")
+    }
+    for stage in ("after_apply", "after_restart", "after_rollback", "after_reapply"):
+        qualification["image_inventory_" + stage] = copy.deepcopy(summary)
+
+
+def _evidence(
+    catalog_path: Path,
+    descriptors: dict[str, dict],
+    inventories: dict[str, bytes],
+):
     architectures = {}
     for architecture, descriptor in descriptors.items():
         descriptor_sha256 = hashlib.sha256(
@@ -133,9 +329,16 @@ def _evidence(catalog_path: Path, descriptors: dict[str, dict]):
             "rollback": True,
         }
         root = "/config/channelwatch-runtime/releases/" + descriptor["generation_id"]
-        imports = {
-            name: {"loaded": True, "path": root + "/dependencies/site-packages/" + name + "/__init__.py", "version": "1.0.0"}
-            for name in ("requests", "cryptography", "sqlmodel", "uvicorn", "pydantic_core")
+        dependencies = {
+            module: {
+                "loaded": True,
+                "path": root
+                + "/dependencies/site-packages/"
+                + module
+                + "/__init__.py",
+                "version": SELECTED_VERSIONS[distribution],
+            }
+            for module, distribution in TRACKED_DISTRIBUTIONS.items()
         }
         components = {
             component: {
@@ -143,15 +346,26 @@ def _evidence(catalog_path: Path, descriptors: dict[str, dict]):
                 "runtime_descriptor_sha256": descriptor["generation_id"],
                 "dependency_inventory_sha256": descriptor["dependency_inventory_sha256"],
                 "process_runtime": {
-                    "pid": 123,
+                    "pid": pid,
                     "python_executable": root + "/environment/bin/python",
                     "python_prefix": root + "/environment",
                     "python_version": descriptor["python_version"],
-                    "dependencies": imports,
+                    "dependencies": copy.deepcopy(dependencies),
+                    "verified_generation": {
+                        "path": root,
+                        "runtime_generation_id": descriptor["generation_id"],
+                        "runtime_descriptor_sha256": descriptor["generation_id"],
+                        "dependency_inventory_sha256": descriptor[
+                            "dependency_inventory_sha256"
+                        ],
+                    },
                 },
             }
-            for component in ("core", "ui")
+            for component, pid in (("core", 123), ("ui", 124))
         }
+        reapply_components = copy.deepcopy(components)
+        for component, pid in (("core", 223), ("ui", 224)):
+            reapply_components[component]["process_runtime"]["pid"] = pid
         architectures[architecture].update({
             "target_variant_bundle_sha256": hashlib.sha256(architecture.encode()).hexdigest(),
             "qualification": {
@@ -166,13 +380,34 @@ def _evidence(catalog_path: Path, descriptors: dict[str, dict]):
                 "apply_job_id": "a" * 32,
                 "reapply_job_id": "b" * 32,
                 "apply_runtime_components": copy.deepcopy(components),
-                "reapply_runtime_components": copy.deepcopy(components),
-                "native_imports": imports,
-                "supervisor_processes": {component: root + "/environment/bin/python --mode " + component for component in ("core", "ui")},
-                "preservation_sha256": {path: "c" * 64 for path in ("/config/settings.json", "/config/encryption.key", "/venv/pyvenv.cfg", "/venv/bin/python")},
+                "reapply_runtime_components": copy.deepcopy(reapply_components),
+                "signed_dependency_inventory": {
+                    "sha256": descriptor["dependency_inventory_sha256"],
+                    "size": len(inventories[architecture]),
+                    "json_base64": base64.b64encode(inventories[architecture]).decode(),
+                },
+                "image_imports_before": None,
+                "selected_native_imports": None,
+                "image_imports_after_rollback": None,
+                "supervisor_processes": {
+                    "core": (
+                        f"{root}/environment/bin/python -I -B -S "
+                        "/app/core/runtime_worker.py --image-app-dir /app "
+                        f"--mode core --generation {root} --activation-id activation-123 "
+                        f"--descriptor-sha256 {descriptor['generation_id']} -- --stay-alive"
+                    ),
+                    "ui": (
+                        f"{root}/environment/bin/python -I -B -S "
+                        "/app/core/runtime_worker.py --image-app-dir /app "
+                        f"--mode ui --generation {root} --activation-id activation-123 "
+                        f"--descriptor-sha256 {descriptor['generation_id']} --host 0.0.0.0 "
+                        "--port 8501 --log-level warning --"
+                    ),
+                },
+                "persistent_hashes_before": {path: "c" * 64 for path in ("/config/settings.json", "/config/encryption.key")},
                 "container_restart": {"status": "passed", "current_version": "1.6.0"},
                 "rollback": {"operation": "rollback", "status": "restarting", "rolled_back_from": "1.6.0", "job_id": "c" * 32},
-                "rollback_status": {"current_version": "1.5.0", "launcher_protocol": 4, "active_bundle": None, "operation_busy": False},
+                "rollback_status": None,
             },
         })
         qualification = architectures[architecture]["qualification"]
@@ -180,10 +415,240 @@ def _evidence(catalog_path: Path, descriptors: dict[str, dict]):
                              container_identity_before="d" * 64, container_identity_after="d" * 64)
         commands = qualification["supervisor_processes"]
         qualification["supervisor_processes_after_restart"] = copy.deepcopy(commands)
+        qualification["rollback_supervisor_processes"] = {
+            "core": (
+                "/venv/bin/python -u /app/core/runtime_launcher.py "
+                "core --stay-alive"
+            ),
+            "ui": (
+                "/venv/bin/python -u /app/core/runtime_launcher.py ui "
+                "--host 0.0.0.0 --port 8501 --log-level warning"
+            ),
+        }
+        qualification["rollback_supervisor_process_identities"] = {
+            component: {
+                "pid": pid,
+                "command": qualification["rollback_supervisor_processes"][component],
+            }
+            for component, pid in (("core", 456), ("ui", 457))
+        }
+        qualification["rollback_supervisor_services"] = {
+            component: {
+                "status": "RUNNING",
+                "pid": pid,
+                "uptime": "0:00:05",
+            }
+            for component, pid in (("core", 456), ("ui", 457))
+        }
+        qualification["rollback_health"] = {
+            "startup": {"status": "ready"},
+            "ready": {"status": "ready", "ready": True},
+        }
         qualification["supervisor_processes_after_reapply"] = copy.deepcopy(commands)
-        preserved = qualification.pop("preservation_sha256")
-        for stage in ("before", "after_apply", "after_restart", "after_reapply"):
-            qualification["preservation_" + stage + "_sha256"] = copy.deepcopy(preserved)
+        preserved = qualification["persistent_hashes_before"]
+        for stage in ("after_apply", "after_restart", "after_rollback", "after_reapply"):
+            qualification["persistent_hashes_" + stage] = copy.deepcopy(preserved)
+        image_inventory = _image_inventory(architecture)
+        qualification["image_inventory_before"] = image_inventory
+        image_summary = {
+            key: image_inventory[key]
+            for key in ("sha256", "path_count", "regular_file_bytes")
+        }
+        for stage in ("after_apply", "after_restart", "after_rollback", "after_reapply"):
+            qualification["image_inventory_" + stage] = copy.deepcopy(image_summary)
+        image_root = "/venv/lib/python3.14/site-packages"
+        image_parser = next(
+            item["path"]
+            for item in image_inventory["entries"]
+            if item["path"].startswith(
+                image_root + "/httptools/parser/parser.cpython-314-"
+            )
+        )
+        image_imports = {
+            "sqlalchemy": {
+                "path": image_root + "/sqlalchemy/__init__.py",
+                "version": "2.0.54",
+            },
+            "httptools": {
+                "path": image_root + "/httptools/__init__.py",
+                "version": "0.8.0",
+            },
+            "httptools.parser.parser": {
+                "path": image_parser,
+                "version": "0.8.0",
+                "sha256": hashlib.sha256(image_parser.encode()).hexdigest(),
+            },
+        }
+        selected_parser = next(
+            item
+            for item in descriptor["files"]
+            if item["path"].startswith(
+                "dependencies/site-packages/httptools/parser/parser.cpython-314-"
+            )
+        )
+        selected_imports = {
+            "sqlalchemy": {
+                "path": root + "/dependencies/site-packages/sqlalchemy/__init__.py",
+                "version": "2.1.4",
+            },
+            "httptools": {
+                "path": root + "/dependencies/site-packages/httptools/__init__.py",
+                "version": "0.9.0",
+            },
+            "httptools.parser.parser": {
+                "path": root + "/" + selected_parser["path"],
+                "version": "0.9.0",
+                "sha256": selected_parser["sha256"],
+            },
+        }
+        qualification["image_imports_before"] = image_imports
+        qualification["selected_native_imports"] = selected_imports
+        qualification["selected_native_imports_after_restart"] = copy.deepcopy(
+            selected_imports
+        )
+        qualification["selected_native_imports_after_reapply"] = copy.deepcopy(
+            selected_imports
+        )
+        qualification["image_imports_after_rollback"] = copy.deepcopy(image_imports)
+        image_dependencies = {
+            module: {
+                "loaded": True,
+                "path": image_root + f"/{module}/__init__.py",
+                "version": SELECTED_VERSIONS[distribution],
+            }
+            for module, distribution in TRACKED_DISTRIBUTIONS.items()
+            if module
+            in {"requests", "cryptography", "sqlmodel", "uvicorn", "pydantic_core"}
+        }
+        rollback_worker = {
+            "python_executable": "/venv/bin/python",
+            "python_version": descriptor["python_version"],
+            "verified_generation": None,
+        }
+        qualification["rollback_status"] = {
+            "current_version": "1.5.0",
+            "launcher_protocol": 4,
+            "active_bundle": None,
+            "operation_busy": False,
+            "worker_runtime": copy.deepcopy(rollback_worker),
+        }
+        qualification["rollback_runtime_components"] = {
+            "ui": copy.deepcopy(rollback_worker)
+        }
+        qualification["rollback_runtime_component_scope"] = (
+            "frozen_image_ui_status_interpreter_only"
+        )
+        qualification["rollback_runtime_info"] = {
+            "diagnostic_source": "image",
+            "application_dir": "/app",
+            "application_version": "1.5.0",
+            "process_runtime": {
+                "pid": 457,
+                "python_executable": "/venv/bin/python",
+                "python_prefix": "/venv",
+                "python_version": descriptor["python_version"],
+                "dependencies": image_dependencies,
+            },
+            "verified_generation": None,
+        }
+        qualification["initial_status"]["worker_runtime"] = copy.deepcopy(
+            rollback_worker
+        )
+
+        def image_operational_state() -> dict:
+            return {
+                "status_worker_scope": "frozen_image_ui_status_interpreter_only",
+                "status_worker": copy.deepcopy(rollback_worker),
+                "commands": copy.deepcopy(
+                    qualification["rollback_supervisor_processes"]
+                ),
+                "processes": copy.deepcopy(
+                    qualification["rollback_supervisor_process_identities"]
+                ),
+                "services": copy.deepcopy(
+                    qualification["rollback_supervisor_services"]
+                ),
+                "health": copy.deepcopy(qualification["rollback_health"]),
+            }
+
+        def selected_operational_state(
+            runtime_components: dict | None,
+            worker_pids: tuple[int, int],
+            launcher_pids: tuple[int, int],
+        ) -> dict:
+            current_components = (
+                copy.deepcopy(runtime_components)
+                if runtime_components is not None
+                else None
+            )
+            process_runtimes = (
+                {
+                    component: copy.deepcopy(record["process_runtime"])
+                    for component, record in runtime_components.items()
+                }
+                if runtime_components is not None
+                else {
+                    component: copy.deepcopy(components[component]["process_runtime"])
+                    for component in ("core", "ui")
+                }
+            )
+            for component, pid in zip(("core", "ui"), worker_pids):
+                process_runtimes[component]["pid"] = pid
+            launchers = {
+                component: {
+                    "pid": pid,
+                    "command": qualification["rollback_supervisor_processes"][
+                        component
+                    ],
+                }
+                for component, pid in zip(("core", "ui"), launcher_pids)
+            }
+            services = {
+                component: {
+                    "status": "RUNNING",
+                    "pid": launcher_pids[index],
+                    "uptime": "0:00:05",
+                }
+                for index, component in enumerate(("core", "ui"))
+            }
+            commands = copy.deepcopy(qualification["supervisor_processes"])
+            processes = {
+                component: {
+                    "pid": worker_pids[index],
+                    "ppid": launcher_pids[index],
+                    "command": commands[component],
+                }
+                for index, component in enumerate(("core", "ui"))
+            }
+            if current_components is not None:
+                for component in ("core", "ui"):
+                    current_components[component]["process_runtime"] = copy.deepcopy(
+                        process_runtimes[component]
+                    )
+            return {
+                "runtime_components": current_components,
+                "status_worker_scope": "ui_status_handler_only",
+                "status_worker": copy.deepcopy(process_runtimes["ui"]),
+                "commands": commands,
+                "processes": processes,
+                "launchers": launchers,
+                "services": services,
+                "health": {
+                    "startup": {"status": "ready"},
+                    "ready": {"status": "ready", "ready": True},
+                },
+            }
+
+        qualification["initial_operational_state"] = image_operational_state()
+        qualification["apply_operational_state"] = selected_operational_state(
+            components, (123, 124), (301, 302)
+        )
+        qualification["restart_operational_state"] = selected_operational_state(
+            None, (323, 324), (401, 402)
+        )
+        qualification["reapply_operational_state"] = selected_operational_state(
+            reapply_components, (223, 224), (501, 502)
+        )
     return {
         "schema": 2,
         "status": "passed",
@@ -203,8 +668,8 @@ def _evidence(catalog_path: Path, descriptors: dict[str, dict]):
 
 
 def _apply(module, tmp_path: Path, *, paths=(), mutate=None):
-    catalog_path, public_keys, descriptors = _signed_catalog(tmp_path)
-    evidence = _evidence(catalog_path, descriptors)
+    catalog_path, public_keys, descriptors, inventories = _signed_catalog(tmp_path)
+    evidence = _evidence(catalog_path, descriptors, inventories)
     if mutate is not None:
         mutate(evidence, catalog_path)
     evidence_path = tmp_path / "evidence.json"
@@ -328,9 +793,9 @@ def test_patch_three_recovery_accepts_the_exact_descending_predecessor_chain():
     assert policy.retained_capability_floor is False
 
 
-def test_current_release_config_declares_the_patch_three_recovery_contract():
+def test_current_release_config_retains_the_published_dependency_image_floor():
     module = _load_script(
-        "release_version_policy_current_patch_three_recovery",
+        "release_version_policy_current_dependency_image_floor",
         "scripts/release/release_version_policy.py",
     )
     config = json.loads(
@@ -339,37 +804,28 @@ def test_current_release_config_declares_the_patch_three_recovery_contract():
 
     policy = module.validate_release_config(config)
 
-    assert config["version"] == "1.5.3"
+    assert config["version"] == "1.5.4"
     assert config["minimum_image_version"] == "1.5.3"
-    assert config["recommended_image_version"] == "1.5.3"
+    assert config["recommended_image_version"] == "1.5.4"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
-    publication = datetime.fromisoformat(
+    publication_time = datetime_module.datetime.fromisoformat(
         config["publication_time"].removesuffix("Z") + "+00:00"
     )
-    automatic = datetime.fromisoformat(
+    automatic_install_after = datetime_module.datetime.fromisoformat(
         config["automatic_install_after"].removesuffix("Z") + "+00:00"
     )
-    assert publication.tzinfo == timezone.utc
-    assert automatic.tzinfo == timezone.utc
-    assert automatic - publication == timedelta(days=7)
+    assert publication_time.tzinfo is datetime_module.UTC
+    assert automatic_install_after.tzinfo is datetime_module.UTC
+    assert automatic_install_after - publication_time == datetime_module.timedelta(
+        days=7
+    )
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == [
-        "1.4.0",
-        "1.4.1",
-        "1.4.2",
-        "1.4.3",
-        "1.4.4",
-        "1.4.5",
-    ]
-    assert config["runtime_generation_required"] is False
+    assert config["compatible_source_application_versions"] == ["1.5.3"]
+    assert config["runtime_generation_required"] is True
     assert config["runtime_compatibility_evidence"] == {}
-    assert config["recovers_unpublished_image_milestone"] == "1.5.0"
-    assert config["unpublished_predecessor_tags"] == [
-        "v1.5.2",
-        "v1.5.1",
-        "v1.5.0",
-    ]
+    assert "recovers_unpublished_image_milestone" not in config
+    assert "unpublished_predecessor_tags" not in config
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
@@ -378,9 +834,9 @@ def test_current_release_config_declares_the_patch_three_recovery_contract():
         "v1.5.1",
         "v1.5.2",
     ]
-    assert policy.image_milestone is True
+    assert policy.image_milestone is False
     assert policy.minimum_image_version == "1.5.3"
-    assert policy.retained_capability_floor is False
+    assert policy.retained_capability_floor is True
 
 
 @pytest.mark.parametrize(
@@ -633,10 +1089,10 @@ def test_unsupported_legacy_bootstrap_floor_is_image_required(tmp_path: Path):
         "classify_release_capability_legacy_floor",
         "scripts/release/classify-release-impact.py",
     )
-    catalog_path, public_keys, descriptors = _signed_catalog(tmp_path)
+    catalog_path, public_keys, descriptors, inventories = _signed_catalog(tmp_path)
     evidence_path = tmp_path / "evidence.json"
     evidence_path.write_text(
-        json.dumps(_evidence(catalog_path, descriptors)), encoding="utf-8"
+        json.dumps(_evidence(catalog_path, descriptors, inventories)), encoding="utf-8"
     )
 
     result = module.apply_verified_dependency_runtime(
@@ -671,6 +1127,188 @@ def test_compatible_signed_amd64_arm64_runtime_evidence_allows_app_release(
     assert result.triggering_paths == ()
 
 
+def test_selected_dependency_version_must_match_the_signed_inventory(tmp_path: Path):
+    module = _load_script(
+        "classify_release_capability_dependency_version",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    def mutate(evidence, _catalog):
+        evidence["architectures"]["amd64"]["qualification"][
+            "apply_runtime_components"
+        ]["core"]["process_runtime"]["dependencies"]["requests"]["version"] = "999.0"
+
+    result = _apply(
+        module, tmp_path, paths=("deploy/requirements/runtime.txt",), mutate=mutate
+    )
+
+    assert result.delivery_mode == "image_required"
+    assert module.RUNTIME_CAPABILITY_EVIDENCE_TRIGGER in result.triggering_paths
+
+
+@pytest.mark.parametrize("component", ["core", "ui"])
+def test_loaded_sqlalchemy_is_mandatory_in_each_selected_worker(
+    tmp_path: Path, component: str
+):
+    module = _load_script(
+        "classify_release_capability_selected_sqlalchemy_" + component,
+        "scripts/release/classify-release-impact.py",
+    )
+
+    def mutate(evidence, _catalog):
+        evidence["architectures"]["amd64"]["qualification"][
+            "apply_runtime_components"
+        ][component]["process_runtime"]["dependencies"]["sqlalchemy"] = {
+            "loaded": False
+        }
+
+    result = _apply(
+        module, tmp_path, paths=("deploy/requirements/runtime.txt",), mutate=mutate
+    )
+
+    assert result.delivery_mode == "image_required"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda qualification: qualification["supervisor_processes"].update(
+            core="/tmp/evil --pretend " + qualification["supervisor_processes"]["core"]
+        ),
+        lambda qualification: (
+            qualification["rollback_supervisor_processes"].update(
+                core=(
+                    "/tmp/evil --pretend "
+                    + qualification["rollback_supervisor_processes"]["core"]
+                )
+            ),
+            qualification["rollback_supervisor_process_identities"]["core"].update(
+                command=qualification["rollback_supervisor_processes"]["core"]
+            ),
+        ),
+        lambda qualification: qualification["rollback_runtime_info"][
+            "process_runtime"
+        ].update(verified_generation={"runtime_generation_id": "a" * 64}),
+        lambda qualification: _refresh_image_inventory(
+            qualification,
+            lambda entries: entries.append(
+                {
+                    "path": "/app/escape",
+                    "type": "symlink",
+                    "mode": "0777",
+                    "size": 5,
+                    "link_target": "/host",
+                }
+            ),
+        ),
+    ],
+)
+def test_adversarial_classifier_receipts_fail_closed(
+    tmp_path: Path, mutate
+):
+    module = _load_script(
+        "classify_release_capability_adversarial",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    result = _apply(
+        module,
+        tmp_path,
+        paths=("deploy/requirements/runtime.txt",),
+        mutate=lambda evidence, _catalog: mutate(
+            evidence["architectures"]["amd64"]["qualification"]
+        ),
+    )
+
+    assert result.delivery_mode == "image_required"
+
+
+def test_unloaded_optional_httptools_worker_record_remains_app_update(tmp_path: Path):
+    module = _load_script(
+        "classify_release_capability_optional_httptools",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    def mutate(evidence, _catalog):
+        for architecture in evidence["architectures"].values():
+            qualification = architecture["qualification"]
+            for field in ("apply_runtime_components", "reapply_runtime_components"):
+                for component in qualification[field].values():
+                    component["process_runtime"]["dependencies"]["httptools"] = {
+                        "loaded": False
+                    }
+            for field, components_field in (
+                ("apply_operational_state", "apply_runtime_components"),
+                ("reapply_operational_state", "reapply_runtime_components"),
+            ):
+                state = qualification[field]
+                state["runtime_components"] = copy.deepcopy(
+                    qualification[components_field]
+                )
+                state["status_worker"] = copy.deepcopy(
+                    state["runtime_components"]["ui"]["process_runtime"]
+                )
+            qualification["restart_operational_state"]["status_worker"][
+                "dependencies"
+            ]["httptools"] = {"loaded": False}
+
+    result = _apply(
+        module, tmp_path, paths=("deploy/requirements/runtime.txt",), mutate=mutate
+    )
+
+    assert result.delivery_mode == "app_update"
+    assert result.triggering_paths == ()
+
+
+def test_publication_only_runtime_proofs_are_not_classifier_requirements(
+    tmp_path: Path,
+):
+    module = _load_script(
+        "classify_release_capability_without_publication_proofs",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    def mutate(evidence, _catalog):
+        assert all(
+            "release_qualification" not in architecture
+            for architecture in evidence["architectures"].values()
+        )
+
+    result = _apply(
+        module, tmp_path, paths=("deploy/requirements/runtime.txt",), mutate=mutate
+    )
+
+    assert result.delivery_mode == "app_update"
+    assert result.triggering_paths == ()
+
+
+def _mutate_image_entry(evidence, path: str, **updates) -> None:
+    qualification = evidence["architectures"]["amd64"]["qualification"]
+
+    def mutate(entries):
+        entry = next(item for item in entries if item["path"] == path)
+        entry.update(updates)
+
+    _refresh_image_inventory(qualification, mutate)
+
+
+def _remove_image_entry(evidence, path: str) -> None:
+    qualification = evidence["architectures"]["amd64"]["qualification"]
+    _refresh_image_inventory(
+        qualification,
+        lambda entries: entries.__setitem__(
+            slice(None), [item for item in entries if item["path"] != path]
+        ),
+    )
+
+
+def _duplicate_image_entry(evidence) -> None:
+    qualification = evidence["architectures"]["amd64"]["qualification"]
+    _refresh_image_inventory(
+        qualification, lambda entries: entries.append(copy.deepcopy(entries[0]))
+    )
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -690,9 +1328,54 @@ def test_compatible_signed_amd64_arm64_runtime_evidence_allows_app_release(
         lambda evidence, _catalog: evidence["architectures"]["amd64"].pop("qualification"),
         lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["apply_runtime_components"]["core"]["process_runtime"].update({"python_executable": "/venv/bin/python"}),
         lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["apply_runtime_components"]["ui"]["process_runtime"]["dependencies"]["cryptography"].update({"path": "/venv/lib/python/site-packages/cryptography/__init__.py"}),
-        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["preservation_before_sha256"].pop("/config/encryption.key"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["apply_runtime_components"]["core"]["process_runtime"]["dependencies"]["sqlalchemy"].update({"loaded": False}),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["reapply_runtime_components"]["ui"].update({"runtime_generation_id": "0" * 64}),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["reapply_runtime_components"]["ui"]["process_runtime"]["dependencies"].update(extra={"loaded": False}),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].pop("initial_operational_state"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["apply_operational_state"]["processes"]["core"].update(ppid=999),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["apply_operational_state"]["launchers"]["core"].update(command="/venv/bin/python /tmp/evil --mode core"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["apply_operational_state"]["runtime_components"]["ui"]["process_runtime"].update(pid=999),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["restart_operational_state"].update(runtime_components={}),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["restart_operational_state"]["status_worker"].update(pid=999),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["restart_operational_state"]["health"]["ready"].update(ready=False),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["reapply_operational_state"]["services"]["ui"].update(status="STOPPED"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["selected_native_imports_after_restart"]["sqlalchemy"].update(version="0.0"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].pop("selected_native_imports_after_reapply"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].pop("signed_dependency_inventory"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["signed_dependency_inventory"].update(sha256="0" * 64),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["signed_dependency_inventory"].update(size=0),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["signed_dependency_inventory"].update(json_base64="not-base64"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["selected_native_imports"]["httptools"].update(version="0.8.0"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["selected_native_imports"]["httptools"].update(path="/venv/lib/python3.14/site-packages/httptools/__init__.py"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["selected_native_imports"]["httptools.parser.parser"].update(path="/config/channelwatch-runtime/releases/" + "0" * 64 + "/dependencies/site-packages/httptools/parser/parser.py"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["selected_native_imports"]["httptools.parser.parser"].update(sha256="0" * 64),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["image_imports_before"]["sqlalchemy"].update(version="2.1.4"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["image_imports_after_rollback"]["httptools"].update(path="/config/channelwatch-runtime/releases/bad/httptools/__init__.py"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["persistent_hashes_before"].pop("/config/encryption.key"),
         lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].update(native_host_architecture="arm64"),
-        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["preservation_after_restart_sha256"].update({"/config/settings.json": "0" * 64}),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["persistent_hashes_after_restart"].update({"/config/settings.json": "0" * 64}),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].update(container_identity_after="0" * 64),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].update(reapply_job_id="a" * 32),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["supervisor_processes_after_restart"].update(core="/venv/bin/python --mode core"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].pop("rollback_runtime_components"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_runtime_components"]["ui"].update(python_executable="/config/channelwatch-runtime/releases/bad/environment/bin/python"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"].update(rollback_runtime_component_scope="core_and_ui"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_supervisor_processes"].pop("ui"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_supervisor_process_identities"]["ui"].update(pid=456),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_supervisor_process_identities"]["core"].update(command="/venv/bin/python --mode ui"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_supervisor_services"]["core"].update(status="STOPPED"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_supervisor_services"]["ui"].update(pid=456),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_health"]["ready"].update(ready=False),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["rollback_runtime_info"].update(application_dir="/config/channelwatch-runtime/releases/bad/app"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["image_inventory_after_apply"].update(sha256="0" * 64),
+        lambda evidence, _catalog: _remove_image_entry(evidence, "/app/core/runtime_launcher.py"),
+        lambda evidence, _catalog: _duplicate_image_entry(evidence),
+        lambda evidence, _catalog: _mutate_image_entry(evidence, "/app/core/runtime_worker.py", type="socket"),
+        lambda evidence, _catalog: _mutate_image_entry(evidence, "/app/core/runtime_worker.py", mode="0999"),
+        lambda evidence, _catalog: _mutate_image_entry(evidence, "/app/core/runtime_worker.py", size=-1),
+        lambda evidence, _catalog: _mutate_image_entry(evidence, "/app/core/runtime_worker.py", sha256="not-a-digest"),
+        lambda evidence, _catalog: _mutate_image_entry(evidence, "/venv/bin/python", link_target="/tmp/python"),
+        lambda evidence, _catalog: evidence["architectures"]["amd64"]["qualification"]["image_inventory_before"].update(path_count=100001),
         lambda evidence, _catalog: evidence["architectures"]["arm64"].update({"target_variant_bundle_sha256": "0" * 64}),
         lambda evidence, _catalog: evidence["architectures"].pop("arm64"),
         lambda evidence, _catalog: evidence["architectures"]["amd64"].update(
@@ -758,11 +1441,16 @@ def test_signed_catalog_tampering_requires_image(tmp_path: Path):
 @pytest.mark.parametrize(
     "path",
     [
+        "app/bin/channelwatch",
+        "app/core/docker-entrypoint.py",
+        "app/core/runtime_launcher.py",
         "app/core/runtime_image_bootstrap.py",
         "app/core/runtime_release_trust.py",
         "app/core/runtime_generation.py",
         "app/core/runtime_dependency_bridge.py",
         "app/core/runtime_worker.py",
+        "deploy/config/supervisor/supervisord.conf.template",
+        "deploy/docker/Dockerfile.dockerignore",
     ],
 )
 def test_image_owned_runtime_surfaces_remain_image_required_with_valid_evidence(

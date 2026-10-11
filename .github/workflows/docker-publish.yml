@@ -683,6 +683,24 @@ jobs:
         with:
           name: runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}
           path: ${{ runner.temp }}/runtime-dependencies
+      - name: Set up Node for headless live Update Center verification
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Install the existing headless Chromium harness
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'
+        working-directory: app/ui
+        env:
+          CI: 'true'
+          BROWSER: none
+          PLAYWRIGHT_HTML_OPEN: never
+        run: |
+          corepack enable
+          test "$(pnpm --version)" = "11.28.5"
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
       - name: Open signed assets before native qualification starts
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
         env:
@@ -710,6 +728,9 @@ jobs:
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
         env:
           NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+          CI: 'true'
+          BROWSER: none
+          PLAYWRIGHT_HTML_OPEN: never
         shell: bash
         run: |
           set -euo pipefail

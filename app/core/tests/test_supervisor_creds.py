@@ -1417,8 +1417,8 @@ class TestEntrypointWritesSupervisorSocketConfig:
             with pytest.raises(RuntimeError, match=expected):
                 operation()
 
-        assert external.read_text(encoding="utf-8") == "outside\n"
         assert external.stat() == original
+        assert external.read_text(encoding="utf-8") == "outside\n"
 
     def test_config_walk_does_not_trust_releases_tree_without_runtime_root_binding(
         self, tmp_path

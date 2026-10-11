@@ -87,6 +87,10 @@ test("legacy recovery submits the old value once and clears the browser field", 
 
 test("setup shell can apply only a confirmed official signed recovery update", async ({ page }) => {
   const bootstrapCsrf = "bootstrap-browser-review-token"
+  let recoveryApplied = false
+  let applyRequests = 0
+  let recoveryStatusOutages = 0
+  let startupChecks = 0
   const latest = {
     version: "0.9.18",
     version_tag: "v0.9.18",
@@ -123,6 +127,24 @@ test("setup shell can apply only a confirmed official signed recovery update", a
     bootstrap_csrf: bootstrapCsrf,
     confirmation_required: true,
   }
+  const activatedRecoveryStatus = {
+    ...recoveryStatus,
+    current_version: "0.9.18",
+    runtime_source: "app_bundle",
+    active_bundle: { version: "0.9.18", path: "/config/releases/v0.9.18" },
+    latest: null,
+    update_available: false,
+    last_job: {
+      job_id: "recovery-browser-job",
+      operation: "apply",
+      status: "success",
+      version: "0.9.18",
+      message: "Official recovery update installed.",
+      restart_required: false,
+    },
+    recovery_active: false,
+    bootstrap_csrf: null,
+  }
   await page.route("**/api/settings", (route) => route.fulfill({
     status: 401,
     contentType: "application/json",
@@ -158,11 +180,17 @@ test("setup shell can apply only a confirmed official signed recovery update", a
       encryption_key_path: "/config/encryption.key",
     }),
   }))
-  await page.route("**/api/v1/update/recovery/status", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(recoveryStatus),
-  }))
+  await page.route("**/api/v1/update/recovery/status", (route) => {
+    if (recoveryApplied && recoveryStatusOutages === 0) {
+      recoveryStatusOutages += 1
+      return route.fulfill({ status: 502, body: "" })
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(recoveryApplied ? activatedRecoveryStatus : recoveryStatus),
+    })
+  })
   await page.route("**/api/v1/update/recovery/check", async (route) => {
     expect(await route.request().headerValue("x-csrf-token")).toBe(bootstrapCsrf)
     expect(route.request().postDataJSON()).toEqual({})
@@ -173,23 +201,29 @@ test("setup shell can apply only a confirmed official signed recovery update", a
     })
   })
   await page.route("**/api/v1/update/recovery/apply", async (route) => {
+    applyRequests += 1
     expect(await route.request().headerValue("x-csrf-token")).toBe(bootstrapCsrf)
     expect(route.request().postDataJSON()).toEqual({
       version: "0.9.18",
       confirmation: "INSTALL OFFICIAL UPDATE",
     })
+    recoveryApplied = true
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         job_id: "recovery-browser-job",
         operation: "apply",
-        status: "success",
+        status: "restarting",
         version: "0.9.18",
-        message: "Official recovery update installed.",
-        restart_required: false,
+        message: "Official recovery update installed. Restarting ChannelWatch.",
+        restart_required: true,
       }),
     })
+  })
+  await page.route("**/healthz/startup", (route) => {
+    startupChecks += 1
+    return route.fulfill({ status: startupChecks === 1 ? 503 : 200, body: "" })
   })
 
   await page.goto("/")
@@ -201,7 +235,10 @@ test("setup shell can apply only a confirmed official signed recovery update", a
   const confirmation = page.getByLabel(/INSTALL OFFICIAL UPDATE/)
   await confirmation.fill("INSTALL OFFICIAL UPDATE")
   await actions.getByRole("button", { name: "Apply signed v0.9.18 update" }).click()
-  await expect(page).toHaveURL(/#overview$/)
+  await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
+  expect(applyRequests).toBe(1)
+  expect(recoveryStatusOutages).toBe(1)
+  expect(startupChecks).toBeGreaterThanOrEqual(3)
   await expect.poll(async () => {
     try {
       return await page.evaluate(() => sessionStorage.getItem("recovery_bootstrap_csrf"))
@@ -266,6 +303,7 @@ test("Update Center validates and saves an editable local maintenance window", a
 })
 
 test("terminal retry and rollback failures restore Update Center controls", async ({ page }) => {
+  let failedRetryJob: Record<string, unknown> | null = null
   const failedStatus = {
     current_version: "0.9.18",
     image_version: "0.9.18",
@@ -307,17 +345,26 @@ test("terminal retry and rollback failures restore Update Center controls", asyn
     contentType: "application/json",
     body: JSON.stringify(failedStatus),
   }))
-  await page.route("**/api/v1/update/retry", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      job_id: "failed-retry",
+  await page.route("**/api/v1/update/retry", async (route) => {
+    const request = route.request().postDataJSON() as { job_id: string; version: string }
+    failedRetryJob = {
+      job_id: request.job_id,
       operation: "apply",
       status: "failed",
-      version: "0.9.18",
+      version: request.version,
       message: "Retry restart was rejected.",
       restart_required: true,
-    }),
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(failedRetryJob),
+    })
+  })
+  await page.route("**/api/v1/update/jobs/*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(failedRetryJob),
   }))
   await page.route("**/api/v1/update/rollback", (route) => route.fulfill({
     status: 200,
@@ -338,12 +385,12 @@ test("terminal retry and rollback failures restore Update Center controls", asyn
   const rollback = page.getByRole("button", { name: "Roll back" })
 
   await retry.click()
-  await expect(page.getByText("Retry restart was rejected.")).toBeVisible()
+  await expect(page.getByRole("paragraph").filter({ hasText: "Retry restart was rejected." })).toBeVisible()
   await expect(retry).toBeEnabled()
   await expect(rollback).toBeEnabled()
 
   await rollback.click()
-  await expect(page.getByText("Rollback restart was rejected.")).toBeVisible()
+  await expect(page.getByRole("paragraph").filter({ hasText: "Rollback restart was rejected." })).toBeVisible()
   await expect(retry).toBeEnabled()
   await expect(rollback).toBeEnabled()
 })

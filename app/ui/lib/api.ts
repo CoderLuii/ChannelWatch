@@ -1,5 +1,5 @@
 import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus, KeyRecoveryResult, KeyRecoveryStatus, MaintenanceWindowsResponse } from "@/lib/types"
-import { parseApiError, type ErrorPayload } from "@/lib/error-catalog"
+import { ErrorCode, parseApiError, type ErrorPayload } from "@/lib/error-catalog"
 import { encodeReportChallengeProof, solveReportChallenge, type ReportChallenge } from "@/lib/report-proof"
 
 const API_BASE = "/api"
@@ -13,6 +13,42 @@ export class ApiError extends Error {
     super(payload.message)
     this.name = "ApiError"
     this.payload = payload
+  }
+}
+
+export class ApiUnavailableError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = "ApiUnavailableError"
+    this.status = status
+  }
+}
+
+function isApiUnavailableStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504
+}
+
+function throwIfApiUnavailable(response: Response, context: string): void {
+  if (isApiUnavailableStatus(response.status)) {
+    throw new ApiUnavailableError(`${context}: ${response.status}`, response.status)
+  }
+}
+
+function throwIfAssignedUpdateReplyUnavailable(
+  response: Response,
+  payload: ErrorPayload,
+  jobId: string | undefined,
+): void {
+  if (
+    jobId !== undefined
+    && isApiUnavailableStatus(response.status)
+    && payload.code === ErrorCode.UNKNOWN
+  ) {
+    throw new ApiUnavailableError(
+      `ChannelWatch may have accepted the assigned update job before the reply was lost: ${response.status}`,
+      response.status,
+    )
   }
 }
 
@@ -206,6 +242,7 @@ export async function fetchSettings(): Promise<AppSettings> {
   })
 
   if (!response.ok) {
+    throwIfApiUnavailable(response, "ChannelWatch is temporarily unavailable while loading settings")
     if (response.status === 401) {
       throw new AuthRequiredError("Authentication required to load settings", 401)
     }
@@ -225,6 +262,7 @@ export async function verifyStartupReady(): Promise<void> {
     signal: AbortSignal.timeout(2000),
   })
   if (!response.ok) {
+    throwIfApiUnavailable(response, "ChannelWatch startup is not ready")
     throw new Error(`ChannelWatch startup is not ready: ${response.status}`)
   }
 }
@@ -442,6 +480,7 @@ export async function fetchRecoveryUpdateStatus(): Promise<RecoveryUpdateStatus>
     credentials: "same-origin",
   })
   if (!response.ok) {
+    throwIfApiUnavailable(response, "ChannelWatch is temporarily unavailable while loading recovery status")
     throw new ApiError(await parseApiError(response))
   }
   return response.json()
@@ -516,14 +555,27 @@ export async function postponeUpdate(hours: 24 | 168, reason?: "dirty_report_dra
   return response.json()
 }
 
-export async function retryUpdate(): Promise<UpdateJob> {
+export async function retryUpdate(version?: string, jobId?: string): Promise<UpdateJob> {
+  const hasBody = version !== undefined || jobId !== undefined
   const response = await fetch(`${API_BASE}/v1/update/retry`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: hasBody
+      ? { "Content-Type": "application/json", ...authHeaders() }
+      : authHeaders(),
     credentials: "same-origin",
+    ...(hasBody
+      ? {
+          body: JSON.stringify({
+            ...(version !== undefined ? { version } : {}),
+            ...(jobId !== undefined ? { job_id: jobId } : {}),
+          }),
+        }
+      : {}),
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    const payload = await parseApiError(response)
+    throwIfAssignedUpdateReplyUnavailable(response, payload, jobId)
+    throw new ApiError(payload)
   }
   return response.json()
 }
@@ -574,6 +626,7 @@ export async function fetchUpdateStatus(): Promise<UpdateStatus> {
     credentials: "same-origin",
   })
   if (!response.ok) {
+    throwIfApiUnavailable(response, "ChannelWatch is temporarily unavailable while loading update status")
     const payload = await parseApiError(response)
     throw new ApiError(payload)
   }
@@ -593,7 +646,7 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
   return response.json()
 }
 
-export async function applyUpdate(version?: string): Promise<UpdateJob> {
+export async function applyUpdate(version?: string, jobId?: string): Promise<UpdateJob> {
   const response = await fetch(`${API_BASE}/v1/update/apply`, {
     method: "POST",
     headers: {
@@ -601,10 +654,14 @@ export async function applyUpdate(version?: string): Promise<UpdateJob> {
       ...authHeaders(),
     },
     credentials: "same-origin",
-    body: JSON.stringify({ version: version ?? null }),
+    body: JSON.stringify({
+      version: version ?? null,
+      ...(jobId !== undefined ? { job_id: jobId } : {}),
+    }),
   })
   if (!response.ok) {
     const payload = await parseApiError(response)
+    throwIfAssignedUpdateReplyUnavailable(response, payload, jobId)
     throw new ApiError(payload)
   }
   return response.json()
@@ -616,6 +673,7 @@ export async function fetchUpdateJob(jobId: string): Promise<UpdateJob> {
     credentials: "same-origin",
   })
   if (!response.ok) {
+    throwIfApiUnavailable(response, "ChannelWatch is temporarily unavailable while loading the update job")
     const payload = await parseApiError(response)
     throw new ApiError(payload)
   }

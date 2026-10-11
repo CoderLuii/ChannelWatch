@@ -228,6 +228,16 @@ def test_release_body_preserves_0910_repair_copy(monkeypatch, capsys):
         "render_release_body_0910",
         "scripts/release/render-release-body.py",
     )
+    metadata = {
+        "versionTag": "v0.9.10",
+        "changelogHighlights": ["Show v0.9.10 as container image update required"],
+        "dockerTag": "0.9.10",
+    }
+    monkeypatch.setattr(
+        module,
+        "load_exporter",
+        lambda: SimpleNamespace(collect_metadata=lambda *args: metadata),
+    )
     monkeypatch.setattr(sys, "argv", ["render-release-body.py", "--version", "0.9.10"])
 
     assert module.main() == 0
@@ -896,22 +906,22 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_141_in_app_release_on_140_image():
+def test_release_config_declares_142_in_app_release_on_140_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.4.1"
+    assert config["version"] == "1.4.2"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.4.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.4.1"
+    assert config["recommended_image_version"] == "1.4.2"
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.4.0"]
+    assert config["compatible_source_application_versions"] == ["1.4.0", "1.4.1"]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.4.1 - Corrected container license inventory"
+        "# ChannelWatch v1.4.2 - Reliable update reconnects"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -989,7 +999,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_141_release():
+def test_release_version_surfaces_use_142_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1000,11 +1010,11 @@ def test_release_version_surfaces_use_141_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.4.1"
-    assert metadata["versionTag"] == "v1.4.1"
-    assert metadata["dockerTag"] == "1.4.1"
-    assert metadata["helmChartVersion"] == "1.4.1"
-    assert metadata["helmAppVersion"] == "1.4.1"
+    assert metadata["version"] == "1.4.2"
+    assert metadata["versionTag"] == "v1.4.2"
+    assert metadata["dockerTag"] == "1.4.2"
+    assert metadata["helmChartVersion"] == "1.4.2"
+    assert metadata["helmAppVersion"] == "1.4.2"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -1140,9 +1150,13 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         workflow, "Verify CHANGELOG entry"
     )
     output_path = tmp_path / "github-output"
+    release_version = json.loads(
+        (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
+    )["version"]
+    release_tag = f"v{release_version}"
     parse_env = {
         **os.environ,
-        "RELEASE_TAG": "v1.3.0",
+        "RELEASE_TAG": release_tag,
         "GITHUB_OUTPUT": str(output_path),
     }
 
@@ -1160,17 +1174,26 @@ def test_release_workflow_passes_version_between_isolated_action_shells(tmp_path
         line.split("=", 1)
         for line in output_path.read_text(encoding="utf-8").splitlines()
     )
-    assert output_values == {"version": "1.3.0"}
+    assert output_values == {"version": release_version}
     assert "VERSION: ${{ steps.version.outputs.version }}" in verify_block
     assert 'version_re="${VERSION//' in verify_shell
     assert 'version_re="${version//' not in verify_shell
 
+    shell_root = tmp_path / "shell-root"
+    changelog = shell_root / "docs" / "releases" / "CHANGELOG.md"
+    changelog.parent.mkdir(parents=True)
+    changelog.write_text(
+        (ROOT / "docs/releases/CHANGELOG.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+        newline="\n",
+    )
+
     verified = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", verify_shell],
-        cwd=ROOT,
+        cwd=shell_root,
         env={
             **os.environ,
-            "RELEASE_TAG": "v1.3.0",
+            "RELEASE_TAG": release_tag,
             "VERSION": output_values["version"],
         },
         capture_output=True,
@@ -1361,6 +1384,10 @@ def test_release_impact_classifier_accepts_exact_minimum_image_launcher_replay(
                 "schema": 1,
                 "status": "passed",
                 "source_image_version": "1.0.0",
+                "image_index_digest": "sha256:" + "a" * 64,
+                "platform_manifest_digest": "sha256:" + "b" * 64,
+                "pulled_image_id": "sha256:" + "c" * 64,
+                "platform": "linux/amd64",
                 "target_application_version": "1.0.8",
                 "bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
                 "dynamic_activation": phase,
@@ -1377,6 +1404,7 @@ def test_release_impact_classifier_accepts_exact_minimum_image_launcher_replay(
         config={
             "version": "1.0.8",
             "minimum_image_version": "1.0.0",
+            "minimum_image_sha256": "sha256:" + "a" * 64,
             "delivery_mode": "app_update",
         },
         evidence_path=evidence,
@@ -1405,6 +1433,10 @@ def test_release_impact_classifier_rejects_minimum_image_evidence_for_other_bund
                 "schema": 1,
                 "status": "passed",
                 "source_image_version": "1.0.0",
+                "image_index_digest": "sha256:" + "a" * 64,
+                "platform_manifest_digest": "sha256:" + "b" * 64,
+                "pulled_image_id": "sha256:" + "c" * 64,
+                "platform": "linux/amd64",
                 "target_application_version": "1.0.8",
                 "bundle_sha256": "0" * 64,
                 "dynamic_activation": phase,
@@ -1422,6 +1454,7 @@ def test_release_impact_classifier_rejects_minimum_image_evidence_for_other_bund
             config={
                 "version": "1.0.8",
                 "minimum_image_version": "1.0.0",
+                "minimum_image_sha256": "sha256:" + "a" * 64,
                 "delivery_mode": "app_update",
             },
             evidence_path=evidence,
@@ -2419,7 +2452,7 @@ def test_release_workflow_gates_declared_impact_and_live_manifest():
         "classify-release-impact.py"
     )
     assert candidate.index("classify-release-impact.py") < candidate.index(
-        "Seal production-signed candidate for private retention"
+        "Encrypt qualified candidate for the final sealer"
     )
     assert "--historical-compatibility-verified" not in workflow + candidate
     assert workflow.count("--minimum-image-app-update-evidence") == 2
@@ -2466,6 +2499,134 @@ def test_candidate_artifact_sealing_round_trip_and_tamper_rejection(
     assert not rejected.exists()
 
 
+def test_candidate_transport_round_trip_is_context_bound_and_encrypts_without_secret(
+    tmp_path: Path, monkeypatch
+):
+    module = _load_script(
+        "candidate_transport",
+        "scripts/release/candidate-transport.py",
+    )
+    context_value = {
+        "schema": 1,
+        "repository": "CoderLuii/ChannelWatch",
+        "run_id": "123456",
+        "run_attempt": "1",
+        "source_sha": "a" * 40,
+        "release_tag": "v1.5.0",
+        "release_config_sha256": "b" * 64,
+    }
+    context = tmp_path / "context.json"
+    context.write_bytes(module._canonical(context_value))
+    public_key = tmp_path / "public.json"
+    sealed_private = tmp_path / "private.sealed"
+    source = tmp_path / "candidate.oci.tar"
+    encrypted = tmp_path / "candidate.transport"
+    opened = tmp_path / "opened.oci.tar"
+    source.write_bytes(os.urandom((2 * module.CHUNK_BYTES) + 31))
+    monkeypatch.setenv("CHANNELWATCH_UPDATE_SIGNING_KEY", "test-production-signing-secret")
+    sealer = module._load_sealer()
+    original_seal = sealer.seal
+
+    def assert_private_mode_before_sealing(private_path, destination):
+        assert private_path.stat().st_mode & 0o777 == 0o600
+        return original_seal(private_path, destination)
+
+    monkeypatch.setattr(sealer, "seal", assert_private_mode_before_sealing)
+    monkeypatch.setattr(module, "_load_sealer", lambda: sealer)
+
+    module.generate_keypair(context, public_key, sealed_private)
+    monkeypatch.delenv("CHANNELWATCH_UPDATE_SIGNING_KEY")
+    module.encrypt(source, encrypted, public_key, context, source.name)
+
+    assert encrypted.read_bytes()[: len(module.MAGIC)] == module.MAGIC
+    assert source.read_bytes() not in encrypted.read_bytes()
+    monkeypatch.setenv("CHANNELWATCH_UPDATE_SIGNING_KEY", "test-production-signing-secret")
+    module.decrypt(encrypted, opened, sealed_private, context, source.name)
+    assert opened.read_bytes() == source.read_bytes()
+    assert opened.stat().st_mode & 0o777 == 0o600
+
+    wrong_context_value = {**context_value, "run_attempt": "2"}
+    wrong_context = tmp_path / "wrong-context.json"
+    wrong_context.write_bytes(module._canonical(wrong_context_value))
+    for bad_context, bad_name in (
+        (wrong_context, source.name),
+        (context, "different.oci.tar"),
+    ):
+        rejected = tmp_path / f"rejected-{bad_name}"
+        with pytest.raises(ValueError):
+            module.decrypt(encrypted, rejected, sealed_private, bad_context, bad_name)
+        assert not rejected.exists()
+
+
+def test_candidate_transport_rejects_tamper_truncation_and_wrong_private_key(
+    tmp_path: Path, monkeypatch
+):
+    module = _load_script(
+        "candidate_transport_tamper",
+        "scripts/release/candidate-transport.py",
+    )
+    context_value = {
+        "schema": 1,
+        "repository": "CoderLuii/ChannelWatch",
+        "run_id": "42",
+        "run_attempt": "3",
+        "source_sha": "c" * 40,
+        "release_tag": "v1.5.1",
+        "release_config_sha256": "d" * 64,
+    }
+    context = tmp_path / "context.json"
+    context.write_bytes(module._canonical(context_value))
+    source = tmp_path / "candidate.tar"
+    source.write_bytes(os.urandom(4097))
+    monkeypatch.setenv("CHANNELWATCH_UPDATE_SIGNING_KEY", "test-production-signing-secret")
+    public_one = tmp_path / "one.public.json"
+    private_one = tmp_path / "one.private.sealed"
+    public_two = tmp_path / "two.public.json"
+    private_two = tmp_path / "two.private.sealed"
+    module.generate_keypair(context, public_one, private_one)
+    module.generate_keypair(context, public_two, private_two)
+    monkeypatch.delenv("CHANNELWATCH_UPDATE_SIGNING_KEY")
+    encrypted = tmp_path / "candidate.transport"
+    module.encrypt(source, encrypted, public_one, context, source.name)
+    monkeypatch.setenv("CHANNELWATCH_UPDATE_SIGNING_KEY", "test-production-signing-secret")
+
+    variants = {
+        "tampered": bytearray(encrypted.read_bytes()),
+        "truncated": bytearray(encrypted.read_bytes()[:-1]),
+    }
+    variants["tampered"][-module.TAG_BYTES - 1] ^= 1
+    for label, content in variants.items():
+        candidate = tmp_path / f"{label}.transport"
+        candidate.write_bytes(content)
+        output = tmp_path / f"{label}.out"
+        with pytest.raises(Exception):
+            module.decrypt(candidate, output, private_one, context, source.name)
+        assert not output.exists()
+
+    wrong_key_output = tmp_path / "wrong-key.out"
+    with pytest.raises(ValueError):
+        module.decrypt(encrypted, wrong_key_output, private_two, context, source.name)
+    assert not wrong_key_output.exists()
+
+
+def test_candidate_transport_rejects_symlink_and_hardlink_inputs(tmp_path: Path):
+    module = _load_script(
+        "candidate_transport_links",
+        "scripts/release/candidate-transport.py",
+    )
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"candidate")
+    symlink = tmp_path / "source-symlink.bin"
+    symlink.symlink_to(source)
+    hardlink = tmp_path / "source-hardlink.bin"
+    os.link(source, hardlink)
+
+    with pytest.raises(ValueError, match="regular, unlinked"):
+        module._regular_file(symlink, "input")
+    with pytest.raises(ValueError, match="regular, unlinked"):
+        module._regular_file(hardlink, "input")
+
+
 def test_candidate_workflow_uploads_only_sealed_production_assets():
     candidate = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
@@ -2505,6 +2666,8 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert "package-manager-cache: false" in workflow
 
     assert workflow.count("scripts/release/verify-minimum-image-app-update.py") == 2
+    assert workflow.count("--image-index-digest") == 2
+    assert workflow.count("jq -r '.minimum_image_sha256' scripts/release/release-config.json") == 2
     assert "Verify app update frontend on the minimum compatible image" in workflow
     assert "Reverify app update frontend on the minimum compatible image" in workflow
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
@@ -2700,7 +2863,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert 'cmp --silent "${archive}" "${second_archive}"' in candidate
     assert "channelwatch-image-${tag}.oci.tar" in candidate
 
-    import_index = image_job.index("      - name: Download exact approved candidate image")
+    import_index = image_job.index("      - name: Open the exact approved candidate image")
     scan_index = image_job.index("      - name: Scan exact release candidate images")
     docker_login_index = image_job.index("      - name: Login to Docker Hub")
     ghcr_login_index = image_job.index("      - name: Login to GHCR")
@@ -2893,14 +3056,14 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
     )[0]
 
     assert "actions: read" in release_job
-    assert "Require byte-identical approved candidate assets" in release_job
+    assert "Open the exact qualified candidate before release checks" in release_job
     assert "APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}" in release_job
     assert "The verification job did not produce an approved candidate artifact" in release_job
-    assert release_job.count("cmp --silent") == 1
+    assert "Build signed app bundle" not in release_job
     assert "seal-candidate-artifact.py open" in release_job
-    assert '"channelwatch-app-${TAG}.zip"' in release_job
-    assert '"channelwatch-update-${TAG}.json"' in release_job
-    assert '"channelwatch-catalog-${TAG}.json"' in release_job
+    assert 'cp "${approved_dir}/channelwatch-app-${TAG}.zip"' in release_job
+    assert 'cp "${approved_dir}/channelwatch-update-${TAG}.json"' in release_job
+    assert 'cp "${approved_dir}/channelwatch-catalog-${TAG}.json"' in release_job
     assert 'image_descriptor="channelwatch-image-${TAG}.json"' in release_job
     assert 'image_digest="channelwatch-image-${TAG}.digest"' in release_job
     assert 'image_archive="channelwatch-image-${TAG}.oci.tar"' in release_job
@@ -2960,7 +3123,7 @@ def test_publication_window_gate_runs_at_every_public_boundary():
 
     assert candidate.index("verify-update-assets.py") < candidate.index(
         "verify-publication-window.py"
-    ) < candidate.index("Seal production-signed candidate for private retention")
+    ) < candidate.index("Encrypt qualified candidate for the final sealer")
     assert build_job.index("verify-update-assets.py") < build_job.index(
         "verify-publication-window.py"
     ) < build_job.index("Create or update draft GitHub Release")
@@ -3123,7 +3286,24 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     )
 
     assert workflow["jobs"]
-    assert all(job["runs-on"] == expected for job in workflow["jobs"].values())
+    protected_jobs = {
+        "candidate-source-gates",
+        "candidate-signing",
+        "candidate-qualification",
+        "signed-candidate",
+        "build-update-bundle-and-release",
+        "build-and-push",
+        "publish-github-release",
+    }
+    assert all(
+        job["runs-on"] == expected
+        for name, job in workflow["jobs"].items()
+        if name not in protected_jobs
+    )
+    assert all(
+        workflow["jobs"][name]["runs-on"] == "ubuntu-24.04"
+        for name in protected_jobs
+    )
     assert "runs-on: self-hosted" not in workflow_text
     assert "runs-on: [self-hosted" not in workflow_text
     cleanup = next(
@@ -3132,6 +3312,61 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
         if step.get("name") == "Free up disk space"
     )
     assert cleanup["if"] == "runner.environment == 'github-hosted'"
+
+
+def test_release_signing_isolated_from_source_and_lifecycle_steps():
+    workflow_path = ROOT / ".github/workflows/docker-publish.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    expected_secret_jobs = {
+        "candidate-signing",
+        "candidate-qualification",
+        "signed-candidate",
+        "build-update-bundle-and-release",
+        "build-and-push",
+        "publish-github-release",
+    }
+    actual_secret_jobs = set()
+    forbidden_before_secret = (
+        "pytest",
+        "pnpm ",
+        "docker ",
+        "build-update-bundle.py",
+        "build-push-action@",
+    )
+    for name, job in workflow["jobs"].items():
+        steps = job.get("steps", [])
+        secret_steps = [
+            (index, step)
+            for index, step in enumerate(steps)
+            if "secrets.CHANNELWATCH_UPDATE_SIGNING_KEY" in str(step)
+        ]
+        if not secret_steps:
+            continue
+        actual_secret_jobs.add(name)
+        assert job["runs-on"] == "ubuntu-24.04"
+        assert len(secret_steps) == 1
+        secret_index, secret_step = secret_steps[0]
+        prefix = str(steps[:secret_index]).lower()
+        assert all(command not in prefix for command in forbidden_before_secret)
+        assert "unset CHANNELWATCH_UPDATE_SIGNING_KEY" in secret_step["run"]
+        assert all(
+            "secrets.CHANNELWATCH_UPDATE_SIGNING_KEY" not in str(step)
+            for step in steps[secret_index + 1 :]
+        )
+    assert actual_secret_jobs == expected_secret_jobs
+
+    source_job = workflow["jobs"]["candidate-source-gates"]
+    assert source_job["runs-on"] == "ubuntu-24.04"
+    source_text = str(source_job)
+    assert "app/ui/out/" in source_text
+    assert "app/ui/dist" not in source_text
+    candidate = workflow_text.split("  candidate-qualification:", 1)[1].split(
+        "\n  signed-candidate:", 1
+    )[0]
+    assert "Rebuild and compare the complete application payload" in candidate
+    assert "--signing-key-env CHANNELWATCH_COMPARISON_SIGNING_KEY" in candidate
+    assert "CHANNELWATCH_UPDATE_SIGNING_KEY=\"${ephemeral_signing_key}\"" not in candidate
 
 
 def test_trivy_root_entrypoint_exception_is_narrow_and_expires():
@@ -3595,24 +3830,30 @@ def test_update_asset_verifier_matches_critical_members_to_exact_source(tmp_path
         source_path = tmp_path / relative_source
         source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_bytes(member_contents[member])
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    git_env = os.environ.copy()
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        git_env.pop(name, None)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, env=git_env, check=True)
     subprocess.run(
         ["git", "config", "user.email", "review@example.invalid"],
         cwd=tmp_path,
+        env=git_env,
         check=True,
     )
     subprocess.run(
         ["git", "config", "user.name", "Release Review"],
         cwd=tmp_path,
+        env=git_env,
         check=True,
     )
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, env=git_env, check=True)
     subprocess.run(
-        ["git", "commit", "-q", "-m", "exact source"], cwd=tmp_path, check=True
+        ["git", "commit", "-q", "-m", "exact source"], cwd=tmp_path, env=git_env, check=True
     )
     exact_git_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=tmp_path,
+        env=git_env,
         check=True,
         capture_output=True,
         text=True,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { fetchUpdatePolicy, postponeUpdate, retryUpdate, saveUpdatePolicy } from "@/lib/api"
+import { applyUpdate, fetchUpdatePolicy, postponeUpdate, retryUpdate, saveUpdatePolicy } from "@/lib/api"
 
 const policy = {
   mode: "automatic" as const,
@@ -66,6 +66,33 @@ describe("Update Center policy API", () => {
     expect(fetch).toHaveBeenCalledWith("/api/v1/update/retry", expect.objectContaining({
       method: "POST",
       credentials: "same-origin",
+    }))
+    expect(fetch).toHaveBeenCalledWith("/api/v1/update/retry", expect.not.objectContaining({
+      body: expect.anything(),
+    }))
+  })
+
+  it("sends a browser-assigned durable job ID with apply", async () => {
+    await applyUpdate("1.4.2", "0123456789abcdef0123456789abcdef")
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/update/apply", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        version: "1.4.2",
+        job_id: "0123456789abcdef0123456789abcdef",
+      }),
+    }))
+  })
+
+  it("sends a browser-assigned durable job ID and trusted version with retry", async () => {
+    await retryUpdate("1.4.2", "fedcba9876543210fedcba9876543210")
+
+    expect(fetch).toHaveBeenCalledWith("/api/v1/update/retry", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        version: "1.4.2",
+        job_id: "fedcba9876543210fedcba9876543210",
+      }),
     }))
   })
 })

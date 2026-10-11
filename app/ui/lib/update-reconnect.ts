@@ -1,10 +1,15 @@
-type RuntimeStatus = {
+export type RuntimeStatus = {
   current_version: string
   active_bundle?: { version?: string | null } | null
+  last_job?: RestartJob | null
 }
 
-type ReconnectOptions<T extends RuntimeStatus> = {
+export type ReconnectOptions<T extends RuntimeStatus> = {
   fetchStatus: () => Promise<T>
+  fetchJob?: (jobId: string) => Promise<RestartJob>
+  jobId?: string
+  onJob?: (job: RestartJob) => void
+  signal?: AbortSignal
   verifyReady?: () => Promise<void>
   wait?: (milliseconds: number) => Promise<void>
   maxAttempts?: number
@@ -12,10 +17,12 @@ type ReconnectOptions<T extends RuntimeStatus> = {
   requiredStableChecks?: number
 }
 
-type RestartJob = {
+export type RestartJob = {
+  job_id?: string | null
   restart_required?: boolean
   status?: string | null
   version?: string | null
+  message?: string | null
 }
 
 const PENDING_UPDATE_JOB_STATUSES = new Set([
@@ -25,6 +32,62 @@ const PENDING_UPDATE_JOB_STATUSES = new Set([
   "restarting",
   "validating",
 ])
+
+const FAILED_UPDATE_JOB_STATUSES = new Set([
+  "failed",
+  "rejected",
+  "rollback",
+  "rolled_back",
+])
+
+const SUCCESSFUL_UPDATE_JOB_STATUSES = new Set(["success", "current"])
+
+export class UpdateJobError extends Error {
+  readonly job: RestartJob
+
+  constructor(job: RestartJob) {
+    super(
+      job.message?.trim()
+      || "ChannelWatch could not finish the update. Check Update Center before trying again.",
+    )
+    this.name = "UpdateJobError"
+    this.job = job
+  }
+}
+
+export class UpdateReadinessError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "UpdateReadinessError"
+  }
+}
+
+export class UpdateReconnectError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "UpdateReconnectError"
+  }
+}
+
+export class UpdateJobPendingError extends Error {
+  constructor(
+    message = "The update job is not readable yet.",
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+    this.name = "UpdateJobPendingError"
+  }
+}
+
+export class UpdateTransactionUnconfirmedError extends Error {
+  constructor() {
+    super(
+      "ChannelWatch could not confirm which update transaction started after the connection closed. "
+      + "Refresh Update Center and review the current job before trying again.",
+    )
+    this.name = "UpdateTransactionUnconfirmedError"
+  }
+}
 
 export function isPendingUpdateJob(job: { status?: string | null }): boolean {
   // A durable job is active only when it names an explicit pending state.
@@ -93,12 +156,104 @@ function isTargetRuntimeActive(status: RuntimeStatus, targetVersion: string): bo
   return normalizeVersion(status.current_version) === target
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new DOMException("The update reconnect was cancelled.", "AbortError")
+}
+
+function isReconnectDisconnect(error: unknown): boolean {
+  return error instanceof UpdateReconnectError
+    || error instanceof TypeError
+      && /fetch|network|load failed|connection|socket|offline|restart|disconnect/i.test(error.message)
+}
+
+function reconnectTimeoutError(targetVersion: string): Error {
+  return new Error(
+    `ChannelWatch did not reconnect after applying v${normalizeVersion(targetVersion)}. `
+    + "The update may still be finishing. Refresh the page, then check the current version before trying again.",
+  )
+}
+
+function abortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason
+  return new DOMException("The update reconnect was cancelled.", "AbortError")
+}
+
+function waitWithinReconnect<T>(
+  promise: Promise<T>,
+  deadline: number,
+  targetVersion: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  throwIfAborted(signal)
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof globalThis.setTimeout>
+    const cleanup = () => {
+      globalThis.clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+    }
+    const resolveOnce = (value: T) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+    const rejectOnce = (error: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    const onAbort = () => rejectOnce(abortReason(signal!))
+    const remaining = Math.max(0, deadline - Date.now())
+    timer = globalThis.setTimeout(
+      () => rejectOnce(reconnectTimeoutError(targetVersion)),
+      remaining,
+    )
+
+    signal?.addEventListener("abort", onAbort, { once: true })
+    promise.then(resolveOnce, rejectOnce)
+  })
+}
+
+function matchingJob(
+  job: RestartJob | null | undefined,
+  jobId: string,
+  targetVersion: string,
+): RestartJob | null {
+  if (job?.job_id?.trim() !== jobId) return null
+  if (!job.version?.trim() || normalizeVersion(job.version) !== normalizeVersion(targetVersion)) return null
+  return job
+}
+
+function observeJob(job: RestartJob | null, onJob?: (job: RestartJob) => void): RestartJob | null {
+  if (!job) return null
+  onJob?.(job)
+  if (FAILED_UPDATE_JOB_STATUSES.has(job.status?.trim().toLowerCase() ?? "")) {
+    throw new UpdateJobError(job)
+  }
+  return job
+}
+
+function throwIfImageRequired(job: RestartJob | null): void {
+  if (job?.status?.trim().toLowerCase() === "image_required") {
+    throw new UpdateJobError(job)
+  }
+}
+
 export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
   targetVersion: string,
   {
     fetchStatus,
+    fetchJob,
+    jobId,
+    onJob,
+    signal,
     wait = defaultWait,
-    maxAttempts = 40,
+    maxAttempts = 120,
     intervalMs = 1500,
     verifyReady,
     requiredStableChecks = 2,
@@ -106,30 +261,76 @@ export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
 ): Promise<T> {
   const attempts = Math.max(1, maxAttempts)
   const stableChecksRequired = Math.max(1, requiredStableChecks)
+  const trackedJobId = jobId?.trim() || null
+  const deadline = Date.now() + Math.max(1, attempts * Math.max(1, intervalMs))
   let stableChecks = 0
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    throwIfAborted(signal)
     try {
-      const status = await fetchStatus()
-      if (isTargetRuntimeActive(status, targetVersion)) {
-        await verifyReady?.()
-        stableChecks += 1
-        if (stableChecks >= stableChecksRequired) return status
-      } else {
-        stableChecks = 0
+      let job: RestartJob | null = null
+      let jobLookupPending = false
+      if (trackedJobId && fetchJob) {
+        let fetchedJob: RestartJob | null = null
+        try {
+          fetchedJob = await waitWithinReconnect(
+            fetchJob(trackedJobId),
+            deadline,
+            targetVersion,
+            signal,
+          )
+        } catch (error) {
+          if (!(error instanceof UpdateJobPendingError)) throw error
+          jobLookupPending = true
+          stableChecks = 0
+        }
+        if (!jobLookupPending) {
+          job = observeJob(matchingJob(fetchedJob, trackedJobId, targetVersion), onJob)
+          throwIfImageRequired(job)
+        }
       }
-    } catch {
+
+      if (!jobLookupPending) {
+        const status = await waitWithinReconnect(fetchStatus(), deadline, targetVersion, signal)
+        if (trackedJobId && !fetchJob) {
+          job = observeJob(matchingJob(status.last_job, trackedJobId, targetVersion), onJob)
+          throwIfImageRequired(job)
+        }
+
+        const durableJobSucceeded = !trackedJobId || SUCCESSFUL_UPDATE_JOB_STATUSES.has(
+          job?.status?.trim().toLowerCase() ?? "",
+        )
+        if (durableJobSucceeded && isTargetRuntimeActive(status, targetVersion)) {
+          try {
+            if (verifyReady) {
+              await waitWithinReconnect(verifyReady(), deadline, targetVersion, signal)
+            }
+            stableChecks += 1
+            if (stableChecks >= stableChecksRequired) return status
+          } catch (error) {
+            if (error instanceof UpdateReadinessError || isReconnectDisconnect(error)) {
+              stableChecks = 0
+            } else {
+              throw error
+            }
+          }
+        } else {
+          stableChecks = 0
+        }
+      }
+    } catch (error) {
+      if (error instanceof UpdateJobError || !isReconnectDisconnect(error)) throw error
       // A short disconnect is expected while the backend restarts.
       stableChecks = 0
     }
 
-    if (attempt < attempts) await wait(intervalMs)
+    if (attempt < attempts) {
+      await waitWithinReconnect(wait(intervalMs), deadline, targetVersion, signal)
+      throwIfAborted(signal)
+    }
   }
 
-  throw new Error(
-    `ChannelWatch did not reconnect after applying v${normalizeVersion(targetVersion)}. `
-    + "The update may still be finishing. Refresh the page, then check the current version before trying again.",
-  )
+  throw reconnectTimeoutError(targetVersion)
 }
 
 export async function applyUpdateAndReconnect<
@@ -142,30 +343,59 @@ export async function applyUpdateAndReconnect<
   let job: TJob | null = null
   let restartDisconnect: unknown
 
+  throwIfAborted(options.signal)
   try {
     job = await options.apply(targetVersion)
-    if (!requiresUpdateReconnect(job)) {
-      if (job.status === "success") options.reload()
-      return job
-    }
+    throwIfAborted(options.signal)
+    const expectedJobId = options.jobId?.trim()
+    const postedJob = expectedJobId
+      ? matchingJob(job, expectedJobId, targetVersion)
+      : job
+    observeJob(postedJob, options.onJob)
+    if (postedJob?.status?.trim().toLowerCase() === "image_required") return job
   } catch (error) {
     if (options.isRejectedUpdate?.(error)) throw error
     const isRestartDisconnect = options.isRestartDisconnect
       ? options.isRestartDisconnect(error)
-      : error instanceof TypeError && /fetch|network|load failed|connection/i.test(error.message)
+      : error instanceof UpdateReconnectError
+        ? Boolean(options.jobId?.trim())
+        : error instanceof TypeError && /fetch|network|load failed|connection/i.test(error.message)
     if (!isRestartDisconnect) throw error
     restartDisconnect = error
   }
 
+  const selectedVersion = options.jobId?.trim()
+    ? targetVersion
+    : job?.version?.trim() || targetVersion
+  const jobId = options.jobId?.trim() || (options.fetchJob ? job?.job_id?.trim() : undefined)
+  if (restartDisconnect && options.fetchJob && !jobId) {
+    throw new UpdateTransactionUnconfirmedError()
+  }
+  const shouldValidate = Boolean(jobId)
+    || job == null
+    || requiresUpdateReconnect(job)
+  if (!shouldValidate) {
+    if (job?.status === "success") {
+      throwIfAborted(options.signal)
+      options.reload()
+    }
+    return job
+  }
+
   try {
-    const selectedVersion = job?.version?.trim() || targetVersion
-    await waitForUpdatedRuntime(selectedVersion, options)
+    await waitForUpdatedRuntime(selectedVersion, { ...options, jobId })
   } catch (error) {
-    if (restartDisconnect && error instanceof Error) {
+    if (
+      restartDisconnect
+      && error instanceof Error
+      && !(error instanceof UpdateJobError)
+      && error.name !== "AbortError"
+    ) {
       throw new Error(error.message, { cause: restartDisconnect })
     }
     throw error
   }
+  throwIfAborted(options.signal)
   options.reload()
   return job
 }

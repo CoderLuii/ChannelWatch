@@ -41,6 +41,10 @@ If those checks pass, the image-stable launcher can run the active bundle instea
 
 Every activation receives a unique generation identifier and a bounded validation deadline. The core and UI must each report a healthy startup for that exact generation before ChannelWatch marks the update successful. A stale readiness marker from an older process cannot validate a newer bundle. If either component fails or the deadline expires, the image-owned launcher restores the prior runtime selection and requests one coordinated container restart.
 
+Starting in v1.4.2, the browser follows the durable update job across temporary connection failures and page reloads. It waits for the matching job to succeed, the requested application version to become active, and two consecutive runtime and Settings checks before refreshing the dashboard. A terminal failure remains visible. The browser's three-minute reconnect budget gives the launcher's two-minute validation deadline time to finish; it does not extend that deadline or submit a second update.
+
+For manual Apply and Retry actions, the browser assigns the job ID before sending the request. The authenticated updater retains that ID in its existing activation record, so a lost reply does not force the browser to guess which update completed. Signature verification and the server's single-flight lock still govern installation.
+
 ## Image-required updates
 
 An update is image-required when it needs something the current container image cannot provide safely. Examples include dependency changes, base image updates, OS package changes, Supervisor changes, persistent schema changes, and deployment chart assumptions.

@@ -10,6 +10,7 @@ import binascii
 import hashlib
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -837,6 +838,8 @@ def apply_verified_minimum_image_app_update(
         "schema": 1,
         "status": "passed",
         "source_image_version": minimum_image,
+        "image_index_digest": config.get("minimum_image_sha256"),
+        "platform": "linux/amd64",
         "target_application_version": version,
         "bundle_sha256": bundle_sha256,
     }
@@ -845,6 +848,9 @@ def apply_verified_minimum_image_app_update(
         for key, expected in expected_header.items()
         if evidence.get(key) != expected
     }
+    for name in ("image_index_digest", "platform_manifest_digest", "pulled_image_id"):
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", str(evidence.get(name, ""))) is None:
+            mismatches[name] = (evidence.get(name), "immutable image digest")
     phases = (
         "dynamic_activation",
         "ui_restart",

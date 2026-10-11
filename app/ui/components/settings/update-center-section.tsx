@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, CheckCircle2, DownloadCloud, ExternalLink, Loader2, PackageCheck, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
@@ -10,11 +10,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
 import { TabsContent } from "@/components/base/tabs"
-import { ApiError, applyUpdate, checkForUpdate, fetchSettings, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, verifyStartupReady, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
+import { ApiError, ApiUnavailableError, applyUpdate, checkForUpdate, fetchSettings, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, verifyStartupReady, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { applyUpdateAndReconnect, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect, UpdateJobPendingError, UpdateReadinessError, UpdateReconnectError, waitForUpdatedRuntime, type RestartJob } from "@/lib/update-reconnect"
 
 type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling" | "saving-policy" | "postponing" | "retrying"
+
+type UpdateFlight = {
+  controller: AbortController
+  promise: Promise<void>
+}
+
+function createUpdateJobId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("")
+}
 
 function statusTone(status?: string | null): "default" | "secondary" | "destructive" | "outline" {
   if (!status) return "outline"
@@ -69,10 +79,18 @@ export function UpdateCenterSection() {
   const [busy, setBusy] = useState<BusyState>("idle")
   const [error, setError] = useState<string | null>(null)
   const [remediation, setRemediation] = useState<string | null>(null)
+  const updateFlightRef = useRef<UpdateFlight | null>(null)
+  const updateActionLockedRef = useRef(false)
+  const reloadStartedRef = useRef(false)
 
   const latest = status?.trusted_target ?? null
   const latestVersion = latest?.version_tag ?? (latest?.version ? `v${latest.version}` : null)
-  const remoteOperationBusy = Boolean(status?.operation_busy && status.operation_state !== "idle")
+  const durableJobActive = Boolean(job && isPendingUpdateJob(job))
+  const remoteOperationBusy = Boolean(
+    status?.operation_busy
+    && status.operation_state !== "idle"
+    && (!job || durableJobActive),
+  )
   const controlsBusy = busy !== "idle" || remoteOperationBusy
   const canApply = Boolean(status?.update_available && !status.image_required && latest?.version && !controlsBusy)
   const canRollback = Boolean(status?.rollback_available && !controlsBusy)
@@ -112,29 +130,164 @@ export function UpdateCenterSection() {
     })
   }, [loadStatus])
 
-  const activeJobId = job?.job_id
-  const activeJobStatus = job?.status
-  useEffect(() => {
-    if (!activeJobId || !isPendingUpdateJob({ status: activeJobStatus })) return
-    setBusy("polling")
-    const timer = window.setInterval(async () => {
+  useEffect(() => () => {
+    updateFlightRef.current?.controller.abort()
+  }, [])
+
+  const verifyUpdatedRuntimeReady = useCallback(async () => {
+    try {
+      await verifyStartupReady()
+    } catch (err) {
+      if (err instanceof ApiUnavailableError) {
+        throw new UpdateReconnectError(err.message, { cause: err })
+      }
+      if (
+        err instanceof Error
+        && (err.name === "TimeoutError" || err.message === "ChannelWatch startup is not ready: 503")
+      ) {
+        throw new UpdateReadinessError(err.message, { cause: err })
+      }
+      throw err
+    }
+
+    let settings
+    try {
+      settings = await fetchSettings()
+    } catch (err) {
+      if (err instanceof ApiUnavailableError) {
+        throw new UpdateReconnectError(err.message, { cause: err })
+      }
+      throw err
+    }
+    if (!Array.isArray(settings.dvr_servers)) {
+      throw new UpdateReadinessError("ChannelWatch settings are not ready yet.")
+    }
+  }, [])
+
+  const fetchTrackedUpdateStatus = useCallback(async () => {
+    try {
+      return await fetchUpdateStatus()
+    } catch (err) {
+      if (err instanceof ApiUnavailableError) {
+        throw new UpdateReconnectError(err.message, { cause: err })
+      }
+      throw err
+    }
+  }, [])
+
+  const fetchTrackedUpdateJob = useCallback(async (jobId: string) => {
+    try {
+      return await fetchUpdateJob(jobId)
+    } catch (err) {
+      if (err instanceof ApiError && err.payload.code === "ERR_UPDATE_JOB_NOT_FOUND") {
+        throw new UpdateJobPendingError(err.message, { cause: err })
+      }
+      if (err instanceof ApiUnavailableError) {
+        throw new UpdateReconnectError(err.message, { cause: err })
+      }
+      throw err
+    }
+  }, [])
+
+  const observeUpdateJob = useCallback((nextJob: RestartJob) => {
+    if (nextJob.job_id && nextJob.status) {
+      setJob(nextJob as UpdateJob)
+    }
+  }, [])
+
+  const reloadUpdatedDashboardOnce = useCallback(() => {
+    if (reloadStartedRef.current) return
+    reloadStartedRef.current = true
+    reloadUpdatedDashboard()
+  }, [])
+
+  const startUpdateFlight = useCallback((
+    targetVersion: string,
+    options: {
+      apply?: () => Promise<UpdateJob>
+      jobId?: string
+      initialBusy: BusyState
+    },
+  ) => {
+    if (updateActionLockedRef.current || updateFlightRef.current) return false
+
+    updateActionLockedRef.current = true
+    setBusy(options.initialBusy)
+    setError(null)
+    setRemediation(null)
+    const controller = new AbortController()
+    const promise = (async () => {
       try {
-        const nextJob = await fetchUpdateJob(activeJobId)
-        setJob(nextJob)
-        if (!isPendingUpdateJob(nextJob)) {
-          setBusy("idle")
-          await loadStatus()
+        if (options.apply) {
+          const observeFlightJob = (nextJob: RestartJob) => {
+            observeUpdateJob(nextJob)
+            if (requiresUpdateReconnect(nextJob)) setBusy("polling")
+          }
+          const nextJob = await applyUpdateAndReconnect(targetVersion, {
+            apply: async () => {
+              try {
+                const startedJob = await options.apply!()
+                if (requiresUpdateReconnect(startedJob)) setBusy("polling")
+                return startedJob
+              } catch (err) {
+                if (err instanceof ApiUnavailableError) {
+                  throw new UpdateReconnectError(err.message, { cause: err })
+                }
+                throw err
+              }
+            },
+            fetchStatus: fetchTrackedUpdateStatus,
+            fetchJob: fetchTrackedUpdateJob,
+            jobId: options.jobId,
+            onJob: observeFlightJob,
+            signal: controller.signal,
+            verifyReady: verifyUpdatedRuntimeReady,
+            reload: reloadUpdatedDashboardOnce,
+            isRejectedUpdate: (err) => err instanceof ApiError,
+          })
+          if (nextJob && !requiresUpdateReconnect(nextJob)) {
+            setJob(nextJob)
+          }
+          return
         }
+
+        await waitForUpdatedRuntime(targetVersion, {
+          fetchStatus: fetchTrackedUpdateStatus,
+          fetchJob: fetchTrackedUpdateJob,
+          jobId: options.jobId,
+          onJob: observeUpdateJob,
+          signal: controller.signal,
+          verifyReady: verifyUpdatedRuntimeReady,
+        })
+        reloadUpdatedDashboardOnce()
       } catch (err) {
-        setBusy("idle")
+        if (err instanceof Error && err.name === "AbortError") return
         setError(updateErrorMessage(err))
         setRemediation(updateErrorRemediation(err))
+      } finally {
+        if (updateFlightRef.current?.controller === controller) {
+          updateFlightRef.current = null
+          updateActionLockedRef.current = false
+          if (!reloadStartedRef.current) setBusy("idle")
+        }
       }
-    }, 3000)
-    return () => window.clearInterval(timer)
-  }, [activeJobId, activeJobStatus, loadStatus])
+    })()
+    updateFlightRef.current = { controller, promise }
+    return true
+  }, [fetchTrackedUpdateJob, fetchTrackedUpdateStatus, observeUpdateJob, reloadUpdatedDashboardOnce, verifyUpdatedRuntimeReady])
 
-  const pendingJob = Boolean(job && isPendingUpdateJob(job))
+  const activeJobId = job?.job_id
+  const activeJobStatus = job?.status
+  const activeJobVersion = job?.version
+  useEffect(() => {
+    if (!activeJobId || !activeJobVersion || !isPendingUpdateJob({ status: activeJobStatus })) return
+    startUpdateFlight(activeJobVersion, {
+      jobId: activeJobId,
+      initialBusy: "polling",
+    })
+  }, [activeJobId, activeJobStatus, activeJobVersion, startUpdateFlight])
+
+  const pendingJob = durableJobActive
   useEffect(() => {
     if (!remoteOperationBusy || pendingJob || busy !== "idle") return
     const timer = window.setInterval(() => {
@@ -165,39 +318,12 @@ export function UpdateCenterSection() {
   const handleApply = async () => {
     if (!latest?.version) return
     const targetVersion = latest.version
-    setBusy("applying")
-    setError(null)
-    setRemediation(null)
-    try {
-      const nextJob = await applyUpdateAndReconnect(targetVersion, {
-        apply: async (version) => {
-          const startedJob = await applyUpdate(version)
-          if (requiresUpdateReconnect(startedJob)) {
-            setBusy("polling")
-          } else {
-            setJob(startedJob)
-          }
-          return startedJob
-        },
-        fetchStatus: fetchUpdateStatus,
-        verifyReady: async () => {
-          const [, settings] = await Promise.all([verifyStartupReady(), fetchSettings()])
-          if (!Array.isArray(settings.dvr_servers)) {
-            throw new Error("ChannelWatch settings are not ready yet.")
-          }
-        },
-        reload: reloadUpdatedDashboard,
-        isRejectedUpdate: (err) => err instanceof ApiError,
-      })
-      if (nextJob && !requiresUpdateReconnect(nextJob)) {
-        setJob(nextJob)
-        setBusy("idle")
-      }
-    } catch (err) {
-      setError(updateErrorMessage(err))
-      setRemediation(updateErrorRemediation(err))
-      setBusy("idle")
-    }
+    const jobId = createUpdateJobId()
+    startUpdateFlight(targetVersion, {
+      apply: () => applyUpdate(targetVersion, jobId),
+      jobId,
+      initialBusy: "applying",
+    })
   }
 
   const handleRollback = async () => {
@@ -254,46 +380,26 @@ export function UpdateCenterSection() {
     // The backend retries the currently trusted catalog target, which may be
     // newer than the failed job. Only reconnect against the matching target
     // the administrator reviewed in this view.
-    const targetVersion = latest?.version
-    setBusy("retrying")
-    setError(null)
-    setRemediation(null)
-    try {
-      const nextJob = targetVersion
-        ? await applyUpdateAndReconnect(targetVersion, {
-            apply: async () => {
-              const startedJob = await retryUpdate()
-              if (requiresUpdateReconnect(startedJob)) {
-                setBusy("polling")
-              } else {
-                setJob(startedJob)
-              }
-              return startedJob
-            },
-            fetchStatus: fetchUpdateStatus,
-            verifyReady: async () => {
-              const [, settings] = await Promise.all([verifyStartupReady(), fetchSettings()])
-              if (!Array.isArray(settings.dvr_servers)) {
-                throw new Error("ChannelWatch settings are not ready yet.")
-              }
-            },
-            reload: reloadUpdatedDashboard,
-            isRejectedUpdate: (err) => err instanceof ApiError,
-          })
-        : await retryUpdate()
-      if (nextJob && !requiresUpdateReconnect(nextJob)) {
-        setJob(nextJob)
-        setBusy("idle")
-      } else if (nextJob) {
-        setJob(nextJob)
-        setBusy("polling")
-      }
-    } catch (err) {
-      setError(updateErrorMessage(err))
-      setRemediation(updateErrorRemediation(err))
-      setBusy("idle")
-    }
+    const targetVersion = latest?.version ?? job?.version
+    if (!targetVersion) return
+    const jobId = createUpdateJobId()
+    startUpdateFlight(targetVersion, {
+      apply: () => retryUpdate(targetVersion, jobId),
+      jobId,
+      initialBusy: "retrying",
+    })
   }
+
+  const updateStage = useMemo(() => {
+    if (!["applying", "retrying", "polling"].includes(busy)) return null
+    if (busy === "applying" || busy === "retrying" || ["backing_up", "verifying", "applying"].includes(job?.status ?? "")) {
+      return t("updates.progress.installing")
+    }
+    if (job?.status === "restarting" || (busy === "polling" && !job)) {
+      return t("updates.progress.restarting")
+    }
+    return t("updates.progress.checking")
+  }, [busy, job])
 
   const windowStartMatch = /^(\d{2}):(\d{2})$/.exec(maintenanceStart)
   const windowStartValid = Boolean(
@@ -483,6 +589,14 @@ export function UpdateCenterSection() {
               {job.backup_path && <p className="text-xs text-muted-foreground">{t("updates.backupCreated", { path: job.backup_path })}</p>}
             </div>
           )}
+
+          {updateStage ? (
+            <Alert aria-live="polite" className="border-sky-400/30 bg-sky-500/10 text-sky-900 dark:text-sky-100 [&>svg]:text-sky-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <AlertTitle>{updateStage}</AlertTitle>
+              <AlertDescription>{t("updates.progress.refreshWhenReady")}</AlertDescription>
+            </Alert>
+          ) : null}
 
           {error && (
             <Alert variant="destructive">

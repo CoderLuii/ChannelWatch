@@ -292,14 +292,154 @@ jobs:
               f"({len(default_targets)} + {len(secret_targets)} resources)."
           )
           PY
-  signed-candidate:
-    needs: [docs-config, helm, security]
+  candidate-source-gates:
+    name: Verify release source and static frontend without secrets
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install constrained Python dependencies
+        run: |
+          python -m pip install --upgrade \
+            -c deploy/requirements/dev.constraints.txt \
+            -r deploy/requirements/runtime.txt \
+            -r deploy/requirements/dev.txt
+      - name: Run source gates
+        run: |
+          python scripts/release/release_version_policy.py
+          python -m compileall app/core app/ui/backend
+          PYTHONPATH=app python -m pytest app/core/tests
+      - name: Build verified static frontend
+        working-directory: app/ui
+        env:
+          CHANNELWATCH_BUILD_ID: ${{ github.sha }}
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm exec playwright install --with-deps chromium firefox webkit
+          pnpm exec playwright test
+      - name: Retain verified static frontend
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-static-${{ github.sha }}
+          path: app/ui/out/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Retain browser diagnostics, including first failed attempts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-browser-${{ github.sha }}
+          path: |
+            app/ui/playwright-report/
+            app/ui/test-results/
+          retention-days: 7
+          if-no-files-found: warn
+
+  candidate-signing:
+    name: Sign and seal candidate assets on a fresh runner
+    needs: candidate-source-gates
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact audited signer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact binary signer dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download verified static frontend
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-static-${{ github.sha }}
+          path: app/ui/out
+      - name: Sign, verify, and seal immutable candidate inputs
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          mkdir -p dist/candidate-initial
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          common_args=(
+            --version "${version}"
+            --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}"
+            --delivery-mode "$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+            --minimum-image-version "$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+            --updater-protocol "$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+            --recommended-image-version "$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+            --publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
+            --automatic-install-after "$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
+          )
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" --out-dir dist/candidate-one
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" --out-dir dist/candidate-two
+          diff -u <(cd dist/candidate-one && sha256sum ./*) <(cd dist/candidate-two && sha256sum ./*)
+          config_sha256="$(sha256sum scripts/release/release-config.json | awk '{print $1}')"
+          jq -cS -n --arg repository "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" --arg source_sha "${GITHUB_SHA}" \
+            --arg release_tag "${GITHUB_REF_NAME}" --arg release_config_sha256 "${config_sha256}" \
+            '{schema:1,repository:$repository,run_id:$run_id,run_attempt:$run_attempt,source_sha:$source_sha,release_tag:$release_tag,release_config_sha256:$release_config_sha256}' \
+            > dist/candidate-initial/transport-context.json
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/candidate-transport.py generate-keypair \
+            --context dist/candidate-initial/transport-context.json \
+            --public-key-out dist/candidate-initial/transport-public.json \
+            --sealed-private-key-out dist/candidate-initial/transport-private.sealed
+          tar --sort=name --owner=0 --group=0 --numeric-owner --format=posix \
+            -cf "${RUNNER_TEMP}/signed-assets.tar" -C dist candidate-one candidate-two
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py seal \
+            --input "${RUNNER_TEMP}/signed-assets.tar" \
+            --output dist/candidate-initial/signed-assets.sealed
+      - name: Retain sealed initial signer output
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-signer-${{ github.sha }}
+          path: dist/candidate-initial/
+          retention-days: 7
+          if-no-files-found: error
+
+  candidate-qualification:
+    needs: [docs-config, helm, security, candidate-signing]
     name: Build and verify private signed candidate
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
-    outputs:
-      artifact_id: ${{ steps.candidate_upload.outputs.artifact-id }}
 
     steps:
       - name: Checkout exact candidate
@@ -308,6 +448,35 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Set up pinned Python for the audited opener
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact binary opener dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download sealed initial signer output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-signer-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate-signer
+      - name: Open signed assets before qualification starts
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${RUNNER_TEMP}/candidate-signer/signed-assets.sealed" \
+            --output "${RUNNER_TEMP}/signed-assets.tar"
+          tar -xf "${RUNNER_TEMP}/signed-assets.tar" -C .
+          rm -f "${RUNNER_TEMP}/signed-assets.tar"
 
       - name: Verify exact candidate identity
         env:
@@ -360,11 +529,6 @@ jobs:
             exit 1
           fi
 
-      - name: Set up pinned Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
       - name: Set up pinned Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -412,6 +576,44 @@ jobs:
           pnpm exec playwright install --with-deps chromium firefox webkit
           pnpm exec playwright test
 
+      - name: Rebuild and compare the complete application payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          tag="v${version}"
+          comparison_dir="${RUNNER_TEMP}/application-payload-comparison"
+          ephemeral_signing_key="$(python - <<'PY'
+          import base64
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          key = Ed25519PrivateKey.generate().private_bytes(
+              serialization.Encoding.Raw,
+              serialization.PrivateFormat.Raw,
+              serialization.NoEncryption(),
+          )
+          print(base64.b64encode(key).decode("ascii"))
+          PY
+          )"
+          common_args=(
+            --version "${version}"
+            --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
+            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}"
+            --delivery-mode "$(jq -r '.delivery_mode' scripts/release/release-config.json)"
+            --minimum-image-version "$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
+            --updater-protocol "$(jq -r '.updater_protocol' scripts/release/release-config.json)"
+            --recommended-image-version "$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
+            --publication-time "$(jq -r '.publication_time' scripts/release/release-config.json)"
+            --automatic-install-after "$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
+          )
+          CHANNELWATCH_COMPARISON_SIGNING_KEY="${ephemeral_signing_key}" \
+            python scripts/release/build-update-bundle.py \
+              --signing-key-env CHANNELWATCH_COMPARISON_SIGNING_KEY \
+              "${common_args[@]}" --out-dir "${comparison_dir}"
+          cmp --silent \
+            "dist/candidate-one/channelwatch-app-${tag}.zip" \
+            "${comparison_dir}/channelwatch-app-${tag}.zip"
+
       # Browser checks use disposable API fixtures and run before signing secrets.
       - name: Retain browser diagnostics, including first failed attempts
         if: always()
@@ -423,43 +625,6 @@ jobs:
             app/ui/test-results/
           retention-days: 7
           if-no-files-found: warn
-
-      - name: Build deterministic signed candidate twice
-        env:
-          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${CHANNELWATCH_UPDATE_SIGNING_KEY}" ]; then
-            echo "::error::CHANNELWATCH_UPDATE_SIGNING_KEY is required."
-            exit 1
-          fi
-          version="$(jq -r '.version' scripts/release/release-config.json)"
-          tag="v${version}"
-          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
-          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
-          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
-          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
-          publication_time="$(jq -r '.publication_time' scripts/release/release-config.json)"
-          automatic_install_after="$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
-          common_args=(
-            --version "${version}"
-            --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${tag}/channelwatch-app-${tag}.zip"
-            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${tag}"
-            --delivery-mode "${delivery_mode}"
-            --minimum-image-version "${minimum_image_version}"
-            --updater-protocol "${updater_protocol}"
-            --recommended-image-version "${recommended_image_version}"
-            --publication-time "${publication_time}"
-            --automatic-install-after "${automatic_install_after}"
-          )
-          python scripts/release/build-update-bundle.py \
-            "${common_args[@]}" --out-dir dist/candidate-one
-          python scripts/release/build-update-bundle.py \
-            "${common_args[@]}" --out-dir dist/candidate-two
-          diff -u \
-            <(cd dist/candidate-one && sha256sum ./*) \
-            <(cd dist/candidate-two && sha256sum ./*)
 
       - name: Verify app update frontend on the minimum compatible image
         shell: bash
@@ -476,6 +641,7 @@ jobs:
             --bundle "dist/candidate-one/channelwatch-app-v${version}.zip" \
             --version "${version}" \
             --minimum-image-version "${minimum_image_version}" \
+            --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
             --evidence-json "${RUNNER_TEMP}/channelwatch-minimum-image-app-update-v${version}.json"
 
       - name: Build exact deterministic multi-architecture image twice
@@ -919,26 +1085,85 @@ jobs:
           )
           mv "${checksum_tmp}" dist/candidate-one/SHA256SUMS.txt
 
-      - name: Seal production-signed candidate for private retention
+      - name: Encrypt qualified candidate for the final sealer
+        shell: bash
+        run: |
+          set -euo pipefail
+          transport_dir="dist/candidate-transport"
+          archive="${RUNNER_TEMP}/channelwatch-release-candidate-${GITHUB_SHA}.tar"
+          encrypted="${transport_dir}/channelwatch-release-candidate-${GITHUB_SHA}.transport"
+          mkdir -p "${transport_dir}"
+          tar -C dist/candidate-one -cf "${archive}" .
+          python scripts/release/candidate-transport.py encrypt \
+            --context "${RUNNER_TEMP}/candidate-signer/transport-context.json" \
+            --public-key "${RUNNER_TEMP}/candidate-signer/transport-public.json" \
+            --input "${archive}" --output "${encrypted}" \
+            --artifact-name "channelwatch-release-candidate-${GITHUB_SHA}.tar"
+          rm -f "${archive}"
+      - name: Retain encrypted qualification evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-qualification-${{ github.sha }}
+          path: dist/candidate-transport/*.transport
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  signed-candidate:
+    name: Finalize sealed qualified candidate on a fresh runner
+    needs: [candidate-signing, candidate-qualification]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.candidate_upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact audited sealer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact binary sealer dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download signer key material
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-signer-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate-signer
+      - name: Download encrypted qualification evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate-qualification
+      - name: Open qualification and create the final production seal
         env:
           CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          sealed_dir="dist/candidate-sealed"
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
           archive="${RUNNER_TEMP}/channelwatch-release-candidate-${GITHUB_SHA}.tar"
-          sealed="${sealed_dir}/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
-          mkdir -p "${sealed_dir}"
-          tar -C dist/candidate-one -cf "${archive}" .
-          python scripts/release/seal-candidate-artifact.py seal \
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/candidate-transport.py decrypt \
+            --context "${RUNNER_TEMP}/candidate-signer/transport-context.json" \
+            --sealed-private-key "${RUNNER_TEMP}/candidate-signer/transport-private.sealed" \
+            --input "${RUNNER_TEMP}/candidate-qualification/channelwatch-release-candidate-${GITHUB_SHA}.transport" \
+            --output "${archive}" --artifact-name "channelwatch-release-candidate-${GITHUB_SHA}.tar"
+          mkdir -p dist/candidate-sealed
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py seal \
             --input "${archive}" \
-            --output "${sealed}"
+            --output "dist/candidate-sealed/channelwatch-release-candidate-${GITHUB_SHA}.sealed"
           rm -f "${archive}"
-          if [ ! -s "${sealed}" ]; then
-            echo "::error::Sealed candidate artifact was not created."
-            exit 1
-          fi
-
       - name: Retain sealed nonpublishing candidate evidence
         id: candidate_upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -953,7 +1178,7 @@ jobs:
     name: Build signed update bundle and release
     needs: signed-candidate
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: write # Create the exact-SHA draft and upload signed update assets.
       actions: read # Reproduce and compare the approved nonpublishing candidate.
@@ -980,6 +1205,56 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
+
+      - name: Install exact binary opener dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download the exact qualified candidate seal
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.signed-candidate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/approved-candidate
+      - name: Open the exact qualified candidate before release checks
+        id: approved_candidate
+        env:
+          APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          artifact_id="${APPROVED_ARTIFACT_ID}"
+          if [[ ! "${artifact_id}" =~ ^[0-9]+$ ]]; then
+            echo "::error::The verification job did not produce an approved candidate artifact for exact SHA ${RELEASE_SHA}."
+            exit 1
+          fi
+          approved_dir="${RUNNER_TEMP}/approved-candidate"
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed" \
+            --output "${RUNNER_TEMP}/approved-candidate.tar"
+          tar -xf "${RUNNER_TEMP}/approved-candidate.tar" -C "${approved_dir}"
+          rm -f "${RUNNER_TEMP}/approved-candidate.tar" "${approved_dir}"/*.sealed
+          (cd "${approved_dir}" && sha256sum --check SHA256SUMS.txt)
+          mkdir -p dist/update
+          cp "${approved_dir}/channelwatch-app-${TAG}.zip" dist/update/
+          cp "${approved_dir}/channelwatch-update-${TAG}.json" dist/update/
+          cp "${approved_dir}/channelwatch-catalog-${TAG}.json" dist/update/
+          image_descriptor="channelwatch-image-${TAG}.json"
+          image_digest="channelwatch-image-${TAG}.digest"
+          image_archive="channelwatch-image-${TAG}.oci.tar"
+          image_index_digest="$(tr -d '\r\n' < "${approved_dir}/${image_digest}")"
+          [[ "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "artifact_id=${artifact_id}"
+            echo "image_index_digest=${image_index_digest}"
+            echo "image_descriptor_sha256=$(sha256sum "${approved_dir}/${image_descriptor}" | awk '{print $1}')"
+            echo "image_archive_sha256=$(sha256sum "${approved_dir}/${image_archive}" | awk '{print $1}')"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up pinned Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1048,55 +1323,6 @@ jobs:
           pnpm typecheck
           pnpm build
 
-      - name: Build signed app bundle
-        env:
-          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ env.RELEASE_TAG }}
-        shell: bash
-        run: |
-          if [ -z "${CHANNELWATCH_UPDATE_SIGNING_KEY}" ]; then
-            echo "::error::CHANNELWATCH_UPDATE_SIGNING_KEY is required to sign update bundles."
-            exit 1
-          fi
-
-          config_version="$(jq -r '.version' scripts/release/release-config.json)"
-          image_required="$(jq -r '.image_required' scripts/release/release-config.json)"
-          delivery_mode="$(jq -r '.delivery_mode' scripts/release/release-config.json)"
-          minimum_image_version="$(jq -r '.minimum_image_version' scripts/release/release-config.json)"
-          updater_protocol="$(jq -r '.updater_protocol' scripts/release/release-config.json)"
-          recommended_image_version="$(jq -r '.recommended_image_version' scripts/release/release-config.json)"
-          publication_time="$(jq -r '.publication_time' scripts/release/release-config.json)"
-          automatic_install_after="$(jq -r '.automatic_install_after' scripts/release/release-config.json)"
-          if [ "${config_version}" != "${VERSION}" ]; then
-            echo "::error::release-config.json targets ${config_version}, expected ${VERSION}."
-            exit 1
-          fi
-          if [ "${image_required}" = "true" ]; then
-            if [ "${delivery_mode}" != "image_required" ]; then
-              echo "::error::image_required=true conflicts with delivery_mode=${delivery_mode}."
-              exit 1
-            fi
-            echo "Release ${TAG} will be marked as container image update required."
-          elif [ "${image_required}" != "false" ]; then
-            echo "::error::release-config.json image_required must be true or false."
-            exit 1
-          elif [ "${delivery_mode}" = "image_required" ]; then
-            echo "::error::image_required=false conflicts with delivery_mode=image_required."
-            exit 1
-          fi
-
-          python scripts/release/build-update-bundle.py \
-            --version "${VERSION}" \
-            --bundle-url "https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}/channelwatch-app-${TAG}.zip" \
-            --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${TAG}" \
-            --delivery-mode "${delivery_mode}" \
-            --minimum-image-version "${minimum_image_version}" \
-            --updater-protocol "${updater_protocol}" \
-            --recommended-image-version "${recommended_image_version}" \
-            --publication-time "${publication_time}" \
-            --automatic-install-after "${automatic_install_after}"
-
       - name: Reverify app update frontend on the minimum compatible image
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -1113,79 +1339,8 @@ jobs:
             --bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip" \
             --version "${VERSION}" \
             --minimum-image-version "${minimum_image_version}" \
+            --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
             --evidence-json "${RUNNER_TEMP}/channelwatch-minimum-image-app-update-${RELEASE_TAG}.json"
-
-      - name: Require byte-identical approved candidate assets
-        id: approved_candidate
-        env:
-          APPROVED_ARTIFACT_ID: ${{ needs.signed-candidate.outputs.artifact_id }}
-          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ env.RELEASE_TAG }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifact_id="${APPROVED_ARTIFACT_ID}"
-          approved_run_id="${GITHUB_RUN_ID}"
-          if [ -z "${artifact_id}" ]; then
-            echo "::error::The verification job did not produce an approved candidate artifact for exact SHA ${RELEASE_SHA}."
-            exit 1
-          fi
-
-          approved_dir="${RUNNER_TEMP}/approved-candidate"
-          mkdir -p "${approved_dir}"
-          gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
-            > "${RUNNER_TEMP}/approved-candidate.zip"
-          unzip -q "${RUNNER_TEMP}/approved-candidate.zip" -d "${approved_dir}"
-          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
-          opened="${RUNNER_TEMP}/approved-candidate.tar"
-          python scripts/release/seal-candidate-artifact.py open \
-            --input "${sealed}" \
-            --output "${opened}"
-          tar -xf "${opened}" -C "${approved_dir}"
-          rm -f "${opened}" "${sealed}"
-
-          for asset in \
-            "channelwatch-app-${TAG}.zip" \
-            "channelwatch-update-${TAG}.json" \
-            "channelwatch-catalog-${TAG}.json"; do
-            if [ ! -s "${approved_dir}/${asset}" ]; then
-              echo "::error::Approved candidate run ${approved_run_id} is missing ${asset}."
-              exit 1
-            fi
-            cmp --silent "${approved_dir}/${asset}" "dist/update/${asset}" || {
-              echo "::error::Tag workflow did not reproduce approved candidate asset ${asset} byte-for-byte."
-              exit 1
-            }
-          done
-          (
-            cd "${approved_dir}"
-            sha256sum --check SHA256SUMS.txt
-          )
-          image_descriptor="channelwatch-image-${TAG}.json"
-          image_digest="channelwatch-image-${TAG}.digest"
-          image_archive="channelwatch-image-${TAG}.oci.tar"
-          for asset in "${image_descriptor}" "${image_digest}" "${image_archive}"; do
-            if [ ! -s "${approved_dir}/${asset}" ]; then
-              echo "::error::Approved candidate run ${approved_run_id} is missing ${asset}."
-              exit 1
-            fi
-          done
-          image_index_digest="$(tr -d '\r\n' < "${approved_dir}/${image_digest}")"
-          if [[ ! "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Approved candidate image index digest is invalid."
-            exit 1
-          fi
-          image_descriptor_sha256="$(sha256sum "${approved_dir}/${image_descriptor}" | awk '{print $1}')"
-          image_archive_sha256="$(sha256sum "${approved_dir}/${image_archive}" | awk '{print $1}')"
-          {
-            echo "artifact_id=${artifact_id}"
-            echo "image_index_digest=${image_index_digest}"
-            echo "image_descriptor_sha256=${image_descriptor_sha256}"
-            echo "image_archive_sha256=${image_archive_sha256}"
-          } >> "${GITHUB_OUTPUT}"
-          echo "Reproduced approved candidate run ${approved_run_id} for ${RELEASE_SHA}."
 
       - name: Verify generated update assets
         env:
@@ -1358,7 +1513,7 @@ jobs:
 
   build-and-push:
     name: Build and push Docker image
-    runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-24.04
     needs: build-update-bundle-and-release
     env:
       APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
@@ -1379,6 +1534,66 @@ jobs:
           ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Set up pinned Python for the audited opener
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact binary opener dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download the exact approved candidate seal
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
+          path: ${{ runner.temp }}/approved-candidate
+      - name: Open the exact approved candidate image
+        env:
+          APPROVED_ARCHIVE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_archive_sha256 }}
+          APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
+          APPROVED_DESCRIPTOR_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_descriptor_sha256 }}
+          APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          TAG: ${{ env.RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          if [[ ! "${APPROVED_ARTIFACT_ID}" =~ ^[0-9]+$ ]] || \
+             [[ ! "${APPROVED_IMAGE_INDEX_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+             [[ ! "${APPROVED_DESCRIPTOR_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+             [[ ! "${APPROVED_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Approved candidate image outputs are missing or invalid."
+            exit 1
+          fi
+          approved_dir="${RUNNER_TEMP}/approved-candidate"
+          mkdir -p "${RUNNER_TEMP}/channelwatch-release.oci"
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed" \
+            --output "${RUNNER_TEMP}/approved-candidate.tar"
+          tar -xf "${RUNNER_TEMP}/approved-candidate.tar" -C "${approved_dir}"
+          rm -f "${RUNNER_TEMP}/approved-candidate.tar" "${approved_dir}"/*.sealed
+          (cd "${approved_dir}" && sha256sum --check SHA256SUMS.txt)
+          descriptor="${approved_dir}/channelwatch-image-${TAG}.json"
+          digest="${approved_dir}/channelwatch-image-${TAG}.digest"
+          archive="${approved_dir}/channelwatch-image-${TAG}.oci.tar"
+          if [ "$(tr -d '\r\n' < "${digest}")" != "${APPROVED_IMAGE_INDEX_DIGEST}" ] || \
+             [ "$(sha256sum "${descriptor}" | awk '{print $1}')" != "${APPROVED_DESCRIPTOR_SHA256}" ] || \
+             [ "$(sha256sum "${archive}" | awk '{print $1}')" != "${APPROVED_ARCHIVE_SHA256}" ]; then
+            echo "::error::Downloaded candidate image does not match the approved exact-SHA outputs."
+            exit 1
+          fi
+          tar -xf "${archive}" -C "${RUNNER_TEMP}/channelwatch-release.oci"
+          python scripts/release/describe-oci-image.py \
+            --oci-layout "${RUNNER_TEMP}/channelwatch-release.oci" \
+            --output "${RUNNER_TEMP}/release-image.json" \
+            --digest-output "${RUNNER_TEMP}/release-image.digest"
+          cmp --silent "${descriptor}" "${RUNNER_TEMP}/release-image.json"
+          cmp --silent "${digest}" "${RUNNER_TEMP}/release-image.digest"
 
       - name: Parse version
         id: version
@@ -1414,60 +1629,6 @@ jobs:
           sudo apt-get clean
           docker system prune -af
           df -h
-
-      - name: Download exact approved candidate image
-        env:
-          APPROVED_ARCHIVE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_archive_sha256 }}
-          APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
-          APPROVED_DESCRIPTOR_SHA256: ${{ needs.build-update-bundle-and-release.outputs.approved_image_descriptor_sha256 }}
-          APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
-          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ env.RELEASE_TAG }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "${APPROVED_ARTIFACT_ID}" =~ ^[0-9]+$ ]] || \
-             [[ ! "${APPROVED_IMAGE_INDEX_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
-             [[ ! "${APPROVED_DESCRIPTOR_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
-             [[ ! "${APPROVED_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error::Approved candidate image outputs are missing or invalid."
-            exit 1
-          fi
-          approved_dir="${RUNNER_TEMP}/approved-candidate"
-          mkdir -p "${approved_dir}" "${RUNNER_TEMP}/channelwatch-release.oci"
-          gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${APPROVED_ARTIFACT_ID}/zip" \
-            > "${RUNNER_TEMP}/approved-candidate.zip"
-          unzip -q "${RUNNER_TEMP}/approved-candidate.zip" -d "${approved_dir}"
-          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
-          opened="${RUNNER_TEMP}/approved-candidate.tar"
-          python scripts/release/seal-candidate-artifact.py open \
-            --input "${sealed}" \
-            --output "${opened}"
-          tar -xf "${opened}" -C "${approved_dir}"
-          rm -f "${opened}" "${sealed}"
-          (
-            cd "${approved_dir}"
-            sha256sum --check SHA256SUMS.txt
-          )
-          descriptor="${approved_dir}/channelwatch-image-${TAG}.json"
-          digest="${approved_dir}/channelwatch-image-${TAG}.digest"
-          archive="${approved_dir}/channelwatch-image-${TAG}.oci.tar"
-          if [ "$(tr -d '\r\n' < "${digest}")" != "${APPROVED_IMAGE_INDEX_DIGEST}" ] || \
-             [ "$(sha256sum "${descriptor}" | awk '{print $1}')" != "${APPROVED_DESCRIPTOR_SHA256}" ] || \
-             [ "$(sha256sum "${archive}" | awk '{print $1}')" != "${APPROVED_ARCHIVE_SHA256}" ]; then
-            echo "::error::Downloaded candidate image does not match the approved exact-SHA outputs."
-            exit 1
-          fi
-          tar -xf "${archive}" -C "${RUNNER_TEMP}/channelwatch-release.oci"
-          python scripts/release/describe-oci-image.py \
-            --oci-layout "${RUNNER_TEMP}/channelwatch-release.oci" \
-            --output "${RUNNER_TEMP}/release-image.json" \
-            --digest-output "${RUNNER_TEMP}/release-image.digest"
-          cmp --silent "${descriptor}" "${RUNNER_TEMP}/release-image.json"
-          cmp --silent "${digest}" "${RUNNER_TEMP}/release-image.digest"
-          echo "The exact private candidate image is ready for repeat scanning and publication."
 
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
@@ -1908,7 +2069,7 @@ jobs:
 
   publish-github-release:
     name: Publish GitHub Release
-    runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-24.04
     needs:
       - build-update-bundle-and-release
       - build-and-push
@@ -1924,6 +2085,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact binary opener dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all: --require-hashes
+          -r scripts/release/signer-requirements.txt
+      - name: Download the exact approved candidate seal
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
+          path: ${{ runner.temp }}/approved-candidate-canary
+      - name: Open candidate before publication verification starts
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          approved_dir="${RUNNER_TEMP}/approved-candidate-canary"
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed" \
+            --output "${RUNNER_TEMP}/approved-candidate-canary.tar"
+          tar -xf "${RUNNER_TEMP}/approved-candidate-canary.tar" -C "${approved_dir}"
+          rm -f "${RUNNER_TEMP}/approved-candidate-canary.tar" "${approved_dir}"/*.sealed
+          (cd "${approved_dir}" && sha256sum --check SHA256SUMS.txt)
+
       - name: Parse version
         id: version
         shell: bash
@@ -1931,11 +2123,6 @@ jobs:
           raw="${RELEASE_TAG}"
           version="${raw#v}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-
-      - name: Set up pinned Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
 
       - name: Install update verifier dependencies
         run: |
@@ -1956,10 +2143,7 @@ jobs:
 
       - name: Verify pinned bridge or rerun v0.9.18 historical canaries
         env:
-          APPROVED_ARTIFACT_ID: ${{ needs.build-update-bundle-and-release.outputs.approved_candidate_artifact_id }}
           APPROVED_IMAGE_INDEX_DIGEST: ${{ needs.build-update-bundle-and-release.outputs.approved_image_index_digest }}
-          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ env.RELEASE_TAG }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
@@ -1970,22 +2154,6 @@ jobs:
             exit 0
           fi
           approved_dir="${RUNNER_TEMP}/approved-candidate-canary"
-          mkdir -p "${approved_dir}"
-          gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${APPROVED_ARTIFACT_ID}/zip" \
-            > "${RUNNER_TEMP}/approved-candidate-canary.zip"
-          unzip -q "${RUNNER_TEMP}/approved-candidate-canary.zip" -d "${approved_dir}"
-          sealed="${approved_dir}/channelwatch-release-candidate-${RELEASE_SHA}.sealed"
-          opened="${RUNNER_TEMP}/approved-candidate-canary.tar"
-          python scripts/release/seal-candidate-artifact.py open \
-            --input "${sealed}" \
-            --output "${opened}"
-          tar -xf "${opened}" -C "${approved_dir}"
-          rm -f "${opened}" "${sealed}"
-          (
-            cd "${approved_dir}"
-            sha256sum --check SHA256SUMS.txt
-          )
           python scripts/release/verify-historical-image-canaries.py \
             --manifest "${approved_dir}/channelwatch-update-${TAG}.json" \
             --bundle "${approved_dir}/channelwatch-app-${TAG}.zip" \

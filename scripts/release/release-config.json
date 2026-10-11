@@ -1,15 +1,17 @@
 {
-  "version": "1.4.1",
+  "version": "1.4.2",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.4.0",
+  "minimum_image_sha256": "sha256:796a2c666cc2d4cbc7dacd9a99c8651e7ef96f56dff30315788e5879cbe9e53e",
   "updater_protocol": 2,
-  "recommended_image_version": "1.4.1",
-  "publication_time": "2026-10-10T19:10:00Z",
-  "automatic_install_after": "2026-10-17T19:10:00Z",
+  "recommended_image_version": "1.4.2",
+  "publication_time": "2026-10-11T04:00:00Z",
+  "automatic_install_after": "2026-10-18T04:00:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
-    "1.4.0"
+    "1.4.0",
+    "1.4.1"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -17,6 +19,6 @@
     3
   ],
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.4.1 - Corrected container license inventory",
+  "release_heading": "# ChannelWatch v1.4.2 - Reliable update reconnects",
   "verification_assets": true
 }

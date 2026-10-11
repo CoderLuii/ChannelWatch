@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import html.parser
 import json
+import re
 import secrets
 import shutil
 
@@ -30,6 +31,45 @@ SUPERVISOR_CONFIG = "/tmp/supervisord.conf"  # nosec B108
 
 class CanaryError(RuntimeError):
     """Raised when the minimum-image app-update contract is not satisfied."""
+
+
+def pinned_image(repository: str, index_digest: str) -> tuple[str, str]:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", index_digest):
+        raise CanaryError("The minimum image requires an immutable index digest.")
+    index = json.loads(run([
+        "docker", "buildx", "imagetools", "inspect", "--raw",
+        f"{repository}@{index_digest}",
+    ]).stdout)
+    manifests = index.get("manifests") if isinstance(index, dict) else None
+    if not isinstance(manifests, list):
+        raise CanaryError("The minimum image must identify a multi-platform index.")
+    matches = [
+        member for member in manifests
+        if isinstance(member, dict)
+        and member.get("platform", {}).get("os") == "linux"
+        and member.get("platform", {}).get("architecture") == "amd64"
+    ]
+    if len(matches) != 1 or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", str(matches[0].get("digest", ""))
+    ):
+        raise CanaryError("The minimum image requires one exact Linux AMD64 manifest.")
+    digest = matches[0]["digest"]
+    return f"{repository}@{digest}", digest
+
+
+def verify_pulled_image(image: str) -> str:
+    values = json.loads(run(["docker", "image", "inspect", image]).stdout)
+    if not isinstance(values, list) or len(values) != 1:
+        raise CanaryError("The exact minimum image could not be inspected.")
+    value = values[0]
+    if (
+        value.get("Os") != "linux"
+        or value.get("Architecture") != "amd64"
+        or image not in value.get("RepoDigests", [])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(value.get("Id", "")))
+    ):
+        raise CanaryError("The pulled minimum image does not match its pinned platform.")
+    return value["Id"]
 
 
 class _StaticAssetParser(html.parser.HTMLParser):
@@ -197,13 +237,14 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--minimum-image-version", required=True)
     parser.add_argument("--image-repository", default="coderluii/channelwatch")
+    parser.add_argument("--image-index-digest", required=True)
     parser.add_argument("--evidence-json", type=Path, required=True)
     parser.add_argument("--startup-timeout", type=int, default=120)
     args = parser.parse_args()
 
     version = args.version.strip().lstrip("v")
     minimum = args.minimum_image_version.strip().lstrip("v")
-    image = f"{args.image_repository}:{minimum}"
+    image, platform_digest = pinned_image(args.image_repository, args.image_index_digest)
     name = f"cw-minimum-image-canary-{secrets.token_hex(6)}"
     temp_root = Path(tempfile.mkdtemp(prefix="channelwatch-minimum-image-canary-"))
     config_dir = temp_root / "config"
@@ -212,6 +253,7 @@ def main() -> int:
 
     try:
         run(["docker", "pull", image])
+        image_id = verify_pulled_image(image)
         # Stage the bundle before the historical image repairs /config ownership.
         # Selection still happens only after Supervisor has captured the original
         # image-owned environment, preserving the in-app activation boundary.
@@ -287,6 +329,10 @@ def main() -> int:
             "schema": 1,
             "status": "passed",
             "source_image_version": minimum,
+            "image_index_digest": args.image_index_digest,
+            "platform_manifest_digest": platform_digest,
+            "pulled_image_id": image_id,
+            "platform": "linux/amd64",
             "target_application_version": version,
             "bundle_sha256": hashlib.sha256(args.bundle.read_bytes()).hexdigest(),
             "dynamic_activation": initial,

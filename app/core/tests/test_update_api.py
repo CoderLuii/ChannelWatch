@@ -195,6 +195,83 @@ def test_update_apply_image_required_maps_to_structured_error(tmp_path: Path):
     assert resp.json()["detail"]["code"] == "ERR_UPDATE_IMAGE_REQUIRED"
 
 
+def test_update_apply_passes_browser_assigned_job_identity(tmp_path: Path):
+    import ui.backend.main as ui_main
+
+    calls = []
+
+    def apply_release(**kwargs):
+        calls.append(kwargs)
+        return {
+            "job_id": kwargs["job_id"],
+            "operation": "apply",
+            "status": "restarting",
+            "version": kwargs["version"],
+        }
+
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(
+            ui_main,
+            "_get_update_automation_service",
+            return_value=SimpleNamespace(apply_release=apply_release),
+        ),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        response = client.post(
+            "/api/v1/update/apply",
+            json={
+                "version": "1.4.2",
+                "job_id": "0123456789abcdef0123456789abcdef",
+            },
+        )
+
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "0123456789abcdef0123456789abcdef"
+    assert calls == [
+        {
+            "version": "1.4.2",
+            "job_id": "0123456789abcdef0123456789abcdef",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    ["", "abc", "0123456789ABCDEF0123456789ABCDEF", "g" * 32, "a" * 33],
+)
+def test_update_apply_rejects_malformed_job_identity_before_service_call(
+    tmp_path: Path, job_id: str
+):
+    import ui.backend.main as ui_main
+
+    calls = []
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(
+            ui_main,
+            "_get_update_automation_service",
+            return_value=SimpleNamespace(apply_release=lambda **kwargs: calls.append(kwargs)),
+        ),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        response = client.post(
+            "/api/v1/update/apply",
+            json={"version": "1.4.2", "job_id": job_id},
+        )
+
+    assert response.status_code == 422
+    assert calls == []
+
+
 def test_update_check_network_error_maps_to_check_failure(tmp_path: Path):
     import ui.backend.main as ui_main
 
@@ -534,6 +611,116 @@ def test_update_retry_admin_postpone_and_rollback_hold(tmp_path: Path):
     ]
 
 
+def test_update_retry_passes_browser_identity_for_current_trusted_target(tmp_path: Path):
+    import ui.backend.main as ui_main
+
+    digest = "d" * 64
+    manager = FakeUpdateManager()
+    manager.status = lambda: {
+        **FakeUpdateManager().status(),
+        "trusted_target": {"version": "1.4.2", "bundle_sha256": digest},
+    }
+    calls = []
+
+    def retry_release(**kwargs):
+        calls.append(kwargs)
+        return {"status": "restarting", "operation": "apply", **kwargs}
+
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(ui_main, "_build_update_manager", return_value=manager),
+        patch.object(
+            ui_main,
+            "_get_update_automation_service",
+            return_value=SimpleNamespace(retry_release=retry_release),
+        ),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        response = client.post(
+            "/api/v1/update/retry",
+            json={
+                "version": "1.4.2",
+                "job_id": "fedcba9876543210fedcba9876543210",
+            },
+        )
+
+    assert response.status_code == 202
+    assert calls == [
+        {
+            "version": "1.4.2",
+            "bundle_sha256": digest,
+            "job_id": "fedcba9876543210fedcba9876543210",
+        }
+    ]
+
+
+def test_update_retry_rejects_changed_browser_target_before_apply(tmp_path: Path):
+    import ui.backend.main as ui_main
+
+    manager = FakeUpdateManager()
+    manager.status = lambda: {
+        **FakeUpdateManager().status(),
+        "trusted_target": {"version": "1.4.3", "bundle_sha256": "d" * 64},
+    }
+    calls = []
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(ui_main, "_build_update_manager", return_value=manager),
+        patch.object(
+            ui_main,
+            "_get_update_automation_service",
+            return_value=SimpleNamespace(retry_release=lambda **kwargs: calls.append(kwargs)),
+        ),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        response = client.post(
+            "/api/v1/update/retry",
+            json={
+                "version": "1.4.2",
+                "job_id": "fedcba9876543210fedcba9876543210",
+            },
+        )
+
+    assert response.status_code >= 400
+    assert calls == []
+
+
+def test_update_retry_rejects_malformed_job_identity_before_target_lookup(
+    tmp_path: Path,
+):
+    import ui.backend.main as ui_main
+
+    manager_calls = []
+    settings_file = _settings(tmp_path)
+    with (
+        patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CONFIG_DIR", tmp_path),
+        patch.object(ui_main, "CW_DISABLE_AUTH", True),
+        patch.object(
+            ui_main,
+            "_build_update_manager",
+            side_effect=lambda: manager_calls.append("built"),
+        ),
+    ):
+        client = TestClient(ui_main.app, raise_server_exceptions=False)
+        response = client.post(
+            "/api/v1/update/retry",
+            json={"version": "1.4.2", "job_id": "not-a-durable-job-id"},
+        )
+
+    assert response.status_code == 422
+    assert manager_calls == []
+
+
 def test_recovery_update_accepts_authenticated_api_key(tmp_path: Path):
     import ui.backend.main as ui_main
 
@@ -542,6 +729,7 @@ def test_recovery_update_accepts_authenticated_api_key(tmp_path: Path):
     settings = SimpleNamespace(auth_mode="api_key", api_key="test-key")
     with (
         patch("ui.backend.config.CONFIG_FILE", settings_file),
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
         patch.object(ui_main, "CONFIG_DIR", tmp_path),
         patch.object(ui_main, "CW_DISABLE_AUTH", False),
         patch.object(ui_main, "_active_administrator_auth_required", return_value=True),

@@ -236,7 +236,7 @@ def test_release_workflow_changelog_gate_precedes_publish_steps():
 
     publish_markers = [
         "      - name: Login to Docker Hub",
-        "      - name: Download exact approved candidate image",
+        "      - name: Download the exact approved candidate seal",
         "      - name: Publish the scanned images and assemble exact manifests",
         "      - name: Attest build provenance",
     ]

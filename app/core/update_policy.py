@@ -54,6 +54,7 @@ PRE_HANDOFF_JOB_STATUSES = {"backing_up", "downloading", "verifying", "applying"
 PENDING_JOB_STATUSES = {"restarting", "validating"}
 SUCCESS_JOB_STATUSES = {"success", "current"}
 FAILED_JOB_STATUSES = {"failed", "rejected"}
+MANUAL_JOB_ID_LENGTH = 32
 ATTEMPT_PHASES = PENDING_ATTEMPT_PHASES | {"success", "failed", "interrupted"}
 ATTEMPT_FIELDS = {
     "version",
@@ -114,6 +115,37 @@ def format_timestamp(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _validate_manual_job_id(job_id: str | None) -> str | None:
+    if job_id is None:
+        return None
+    if (
+        not isinstance(job_id, str)
+        or len(job_id) != MANUAL_JOB_ID_LENGTH
+        or any(char not in "0123456789abcdef" for char in job_id)
+    ):
+        raise ValueError("Update job ID must be exactly 32 lowercase hexadecimal characters.")
+    return job_id
+
+
+def _select_manual_job_id(state: Mapping[str, Any], requested: str | None) -> str:
+    previous_attempt = state.get("last_attempt")
+    previous_job_id = (
+        str(previous_attempt.get("job_id") or "")
+        if isinstance(previous_attempt, dict)
+        else ""
+    )
+    if requested is not None:
+        if requested == previous_job_id:
+            raise UpdateLockedError(
+                "The requested update job ID already belongs to a prior attempt."
+            )
+        return requested
+    while True:
+        generated = secrets.token_hex(16)
+        if generated != previous_job_id:
+            return generated
 
 
 def parse_timestamp(value: object) -> datetime | None:
@@ -1388,17 +1420,24 @@ class UpdateAutomationService:
         )
         return "verification-failed" if quarantine else "retry-scheduled"
 
-    def apply_release(self, *, version: str | None = None) -> dict[str, Any]:
+    def apply_release(
+        self, *, version: str | None = None, job_id: str | None = None
+    ) -> dict[str, Any]:
         """Apply one exact signed release and retain its activation identity."""
 
         if not self._run_lock.acquire(blocking=False):
             raise UpdateLockedError("Another update operation is already in progress.")
         try:
-            return self._apply_release_locked(version=version)
+            return self._apply_release_locked(
+                version=version,
+                job_id=_validate_manual_job_id(job_id),
+            )
         finally:
             self._run_lock.release()
 
-    def _apply_release_locked(self, *, version: str | None) -> dict[str, Any]:
+    def _apply_release_locked(
+        self, *, version: str | None, job_id: str | None = None
+    ) -> dict[str, Any]:
         manager = self.manager_factory()
         recovery_mode = self._recovery_mode()
         checked = manager.check(recovery=recovery_mode)
@@ -1413,12 +1452,17 @@ class UpdateAutomationService:
             )
         if len(selected_digest) != 64:
             raise UpdateManifestError("The signed release digest is invalid.")
+        state = self.store.get_state()
+        if job_id is not None:
+            job_id = _select_manual_job_id(state, job_id)
         if checked.get("update_available") is not True or checked.get(
             "image_required"
         ) is True:
-            return manager.apply(selected_version, recovery=recovery_mode)
+            apply_kwargs: dict[str, Any] = {"recovery": recovery_mode}
+            if job_id is not None:
+                apply_kwargs["job_id"] = job_id
+            return manager.apply(selected_version, **apply_kwargs)
 
-        state = self.store.get_state()
         if self._pending_attempt(state) is not None:
             raise UpdateLockedError(
                 "A prior update activation must reach a durable outcome before applying."
@@ -1430,7 +1474,8 @@ class UpdateAutomationService:
             )
 
         now = self.clock()
-        job_id = secrets.token_hex(16)
+        if job_id is None:
+            job_id = _select_manual_job_id(state, None)
         attempt = {
             "version": selected_version,
             "bundle_sha256": selected_digest,
@@ -1559,7 +1604,13 @@ class UpdateAutomationService:
         finally:
             self._run_lock.release()
 
-    def retry_release(self, *, version: str, bundle_sha256: str) -> dict[str, Any]:
+    def retry_release(
+        self,
+        *,
+        version: str,
+        bundle_sha256: str,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         """Administrator retry that clears and applies one exact signed asset."""
 
         if not self._run_lock.acquire(blocking=False):
@@ -1568,12 +1619,17 @@ class UpdateAutomationService:
             return self._retry_release_locked(
                 version=version,
                 bundle_sha256=bundle_sha256,
+                job_id=_validate_manual_job_id(job_id),
             )
         finally:
             self._run_lock.release()
 
     def _retry_release_locked(
-        self, *, version: str, bundle_sha256: str
+        self,
+        *,
+        version: str,
+        bundle_sha256: str,
+        job_id: str | None = None,
     ) -> dict[str, Any]:
 
         normalized_version, digest, _ = release_identity(
@@ -1598,7 +1654,7 @@ class UpdateAutomationService:
                 "A prior update activation must reach a durable outcome before retrying."
             )
         now = self.clock()
-        job_id = secrets.token_hex(16)
+        job_id = _select_manual_job_id(state, job_id)
         attempt = {
             "version": normalized_version,
             "bundle_sha256": selected_digest,

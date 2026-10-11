@@ -210,8 +210,14 @@ test("Recent Activity applies an exact client without changing the aggregate tim
     })
   })
 
+  const clientFiltersLoaded = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === "/api/v1/activity-history/filters" && response.ok(),
+  )
   await page.goto("/#overview")
-  await page.getByRole("button", { name: "Filter activity by type" }).click()
+  await clientFiltersLoaded
+  const filterButton = page.getByRole("button", { name: "Filter activity by type" })
+  await expect(filterButton.locator(".animate-spin")).toHaveCount(0)
+  await filterButton.click()
   await expect(page.getByText("The timeline remains an aggregate across all clients.")).toBeVisible()
   await page.getByRole("option", { name: /Living Room Apple TV/ }).click()
 
@@ -695,6 +701,7 @@ test("Update Center keeps a compatible app update visible below a newer image re
 
 test("a successful in-app update hard-refreshes onto the dashboard", async ({ page }) => {
   let statusChecks = 0
+  let submittedJobId: string | null = null
   const targetStatus = {
     current_version: "1.0.8",
     image_version: "1.0.0",
@@ -718,6 +725,14 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
     rollback_available: true,
     auth_disabled_warning: false,
   }
+  const successfulJob = () => ({
+    job_id: submittedJobId,
+    operation: "apply",
+    status: "success",
+    version: "1.0.8",
+    message: "Update activated and ChannelWatch started successfully.",
+    restart_required: false,
+  })
   await page.route("**/api/v1/update/status", (route) => {
     statusChecks += 1
     return fulfillJson(route, statusChecks === 1 ? {
@@ -736,16 +751,20 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
       },
       update_available: true,
       rollback_available: false,
-    } : targetStatus)
+    } : { ...targetStatus, last_job: successfulJob() })
   })
-  await page.route("**/api/v1/update/apply", (route) => fulfillJson(route, {
-    job_id: "successful-dashboard-handoff",
-    operation: "apply",
-    status: "restarting",
-    version: "1.0.8",
-    message: "Update installed. Restarting ChannelWatch to activate it.",
-    restart_required: true,
-  }))
+  await page.route("**/api/v1/update/apply", (route) => {
+    submittedJobId = (route.request().postDataJSON() as { job_id: string }).job_id
+    return fulfillJson(route, {
+      job_id: submittedJobId,
+      operation: "apply",
+      status: "restarting",
+      version: "1.0.8",
+      message: "Update installed. Restarting ChannelWatch to activate it.",
+      restart_required: true,
+    })
+  })
+  await page.route("**/api/v1/update/jobs/*", (route) => fulfillJson(route, successfulJob()))
 
   await page.goto("/#settings:updates")
   await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
@@ -757,6 +776,7 @@ test("a successful in-app update hard-refreshes onto the dashboard", async ({ pa
 
 test("a retry restart disconnect follows the activated runtime instead of showing an error", async ({ page }) => {
   let retryStarted = false
+  let submittedJobId: string | null = null
   const targetStatus = {
     current_version: "1.1.3",
     image_version: "1.1.0",
@@ -777,7 +797,7 @@ test("a retry restart disconnect follows the activated runtime instead of showin
     update_available: false,
     image_required: false,
     last_job: {
-      job_id: "retry-success",
+      job_id: "placeholder",
       operation: "apply",
       status: "success",
       version: "1.1.3",
@@ -787,7 +807,14 @@ test("a retry restart disconnect follows the activated runtime instead of showin
     rollback_available: true,
     auth_disabled_warning: false,
   }
-  await page.route("**/api/v1/update/status", (route) => fulfillJson(route, retryStarted ? targetStatus : {
+  const successfulJob = () => ({
+    ...targetStatus.last_job,
+    job_id: submittedJobId,
+  })
+  await page.route("**/api/v1/update/status", (route) => fulfillJson(route, retryStarted ? {
+    ...targetStatus,
+    last_job: successfulJob(),
+  } : {
     ...targetStatus,
     current_version: "1.1.2",
     active_bundle: { version: "1.1.2", path: "/config/releases/v1.1.2" },
@@ -813,9 +840,11 @@ test("a retry restart disconnect follows the activated runtime instead of showin
     rollback_available: false,
   }))
   await page.route("**/api/v1/update/retry", async (route) => {
+    submittedJobId = (route.request().postDataJSON() as { job_id: string }).job_id
     retryStarted = true
     await route.abort("connectionreset")
   })
+  await page.route("**/api/v1/update/jobs/*", (route) => fulfillJson(route, successfulJob()))
 
   await page.goto("/#settings:updates")
   await page.getByRole("button", { name: "Retry now" }).click()

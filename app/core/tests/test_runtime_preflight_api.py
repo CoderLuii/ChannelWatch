@@ -107,7 +107,7 @@ def test_setup_required_keeps_unauthenticated_readiness_minimal():
     assert response.json() == {"status": "degraded", "ready": False}
 
 
-def test_setup_required_overrides_stale_detailed_monitor_readiness():
+def test_setup_required_overrides_stale_detailed_monitor_readiness(tmp_path: Path):
     from ui.backend.main import app
 
     result = RuntimePreflight(
@@ -117,6 +117,8 @@ def test_setup_required_overrides_stale_detailed_monitor_readiness():
     )
     startup_patch, scheduler_patch = _lifespan_patches()
     with (
+        patch("ui.backend.config.CONFIG_DIR", tmp_path),
+        patch("ui.backend.config.CONFIG_FILE", tmp_path / "settings.json"),
         patch("ui.backend.main.CW_DISABLE_AUTH", True),
         patch("ui.backend.main.inspect_runtime_preflight", return_value=result),
         patch(

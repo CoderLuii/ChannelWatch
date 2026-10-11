@@ -1377,6 +1377,181 @@ def test_manual_apply_tracks_exact_identity_for_post_restart_reconciliation(
     assert result["scheduler_attempt_id"] == attempt["attempt_id"]
 
 
+def test_manual_apply_preserves_browser_assigned_job_identity(tmp_path: Path):
+    payload = _automatic_payload()
+    manager = _FakeManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        clock=lambda: datetime(2026, 8, 24, 3, 30, tzinfo=timezone.utc),
+        timezone_provider=lambda: timezone.utc,
+    )
+    job_id = "0123456789abcdef0123456789abcdef"
+
+    result = service.apply_release(version=payload["version"], job_id=job_id)
+
+    assert result["job_id"] == job_id
+    assert service.store.get_state()["last_attempt"]["job_id"] == job_id
+
+
+@pytest.mark.parametrize(
+    ("update_available", "image_required", "terminal_status"),
+    [
+        (False, False, "current"),
+        (True, True, "image_required"),
+    ],
+)
+def test_manual_apply_preserves_browser_job_identity_for_non_activation_results(
+    tmp_path: Path,
+    update_available: bool,
+    image_required: bool,
+    terminal_status: str,
+):
+    payload = _automatic_payload()
+
+    class NonActivationManager(_FakeManager):
+        def check(self, **_kwargs):
+            return {
+                "latest": self.payload,
+                "update_available": update_available,
+                "image_required": image_required,
+            }
+
+        def apply(self, version: str, **kwargs):
+            self.applies += 1
+            self.last_job = {
+                "job_id": kwargs.get("job_id", "server-generated"),
+                "operation": "apply",
+                "status": terminal_status,
+                "version": version,
+            }
+            return dict(self.last_job)
+
+    manager = NonActivationManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        timezone_provider=lambda: timezone.utc,
+    )
+    job_id = "1234567890abcdef1234567890abcdef"
+
+    result = service.apply_release(version=payload["version"], job_id=job_id)
+
+    assert result["status"] == terminal_status
+    assert result["job_id"] == job_id
+    assert manager.last_job is not None
+    assert manager.last_job["job_id"] == job_id
+    assert service.store.get_state()["last_attempt"] is None
+
+
+def test_non_activation_apply_rejects_reused_browser_job_before_manager_write(
+    tmp_path: Path,
+):
+    payload = _automatic_payload()
+
+    class CurrentManager(_FakeManager):
+        def check(self, **_kwargs):
+            return {
+                "latest": self.payload,
+                "update_available": False,
+                "image_required": False,
+            }
+
+    manager = CurrentManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        timezone_provider=lambda: timezone.utc,
+    )
+    job_id = "1234567890abcdef1234567890abcdef"
+    service.store.put_state(
+        {
+            "last_attempt": {
+                "version": payload["version"],
+                "bundle_sha256": payload["bundle_sha256"],
+                "attempted_at": "2026-08-24T03:00:00Z",
+                "attempt_id": "manual-apply@prior",
+                "job_id": job_id,
+                "phase": "failed",
+                "automatic": False,
+                "clear_hold_on_success": False,
+                "completed_at": "2026-08-24T03:01:00Z",
+                "terminal_job_status": "failed",
+                "failure_reason": "prior failure",
+                "rollback_applied": False,
+            }
+        }
+    )
+
+    with pytest.raises(UpdateLockedError, match="already belongs"):
+        service.apply_release(version=payload["version"], job_id=job_id)
+
+    assert manager.applies == 0
+    assert manager.last_job is None
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    [
+        "",
+        "abc",
+        "0123456789ABCDEF0123456789ABCDEF",
+        "g123456789abcdef0123456789abcdef",
+        "0123456789abcdef0123456789abcdef00",
+    ],
+)
+def test_manual_apply_rejects_malformed_browser_job_identity_without_side_effects(
+    tmp_path: Path, job_id: str
+):
+    payload = _automatic_payload()
+    manager = _FakeManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        timezone_provider=lambda: timezone.utc,
+    )
+
+    with pytest.raises(ValueError, match="32 lowercase hexadecimal"):
+        service.apply_release(version=payload["version"], job_id=job_id)
+
+    assert manager.applies == 0
+    assert service.store.get_state()["last_attempt"] is None
+
+
+def test_manual_apply_rejects_reused_browser_job_identity(tmp_path: Path):
+    payload = _automatic_payload()
+    manager = _FakeManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        timezone_provider=lambda: timezone.utc,
+    )
+    job_id = "0123456789abcdef0123456789abcdef"
+    service.store.put_state(
+        {
+            "last_attempt": {
+                "version": payload["version"],
+                "bundle_sha256": payload["bundle_sha256"],
+                "attempted_at": "2026-08-24T03:00:00Z",
+                "attempt_id": "manual-apply@prior",
+                "job_id": job_id,
+                "phase": "failed",
+                "automatic": False,
+                "clear_hold_on_success": False,
+                "completed_at": "2026-08-24T03:01:00Z",
+                "terminal_job_status": "failed",
+                "failure_reason": "prior failure",
+                "rollback_applied": False,
+            }
+        }
+    )
+
+    with pytest.raises(UpdateLockedError, match="already belongs"):
+        service.apply_release(version=payload["version"], job_id=job_id)
+
+    assert manager.applies == 0
+
+
 def test_manual_apply_recovers_abandoned_pre_v102_scheduler_marker(
     tmp_path: Path,
 ):
@@ -1435,12 +1610,15 @@ def test_manual_apply_activation_failure_is_quarantined_by_exact_digest(
         timezone_provider=lambda: timezone.utc,
     )
 
-    result = service.apply_release(version=payload["version"])
+    job_id = "abcdef0123456789abcdef0123456789"
+    result = service.apply_release(version=payload["version"], job_id=job_id)
 
     assert result["status"] == "failed"
+    assert result["job_id"] == job_id
     identity = f"{payload['version']}:{payload['bundle_sha256']}"
     state = service.store.get_state()
     assert state["last_attempt"]["phase"] == "failed"
+    assert state["last_attempt"]["job_id"] == job_id
     assert state["quarantines"][identity]["reason"] == "Activation failed."
 
 
@@ -2000,6 +2178,27 @@ def test_manual_retry_keeps_exact_holds_until_activation_succeeds(tmp_path: Path
     activated = service.store.get_state()
     assert identity not in activated["quarantines"]
     assert identity not in activated["rollback_holds"]
+
+
+def test_manual_retry_preserves_browser_assigned_job_identity(tmp_path: Path):
+    payload = _automatic_payload()
+    manager = _FakeManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        clock=lambda: datetime(2026, 8, 24, 3, 30, tzinfo=timezone.utc),
+        timezone_provider=lambda: timezone.utc,
+    )
+    job_id = "fedcba9876543210fedcba9876543210"
+
+    result = service.retry_release(
+        version=payload["version"],
+        bundle_sha256=payload["bundle_sha256"],
+        job_id=job_id,
+    )
+
+    assert result["job_id"] == job_id
+    assert service.store.get_state()["last_attempt"]["job_id"] == job_id
 
 
 def test_recovery_scheduler_selects_only_recovery_compatible_official_release(

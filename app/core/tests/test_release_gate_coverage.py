@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_tag_candidate_requires_existing_deployment_docs_and_security_gates():
     workflow = yaml.load((ROOT / '.github/workflows/docker-publish.yml').read_text(), Loader=yaml.BaseLoader)
     jobs = workflow['jobs']
-    assert set(jobs['signed-candidate']['needs']) >= {'docs-config', 'helm', 'security'}
+    assert set(jobs['candidate-qualification']['needs']) >= {'docs-config', 'helm', 'security'}
+    assert set(jobs['signed-candidate']['needs']) >= {'candidate-qualification', 'candidate-signing'}
     for name in ('docs-config', 'helm', 'security'):
         job = jobs[name]
         assert 'if' not in job  # Both supported events use the same check.
@@ -24,7 +25,7 @@ def test_tag_candidate_requires_existing_deployment_docs_and_security_gates():
 
 def test_both_browser_paths_retain_first_attempt_diagnostics_before_signing():
     workflow = yaml.load((ROOT / '.github/workflows/docker-publish.yml').read_text(), Loader=yaml.BaseLoader)
-    for name in ('browser', 'signed-candidate'):
+    for name in ('browser', 'candidate-qualification'):
         steps = workflow['jobs'][name]['steps']
         uploads = [step for step in steps if 'browser diagnostics' in step.get('name', '')]
         assert len(uploads) == 1

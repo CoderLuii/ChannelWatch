@@ -7,14 +7,39 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
 import { Button } from "@/components/base/button"
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
-import { ApiError, applyRecoveryUpdate, checkRecoveryUpdate, fetchRecoveryUpdateStatus, verifyStartupReady, type RecoveryUpdateStatus } from "@/lib/api"
+import { ApiError, ApiUnavailableError, applyRecoveryUpdate, checkRecoveryUpdate, fetchRecoveryUpdateStatus, verifyStartupReady, type RecoveryUpdateStatus } from "@/lib/api"
 import { t } from "@/lib/i18n"
-import { applyUpdateAndReconnect, reloadUpdatedDashboard } from "@/lib/update-reconnect"
+import { applyUpdateAndReconnect, reloadUpdatedDashboard, UpdateReadinessError, UpdateReconnectError } from "@/lib/update-reconnect"
 
 const RECOVERY_UPDATE_CONFIRMATION = "INSTALL OFFICIAL UPDATE" as const
 
 function publicStatus(status: RecoveryUpdateStatus): RecoveryUpdateStatus {
   return { ...status, bootstrap_csrf: null }
+}
+
+async function fetchRecoveryStatusForReconnect(): Promise<RecoveryUpdateStatus> {
+  try {
+    return await fetchRecoveryUpdateStatus()
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) {
+      throw new UpdateReconnectError(error.message, { cause: error })
+    }
+    throw error
+  }
+}
+
+async function verifyRecoveryRuntimeReady(): Promise<void> {
+  try {
+    await verifyStartupReady()
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) {
+      throw new UpdateReconnectError(error.message, { cause: error })
+    }
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new UpdateReadinessError(error.message, { cause: error })
+    }
+    throw error
+  }
 }
 
 export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: boolean }) {
@@ -119,11 +144,11 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
                 const result = await applyUpdateAndReconnect(latestVersion, {
                   apply: (version) => applyRecoveryUpdate(version, bootstrapCsrfRef.current),
                   fetchStatus: async () => {
-                    const next = await fetchRecoveryUpdateStatus()
+                    const next = await fetchRecoveryStatusForReconnect()
                     acceptStatus(next)
                     return next
                   },
-                  verifyReady: verifyStartupReady,
+                  verifyReady: verifyRecoveryRuntimeReady,
                   reload: reloadUpdatedDashboard,
                   isRejectedUpdate: (nextError) => nextError instanceof ApiError,
                 })

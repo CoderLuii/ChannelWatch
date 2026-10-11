@@ -21,7 +21,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 import asyncio
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from . import config as backend_config
 from .config import load_settings, save_settings
 from .support_report import (
@@ -6106,6 +6106,16 @@ def _schedule_container_restart_for_update() -> Any:
 
 class UpdateApplyRequest(BaseModel):
     version: Optional[str] = None
+    job_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+    model_config = {"extra": "forbid"}
+
+
+class UpdateRetryRequest(BaseModel):
+    version: Optional[str] = None
+    job_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+    model_config = {"extra": "forbid"}
 
 
 class UpdatePolicyRequest(BaseModel):
@@ -6629,9 +6639,12 @@ async def update_check():
 async def update_apply(body: UpdateApplyRequest):
     _require_persistent_config_writable()
     try:
+        apply_kwargs: Dict[str, Any] = {"version": body.version}
+        if body.job_id is not None:
+            apply_kwargs["job_id"] = body.job_id
         result = await asyncio.to_thread(
             _get_update_automation_service().apply_release,
-            version=body.version,
+            **apply_kwargs,
         )
     except Exception as exc:
         log.exception("Update apply failed: %s", exc)
@@ -6650,7 +6663,7 @@ async def update_apply(body: UpdateApplyRequest):
     tags=["Updates"],
     dependencies=[require_role("admin")],
 )
-async def update_retry():
+async def update_retry(body: Optional[UpdateRetryRequest] = None):
     _require_persistent_config_writable()
     try:
         manager_status = await asyncio.to_thread(_build_update_manager().status)
@@ -6662,10 +6675,21 @@ async def update_retry():
             raise ValueError("No signed release is available to retry.")
         version = str(target.get("version") or "")
         digest = str(target.get("bundle_sha256") or "")
+        if body is not None and body.version is not None and body.version != version:
+            from core.update_center import UpdateManifestError
+
+            raise UpdateManifestError(
+                "The signed release changed; review the current version before retrying."
+            )
+        retry_kwargs: Dict[str, Any] = {
+            "version": version,
+            "bundle_sha256": digest,
+        }
+        if body is not None and body.job_id is not None:
+            retry_kwargs["job_id"] = body.job_id
         return await asyncio.to_thread(
             _get_update_automation_service().retry_release,
-            version=version,
-            bundle_sha256=digest,
+            **retry_kwargs,
         )
     except Exception as exc:
         log.warning("Update retry failed: %s", exc)

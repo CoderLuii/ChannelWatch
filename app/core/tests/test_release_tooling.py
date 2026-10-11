@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -481,6 +482,155 @@ def test_catalog_predecessor_allows_only_verified_unpublished_ancestor(tmp_path)
     for request in (tag_request, list_request):
         assert request.get_header("Authorization") == "Bearer authenticated-test-token"
     assert tag_timeout == list_timeout == 15
+
+
+def test_catalog_predecessor_allows_verified_contiguous_unpublished_tags(tmp_path):
+    module = _load_script(
+        "build_update_bundle_contiguous_unpublished_predecessors",
+        "scripts/release/build-update-bundle.py",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3", "1.4.4"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.4":
+            git("tag", f"v{version}")
+
+    requests = []
+
+    def release_not_found(request, *, timeout):
+        requests.append((request, timeout))
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b'[{"tag_name":"v1.4.1"}]',
+            close=lambda: None,
+        )
+
+    module.require_previous_catalog_release(
+        "1.4.4",
+        [{"version": "1.4.1"}],
+        ["v1.4.1", "v1.4.2", "v1.4.3"],
+        unpublished_tags=["v1.4.3", "v1.4.2"],
+        repository="CoderLuii/ChannelWatch",
+        github_token="authenticated-test-token",
+        repo_root=repo,
+        urlopen=release_not_found,
+    )
+
+    assert [
+        request.full_url.rsplit("/", 1)[-1]
+        for request, _timeout in requests
+        if "/releases/tags/" in request.full_url
+    ] == ["v1.4.3", "v1.4.2"]
+    assert len(requests) == 4
+    assert all(timeout == 15 for _request, timeout in requests)
+    assert all(
+        request.get_header("Authorization") == "Bearer authenticated-test-token"
+        for request, _timeout in requests
+    )
+
+
+def test_catalog_predecessor_rejects_noncontiguous_or_unretained_history(tmp_path):
+    module = _load_script(
+        "build_update_bundle_noncontiguous_unpublished_predecessors",
+        "scripts/release/build-update-bundle.py",
+    )
+    failure_urlopen = lambda *_args, **_kwargs: pytest.fail(
+        "Invalid exception lists must fail before GitHub is queried."
+    )
+
+    with pytest.raises(ValueError, match="retain the previous release 1.4.3"):
+        module.require_previous_catalog_release(
+            "1.4.4",
+            [{"version": "1.4.1"}],
+            ["v1.4.1", "v1.4.2", "v1.4.3"],
+            unpublished_tags=["v1.4.3", "v1.4.1"],
+            urlopen=failure_urlopen,
+        )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=ChannelWatch Test",
+                "-c",
+                "user.email=channelwatch-test@example.invalid",
+                *args,
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--initial-branch=main")
+    tracked = repo / "tracked.txt"
+    for version in ("1.4.1", "1.4.2", "1.4.3", "1.4.4"):
+        tracked.write_text(version, encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", version)
+        if version != "1.4.4":
+            git("tag", f"v{version}")
+
+    def release_not_found(request, *, timeout):
+        assert timeout == 15
+        if "/releases/tags/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"message":"Not Found"}'),
+            )
+        return SimpleNamespace(
+            status=200,
+            read=lambda _limit: b'[{"tag_name":"v1.4.1"}]',
+            close=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="nearest published predecessor 1.4.1"):
+        module.require_previous_catalog_release(
+            "1.4.4",
+            [],
+            ["v1.4.1", "v1.4.2", "v1.4.3"],
+            unpublished_tags=["v1.4.3", "v1.4.2"],
+            repository="CoderLuii/ChannelWatch",
+            github_token="authenticated-test-token",
+            repo_root=repo,
+            urlopen=release_not_found,
+        )
 
 
 def test_catalog_predecessor_unpublished_exception_rejects_draft_release(tmp_path):
@@ -1275,28 +1425,29 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_143_in_app_release_on_140_image():
+def test_release_config_declares_144_in_app_release_on_140_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
 
-    assert config["version"] == "1.4.3"
+    assert config["version"] == "1.4.4"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.4.0"
     assert config["updater_protocol"] == 2
-    assert config["recommended_image_version"] == "1.4.3"
+    assert config["recommended_image_version"] == "1.4.4"
     assert config["automatic_install_allowed"] is False
     assert config["compatible_source_application_versions"] == [
         "1.4.0",
         "1.4.1",
         "1.4.2",
+        "1.4.3",
     ]
     assert config["compatible_launcher_protocols"] == [1, 2, 3]
-    assert config["unpublished_predecessor_tags"] == ["v1.4.2"]
-    assert config["unpublished_release_tags"] == ["v1.4.2"]
+    assert config["unpublished_predecessor_tags"] == ["v1.4.3", "v1.4.2"]
+    assert config["unpublished_release_tags"] == ["v1.4.2", "v1.4.3"]
     assert config["release_heading"] == (
-        "# ChannelWatch v1.4.3 - Verified release signing"
+        "# ChannelWatch v1.4.4 - Reliable release transport"
     )
     assert config["verification_assets"] is True
     publication = datetime.fromisoformat(config["publication_time"].replace("Z", "+00:00"))
@@ -1384,7 +1535,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_143_release():
+def test_release_version_surfaces_use_144_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1395,11 +1546,11 @@ def test_release_version_surfaces_use_143_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.4.3"
-    assert metadata["versionTag"] == "v1.4.3"
-    assert metadata["dockerTag"] == "1.4.3"
-    assert metadata["helmChartVersion"] == "1.4.3"
-    assert metadata["helmAppVersion"] == "1.4.3"
+    assert metadata["version"] == "1.4.4"
+    assert metadata["versionTag"] == "v1.4.4"
+    assert metadata["dockerTag"] == "1.4.4"
+    assert metadata["helmChartVersion"] == "1.4.4"
+    assert metadata["helmAppVersion"] == "1.4.4"
     assert [release["version"] for release in metadata["previousReleases"]] == [
         "1.4.1",
         "1.4.0",
@@ -1408,7 +1559,7 @@ def test_release_version_surfaces_use_143_release():
     ]
 
 
-def test_future_metadata_keeps_failed_142_excluded_and_pre_catalog_history(
+def test_future_metadata_keeps_failed_142_and_143_excluded(
     monkeypatch,
 ):
     module = _load_script(
@@ -1421,10 +1572,15 @@ def test_future_metadata_keeps_failed_142_excluded_and_pre_catalog_history(
 ### Added
 - Image update.
 
-## [1.4.3] - 2026-10-11
+## [1.4.4] - 2026-10-11
 
 ### Fixed
-- App update.
+- Release transport.
+
+## [1.4.3] - 2026-10-11
+
+### Important
+- Publishing failed.
 
 ## [1.4.2] - 2026-10-10
 
@@ -1444,7 +1600,7 @@ def test_future_metadata_keeps_failed_142_excluded_and_pre_catalog_history(
     files = {
         "docs/releases/CHANGELOG.md": changelog,
         "scripts/release/release-config.json": json.dumps(
-            {"unpublished_release_tags": ["v1.4.2"]}
+            {"unpublished_release_tags": ["v1.4.2", "v1.4.3"]}
         ),
     }
     monkeypatch.setattr(
@@ -1456,7 +1612,7 @@ def test_future_metadata_keeps_failed_142_excluded_and_pre_catalog_history(
     parsed = module.parse_changelog("1.5.0")
 
     assert [release["version"] for release in parsed["previousReleases"]] == [
-        "1.4.3",
+        "1.4.4",
         "1.4.1",
         "0.9.17",
     ]
@@ -3001,6 +3157,205 @@ def test_candidate_transport_round_trip_is_context_bound_and_encrypts_without_se
         with pytest.raises(ValueError):
             module.decrypt(encrypted, rejected, sealed_private, bad_context, bad_name)
         assert not rejected.exists()
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None or shutil.which("jq") is None,
+    reason="The release workflow shell regression requires bash and jq.",
+)
+def test_candidate_transport_workflow_shell_produces_exact_canonical_context(
+    tmp_path: Path,
+):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    signing_step = next(
+        step
+        for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Sign, verify, and seal immutable candidate inputs"
+    )
+    lines = signing_step["run"].splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith("config_sha256=")
+    )
+    end = next(
+        index
+        for index, line in enumerate(lines[start:], start)
+        if "--sealed-private-key-out" in line
+    )
+    workflow_fragment = "\n".join(lines[start : end + 1])
+
+    release_root = tmp_path / "release"
+    scripts = release_root / "scripts" / "release"
+    scripts.mkdir(parents=True)
+    for name in (
+        "candidate-transport.py",
+        "seal-candidate-artifact.py",
+        "release-config.json",
+    ):
+        shutil.copyfile(ROOT / "scripts" / "release" / name, scripts / name)
+    (release_root / "dist" / "candidate-initial").mkdir(parents=True)
+    signing_key = base64.b64encode(
+        Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+    ).decode("ascii")
+    shell = f"""\
+set -euo pipefail
+signing_key="${{CHANNELWATCH_UPDATE_SIGNING_KEY}}"
+{workflow_fragment}
+printf 'exact candidate bytes' > dist/candidate-initial/plain.bin
+python scripts/release/candidate-transport.py encrypt \\
+  --context dist/candidate-initial/transport-context.json \\
+  --public-key dist/candidate-initial/transport-public.json \\
+  --input dist/candidate-initial/plain.bin \\
+  --output dist/candidate-initial/plain.transport \\
+  --artifact-name plain.bin
+CHANNELWATCH_UPDATE_SIGNING_KEY="${{signing_key}}" python scripts/release/candidate-transport.py decrypt \\
+  --context dist/candidate-initial/transport-context.json \\
+  --sealed-private-key dist/candidate-initial/transport-private.sealed \\
+  --input dist/candidate-initial/plain.transport \\
+  --output dist/candidate-initial/plain.opened \\
+  --artifact-name plain.bin
+cmp dist/candidate-initial/plain.bin dist/candidate-initial/plain.opened
+CHANNELWATCH_UPDATE_SIGNING_KEY="${{signing_key}}" python scripts/release/seal-candidate-artifact.py seal \\
+  --input dist/candidate-initial/plain.bin \\
+  --output dist/candidate-initial/plain.sealed
+CHANNELWATCH_UPDATE_SIGNING_KEY="${{signing_key}}" python scripts/release/seal-candidate-artifact.py open \\
+  --input dist/candidate-initial/plain.sealed \\
+  --output dist/candidate-initial/plain.unsealed
+cmp dist/candidate-initial/plain.bin dist/candidate-initial/plain.unsealed
+"""
+    environment = {
+        **os.environ,
+        "PATH": f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
+        "CHANNELWATCH_UPDATE_SIGNING_KEY": signing_key,
+        "GITHUB_REPOSITORY": "CoderLuii/ChannelWatch",
+        "GITHUB_RUN_ID": "38109517736",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_SHA": "26df97e7eef46ea6f2f58dce492311683e617523",
+        "GITHUB_REF_NAME": "v1.4.4",
+    }
+
+    subprocess.run(
+        ["bash", "-c", shell],
+        cwd=release_root,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    transport = _load_script(
+        "candidate_transport_workflow_context",
+        "scripts/release/candidate-transport.py",
+    )
+    context = release_root / "dist" / "candidate-initial" / "transport-context.json"
+    value = json.loads(context.read_text(encoding="utf-8"))
+    assert context.read_bytes() == transport._canonical(value)
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None or shutil.which("tar") is None,
+    reason="The release workflow archive regression requires bash and tar.",
+)
+def test_signed_candidate_workflow_archive_round_trip_preserves_dist_layout(
+    tmp_path: Path,
+):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    signing_step = next(
+        step
+        for step in workflow["jobs"]["candidate-signing"]["steps"]
+        if step.get("name") == "Sign, verify, and seal immutable candidate inputs"
+    )
+    signing_lines = signing_step["run"].splitlines()
+    archive_start = next(
+        index for index, line in enumerate(signing_lines) if line.startswith("tar --sort")
+    )
+    archive_end = next(
+        index
+        for index, line in enumerate(signing_lines[archive_start:], archive_start)
+        if "--output dist/candidate-initial/signed-assets.sealed" in line
+    )
+    archive_fragment = "\n".join(signing_lines[archive_start : archive_end + 1])
+    opener_step = next(
+        step
+        for step in workflow["jobs"]["candidate-qualification"]["steps"]
+        if step.get("name") == "Open signed assets before qualification starts"
+    )
+
+    signer_root = tmp_path / "signer"
+    signer_scripts = signer_root / "scripts" / "release"
+    signer_scripts.mkdir(parents=True)
+    shutil.copyfile(
+        ROOT / "scripts/release/seal-candidate-artifact.py",
+        signer_scripts / "seal-candidate-artifact.py",
+    )
+    for name in ("candidate-one", "candidate-two"):
+        candidate = signer_root / "dist" / name
+        candidate.mkdir(parents=True)
+        (candidate / "marker.txt").write_text(name, encoding="utf-8")
+    (signer_root / "dist" / "candidate-initial").mkdir()
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    signing_key = base64.b64encode(
+        Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+    ).decode("ascii")
+    environment = {
+        **os.environ,
+        "PATH": f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
+        "CHANNELWATCH_UPDATE_SIGNING_KEY": signing_key,
+        "RUNNER_TEMP": str(runner_temp),
+    }
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'set -euo pipefail\nsigning_key="${{CHANNELWATCH_UPDATE_SIGNING_KEY}}"\n{archive_fragment}',
+        ],
+        cwd=signer_root,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    signer_artifact = runner_temp / "candidate-signer"
+    signer_artifact.mkdir()
+    shutil.copyfile(
+        signer_root / "dist" / "candidate-initial" / "signed-assets.sealed",
+        signer_artifact / "signed-assets.sealed",
+    )
+    qualification_root = tmp_path / "qualification"
+    qualification_scripts = qualification_root / "scripts" / "release"
+    qualification_scripts.mkdir(parents=True)
+    shutil.copyfile(
+        ROOT / "scripts/release/seal-candidate-artifact.py",
+        qualification_scripts / "seal-candidate-artifact.py",
+    )
+    subprocess.run(
+        ["bash", "-c", opener_step["run"]],
+        cwd=qualification_root,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert (
+        qualification_root / "dist" / "candidate-one" / "marker.txt"
+    ).read_text(encoding="utf-8") == "candidate-one"
+    assert (
+        qualification_root / "dist" / "candidate-two" / "marker.txt"
+    ).read_text(encoding="utf-8") == "candidate-two"
 
 
 def test_candidate_transport_rejects_tamper_truncation_and_wrong_private_key(

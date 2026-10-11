@@ -327,27 +327,31 @@ def require_previous_catalog_release(
 
     ordered = sorted(set(previous), reverse=True)
     version = ".".join(map(str, ordered[0]))
-    expected_tag = f"v{version}"
     retained_versions = {str(release.get("version") or "") for release in history}
     if version in retained_versions:
         if exceptions:
             raise ValueError(
-                "unpublished_predecessor_tags may only name the missing immediate predecessor."
+                "unpublished_predecessor_tags may only name missing immediate predecessors."
             )
         return
-    if exceptions != [expected_tag]:
+    expected_tags = [f"v{'.'.join(map(str, item))}" for item in ordered]
+    if not exceptions or exceptions != expected_tags[: len(exceptions)]:
         raise ValueError(f"Signed-catalog history must retain the previous release {version}.")
-
-    _verify_tag_is_ancestor(expected_tag, repo_root=repo_root)
-    _verify_github_release_absence(
-        expected_tag,
-        repository=repository,
-        github_token=github_token,
-        urlopen=urlopen,
-    )
-    if len(ordered) < 2:
+    if len(exceptions) >= len(ordered):
         raise ValueError("Cannot verify catalog predecessor; fetch the complete release tags.")
-    retained_predecessor = ".".join(map(str, ordered[1]))
+    if any(tag.removeprefix("v") in retained_versions for tag in exceptions):
+        raise ValueError(
+            "unpublished_predecessor_tags may only name missing immediate predecessors."
+        )
+    for expected_tag in exceptions:
+        _verify_tag_is_ancestor(expected_tag, repo_root=repo_root)
+        _verify_github_release_absence(
+            expected_tag,
+            repository=repository,
+            github_token=github_token,
+            urlopen=urlopen,
+        )
+    retained_predecessor = ".".join(map(str, ordered[len(exceptions)]))
     if retained_predecessor not in retained_versions:
         raise ValueError(
             "Signed-catalog history must retain the nearest published predecessor "

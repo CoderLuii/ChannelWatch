@@ -1,18 +1,19 @@
 {
-  "version": "1.4.3",
+  "version": "1.4.4",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.4.0",
   "minimum_image_sha256": "sha256:796a2c666cc2d4cbc7dacd9a99c8651e7ef96f56dff30315788e5879cbe9e53e",
   "updater_protocol": 2,
-  "recommended_image_version": "1.4.3",
-  "publication_time": "2026-10-11T12:00:00Z",
-  "automatic_install_after": "2026-10-18T12:00:00Z",
+  "recommended_image_version": "1.4.4",
+  "publication_time": "2026-10-11T04:45:00Z",
+  "automatic_install_after": "2026-10-18T04:45:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.4.0",
     "1.4.1",
-    "1.4.2"
+    "1.4.2",
+    "1.4.3"
   ],
   "compatible_launcher_protocols": [
     1,
@@ -21,11 +22,13 @@
   ],
   "runtime_compatibility_evidence": {},
   "unpublished_predecessor_tags": [
+    "v1.4.3",
     "v1.4.2"
   ],
   "unpublished_release_tags": [
-    "v1.4.2"
+    "v1.4.2",
+    "v1.4.3"
   ],
-  "release_heading": "# ChannelWatch v1.4.3 - Verified release signing",
+  "release_heading": "# ChannelWatch v1.4.4 - Reliable release transport",
   "verification_assets": true
 }

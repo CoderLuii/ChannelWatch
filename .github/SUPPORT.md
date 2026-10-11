@@ -68,7 +68,7 @@ Search before posting. Your question has probably been asked before.
 
 The issue tracker is for **confirmed bugs and feature requests**. It's not a support forum.
 
-Before opening a bug report for the current v1.4.3 release:
+Before opening a bug report for the current v1.4.4 release:
 
 1. In **Settings > Updates**, read **Application version** and check for updates. Include **Container image version** for update problems; an image tag alone does not identify an active in-app bundle.
 2. Check that the issue isn't already reported

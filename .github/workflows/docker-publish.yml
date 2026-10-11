@@ -414,7 +414,7 @@ jobs:
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/build-update-bundle.py "${common_args[@]}" --out-dir dist/candidate-two
           diff -u <(cd dist/candidate-one && sha256sum ./*) <(cd dist/candidate-two && sha256sum ./*)
           config_sha256="$(sha256sum scripts/release/release-config.json | awk '{print $1}')"
-          jq -cS -n --arg repository "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" \
+          jq -cS -j -n --arg repository "${GITHUB_REPOSITORY}" --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" --arg source_sha "${GITHUB_SHA}" \
             --arg release_tag "${GITHUB_REF_NAME}" --arg release_config_sha256 "${config_sha256}" \
             '{schema:1,repository:$repository,run_id:$run_id,run_attempt:$run_attempt,source_sha:$source_sha,release_tag:$release_tag,release_config_sha256:$release_config_sha256}' \
@@ -479,7 +479,8 @@ jobs:
           CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
             --input "${RUNNER_TEMP}/candidate-signer/signed-assets.sealed" \
             --output "${RUNNER_TEMP}/signed-assets.tar"
-          tar -xf "${RUNNER_TEMP}/signed-assets.tar" -C .
+          mkdir -p dist
+          tar -xf "${RUNNER_TEMP}/signed-assets.tar" -C dist
           rm -f "${RUNNER_TEMP}/signed-assets.tar"
 
       - name: Verify exact candidate identity

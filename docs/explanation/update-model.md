@@ -15,9 +15,9 @@ Published v1.0.0 through v1.4.x lines follow one image milestone per minor line:
 
 For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9. Published versions keep their original delivery requirements. Patch numbers still stop at 9.
 
-After a verified protocol-4 image milestone at v1.5.1 or newer, a future minor line may retain that image floor. This requires a complete signed runtime generation, the exact immutable bootstrap identity, and matching native AMD64 and ARM64 compatibility, restart, and rollback evidence. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
+After a verified protocol-4 image milestone at v1.5.2 or newer, a future minor line may retain that image floor. This requires a complete signed runtime generation, the exact immutable bootstrap identity, and compatibility, restart, and rollback evidence on both native AMD64 and native ARM64. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
 
-An image milestone without a published GitHub release can be recovered by a later patch in the same minor line. The release tooling verifies that every intervening tag has no GitHub release, keeps those versions out of signed update catalog history, and requires the replacement's matching image. v1.5.1 follows this path after v1.5.0 publishing failed before any GitHub release, release assets, or container image was published. The original v1.5.0 tag remains unchanged. Future runtime generations must name the actual published image and its exact digest.
+An image milestone without a published GitHub release can be recovered by a later patch in the same minor line. The release tooling verifies that every intervening tag has no GitHub release, keeps those versions out of signed update catalog history, and requires the replacement's matching image. v1.5.2 follows this path after v1.5.0 failed in source testing and v1.5.1 failed during candidate signing because its publication time preceded the candidate commit. Neither tag produced a GitHub release, release assets, or container image; both original tags remain unchanged. Future runtime generations must name the actual published image and its exact digest.
 
 The default policy installs verified compatible updates during the local 03:00–05:00 maintenance window. Administrators can choose notify-only, apply immediately, postpone for 24 hours or 7 days, retry a failed attempt, or roll back. This keeps routine updates simple without pretending that a running container can safely replace its own base image, Python runtime, system packages, or launcher contract.
 
@@ -68,10 +68,16 @@ They require one container image update before dependency generations can be
 used. An application-only download cannot replace their immutable launchers.
 Preserve `/config` and any external storage key during that image update.
 
-v1.5.0 failed before release assets or images were published. v1.5.1 recovers
-that milestone and is the first published image with this authority. Once it is installed,
-future compatible releases can update the application and official Python
-packages together without recreating the container.
+v1.5.0 and v1.5.1 failed before release assets or images were published. v1.5.2
+recovers that milestone and is the first published image with this authority.
+It supplies the image foundation and does not publish a runtime-generation
+payload. Once it is installed, a future compatible release can update the
+application and official Python packages together without recreating the
+container.
+
+The older-client restart report in [issue #22](https://github.com/CoderLuii/ChannelWatch/issues/22)
+remains open. Its cause has not been proven, and this image foundation does not
+present it as resolved.
 
 This capability covers compatible Python packages, including qualified binary
 wheels. It does not replace Python itself, the operating system, glibc,

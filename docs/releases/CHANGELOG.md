@@ -8,11 +8,12 @@ All notable changes to this project will be documented in this file. The format 
 
 - Keep this section for changes that have landed after the latest drafted release entry.
 
-## [1.5.1] - 2026-10-11
+## [1.5.2] - 2026-10-11
 
 ### Important
 
-- Container image update required. Pull v1.5.1 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
+- Container image update required. Pull v1.5.2 and recreate the container with the same `/config` volume and existing external storage key configuration. Every published v1.4.x image needs this one-time update to receive launcher protocol 4.
+- v1.5.2 supplies the image foundation. It does not publish a runtime-generation payload. Future compatible releases can deliver a complete signed application and official Python package generation through **Settings > Updates** in the same container.
 
 ### Added
 
@@ -21,6 +22,7 @@ All notable changes to this project will be documented in this file. The format 
 ### Changed
 
 - Keep Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates on the container image path.
+- Require future image-floor retention to pass compatibility, restart, and rollback checks on both native AMD64 and native ARM64.
 
 ### Fixed
 
@@ -28,12 +30,19 @@ All notable changes to this project will be documented in this file. The format 
 - Verify unpublished milestone recovery before publishing the replacement image and its four native migration reports.
 - Make interrupted update preparation retryable after the current runtime starts again, while preserving the selected release and saved configuration.
 - Keep update policy button labels readable on smaller screens.
+- Keep the older-client restart report in issue #22 open because its cause remains unproven.
+
+## [1.5.1] - 2026-10-11
+
+### Important
+
+- Publishing failed during candidate signing because the configured publication time preceded the candidate commit. No v1.5.1 GitHub release, release assets, or container image was published. Use v1.5.2 instead. The original tag remains unchanged.
 
 ## [1.5.0] - 2026-10-11
 
 ### Important
 
-- Publishing failed in the source tests before any v1.5.0 release assets, container image, or GitHub release was published. Use v1.5.1 instead. The original tag remains unchanged.
+- Publishing failed in the source tests before any v1.5.0 release assets, container image, or GitHub release was published. Use v1.5.2 instead. The original tag remains unchanged.
 
 ## [1.4.5] - 2026-10-11
 
@@ -936,7 +945,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.5...v1.5.0
 [1.4.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.4.4...v1.4.5

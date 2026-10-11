@@ -119,7 +119,7 @@ def test_complete_native_migration_matrix_is_bound_to_candidate(evidence):
     )
     result = run_aggregate(evidence)
     assert result["status"] == "passed"
-    assert result["candidate_version"] == "1.5.1"
+    assert result["candidate_version"] == "1.5.2"
     assert result["recovers_unpublished_image_milestone"] == "1.5.0"
     assert [(row["architecture"], row["baseline_image_version"]) for row in result["migrations"]] == [
         ("amd64", "1.4.0"), ("amd64", "1.4.1"), ("arm64", "1.4.0"), ("arm64", "1.4.1")

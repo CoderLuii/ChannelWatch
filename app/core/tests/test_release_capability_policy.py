@@ -277,6 +277,56 @@ def _recovery_config(**overrides):
     }
 
 
+def _patch_two_recovery_config(**overrides):
+    config = _recovery_config(
+        version="1.5.2",
+        minimum_image_version="1.5.2",
+        recommended_image_version="1.5.2",
+        unpublished_predecessor_tags=["v1.5.1", "v1.5.0"],
+        unpublished_release_tags=[
+            "v1.4.2",
+            "v1.4.3",
+            "v1.4.4",
+            "v1.5.0",
+            "v1.5.1",
+        ],
+    )
+    config.update(overrides)
+    return config
+
+
+def test_patch_two_recovery_accepts_the_exact_descending_predecessor_chain():
+    module = _load_script(
+        "release_version_policy_patch_two_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+
+    policy = module.validate_release_config(_patch_two_recovery_config())
+
+    assert policy.image_milestone is True
+    assert policy.minimum_image_version == "1.5.2"
+    assert policy.retained_capability_floor is False
+
+
+@pytest.mark.parametrize(
+    "predecessors",
+    [
+        ["v1.5.0"],
+        ["v1.5.0", "v1.5.1"],
+    ],
+)
+def test_patch_two_recovery_rejects_missing_or_reversed_predecessors(predecessors):
+    module = _load_script(
+        "release_version_policy_invalid_patch_two_recovery",
+        "scripts/release/release_version_policy.py",
+    )
+
+    with pytest.raises(ValueError, match="exact contiguous unpublished predecessors"):
+        module.validate_release_config(
+            _patch_two_recovery_config(unpublished_predecessor_tags=predecessors)
+        )
+
+
 def test_failed_image_milestone_recovery_is_the_replacement_image_foundation():
     module = _load_script(
         "release_version_policy_image_recovery",

@@ -16,6 +16,7 @@ import json
 import re
 import secrets
 import shutil
+import sys
 
 # This release canary intentionally invokes fixed Docker argv.
 import subprocess  # nosec B404
@@ -27,6 +28,9 @@ from pathlib import Path
 
 # Immutable generated path inside the disposable ChannelWatch image.
 SUPERVISOR_CONFIG = "/tmp/supervisord.conf"  # nosec B108
+APP_ROOT = Path(__file__).resolve().parents[2] / "app"
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
 
 class CanaryError(RuntimeError):
@@ -106,8 +110,12 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
     return result
 
 
-def docker_exec(name: str, code: str) -> str:
-    return run(["docker", "exec", name, "python", "-c", code]).stdout.strip()
+def docker_exec(name: str, code: str, user: str | None = None) -> str:
+    command = ["docker", "exec"]
+    if user is not None:
+        command.extend(["--user", user])
+    command.extend([name, "python", "-c", code])
+    return run(command).stdout.strip()
 
 
 def wait_for_json(name: str, path: str, predicate, timeout: int) -> dict:
@@ -158,28 +166,266 @@ def restart(name: str, target: str = "all") -> None:
     )
 
 
-def write_active(name: str, version: str) -> None:
-    payload = (
-        json.dumps(
-            {
-                "version": version,
-                "path": f"/config/channelwatch-runtime/releases/v{version}",
-                "runtime_abi": "channelwatch-runtime-v1",
-                "settings_schema_version": 7,
-                "activation_protocol": 3,
-                "activation_id": "minimum-image-static-canary",
-            },
-            sort_keys=True,
+def expected_runtime_identity(
+    catalog_path: Path,
+    bundle_path: Path,
+    minimum_version: str,
+    target_version: str,
+) -> dict[str, object]:
+    from core.runtime_generation import (
+        descriptor_generation_id,
+        detect_runtime_platform,
+        validate_runtime_descriptor,
+    )
+    from core.update_center import (
+        UPDATE_PUBLIC_KEYS,
+        read_update_document_bytes,
+        verify_ed25519_signature,
+    )
+
+    catalog_bytes = catalog_path.read_bytes()
+    bundle_bytes = bundle_path.read_bytes()
+    selected = read_update_document_bytes(
+        catalog_bytes,
+        UPDATE_PUBLIC_KEYS,
+        current_version=minimum_version,
+        runtime_abi="channelwatch-runtime-v1",
+        settings_schema_version=7,
+        launcher_protocol=4,
+    )
+    payload = selected.get("payload") if isinstance(selected, dict) else None
+    signature = selected.get("signature") if isinstance(selected, dict) else None
+    descriptor = payload.get("runtime_descriptor") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or str(payload.get("version") or "").lstrip("v") != target_version
+        or not isinstance(signature, dict)
+        or not isinstance(descriptor, dict)
+    ):
+        raise CanaryError("The signed catalog did not select the requested runtime.")
+    validate_runtime_descriptor(
+        descriptor, detect_runtime_platform(launcher_protocol=4)
+    )
+    generation = descriptor_generation_id(descriptor)
+    if descriptor.get("generation_id") != generation:
+        raise CanaryError("The signed runtime descriptor identity is invalid.")
+    try:
+        with zipfile.ZipFile(bundle_path) as archive:
+            embedded_descriptor = json.loads(
+                archive.read("channelwatch-bundle.json").decode("utf-8")
+            )
+    except (KeyError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+        raise CanaryError("The runtime bundle descriptor is unreadable.") from exc
+    bundle_sha256 = hashlib.sha256(bundle_bytes).hexdigest()
+    if (
+        embedded_descriptor != descriptor
+        or payload.get("bundle_sha256") != bundle_sha256
+    ):
+        raise CanaryError("The runtime bundle does not match the signed catalog.")
+    key_id = str(payload.get("key_id") or signature.get("key_id") or "")
+    try:
+        verify_ed25519_signature(
+            UPDATE_PUBLIC_KEYS,
+            key_id,
+            str(payload.get("bundle_signature") or ""),
+            bytes.fromhex(bundle_sha256),
         )
-        + "\n"
+    except Exception as exc:
+        raise CanaryError("The runtime bundle signature is invalid.") from exc
+    runtime_abi = str(payload.get("runtime_abi") or "")
+    settings_schema_version = payload.get("settings_schema_version")
+    if runtime_abi != "channelwatch-runtime-v1" or settings_schema_version != 7:
+        raise CanaryError("The selected runtime is incompatible with the canary.")
+    return {
+        "version": target_version,
+        "path": f"/config/channelwatch-runtime/releases/{generation}",
+        "runtime_abi": runtime_abi,
+        "settings_schema_version": settings_schema_version,
+        "runtime_generation_id": generation,
+        "runtime_descriptor_sha256": generation,
+        "dependency_inventory_sha256": descriptor["dependency_inventory_sha256"],
+        "runtime_trust_sha256": hashlib.sha256(catalog_bytes).hexdigest(),
+        "manifest": {
+            "release_url": payload.get("release_url"),
+            "bundle_sha256": bundle_sha256,
+            "key_id": key_id,
+        },
+        "metadata": {
+            "version": str(payload.get("version") or ""),
+            "version_tag": str(
+                payload.get("version_tag") or f"v{target_version}"
+            ),
+            "runtime_abi": runtime_abi,
+            "settings_schema_version": settings_schema_version,
+            "git_sha": descriptor["source_commit"],
+            "bundle_type": descriptor["bundle_format"],
+        },
+    }
+
+
+def _validated_protocol_four_active(
+    active: object, expected: dict[str, object]
+) -> dict[str, object]:
+    identity_fields = (
+        "runtime_generation_id",
+        "runtime_descriptor_sha256",
+        "dependency_inventory_sha256",
+        "runtime_trust_sha256",
+    )
+    if (
+        not isinstance(active, dict)
+        or active.get("activation_protocol") != 4
+        or not str(active.get("activation_id") or "")
+        or active.get("runtime_abi") != "channelwatch-runtime-v1"
+        or active.get("settings_schema_version") != 7
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(active.get(field) or "")) is None
+            for field in identity_fields
+        )
+        or active.get("runtime_generation_id")
+        != active.get("runtime_descriptor_sha256")
+        or active.get("path")
+        != (
+            "/config/channelwatch-runtime/releases/"
+            + str(active.get("runtime_generation_id") or "")
+        )
+    ):
+        raise CanaryError("The canary requires a complete protocol-4 active identity.")
+    if any(active.get(field) != value for field, value in expected.items()):
+        raise CanaryError("The active selection does not match the signed runtime identity.")
+    return active
+
+
+def apply_runtime_update(
+    name: str, minimum: str, expected: dict[str, object]
+) -> tuple[dict[str, object], str]:
+    version = str(expected["version"])
+    code = (
+        "import json; from pathlib import Path; "
+        "from core.runtime_launcher import request_container_restart; "
+        "from core.update_center import UpdateManager; "
+        "root=Path('/config/minimum-image-canary'); "
+        "catalog_url='https://channelwatch.coderluii.dev/updates/v3/stable.json'; "
+        "catalog=(root/'catalog.json').read_bytes(); "
+        "bundle=(root/'runtime.zip').read_bytes(); "
+        "fetch=lambda url,maximum: (catalog if url==catalog_url else bundle) "
+        "if len(catalog if url==catalog_url else bundle)<=maximum "
+        "else (_ for _ in ()).throw(ValueError('canary asset exceeds product limit')); "
+        f"manager=UpdateManager(config_dir=Path('/config'), current_version={minimum!r}, "
+        f"image_version={minimum!r}, launcher_protocol=4, manifest_url=catalog_url, "
+        "fetcher=fetch, "
+        "restart_callable=lambda: request_container_restart() is None); "
+        "manager.check(); "
+        f"job=manager.apply({version!r}); "
+        "active=json.loads(manager.active_path.read_text(encoding='utf-8')); "
+        "print(json.dumps({'job':job,'active':active},sort_keys=True))"
+    )
+    try:
+        result = json.loads(docker_exec(name, code, user="501:20"))
+    except (CanaryError, json.JSONDecodeError) as exc:
+        raise CanaryError("The minimum image could not prepare the signed runtime.") from exc
+    job = result.get("job") if isinstance(result, dict) else None
+    active = result.get("active") if isinstance(result, dict) else None
+    if (
+        not isinstance(job, dict)
+        or job.get("operation") != "apply"
+        or job.get("status") != "restarting"
+        or not str(job.get("job_id") or "")
+        or str(job.get("version") or "").lstrip("v") != version
+        or job.get("bundle_sha256") != expected["manifest"]["bundle_sha256"]
+    ):
+        raise CanaryError("The minimum image did not accept the signed runtime update.")
+    return _validated_protocol_four_active(active, expected), str(job["job_id"])
+
+
+def _activation_state_converged(
+    state: object,
+    selected_active: dict[str, object],
+    expected: dict[str, object],
+    apply_job_id: str,
+) -> bool:
+    if not isinstance(state, dict):
+        return False
+    health = state.get("health")
+    job = state.get("job")
+    supervisor = state.get("supervisor")
+    return bool(
+        isinstance(health, dict)
+        and health.get("live") is True
+        and health.get("startup") is True
+        and isinstance(supervisor, str)
+        and re.search(r"(?m)^core\s+RUNNING\s+pid\s+[1-9][0-9]*,", supervisor)
+        and re.search(r"(?m)^ui\s+RUNNING\s+pid\s+[1-9][0-9]*,", supervisor)
+        and state.get("active") == selected_active
+        and isinstance(job, dict)
+        and job.get("job_id") == apply_job_id
+        and job.get("operation") == "apply"
+        and job.get("status") == "success"
+        and str(job.get("version") or "").lstrip("v") == expected["version"]
+        and job.get("bundle_sha256") == expected["manifest"]["bundle_sha256"]
+        and state.get("restart_required") is False
+        and state.get("handoff") is False
+        and state.get("activation_artifacts") == []
+    )
+
+
+def wait_for_activation_convergence(
+    name: str,
+    selected_active: dict[str, object],
+    expected: dict[str, object],
+    apply_job_id: str,
+    timeout: int,
+) -> None:
+    code = (
+        "import json,subprocess,sys,urllib.request; from pathlib import Path; "
+        "root=Path('/config/channelwatch-runtime'); "
+        "read=lambda p: json.loads(p.read_text(encoding='utf-8')) if p.is_file() else None; "
+        "healthy=lambda path: urllib.request.urlopen("
+        "'http://127.0.0.1:8501'+path,timeout=3).status==200; "
+        "supervisor=subprocess.run([sys.executable,'-m','supervisor.supervisorctl',"
+        f"'-c',{SUPERVISOR_CONFIG!r},'status'],text=True,capture_output=True,check=False); "
+        "print(json.dumps({'health':{'live':healthy('/healthz/live'),"
+        "'startup':healthy('/healthz/startup')},'supervisor':supervisor.stdout,"
+        "'active':read(root/'active.json'),'job':read(root/'update-job.json'),"
+        "'restart_required':(root/'restart-required.json').exists(),"
+        "'handoff':(root/'restart-services-accepted.json').exists(),"
+        "'activation_artifacts':sorted(p.name for p in root.glob('activation-*.json'))},"
+        "sort_keys=True))"
+    )
+    deadline = time.monotonic() + timeout
+    last_state: object = None
+    while time.monotonic() < deadline:
+        try:
+            last_state = json.loads(docker_exec(name, code, user="501:20"))
+            if _activation_state_converged(
+                last_state, selected_active, expected, apply_job_id
+            ):
+                return
+        except (CanaryError, json.JSONDecodeError, OSError):
+            last_state = None
+        time.sleep(1)
+    summary = json.dumps(last_state, sort_keys=True)[:1000]
+    raise CanaryError(
+        "the selected runtime did not reach durable activation convergence: "
+        + summary
+    )
+
+
+def write_active(
+    name: str, active: dict[str, object], expected: dict[str, object]
+) -> None:
+    payload = json.dumps(
+        _validated_protocol_four_active(active, expected),
+        sort_keys=True,
+        separators=(",", ":"),
     )
     code = (
-        "from pathlib import Path; "
+        "import json; from pathlib import Path; "
+        "from core.helpers.atomic_io import atomic_write_json; "
         "p=Path('/config/channelwatch-runtime/active.json'); "
-        f"p.write_text({payload!r}, encoding='utf-8'); "
-        "p.chmod(0o644)"
+        f"atomic_write_json(p,json.loads({payload!r}))"
     )
-    docker_exec(name, code)
+    docker_exec(name, code, user="501:20")
 
 
 def remove_active(name: str) -> None:
@@ -187,7 +433,58 @@ def remove_active(name: str) -> None:
         name,
         "from pathlib import Path; "
         "Path('/config/channelwatch-runtime/active.json').unlink()",
+        user="501:20",
     )
+
+
+def read_active(name: str, expected: dict[str, object]) -> dict[str, object]:
+    code = (
+        "from pathlib import Path; "
+        "print(Path('/config/channelwatch-runtime/active.json').read_text(encoding='utf-8'))"
+    )
+    try:
+        active = json.loads(docker_exec(name, code, user="501:20"))
+    except (CanaryError, json.JSONDecodeError) as exc:
+        raise CanaryError("The selected protocol-4 active identity is unreadable.") from exc
+    return _validated_protocol_four_active(active, expected)
+
+
+def retain_failure_diagnostics(
+    name: str, evidence_json: Path, error: BaseException
+) -> dict[str, object]:
+    docker_log = run(["docker", "logs", name], check=False)
+    supervisor = run(
+        [
+            "docker", "exec", name, "python", "-m", "supervisor.supervisorctl",
+            "-c", SUPERVISOR_CONFIG, "status",
+        ],
+        check=False,
+    )
+    docker_path = evidence_json.with_name(evidence_json.stem + "-docker.log")
+    supervisor_path = evidence_json.with_name(
+        evidence_json.stem + "-supervisor.log"
+    )
+    failure_path = evidence_json.with_name(evidence_json.stem + "-failure.json")
+    evidence_json.parent.mkdir(parents=True, exist_ok=True)
+    docker_path.write_text(
+        docker_log.stdout + docker_log.stderr, encoding="utf-8"
+    )
+    supervisor_path.write_text(
+        supervisor.stdout + supervisor.stderr, encoding="utf-8"
+    )
+    retained = {
+        "schema": 1,
+        "status": "failed",
+        "error": str(error),
+        "docker_log": docker_path.name,
+        "supervisor_log": supervisor_path.name,
+    }
+    failure_path.write_text(
+        json.dumps(retained, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(docker_log.stdout + docker_log.stderr, file=sys.stderr)
+    print(supervisor.stdout + supervisor.stderr, file=sys.stderr)
+    return retained
 
 
 def extract_bundle(bundle: Path, destination: Path) -> None:
@@ -234,6 +531,8 @@ def verify_frontend(name: str, bundle: Path) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--runtime-bundle", type=Path, required=True)
+    parser.add_argument("--runtime-catalog", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--minimum-image-version", required=True)
     parser.add_argument("--image-repository", default="coderluii/channelwatch")
@@ -249,15 +548,28 @@ def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="channelwatch-minimum-image-canary-"))
     config_dir = temp_root / "config"
     config_dir.mkdir(mode=0o777)
-    release_dir = config_dir / "channelwatch-runtime" / "releases" / f"v{version}"
+    input_dir = config_dir / "minimum-image-canary"
+    input_dir.mkdir()
+    app_bundle = args.bundle.resolve()
+    runtime_bundle = args.runtime_bundle.resolve()
+    runtime_catalog = args.runtime_catalog.resolve()
+    container_started = False
 
     try:
+        for path, label in (
+            (app_bundle, "application bundle"),
+            (runtime_bundle, "runtime bundle"),
+            (runtime_catalog, "runtime catalog"),
+        ):
+            if not path.is_file() or path.is_symlink():
+                raise CanaryError(f"The {label} must be a regular, non-symlink file.")
+        expected_identity = expected_runtime_identity(
+            runtime_catalog, runtime_bundle, minimum, version
+        )
+        shutil.copyfile(runtime_bundle, input_dir / "runtime.zip")
+        shutil.copyfile(runtime_catalog, input_dir / "catalog.json")
         run(["docker", "pull", image])
         image_id = verify_pulled_image(image)
-        # Stage the bundle before the historical image repairs /config ownership.
-        # Selection still happens only after Supervisor has captured the original
-        # image-owned environment, preserving the in-app activation boundary.
-        extract_bundle(args.bundle.resolve(), release_dir)
         run(
             [
                 "docker",
@@ -276,6 +588,7 @@ def main() -> int:
                 image,
             ]
         )
+        container_started = True
         wait_for_json(
             name,
             "/api/about",
@@ -283,20 +596,34 @@ def main() -> int:
             args.startup_timeout,
         )
 
-        # Select only after Supervisor has captured its image-owned environment.
-        write_active(name, version)
-        restart(name)
+        # Prepare and select only after Supervisor has captured its image-owned
+        # environment. The minimum image verifies the signed catalog, bundle,
+        # dependency generation, and durable protocol-4 identity itself.
+        selected_active, apply_job_id = apply_runtime_update(
+            name, minimum, expected_identity
+        )
         wait_for_json(
             name,
             "/api/about",
             lambda payload: str(payload.get("version", "")).lstrip("v") == version,
             args.startup_timeout,
         )
-        initial = verify_frontend(name, args.bundle.resolve())
+        wait_for_activation_convergence(
+            name,
+            selected_active,
+            expected_identity,
+            apply_job_id,
+            args.startup_timeout,
+        )
+        if read_active(name, expected_identity) != selected_active:
+            raise CanaryError("The active runtime identity changed during restart.")
+        initial = verify_frontend(name, app_bundle)
 
         restart(name, "ui")
         wait_for_json(name, "/healthz/live", lambda payload: True, args.startup_timeout)
-        ui_restart = verify_frontend(name, args.bundle.resolve())
+        if read_active(name, expected_identity) != selected_active:
+            raise CanaryError("The active runtime identity changed during UI restart.")
+        ui_restart = verify_frontend(name, app_bundle)
 
         remove_active(name)
         restart(name)
@@ -306,7 +633,7 @@ def main() -> int:
             lambda payload: str(payload.get("version", "")).lstrip("v") == minimum,
             args.startup_timeout,
         )
-        write_active(name, version)
+        write_active(name, selected_active, expected_identity)
         restart(name)
         wait_for_json(
             name,
@@ -314,7 +641,9 @@ def main() -> int:
             lambda payload: str(payload.get("version", "")).lstrip("v") == version,
             args.startup_timeout,
         )
-        reapply = verify_frontend(name, args.bundle.resolve())
+        if read_active(name, expected_identity) != selected_active:
+            raise CanaryError("The reapplied runtime identity changed during restart.")
+        reapply = verify_frontend(name, app_bundle)
 
         run(["docker", "restart", name])
         wait_for_json(
@@ -323,7 +652,9 @@ def main() -> int:
             lambda payload: str(payload.get("version", "")).lstrip("v") == version,
             args.startup_timeout,
         )
-        container_restart = verify_frontend(name, args.bundle.resolve())
+        if read_active(name, expected_identity) != selected_active:
+            raise CanaryError("The active runtime identity changed after container restart.")
+        container_restart = verify_frontend(name, app_bundle)
 
         evidence = {
             "schema": 1,
@@ -334,7 +665,14 @@ def main() -> int:
             "pulled_image_id": image_id,
             "platform": "linux/amd64",
             "target_application_version": version,
-            "bundle_sha256": hashlib.sha256(args.bundle.read_bytes()).hexdigest(),
+            "bundle_sha256": hashlib.sha256(app_bundle.read_bytes()).hexdigest(),
+            "runtime_bundle_sha256": hashlib.sha256(
+                runtime_bundle.read_bytes()
+            ).hexdigest(),
+            "runtime_catalog_sha256": hashlib.sha256(
+                runtime_catalog.read_bytes()
+            ).hexdigest(),
+            "runtime_generation_id": selected_active["runtime_generation_id"],
             "dynamic_activation": initial,
             "ui_restart": ui_restart,
             "rollback_reapply": reapply,
@@ -346,6 +684,10 @@ def main() -> int:
         )
         print(json.dumps(evidence, sort_keys=True))
         return 0
+    except BaseException as exc:
+        if container_started:
+            retain_failure_diagnostics(name, args.evidence_json, exc)
+        raise
     finally:
         run(["docker", "rm", "--force", name], check=False)
         shutil.rmtree(temp_root, ignore_errors=True)

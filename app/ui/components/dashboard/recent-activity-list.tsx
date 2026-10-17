@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useMemo } from "react"
+import React, { useState, useMemo, useRef } from "react"
 import { t } from "@/lib/i18n"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
 import { Badge } from "@/components/base/badge"
@@ -156,6 +156,8 @@ export function RecentActivityList({
   clientStatus,
 }: RecentActivityListProps) {
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null)
+  const dialogTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const [failedArtwork, setFailedArtwork] = useState<Set<string>>(() => new Set())
   const [filtersOpen, setFiltersOpen] = useState(false)
   const selectedClientLabel = clients.find((client) => client.value === selectedClient)?.label ?? selectedClient
   const typeFilterCount = selectedFilters.includes("all") ? 0 : selectedFilters.length
@@ -181,11 +183,11 @@ export function RecentActivityList({
 
   return (
     <>
-      <Card className="flex flex-col h-[300px] sm:h-[350px] md:h-[420px] max-w-full overflow-hidden">
-        <CardHeader className="pb-2 flex-shrink-0">
+      <Card className="flex max-h-[480px] min-h-0 sm:min-h-[280px] max-w-full flex-col overflow-hidden border-border/70 shadow-sm">
+        <CardHeader className="flex-shrink-0 px-4 pb-3 pt-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Zap className="h-4 w-4 text-primary" />
+            <CardTitle className="flex items-center gap-2 text-[17px] font-semibold">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10"><Zap className="h-[18px] w-[18px] text-primary" /></span>
               {t("activity.title")}
               {filteredActivity.length > 0 && (
                 <Badge variant="secondary" className="h-5 px-1.5 py-0 text-xs font-normal leading-none">
@@ -295,12 +297,16 @@ export function RecentActivityList({
                   const colorClasses = getIconColorClasses(activity.type, activity.message)
                   const isTestAlert = isTestDiskAlert(activity)
                   const displayTitle = getDisplayTitle(activity)
-                  const hasImage = !!activity.image_url
+                  const artworkKey = `${activity.id}:${activity.image_url || ""}`
+                  const hasImage = Boolean(activity.image_url && !failedArtwork.has(artworkKey))
                   return (
                     <button
                       key={activity.id}
-                      onClick={() => setSelectedActivity(activity)}
-                      className="flex items-center gap-2 p-2 hover:bg-muted/50 transition-colors border-b border-border/20 w-full text-left cursor-pointer"
+                      onClick={(event) => {
+                        dialogTriggerRef.current = event.currentTarget
+                        setSelectedActivity(activity)
+                      }}
+                      className="flex min-h-14 w-full cursor-pointer items-start gap-3 border-b border-border/20 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
                     >
                       <div className={`rounded-full ${colorClasses.split(' ')[0]} p-1.5 flex-shrink-0`}>
                         <ActivityIcon
@@ -309,35 +315,45 @@ export function RecentActivityList({
                           message={activity.message}
                         />
                       </div>
-                      {hasImage && (
-                        <div className="h-12 w-8 flex-shrink-0 overflow-hidden rounded-md border border-border/40 bg-muted">
+                      <div aria-hidden="true" className="flex h-12 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted">
+                        {hasImage ? (
+                          <>
                           {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
                           <img
                             src={activity.image_url}
                             alt=""
+                            onError={() => {
+                              setFailedArtwork((current) => {
+                                if (current.has(artworkKey)) return current
+                                const next = new Set(current)
+                                next.add(artworkKey)
+                                return next
+                              })
+                            }}
                             className="h-full w-full object-cover"
                             loading="lazy"
                           />
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0 pr-1 overflow-hidden">
-                        <div className="flex items-center gap-1 mb-1">
-                          <p className="text-sm font-medium leading-none truncate">{displayTitle}</p>
+                          </>
+                        ) : <Video className="h-4 w-4 text-muted-foreground/70" />}
+                      </div>
+                      <div className="min-w-0 flex-1 pr-1">
+                        <div className="mb-1 flex min-w-0 flex-wrap items-start gap-1">
+                          <p className="min-w-0 flex-1 break-words text-sm font-medium leading-snug [overflow-wrap:anywhere]">{displayTitle}</p>
                           {isTestAlert && (
                             <Badge
                               variant="outline"
-                              className="h-5 shrink-0 border-amber-300 bg-amber-100 px-1 text-xs font-normal leading-none text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
+                              className="h-auto min-h-5 shrink-0 whitespace-normal border-amber-300 bg-amber-100 px-1 text-xs font-normal leading-snug text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
                             >
                               {t("activity.testBadge")}
                             </Badge>
                           )}
                           {activity.dvr_name && (
-                            <Badge variant="secondary" className="h-5 shrink-0 px-1 py-0 text-xs font-normal leading-none">{activity.dvr_name}</Badge>
+                            <Badge variant="secondary" className="h-auto min-h-5 min-w-0 max-w-full whitespace-normal break-words px-1 py-0 text-xs font-normal leading-snug [overflow-wrap:anywhere]" title={activity.dvr_name}>{activity.dvr_name}</Badge>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground truncate max-w-full">{activity.message}</p>
+                        <p className="max-w-full break-words text-[13px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{activity.message}</p>
                       </div>
-                      <Badge variant="outline" className="flex-shrink-0 text-xs whitespace-nowrap py-0 h-5 px-1.5">
+                      <Badge variant="outline" className="h-auto min-h-5 max-w-[35%] flex-shrink-0 whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere]">
                         {formatTimeAgo(activity.timestamp)}
                       </Badge>
                     </button>
@@ -386,7 +402,14 @@ export function RecentActivityList({
       <ActivityDetailDialog
         activity={selectedActivity}
         open={!!selectedActivity}
-        onOpenChange={(open) => { if (!open) setSelectedActivity(null) }}
+        onOpenChange={(open) => {
+          if (open) return
+          setSelectedActivity(null)
+          requestAnimationFrame(() => {
+            const trigger = dialogTriggerRef.current
+            if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
+          })
+        }}
       />
     </>
   )

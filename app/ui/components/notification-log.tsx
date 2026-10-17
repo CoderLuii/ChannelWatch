@@ -16,6 +16,25 @@ const PAGE_SIZE = 50
 const STATUS_OPTIONS = ["sent", "retry", "failed", "circuit_open"]
 const CHANNEL_OPTIONS = ["apprise", "webhook"]
 
+function eventTypeLabel(type?: string): string {
+  switch (type) {
+    case "watching_channel":
+    case "stream_started":
+      return t("type.liveTV")
+    case "watching_vod":
+    case "vod_playback":
+      return t("type.vod")
+    case "recording_started":
+    case "recording_completed":
+    case "recording_event":
+      return t("type.recording")
+    case "disk_alert":
+      return t("type.diskAlert")
+    default:
+      return type?.replaceAll("_", " ") || "—"
+  }
+}
+
 function formatTimestamp(ts: string): string {
   try {
     return new Date(ts).toLocaleString(undefined, {
@@ -149,19 +168,19 @@ export function NotificationLog() {
   const to = Math.min(offset + PAGE_SIZE, total)
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Bell className="h-5 w-5 text-primary" />
-            <CardTitle>{t("notificationLog.title")}</CardTitle>
+    <div className="space-y-5">
+      <Card className="border-border/70 shadow-sm">
+        <CardHeader className="px-4 pb-4 pt-5 sm:px-5">
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/10"><Bell className="h-5 w-5 text-primary" /></span>
+            <CardTitle className="min-w-0 break-words text-[22px] font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-2xl"><h1>{t("notificationLog.title")}</h1></CardTitle>
           </div>
           <CardDescription>{t("notificationLog.description")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-wrap gap-2 mb-4">
+          <div className="mb-5 grid gap-3 min-[360px]:grid-cols-2 lg:grid-cols-4">
             <Select value={filterChannel} onValueChange={(v) => setFilterChannel(v === "_all" ? "" : v)}>
-              <SelectTrigger className="w-36" aria-label={t("notificationLog.aria.channelFilter")}>
+              <SelectTrigger className="h-11 w-full rounded-xl" aria-label={t("notificationLog.aria.channelFilter")}>
                 <SelectValue placeholder={t("notificationLog.filterChannel")} />
               </SelectTrigger>
               <SelectContent>
@@ -175,7 +194,7 @@ export function NotificationLog() {
             </Select>
 
             <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v === "_all" ? "" : v)}>
-              <SelectTrigger className="w-36" aria-label={t("notificationLog.aria.statusFilter")}>
+              <SelectTrigger className="h-11 w-full rounded-xl" aria-label={t("notificationLog.aria.statusFilter")}>
                 <SelectValue placeholder={t("notificationLog.filterStatus")} />
               </SelectTrigger>
               <SelectContent>
@@ -187,24 +206,24 @@ export function NotificationLog() {
               </SelectContent>
             </Select>
 
-            <div className="flex items-center gap-1">
-              <label htmlFor="notification-log-since" className="text-xs text-muted-foreground whitespace-nowrap">{t("notificationLog.filterSince")}</label>
+            <div className="flex min-w-0 items-center gap-2 min-[360px]:col-span-2 sm:col-span-1">
+              <label htmlFor="notification-log-since" className="whitespace-nowrap text-[13px] text-muted-foreground">{t("notificationLog.filterSince")}</label>
               <Input
                 id="notification-log-since"
                 type="date"
-                className="h-9 w-36 text-xs"
+                className="h-11 min-w-0 w-full rounded-xl text-sm"
                 value={filterSince}
                 onChange={(e) => setFilterSince(e.target.value)}
                 aria-label={t("notificationLog.aria.since")}
               />
             </div>
 
-            <div className="flex items-center gap-1">
-              <label htmlFor="notification-log-until" className="text-xs text-muted-foreground whitespace-nowrap">{t("notificationLog.filterUntil")}</label>
+            <div className="flex min-w-0 items-center gap-2 min-[360px]:col-span-2 sm:col-span-1">
+              <label htmlFor="notification-log-until" className="whitespace-nowrap text-[13px] text-muted-foreground">{t("notificationLog.filterUntil")}</label>
               <Input
                 id="notification-log-until"
                 type="date"
-                className="h-9 w-36 text-xs"
+                className="h-11 min-w-0 w-full rounded-xl text-sm"
                 value={filterUntil}
                 onChange={(e) => setFilterUntil(e.target.value)}
                 aria-label={t("notificationLog.aria.until")}
@@ -245,7 +264,43 @@ export function NotificationLog() {
                   .replace("{to}", String(to))
                   .replace("{total}", String(total))}
               </div>
-              <div className="overflow-x-auto rounded-md border">
+              <div className="space-y-3 lg:hidden" role="list" aria-label={t("notificationLog.tableCaption")}>
+                {items.map((item) => (
+                  <article key={item.id} role="listitem" className="rounded-xl border bg-background p-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="break-words font-mono text-[13px] font-medium">{item.channel || item.provider_type}</p>
+                        <p className="mt-1 text-[13px] leading-5 text-muted-foreground">{formatTimestamp(item.sent_at)}</p>
+                      </div>
+                      <StatusBadge status={item.status} />
+                    </div>
+                    <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 border-t pt-3 text-[13px] leading-5">
+                      <dt className="text-muted-foreground">{t("notificationLog.colEventType")}</dt>
+                      <dd className="max-w-[55vw] break-words text-right">{eventTypeLabel(item.event_type)}</dd>
+                      <dt className="text-muted-foreground">{t("notificationLog.colRetries")}</dt>
+                      <dd className="text-right tabular-nums">{item.retry_count}</dd>
+                      <dt className="text-muted-foreground">{t("notificationLog.colPayload")}</dt>
+                      <dd className="text-right tabular-nums">
+                        {item.payload_size > 0
+                          ? t("notificationLog.bytes").replace("{n}", String(item.payload_size))
+                          : "—"}
+                      </dd>
+                      {item.error ? (
+                        <>
+                          <dt className="text-muted-foreground">{t("notificationLog.colError")}</dt>
+                          <dd className="max-w-[55vw] break-words text-right text-muted-foreground">{item.error}</dd>
+                        </>
+                      ) : null}
+                    </dl>
+                  </article>
+                ))}
+              </div>
+              <div
+                className="hidden overflow-x-auto rounded-xl border lg:block"
+                role="region"
+                aria-label={t("notificationLog.tableCaption")}
+                tabIndex={0}
+              >
                 <table className="w-full text-sm">
                   <caption className="sr-only">{t("notificationLog.tableCaption")}</caption>
                   <thead>
@@ -266,7 +321,7 @@ export function NotificationLog() {
                           {formatTimestamp(item.sent_at)}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{item.channel || item.provider_type}</td>
-                        <td className="px-3 py-2 text-xs">{item.event_type || "—"}</td>
+                        <td className="px-3 py-2 text-xs">{eventTypeLabel(item.event_type)}</td>
                         <td className="px-3 py-2">
                           <StatusBadge status={item.status} />
                         </td>
@@ -276,7 +331,7 @@ export function NotificationLog() {
                             ? t("notificationLog.bytes").replace("{n}", String(item.payload_size))
                             : "—"}
                         </td>
-                        <td className="max-w-xs truncate px-3 py-2 text-xs text-muted-foreground" title={item.error ?? ""}>
+                        <td className="max-w-xs whitespace-normal break-words px-3 py-2 text-xs text-muted-foreground [overflow-wrap:anywhere]" title={item.error ?? ""}>
                           {item.error || "—"}
                         </td>
                       </tr>

@@ -51,6 +51,7 @@ from core.runtime_identity import (
 from core.update_catalog import (
     CATALOG_SCHEMA_VERSION,
     DEFAULT_UPDATE_CATALOG_URL,
+    LEGACY_UPDATE_CATALOG_URL,
     DeliveryMode,
     LauncherProtocol,
     launcher_protocol_for_image_version,
@@ -117,6 +118,9 @@ RESTART_JOURNAL_FIELDS = {
     "created_at",
     "control",
 }
+PENDING_SCHEDULER_ATTEMPT_PHASES = frozenset(
+    {"apply_started", "activation_pending"}
+)
 
 
 def _runtime_active_metadata(
@@ -1151,6 +1155,11 @@ class UpdateManager:
             )
         else:
             self.launcher_protocol = int(launcher_protocol)
+        if (
+            manifest_url == DEFAULT_UPDATE_CATALOG_URL
+            and self.launcher_protocol < int(LauncherProtocol.VERIFIED_DEPENDENCIES)
+        ):
+            self.manifest_url = LEGACY_UPDATE_CATALOG_URL
         self.fetcher = fetcher
         self.backup_callable = backup_callable
         self.restart_callable = restart_callable
@@ -2007,6 +2016,74 @@ class UpdateManager:
         atomic_write_json(self.job_path, job)
         return job
 
+    def _unreconciled_scheduler_apply_job(self) -> dict[str, Any] | None:
+        """Return the exact apply result that a scheduler attempt still owns."""
+
+        scheduler_path = self.runtime_dir / "update-scheduler.json"
+        try:
+            state = _read_runtime_json_strict(
+                scheduler_path,
+                label="update scheduler state",
+            )
+        except FileNotFoundError:
+            return None
+        if not isinstance(state, dict):
+            raise UpdateLockedError(
+                "The update scheduler state is invalid and was preserved."
+            )
+        attempt = state.get("last_attempt")
+        if attempt is None:
+            return None
+        if not isinstance(attempt, dict):
+            raise UpdateLockedError(
+                "The update scheduler attempt is invalid and was preserved."
+            )
+        if attempt.get("phase") not in PENDING_SCHEDULER_ATTEMPT_PHASES:
+            return None
+
+        version = attempt.get("version")
+        digest = attempt.get("bundle_sha256")
+        job_id = attempt.get("job_id")
+        attempt_id = attempt.get("attempt_id")
+        if (
+            not isinstance(version, str)
+            or not version.strip().lstrip("v")
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or digest != digest.lower()
+            or any(character not in "0123456789abcdef" for character in digest)
+            or not isinstance(job_id, str)
+            or not job_id
+            or not isinstance(attempt_id, str)
+            or not attempt_id
+        ):
+            raise UpdateLockedError(
+                "The pending update scheduler identity is invalid and was preserved."
+            )
+
+        try:
+            job = _read_runtime_json_strict(
+                self.job_path,
+                label="update job",
+            )
+        except FileNotFoundError as exc:
+            raise UpdateLockedError(
+                "The pending update scheduler result is missing."
+            ) from exc
+        if (
+            not isinstance(job, dict)
+            or job.get("operation") != "apply"
+            or job.get("job_id") != job_id
+            or job.get("scheduler_attempt_id") != attempt_id
+            or str(job.get("version") or "").strip().lstrip("v")
+            != version.strip().lstrip("v")
+            or str(job.get("bundle_sha256") or "").strip().lower() != digest
+        ):
+            raise UpdateLockedError(
+                "A different update job replaced the pending scheduler result."
+            )
+        return job
+
     def _pre_handoff_apply_failure_payload(
         self,
         current: Any,
@@ -2429,24 +2506,28 @@ class UpdateManager:
                     raise UpdateLockedError(
                         "A runtime transition is waiting for the next container entrypoint."
                     )
+                pending_apply_job = self._unreconciled_scheduler_apply_job()
                 self._ensure_runtime()
                 atomic_write_json(self.latest_path, manifest)
-                job = self._write_job(
-                    {
-                        "operation": "check",
-                        "recovery": recovery,
-                        "status": (
-                            "image_required"
-                            if image_required and update_available
-                            else "available" if update_available else "current"
-                        ),
-                        "version": payload["version"],
-                        "message": (
-                            "Container image update required."
-                            if image_required and update_available
-                            else "Update check completed."
-                        ),
-                    }
+                check_payload = {
+                    "operation": "check",
+                    "recovery": recovery,
+                    "status": (
+                        "image_required"
+                        if image_required and update_available
+                        else "available" if update_available else "current"
+                    ),
+                    "version": payload["version"],
+                    "message": (
+                        "Container image update required."
+                        if image_required and update_available
+                        else "Update check completed."
+                    ),
+                }
+                job = (
+                    self._prepare_job(check_payload)
+                    if pending_apply_job is not None
+                    else self._write_job(check_payload)
                 )
                 # The check owns the lock until this return value has been
                 # built.  Its work is nevertheless complete, so do not send a

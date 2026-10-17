@@ -510,7 +510,7 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
 
   await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
   await expect(page.getByText("1 live stream, 1 recording in progress")).toBeVisible()
-  await expect(page.getByText("10.94 TB Free")).toBeVisible()
+  await expect(page.locator("#mobile-disk-details").getByText("10.94 TB Free", { exact: true })).toBeVisible()
   await expect(page.getByText("10.94 TB GB Free")).toHaveCount(0)
 
   await page.getByRole("button", { name: "Watch History", exact: true }).click()

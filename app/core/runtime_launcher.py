@@ -346,6 +346,73 @@ def _protocol_three_restart_helper_lock(socket_path: Path):
             os.close(fd)
 
 
+def _protocol_three_restart_helper_active(socket_path: Path) -> bool:
+    """Return true only while a trusted image-owned helper holds its lock."""
+
+    if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("Safe restart helper locking is unavailable.")
+    try:
+        parent_metadata = os.lstat(socket_path.parent)
+    except OSError as exc:
+        raise RuntimeError("The Supervisor runtime directory is unavailable.") from exc
+    if (
+        not stat_module.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != os.geteuid()
+        or stat_module.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise RuntimeError("The Supervisor runtime directory is not trusted.")
+    lock_path = socket_path.parent / PROTOCOL_THREE_RESTART_HELPER_LOCK_FILE
+    try:
+        fd = os.open(
+            lock_path,
+            os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as exc:
+        raise RuntimeError("The restart helper lock cannot be opened safely.") from exc
+    try:
+        metadata = os.fstat(fd)
+        if (
+            not stat_module.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise RuntimeError(
+                "The restart helper lock is not a trusted single-link regular file."
+            )
+        try:
+            named_metadata = os.stat(lock_path, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeError("The restart helper lock changed ownership.") from exc
+        if (
+            named_metadata.st_dev != metadata.st_dev
+            or named_metadata.st_ino != metadata.st_ino
+            or not stat_module.S_ISREG(named_metadata.st_mode)
+            or named_metadata.st_nlink != 1
+            or named_metadata.st_uid != os.geteuid()
+        ):
+            raise RuntimeError("The restart helper lock changed ownership.")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        try:
+            current_metadata = os.stat(lock_path, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeError("The restart helper lock changed ownership.") from exc
+        if (
+            current_metadata.st_dev != metadata.st_dev
+            or current_metadata.st_ino != metadata.st_ino
+            or not stat_module.S_ISREG(current_metadata.st_mode)
+            or current_metadata.st_nlink != 1
+            or current_metadata.st_uid != os.geteuid()
+        ):
+            raise RuntimeError("The restart helper lock changed ownership.")
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def _restart_journal_lock():
     """Serialize journal ownership and replay across image/bundle code."""
@@ -1918,8 +1985,32 @@ def request_container_restart() -> None:
     container handoff so their entrypoint can reselect the active runtime.
     """
 
-    if image_launcher_protocol() >= LAUNCHER_PROTOCOL_RECOVERY_CAPABLE:
-        _spawn_protocol_three_restart_helper()
+    launcher_protocol = image_launcher_protocol()
+    if launcher_protocol >= LAUNCHER_PROTOCOL_RECOVERY_CAPABLE:
+        expected_journal = (
+            validate_protocol_three_restart_handoff_if_present()
+            if launcher_protocol == LAUNCHER_PROTOCOL_RECOVERY_CAPABLE
+            else None
+        )
+        try:
+            _spawn_protocol_three_restart_helper()
+        except RestartRequestError as exc:
+            if (
+                launcher_protocol != LAUNCHER_PROTOCOL_RECOVERY_CAPABLE
+                or exc.diagnostic != "restart_helper_rejected"
+                or expected_journal is None
+            ):
+                raise
+            try:
+                current_journal = validate_protocol_three_restart_handoff_if_present()
+                if current_journal != expected_journal:
+                    raise RuntimeError("The restart journal changed ownership.")
+                if not _protocol_three_restart_helper_active(
+                    Path(SUPERVISOR_SOCKET_FILE)
+                ):
+                    raise RuntimeError("No coordinated restart helper is active.")
+            except Exception:
+                raise exc from None
         return
 
     supervisor_pid = _supervisor_parent_pid()

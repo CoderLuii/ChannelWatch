@@ -29,35 +29,44 @@ export function MetricCard({
   subtitle,
   loading,
   hasError,
-  gradientClasses,
+  gradientClasses: _gradientClasses,
   iconBgClass,
   iconColorClass,
-  valueColorClass,
-  subtitleColorClass,
-  loadingColorClass,
+  valueColorClass: _valueColorClass,
+  subtitleColorClass: _subtitleColorClass,
+  loadingColorClass: _loadingColorClass,
   backgroundImage,
   children,
 }: MetricCardProps) {
+  const [failedArtwork, setFailedArtwork] = React.useState("")
+  const showBackgroundImage = Boolean(
+    backgroundImage &&
+    backgroundImage !== failedArtwork &&
+    !/channelwatch-logo\.(?:png|svg|webp)(?:[?#]|$)/i.test(backgroundImage),
+  )
+
   return (
-    <Card className={`${gradientClasses} relative overflow-hidden`}>
-      {backgroundImage && (
+    <Card className="relative overflow-hidden border-border/70 bg-card shadow-sm">
+      {showBackgroundImage ? (
         // eslint-disable-next-line @next/next/no-img-element -- static export: next/image optimizer unavailable
         <img
           src={backgroundImage}
           alt=""
-          className="absolute inset-0 w-full h-full object-cover opacity-[0.12] pointer-events-none"
+          data-testid="metric-card-artwork"
+          onError={() => setFailedArtwork(backgroundImage || "")}
+          className="pointer-events-none absolute bottom-4 right-4 h-16 w-16 rounded-xl object-cover opacity-100 md:bottom-0 md:right-0 md:h-full md:w-[44%] md:rounded-none md:opacity-35 md:[mask-image:linear-gradient(to_right,transparent,black)]"
         />
-      )}
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 relative z-10">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <div className="flex items-center gap-1">
+      ) : null}
+      <CardHeader className={`relative z-10 flex flex-row items-center justify-between space-y-0 px-4 pb-0 pt-3 md:pb-1 md:pt-4 ${showBackgroundImage ? "pr-20 md:pr-4" : ""}`}>
+        <CardTitle className="text-[13px] font-medium text-muted-foreground">{title}</CardTitle>
+        <div className={`${showBackgroundImage && !hasError ? "hidden md:flex" : "flex"} items-center gap-1`}>
           {hasError && <AlertCircle className="h-3.5 w-3.5 text-red-500" />}
-          <div className={`rounded-full ${iconBgClass} p-1`}>
-            <Icon className={`h-4 w-4 ${iconColorClass}`} />
+          <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBgClass}`}>
+            <Icon className={`h-[18px] w-[18px] ${iconColorClass}`} />
           </div>
         </div>
       </CardHeader>
-      <CardContent className="py-2 relative z-10">
+      <CardContent className={`relative z-10 px-4 pb-3 pt-0 md:pb-4 md:pt-1 ${showBackgroundImage ? "pr-20" : ""}`}>
         {loading ? (
           <div className="space-y-2 animate-pulse">
             <div className={`h-8 w-16 rounded ${iconBgClass}`} />
@@ -67,8 +76,8 @@ export function MetricCard({
           children
         ) : (
           <>
-            <div className={`text-3xl font-bold ${valueColorClass}`}>{value}</div>
-            <p className={`text-xs ${subtitleColorClass}`}>{subtitle}</p>
+            <div className="text-[28px] font-semibold leading-none tracking-tight tabular-nums text-foreground">{value}</div>
+            <p className="mt-1.5 break-words text-[13px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">{subtitle}</p>
           </>
         )}
       </CardContent>

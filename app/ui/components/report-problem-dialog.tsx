@@ -328,6 +328,22 @@ function diagnosticsRows(diagnostics: ReportDiagnostics): Array<[string, string]
   return publicDiagnosticsRows(diagnostics)
 }
 
+function DiagnosticValue({ label, value }: { label: string; value: string }) {
+  if (label !== "Feature toggles") return <>{value}</>
+
+  const toggles = value.split(", ")
+  return (
+    <span className="flex flex-wrap gap-x-1 gap-y-0.5">
+      {toggles.map((toggle, index) => (
+        <span key={toggle} className="whitespace-nowrap">
+          {toggle}
+          {index < toggles.length - 1 ? "," : ""}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 function fieldError(errors: Partial<Record<ReportField, string>>, field: ReportField): string | undefined {
   return errors[field]
 }
@@ -642,12 +658,14 @@ function ReportPreviewCard({
             {diagnosticsRows(payload.diagnostics ?? emptyReportDiagnostics).map(([label, value]) => (
               <div
                 key={label}
-                className="grid gap-1 border-b border-border px-3 py-2 last:border-b-0 sm:grid-cols-[170px_minmax(0,1fr)]"
+                className="grid gap-1 border-b border-border px-3 py-2 last:border-b-0"
               >
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   {label}
                 </dt>
-                <dd className="break-words">{value}</dd>
+                <dd className="break-words">
+                  <DiagnosticValue label={label} value={value} />
+                </dd>
               </div>
             ))}
           </dl>
@@ -1641,7 +1659,9 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                         {diagnosticsRows(draftPayload.diagnostics ?? emptyReportDiagnostics).map(([label, value]) => (
                           <div key={label} className="px-3 py-2">
                             <dt className="text-xs text-muted-foreground">{label}</dt>
-                            <dd className="mt-0.5 break-words">{value}</dd>
+                            <dd className="mt-0.5 break-words">
+                              <DiagnosticValue label={label} value={value} />
+                            </dd>
                           </div>
                         ))}
                       </dl>

@@ -95,7 +95,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
           onToggle={() => toggleAlert("sc")}
         />
         {expandedAlerts.sc && (
-          <CardContent id="alert-section-sc" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-3">
+          <CardContent id="alert-section-sc" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-3 sm:pt-5">
             <DvrTabBar cardId="sc" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("sc") === "global" ? (
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-muted/40 border border-blue-400/10">
@@ -123,7 +123,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
           onToggle={() => toggleAlert("cw")}
         />
         {expandedAlerts.cw && (
-          <CardContent id="alert-section-cw" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-5">
+          <CardContent id="alert-section-cw" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-5 sm:pt-5">
             <DvrTabBar cardId="cw" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("cw") === "global" ? (
               <>
@@ -206,7 +206,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
           onToggle={() => toggleAlert("vod")}
         />
         {expandedAlerts.vod && (
-          <CardContent id="alert-section-vod" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="alert-section-vod" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
             <DvrTabBar cardId="vod" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("vod") === "global" ? (
               <>
@@ -284,7 +284,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
           onToggle={() => toggleAlert("health")}
         />
         {expandedAlerts.health && (
-          <CardContent id="alert-section-health" className="space-y-4 border-t border-blue-400/10 bg-muted/20 pt-5">
+          <CardContent id="alert-section-health" className="space-y-4 border-t border-blue-400/10 bg-muted/20 pt-5 sm:pt-5">
             <DvrTabBar cardId="health" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("health") === "global" ? (
               <>
@@ -353,7 +353,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
           onToggle={() => toggleAlert("rec")}
         />
         {expandedAlerts.rec && (
-          <CardContent id="alert-section-rec" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-5">
+          <CardContent id="alert-section-rec" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-5 sm:pt-5">
             <DvrTabBar cardId="rec" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("rec") === "global" ? (
               <>
@@ -467,7 +467,7 @@ export function AlertsSettingsSection({ form, dvrHelpers, expandedAlerts, toggle
           onToggle={() => toggleAlert("disk")}
         />
         {expandedAlerts.disk && (
-          <CardContent id="alert-section-disk" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="alert-section-disk" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
             <DvrTabBar cardId="disk" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("disk") === "global" ? (
               <>

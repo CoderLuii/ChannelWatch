@@ -436,8 +436,8 @@ export function UpdateCenterSection() {
           </CardHeader>
         </div>
 
-        <CardContent className="space-y-6 pt-6">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <CardContent className="space-y-6 pt-6 sm:pt-6">
+          <div className="grid gap-3 min-[360px]:grid-cols-2 md:gap-4 xl:grid-cols-4 [&>div]:min-w-0 [&>div]:[overflow-wrap:anywhere]">
             <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
               <p className="text-xs uppercase text-muted-foreground">{t("updates.appVersion")}</p>
               <p className="mt-1 text-lg font-semibold">{versionLabel(status)}</p>
@@ -541,7 +541,7 @@ export function UpdateCenterSection() {
               </Button>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
+              <div className="min-w-0 space-y-2">
                 <Label htmlFor="update-maintenance-start">{t("updates.policy.startLabel")}</Label>
                 <Input
                   id="update-maintenance-start"
@@ -550,9 +550,10 @@ export function UpdateCenterSection() {
                   value={maintenanceStart}
                   onChange={(event) => setMaintenanceStart(event.target.value)}
                   aria-invalid={!windowStartValid}
+                  className="min-w-0"
                 />
               </div>
-              <div className="space-y-2">
+              <div className="min-w-0 space-y-2">
                 <Label htmlFor="update-maintenance-minutes">{t("updates.policy.durationLabel")}</Label>
                 <Input
                   id="update-maintenance-minutes"
@@ -563,22 +564,23 @@ export function UpdateCenterSection() {
                   value={maintenanceMinutes}
                   onChange={(event) => setMaintenanceMinutes(event.target.value)}
                   aria-invalid={!windowMinutesValid}
+                  className="min-w-0"
                 />
               </div>
             </div>
             {!policyFieldsValid ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.windowInvalid")}</p> : null}
-            <Button type="button" variant="outline" disabled={controlsBusy || !policyFieldsValid} onClick={handlePolicySchedule}>
+            <Button type="button" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" disabled={controlsBusy || !policyFieldsValid} onClick={handlePolicySchedule}>
               {busy === "saving-policy" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {t("updates.policy.saveWindow")}
             </Button>
-            <p className="text-sm text-muted-foreground">
+            <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
               {t("updates.policy.window", {
                 start: maintenanceStart,
                 end: maintenanceWindowEnd(maintenanceStart, Number(maintenanceMinutes)),
               })}
             </p>
-            {policy?.postponed_until ? <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("updates.policy.postponedUntil", { time: policy.postponed_until })}</p> : null}
-            {policy?.next_attempt_at ? <p className="text-xs text-muted-foreground">{t("updates.policy.nextAttempt", { time: policy.next_attempt_at })}</p> : null}
+            {policy?.postponed_until ? <p role="status" className="break-words text-sm text-amber-700 [overflow-wrap:anywhere] dark:text-amber-300">{t("updates.policy.postponedUntil", { time: policy.postponed_until })}</p> : null}
+            {policy?.next_attempt_at ? <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">{t("updates.policy.nextAttempt", { time: policy.next_attempt_at })}</p> : null}
             {policy?.last_error ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.lastError", { error: policy.last_error })}</p> : null}
           </div>
 

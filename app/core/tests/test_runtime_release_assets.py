@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import importlib.util
 import json
 import sys
@@ -11,9 +12,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from core.tests.test_runtime_bundle_build import _load_builder, _payload
 from core.runtime_generation import descriptor_generation_id
-
+from core.tests.test_runtime_bundle_build import _load_builder, _payload
+from core.tests.test_update_manager import _bundle
+from core.update_catalog import normalize_catalog, select_catalog_release
+from core.update_center import UpdateManager
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE_COMMIT = "a" * 40
@@ -121,6 +124,349 @@ def _image_bootstrap_release() -> dict:
         }
     )
     return release
+
+
+def _release_160() -> dict:
+    release = _release()
+    release.update(
+        {
+            "version": "1.6.0",
+            "version_tag": "v1.6.0",
+            "image_refresh_recommended": False,
+            "minimum_image_version": "1.5.3",
+            "recommended_image_version": "1.6.0",
+            "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.6.0",
+            "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-app-v1.6.0.zip",
+            "compatible_source_application_versions": ["1.5.3"],
+        }
+    )
+    return release
+
+
+def _signed_schema_two(builder, private, release):
+    payload = {
+        "channel": "stable",
+        "published_at": release["published_at"],
+        "releases": [release],
+    }
+    return {
+        "schema": 2,
+        "payload": payload,
+        "signature": {
+            "alg": "ed25519",
+            "key_id": "test-key",
+            "value": base64.b64encode(
+                private.sign(builder.canonical_payload_bytes(payload))
+            ).decode("ascii"),
+        },
+    }
+
+
+def test_schema_two_projects_exact_legacy_app_bridge_without_mutating_assets(
+    tmp_path: Path,
+):
+    builder = _load("legacy_160_projection", "scripts/release/build-update-bundle.py")
+    verifier = _load(
+        "legacy_160_projection_verifier", "scripts/release/verify-update-assets.py"
+    )
+    private, public = _key_pair()
+    bundle = _bundle("1.6.0")
+    bundle_digest = hashlib.sha256(bundle).digest()
+    canonical = _release_160()
+    canonical["bundle_sha256"] = bundle_digest.hex()
+    canonical["bundle_signature"] = base64.b64encode(
+        private.sign(bundle_digest)
+    ).decode("ascii")
+    before = copy.deepcopy(canonical)
+    projected = builder.project_current_release_v2(
+        canonical, ["1.4.0", "1.4.1", "1.4.5"]
+    )
+
+    assert canonical == before
+    assert projected is not canonical
+    assert projected["delivery_mode"] == "app_update"
+    assert projected["image_required"] is False
+    assert projected["image_refresh_recommended"] is False
+    assert projected["updater_protocol"] == 2
+    assert projected["compatible_launcher_protocols"] == [3]
+    assert projected["compatible_source_application_versions"] == [
+        "1.4.0",
+        "1.4.1",
+        "1.4.5",
+    ]
+    assert projected["minimum_image_version"] == "1.4.0"
+    assert projected["recommended_image_version"] == "1.6.0"
+    assert projected["automatic_install_allowed"] is False
+    for field in (
+        "version",
+        "version_tag",
+        "runtime_abi",
+        "settings_schema_version",
+        "release_url",
+        "bundle_url",
+        "bundle_sha256",
+        "bundle_signature",
+        "key_id",
+        "published_at",
+        "publication_time",
+        "automatic_install_after",
+        "recommended_image_version",
+        "highlights",
+    ):
+        assert projected[field] == canonical[field]
+
+    signed = _signed_schema_two(builder, private, projected)
+    assert verifier.verify_update_catalog(
+        json.dumps(signed).encode("utf-8"),
+        bundle,
+        public_keys=public,
+        expected_version="1.6.0",
+        expected_delivery_mode="app_update",
+        expected_runtime_abi="channelwatch-runtime-v1",
+        expected_settings_schema_version=7,
+        expected_recommended_image_version="1.6.0",
+        legacy_app_update_sources=["1.4.0", "1.4.1", "1.4.5"],
+    ) == normalize_catalog(
+        signed,
+        public_keys=public,
+        verify_signature=verifier.verify_ed25519_signature,
+        canonical_payload=verifier.canonical_payload_bytes,
+        validate_url=verifier.validate_trusted_url,
+    )
+    tampered = copy.deepcopy(signed)
+    tampered["payload"]["releases"][0]["minimum_image_version"] = "1.4.1"
+    with pytest.raises(Exception, match="Signed update catalog is invalid"):
+        verifier.verify_update_catalog(
+            json.dumps(tampered).encode("utf-8"),
+            bundle,
+            public_keys=public,
+            expected_version="1.6.0",
+            expected_delivery_mode="app_update",
+            expected_runtime_abi="channelwatch-runtime-v1",
+            expected_settings_schema_version=7,
+            expected_recommended_image_version="1.6.0",
+            legacy_app_update_sources=["1.4.0", "1.4.1", "1.4.5"],
+        )
+
+    def verify_signature(keys, key_id, value, payload):
+        assert keys == public
+        assert key_id == "test-key"
+        private.public_key().verify(base64.b64decode(value), payload)
+
+    catalog = normalize_catalog(
+        signed,
+        public_keys=public,
+        verify_signature=verify_signature,
+        canonical_payload=builder.canonical_payload_bytes,
+        validate_url=lambda value: value,
+    )
+    for source in ("1.4.0", "1.4.1", "1.4.5"):
+        selection = select_catalog_release(
+            catalog,
+            current_version=source,
+            runtime_abi="channelwatch-runtime-v1",
+            settings_schema_version=7,
+            launcher_protocol=3,
+        )
+        assert selection.release is not None
+        assert selection.release["version"] == "1.6.0"
+        assert selection.release["delivery_mode"] == "app_update"
+        manager = UpdateManager(
+            config_dir=tmp_path / source,
+            current_version=source,
+            image_version=source,
+            launcher_protocol=3,
+        )
+        assert manager._payload_requires_image(selection.release) is False
+
+    for source, launcher_protocol in (("1.4.4", 3), ("1.4.0", 2), ("1.4.0", 4)):
+        assert select_catalog_release(
+            catalog,
+            current_version=source,
+            runtime_abi="channelwatch-runtime-v1",
+            settings_schema_version=7,
+            launcher_protocol=launcher_protocol,
+        ).release is None
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [
+        "1.4.0",
+        ["1.4.0", "1.4.1"],
+        ["1.4.5", "1.4.1", "1.4.0"],
+        ["v1.4.0", "1.4.1", "1.4.5"],
+        ["1.4.0", "1.4.1", "1.5.3"],
+    ],
+)
+def test_schema_two_legacy_app_bridge_rejects_any_other_source_set(sources):
+    builder = _load("legacy_160_invalid_sources", "scripts/release/build-update-bundle.py")
+    with pytest.raises(ValueError, match="exactly the sorted, published"):
+        builder.project_current_release_v2(_release_160(), sources)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("delivery_mode", "image_required"),
+        ("image_required", True),
+        ("updater_protocol", 3),
+        ("minimum_image_version", "1.4.0"),
+        ("compatible_source_application_versions", ["1.4.5"]),
+        ("compatible_launcher_protocols", [3]),
+    ],
+)
+def test_schema_two_legacy_app_bridge_rejects_noncanonical_release(field, value):
+    builder = _load("legacy_160_invalid_release", "scripts/release/build-update-bundle.py")
+    release = _release_160()
+    release[field] = value
+    with pytest.raises(ValueError, match="verified-dependency app-update contract"):
+        builder.project_current_release_v2(
+            release, ["1.4.0", "1.4.1", "1.4.5"]
+        )
+
+
+@pytest.mark.parametrize("version", ["1.6.1", "2.0.0"])
+def test_schema_two_legacy_app_bridge_rejects_any_future_target(version):
+    builder = _load("legacy_160_future_target", "scripts/release/build-update-bundle.py")
+    release = _release_160()
+    release["version"] = version
+    release["version_tag"] = f"v{version}"
+    with pytest.raises(ValueError, match="verified-dependency app-update contract"):
+        builder.project_current_release_v2(
+            release, ["1.4.0", "1.4.1", "1.4.5"]
+        )
+
+
+def test_empty_schema_two_projection_keeps_canonical_protocol_four_release():
+    builder = _load("legacy_160_empty_projection", "scripts/release/build-update-bundle.py")
+    canonical = _release_160()
+    assert builder.project_current_release_v2(canonical, []) == canonical
+    assert builder.project_current_release_v2(canonical, None) == canonical
+
+
+def test_asset_verifier_loads_only_the_exact_target_legacy_bridge(tmp_path: Path):
+    verifier = _load("legacy_160_config_verifier", "scripts/release/verify-update-assets.py")
+    config = tmp_path / "release-config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "version": "1.6.0",
+                "legacy_app_update_sources": ["1.4.0", "1.4.1", "1.4.5"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert verifier.load_legacy_app_update_sources(
+        config, expected_version="1.6.0"
+    ) == ["1.4.0", "1.4.1", "1.4.5"]
+    assert verifier.load_legacy_app_update_sources(
+        config, expected_version="1.5.3"
+    ) == []
+
+    config.write_text(
+        json.dumps(
+            {
+                "version": "1.6.0",
+                "legacy_app_update_sources": ["1.4.0", "1.4.5"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception, match="exact published bridge set"):
+        verifier.load_legacy_app_update_sources(config, expected_version="1.6.0")
+
+    config.write_text(
+        json.dumps(
+            {
+                "version": "1.6.1",
+                "legacy_app_update_sources": ["1.4.0", "1.4.1", "1.4.5"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception, match="only for the v1.6.0 bridge"):
+        verifier.load_legacy_app_update_sources(config, expected_version="1.6.1")
+
+
+def test_protocol_four_runtime_catalog_keeps_only_153_app_source(
+    tmp_path: Path, monkeypatch
+):
+    builder = _load("runtime_160_canonical", "scripts/release/build-update-bundle.py")
+    verifier = _load("runtime_160_verifier", "scripts/release/verify-update-assets.py")
+    private, public = _key_pair()
+    bundles = _runtime_archives(
+        tmp_path, monkeypatch, application_version="1.6.0"
+    )
+    canonical = _release_160()
+    catalog = builder.build_runtime_catalog_v3(
+        catalog_release=canonical,
+        catalog_history=[],
+        runtime_bundles=bundles,
+        expected_source_commit=SOURCE_COMMIT,
+        private_key=private,
+        key_id="test-key",
+        publication_time=canonical["published_at"],
+    )
+    release = catalog["payload"]["releases"][0]
+    assert release["delivery_mode"] == "app_update"
+    assert release["image_required"] is False
+    assert release["updater_protocol"] == 4
+    assert release["compatible_launcher_protocols"] == [4]
+    assert release["compatible_source_application_versions"] == ["1.5.3"]
+    assert release["minimum_image_version"] == "1.5.3"
+    assert release["recommended_image_version"] == "1.6.0"
+    assert verifier.verify_runtime_update_catalog(
+        json.dumps(catalog).encode("utf-8"),
+        {arch: path.read_bytes() for arch, (path, _url) in bundles.items()},
+        public_keys=public,
+        expected_version="1.6.0",
+        expected_source_commit=SOURCE_COMMIT,
+        expected_bundle_urls={arch: url for arch, (_path, url) in bundles.items()},
+    ) == catalog
+
+    legacy_sources = ["1.4.0", "1.4.1", "1.4.5"]
+    projected = builder.project_current_release_v2(canonical, legacy_sources)
+    app_catalog = _signed_schema_two(builder, private, projected)
+    verifier.verify_runtime_catalog_binding(
+        app_catalog,
+        catalog,
+        expected_version="1.6.0",
+        legacy_app_update_sources=legacy_sources,
+    )
+
+    for field, value, message in (
+        ("updater_protocol", 3, "legacy app-update projection"),
+        ("minimum_image_version", "1.4.1", "legacy app-update projection"),
+        (
+            "compatible_source_application_versions",
+            ["1.4.0"],
+            "legacy app-update projection",
+        ),
+        ("automatic_install_allowed", True, "legacy app-update projection"),
+        ("bundle_signature", "different", "same signed app asset"),
+    ):
+        changed = copy.deepcopy(app_catalog)
+        changed["payload"]["releases"][0][field] = value
+        with pytest.raises(Exception, match=message):
+            verifier.verify_runtime_catalog_binding(
+                changed,
+                catalog,
+                expected_version="1.6.0",
+                legacy_app_update_sources=legacy_sources,
+            )
+
+    wrong_runtime = copy.deepcopy(catalog)
+    wrong_runtime["payload"]["releases"][0][
+        "compatible_source_application_versions"
+    ] = ["1.4.5"]
+    with pytest.raises(Exception, match="protocol-4 release contract"):
+        verifier.verify_runtime_catalog_binding(
+            app_catalog,
+            wrong_runtime,
+            expected_version="1.6.0",
+            legacy_app_update_sources=legacy_sources,
+        )
 
 
 @pytest.mark.parametrize(

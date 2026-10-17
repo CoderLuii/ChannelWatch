@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Badge } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ActivityDetailDialog } from "@/components/dashboard/activity-detail-dialog"
 import { ClientFilterCombobox } from "@/components/activity/client-filter-combobox"
 import {
+  ApiError,
   downloadActivityHistoryCsv,
   fetchActivityClientFilters,
   fetchActivityHistory,
@@ -158,8 +159,11 @@ export function WatchHistory() {
   const [loading, setLoading] = useState(true)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorRemediation, setErrorRemediation] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
+  const [failedArtwork, setFailedArtwork] = useState<Set<string>>(() => new Set())
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null)
+  const dialogTriggerRef = useRef<HTMLButtonElement | null>(null)
   const [searchInput, setSearchInput] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
@@ -261,6 +265,7 @@ export function WatchHistory() {
       try {
         setLoading(true)
         setError(null)
+        setErrorRemediation(null)
 
         const response = await fetchWatchHistoryForDvrSelection(selectedDvr, {
           offset,
@@ -278,6 +283,7 @@ export function WatchHistory() {
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return
         setError(err instanceof Error ? err.message : t("watchHistory.loadError"))
+        setErrorRemediation(err instanceof ApiError ? err.payload.remediation ?? null : null)
         setItems([])
         setTotal(0)
       } finally {
@@ -325,14 +331,14 @@ export function WatchHistory() {
 
   return (
     <>
-      <div className="space-y-6">
-        <Card>
-          <CardHeader className="gap-4">
+      <div className="space-y-5">
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader className="gap-4 px-4 pb-4 pt-5 sm:px-5">
             <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <Clock className="h-5 w-5 text-primary" />
-                  <CardTitle>{t("watchHistory.title")}</CardTitle>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10"><Clock className="h-5 w-5 text-primary" /></span>
+                  <CardTitle className="text-[22px] font-semibold tracking-tight sm:text-2xl"><h1>{t("watchHistory.title")}</h1></CardTitle>
                   <Badge variant="secondary">{total}</Badge>
                 </div>
                 <CardDescription>
@@ -357,8 +363,8 @@ export function WatchHistory() {
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_190px_220px_170px_150px]">
-              <div className="relative">
+            <div className="grid gap-3 min-[360px]:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_190px_220px_170px_150px]">
+              <div className="relative min-[360px]:col-span-2 xl:col-span-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={searchInput}
@@ -435,7 +441,7 @@ export function WatchHistory() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex min-h-6 flex-wrap items-center justify-between gap-2">
+            {(exportError || clientStatus || clientFacetError || hasNonDefaultFilters) && <div className="flex min-h-6 flex-wrap items-center justify-between gap-2">
               <div aria-live="polite" className="text-sm text-muted-foreground">
                 {exportError ?? clientStatus ?? (clientFacetError ? t("watchHistory.clientFilterError") : "")}
               </div>
@@ -458,7 +464,7 @@ export function WatchHistory() {
                   {t("activity.clearFilters")}
                 </Button>
               ) : null}
-            </div>
+            </div>}
           </CardHeader>
         </Card>
 
@@ -474,9 +480,10 @@ export function WatchHistory() {
             ) : error ? (
               <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 text-center">
                 <AlertCircle className="h-8 w-8 text-muted-foreground/50" />
-                <div className="space-y-1">
+                <div className="min-w-0 max-w-xl space-y-1 [overflow-wrap:anywhere]">
                   <p className="text-sm font-medium">{t("watchHistory.errorTitle")}</p>
                   <p className="text-sm text-muted-foreground">{error}</p>
+                  {errorRemediation && <p className="text-sm text-muted-foreground">{errorRemediation}</p>}
                 </div>
                   <Button
                   variant="outline"
@@ -501,44 +508,58 @@ export function WatchHistory() {
               <div className="divide-y divide-border/40">
                 {items.map((activity) => {
                   const colorClasses = getIconColorClasses(activity.type, activity.message)
-                  const hasImage = !!activity.image_url
+                  const artworkKey = `${activity.id}:${activity.image_url || ""}`
+                  const hasImage = Boolean(activity.image_url && !failedArtwork.has(artworkKey))
 
                   return (
                     <button
                       key={activity.id}
                       type="button"
-                      onClick={() => setSelectedActivity(activity)}
-                      className="flex w-full flex-col gap-3 p-4 text-left transition-colors hover:bg-muted/40 sm:flex-row sm:items-start"
+                      onClick={(event) => {
+                        dialogTriggerRef.current = event.currentTarget
+                        setSelectedActivity(activity)
+                      }}
+                      className="grid w-full grid-cols-[44px_minmax(0,1fr)] items-start gap-3 p-4 text-left transition-colors hover:bg-muted/40 sm:flex"
                     >
-                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${colorClasses.split(" ")[0]}`}>
+                      <div className={`hidden h-9 w-9 shrink-0 items-center justify-center rounded-full sm:flex ${colorClasses.split(" ")[0]}`}>
                         <div className={colorClasses.split(" ").slice(1).join(" ")}>
                           {getActivityIcon(activity.type, activity.message)}
                         </div>
                       </div>
 
-                      {hasImage && (
-                        <div className="h-16 w-11 shrink-0 overflow-hidden rounded-md border border-border/40 bg-muted">
+                      <div aria-hidden="true" className="flex h-16 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted">
+                        {hasImage ? (
+                          <>
                           {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
                           <img
                             src={activity.image_url}
                             alt=""
+                            onError={() => {
+                              setFailedArtwork((current) => {
+                                if (current.has(artworkKey)) return current
+                                const next = new Set(current)
+                                next.add(artworkKey)
+                                return next
+                              })
+                            }}
                             className="h-full w-full object-cover"
                             loading="lazy"
                           />
-                        </div>
-                      )}
+                          </>
+                        ) : <Video className="h-5 w-5 text-muted-foreground/70" />}
+                      </div>
 
                       <div className="min-w-0 flex-1 space-y-2">
                         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                           <div className="min-w-0 space-y-1">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="truncate text-sm font-medium">{activity.title}</p>
+                              <p className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">{activity.title}</p>
                               <Badge variant="outline" className="text-xs uppercase tracking-wide text-muted-foreground">
                                 {getTypeLabel(activity.type)}
                               </Badge>
-                              {activity.dvr_name && <Badge variant="secondary">{activity.dvr_name}</Badge>}
+                              {activity.dvr_name && <Badge variant="secondary" className="h-auto min-w-0 max-w-full whitespace-normal py-1" title={activity.dvr_name}><span className="break-words [overflow-wrap:anywhere]">{activity.dvr_name}</span></Badge>}
                             </div>
-                            <p className="line-clamp-2 text-sm text-muted-foreground">{activity.message}</p>
+                            <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">{activity.message}</p>
                           </div>
 
                           <div className="shrink-0 text-xs text-muted-foreground">
@@ -546,7 +567,7 @@ export function WatchHistory() {
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                           {activity.program_title && <span>{t("watchHistory.meta.program")}: {activity.program_title}</span>}
                           {activity.channel_name && <span>{t("watchHistory.meta.channel")}: {activity.channel_name}</span>}
                           {activity.device_name && <span>{t("watchHistory.meta.device")}: {activity.device_name}</span>}
@@ -572,12 +593,13 @@ export function WatchHistory() {
           <div className="text-sm text-muted-foreground">
             {t("watchHistory.pageOf", { page: currentPage, total: pageCount })}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={() => setOffset((currentOffset) => Math.max(0, currentOffset - pageSize))}
               disabled={!canGoPrevious || loading}
+              className="min-w-0 flex-1 sm:flex-none"
             >
               <ChevronLeft className="mr-1 h-4 w-4" />
               {t("common.previous")}
@@ -587,6 +609,7 @@ export function WatchHistory() {
               size="sm"
               onClick={() => setOffset((currentOffset) => currentOffset + pageSize)}
               disabled={!canGoNext || loading}
+              className="min-w-0 flex-1 sm:flex-none"
             >
               {t("common.next")}
               <ChevronRight className="ml-1 h-4 w-4" />
@@ -599,7 +622,12 @@ export function WatchHistory() {
         activity={selectedActivity}
         open={!!selectedActivity}
         onOpenChange={(open) => {
-          if (!open) setSelectedActivity(null)
+          if (open) return
+          setSelectedActivity(null)
+          requestAnimationFrame(() => {
+            const trigger = dialogTriggerRef.current
+            if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
+          })
         }}
       />
     </>

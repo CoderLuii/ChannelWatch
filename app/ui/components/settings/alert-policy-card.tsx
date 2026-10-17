@@ -57,7 +57,7 @@ export function AlertDisclosureHeader({
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-2">
-        <Badge variant="outline" className="max-w-28 truncate text-xs font-normal">
+        <Badge variant="outline" className="h-auto max-w-40 whitespace-normal break-words text-center text-xs font-normal [overflow-wrap:anywhere]">
           {summary}
         </Badge>
         <ChevronDown
@@ -144,13 +144,14 @@ export function AlertPolicyCard({ form, dvrHelpers }: AlertPolicyCardProps) {
             <AlertDescription className="space-y-3">
               <p>{t("alerts.policy.upgradeDescription")}</p>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={() => selectRef.current?.focus()}>
+                <Button type="button" size="sm" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" onClick={() => selectRef.current?.focus()}>
                   {t("alerts.policy.reviewPresets")}
                 </Button>
                 <Button
                   type="button"
                   size="sm"
                   variant="ghost"
+                  className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center"
                   onClick={() => setValue("notification_preferences_version", 1, { shouldDirty: true })}
                 >
                   {t("alerts.policy.keepCurrent")}
@@ -184,7 +185,7 @@ export function AlertPolicyCard({ form, dvrHelpers }: AlertPolicyCardProps) {
             </Select>
             <p className="text-sm text-muted-foreground">{t(`alerts.policy.presetDescription.${selectedPreset}`)}</p>
           </div>
-          <Button type="button" className="min-h-11" onClick={applyPreset}>
+          <Button type="button" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" onClick={applyPreset}>
             {t("alerts.policy.apply")}
           </Button>
         </div>

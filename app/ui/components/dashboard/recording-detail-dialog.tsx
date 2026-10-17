@@ -47,22 +47,25 @@ function isToday(timestamp: number): boolean {
 }
 
 export function RecordingDetailDialog({ recording, open, onOpenChange }: RecordingDetailDialogProps) {
+  const [failedArtwork, setFailedArtwork] = React.useState("")
+
   if (!recording) return null
 
-  const hasImage = !!recording.image
+  const hasImage = Boolean(recording.image && recording.image !== failedArtwork)
   const countdown = getCountdown(recording.start_time)
   const recordingToday = isToday(recording.start_time)
   const noArtworkNote = getRecordingArtworkNote(recording)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm p-0 overflow-hidden">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] min-w-0 max-w-sm overflow-x-hidden overflow-y-auto p-0">
         {hasImage && (
-          <div className="relative w-full h-48 bg-muted">
+          <div className="relative h-48 min-w-0 w-full bg-muted">
             {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
             <img
               src={recording.image}
               alt=""
+              onError={() => setFailedArtwork(recording.image)}
               className="w-full h-full object-cover"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-background/90 to-transparent" />
@@ -77,10 +80,10 @@ export function RecordingDetailDialog({ recording, open, onOpenChange }: Recordi
             </div>
           </div>
         )}
-        <div className={hasImage ? "px-4 pb-4 pt-2" : "p-4"}>
-          <DialogHeader>
+        <div className={hasImage ? "min-w-0 px-4 pb-4 pt-2" : "min-w-0 p-4"}>
+          <DialogHeader className="min-w-0">
             {!hasImage && (
-              <div className="flex items-center gap-2 mb-2">
+              <div className="mb-2 flex min-h-11 items-start gap-2 pr-14 pt-0.5">
                 <Calendar className="h-5 w-5 text-amber-500" />
                 <Badge className={recordingToday
                   ? "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 text-xs"
@@ -91,37 +94,37 @@ export function RecordingDetailDialog({ recording, open, onOpenChange }: Recordi
                 <span className="text-xs text-muted-foreground ml-auto">{countdown}</span>
               </div>
             )}
-            <DialogTitle className="text-base">{recording.title}</DialogTitle>
-            <DialogDescription className="text-xs">
+            <DialogTitle className={`min-w-0 [overflow-wrap:anywhere] text-left text-base ${hasImage ? "" : "mt-1"}`}>{recording.title}</DialogTitle>
+            <DialogDescription className="min-w-0 [overflow-wrap:anywhere] text-left text-[13px]">
               {recording.channel}
             </DialogDescription>
           </DialogHeader>
 
           {noArtworkNote && (
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p className="mt-2 min-w-0 [overflow-wrap:anywhere] text-xs text-muted-foreground">
               {noArtworkNote}
             </p>
           )}
 
-          <div className="mt-3 space-y-0">
-            <div className="flex justify-between items-start gap-4 py-1.5 border-b border-border/30">
-              <span className="text-xs text-muted-foreground">{t("dialog.recording.field.scheduled")}</span>
-              <span className="text-xs text-right">{recording.scheduled_time}</span>
+          <div className="mt-3 min-w-0 space-y-0">
+            <div className="flex min-w-0 items-start justify-between gap-4 border-b border-border/30 py-1.5">
+              <span className="shrink-0 text-[13px] text-muted-foreground">{t("dialog.recording.field.scheduled")}</span>
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-right text-[13px]">{recording.scheduled_time}</span>
             </div>
-            <div className="flex justify-between items-start gap-4 py-1.5 border-b border-border/30">
-              <span className="text-xs text-muted-foreground">{t("dialog.recording.field.channel")}</span>
-              <span className="text-xs text-right">{recording.channel}</span>
+            <div className="flex min-w-0 items-start justify-between gap-4 border-b border-border/30 py-1.5">
+              <span className="shrink-0 text-[13px] text-muted-foreground">{t("dialog.recording.field.channel")}</span>
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-right text-[13px]">{recording.channel}</span>
             </div>
             {recording.dvr_name && (
-              <div className="flex justify-between items-start gap-4 py-1.5 border-b border-border/30">
-                <span className="text-xs text-muted-foreground">{t("dialog.recording.field.dvr")}</span>
-                <span className="text-xs text-right">{recording.dvr_name}</span>
+              <div className="flex min-w-0 items-start justify-between gap-4 border-b border-border/30 py-1.5">
+                <span className="shrink-0 text-[13px] text-muted-foreground">{t("dialog.recording.field.dvr")}</span>
+                <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-right text-[13px]">{recording.dvr_name}</span>
               </div>
             )}
             {!hasImage && (
-              <div className="flex justify-between items-start gap-4 py-1.5">
-                <span className="text-xs text-muted-foreground">{t("dialog.recording.field.countdown")}</span>
-                <span className="text-xs text-right">{countdown}</span>
+              <div className="flex min-w-0 items-start justify-between gap-4 py-1.5">
+                <span className="shrink-0 text-[13px] text-muted-foreground">{t("dialog.recording.field.countdown")}</span>
+                <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-right text-[13px]">{countdown}</span>
               </div>
             )}
           </div>

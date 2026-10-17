@@ -66,11 +66,11 @@ export function GeneralSettingsSection({
             </div>
           </CardHeader>
         </div>
-        <CardContent className="space-y-6 relative z-10 pt-6">
+        <CardContent className="space-y-6 relative z-10 pt-6 sm:pt-6">
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
               <Label className="text-sm font-medium">{t("settings.general.dvrServers")}</Label>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -95,20 +95,20 @@ export function GeneralSettingsSection({
                     : t("settings.general.noNewServers")}
                 </p>
                 {discoveredServers.map((server, index) => (
-                  <div key={`${server.host}-${server.port}-${index}`} className="flex items-center justify-between p-2 rounded border border-green-400/10 bg-background/50">
-                    <div className="text-xs">
+                  <div key={`${server.host}-${server.port}-${index}`} className="flex min-w-0 flex-col items-start gap-2 rounded border border-green-400/10 bg-background/50 p-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 break-words text-[13px]">
                       <span className="font-medium">{server.name || server.host}</span>
                       <span className="text-muted-foreground ml-2">
                         {server.host}:{server.port}
                       </span>
                       {server.version && <span className="text-muted-foreground ml-2">v{server.version}</span>}
                     </div>
-                    <Button type="button" variant="outline" size="sm" className="h-6 text-[10px] px-2" onClick={() => onAddDiscoveredServer(server, index)}>
+                    <Button type="button" variant="outline" size="sm" className="min-h-11 shrink-0 px-3 text-[13px]" onClick={() => onAddDiscoveredServer(server, index)}>
                       {t("settings.general.addBtn")}
                     </Button>
                   </div>
                 ))}
-                <button type="button" className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={onDismissDiscovery}>
+                <button type="button" className="min-h-11 px-2 text-[13px] text-muted-foreground hover:text-foreground underline" onClick={onDismissDiscovery}>
                   {t("common.dismiss")}
                 </button>
               </div>
@@ -122,7 +122,8 @@ export function GeneralSettingsSection({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-6 w-6 p-0 text-red-400 hover:text-red-600"
+                    className="h-11 w-11 shrink-0 p-0 text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                    aria-label={`Remove ${server.name || server.host || `server ${index + 1}`}`}
                     onClick={() => onRemoveServer(index)}
                   >
                     X
@@ -269,8 +270,8 @@ export function GeneralSettingsSection({
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.display && "rotate-180")} />
         </button>
         {expandedAlerts.display && (
-          <CardContent id="settings-display-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4">
-            <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+          <CardContent id="settings-display-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4 sm:pt-5">
+            <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
               <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                 <Label>
                    <span className="text-sm block">{t("settings.general.bgActiveStreams")}</span>

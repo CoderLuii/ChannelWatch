@@ -158,19 +158,19 @@ export function StatusPanel({
     : allServers
 
   return (
-    <Card className="overflow-hidden flex flex-col h-full">
+    <Card className="flex h-full min-w-0 flex-col overflow-hidden">
       <CardHeader className="pb-1 pt-3 flex-shrink-0">
-        <CardTitle className="flex items-center justify-between text-sm">
-          <div className="flex items-center gap-2">
+        <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Shield className="h-4 w-4 text-primary" />
             {t("status.title")}
             {channelwatchVersion && (
-              <span className="text-[10px] text-muted-foreground font-normal">v{channelwatchVersion}</span>
+              <span className="text-[13px] text-muted-foreground font-normal">v{channelwatchVersion}</span>
             )}
           </div>
           <button
             onClick={() => onNavigate?.('settings')}
-            className="text-muted-foreground hover:text-foreground transition-colors"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground transition-colors"
             aria-label={t("status.goToSettings")}
           >
             <Settings className="h-3.5 w-3.5" />
@@ -194,7 +194,7 @@ export function StatusPanel({
               </div>
               <button
                 onClick={() => onNavigate?.('diagnostics')}
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${bannerStyle.button}`}
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[13px] font-medium transition-colors ${bannerStyle.button}`}
               >
                 <Stethoscope className="h-3 w-3" />
                 {t("status.diagnose")}
@@ -202,10 +202,10 @@ export function StatusPanel({
             </div>
           </div>
         )}
-        <div className="grid grid-cols-1 divide-y h-full">
+        <div className="grid h-full min-w-0 grid-cols-1 divide-y">
           {/* Core Engine Status */}
-          <div className="p-3 hover:bg-muted/50 transition-colors flex items-center justify-between flex-grow">
-            <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-grow flex-wrap items-center justify-between gap-2 p-3 transition-colors hover:bg-muted/50">
+            <div className="flex min-w-0 items-center gap-2">
               <span className="relative flex h-2.5 w-2.5">
                 {isRunning && (
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${statusStyle.dotClass} opacity-75`} />
@@ -214,7 +214,7 @@ export function StatusPanel({
               </span>
               <span className="text-sm font-medium">{t("status.coreEngine")}</span>
             </div>
-            <Badge className={`${statusStyle.bgClass} ${statusStyle.color}`}>
+            <Badge className={`h-auto min-w-0 shrink-0 whitespace-normal text-center ${statusStyle.bgClass} ${statusStyle.color}`}>
               {coreProcessStatus}
             </Badge>
           </div>
@@ -231,9 +231,9 @@ export function StatusPanel({
                 <button
                   key={server.id || idx}
                   onClick={() => onNavigate?.('settings:general')}
-                  className="p-3 hover:bg-muted/50 transition-colors flex items-center justify-between flex-grow text-left w-full"
+                  className="flex w-full min-w-0 flex-grow flex-wrap items-start justify-between gap-2 p-3 text-left transition-colors hover:bg-muted/50"
                 >
-                  <div className="flex items-start gap-2">
+                  <div className="flex min-w-0 flex-1 items-start gap-2">
                     <span
                       className="relative flex h-2 w-2 mt-1.5 flex-shrink-0"
                       title={health.title}
@@ -244,19 +244,19 @@ export function StatusPanel({
                       )}
                       <span className={`relative inline-flex rounded-full h-2 w-2 ${health.dotClass}`} />
                     </span>
-                    <div>
-                      <div className="text-sm font-medium">{server.name || server.host}</div>
-                      <div className="text-xs text-muted-foreground">
+                    <div className="min-w-0 [overflow-wrap:anywhere]">
+                      <div className="break-words text-sm font-medium">{server.name || server.host}</div>
+                      <div className="break-words text-xs text-muted-foreground">
                         {server.host}:{server.port || 8089}
                       </div>
                       {versionDisplay && (
-                      <div className="text-[10px] text-muted-foreground">{versionDisplay}</div>
+                      <div className="break-words text-[13px] text-muted-foreground">{versionDisplay}</div>
                       )}
                     </div>
                   </div>
                   <Badge
                     variant={isConnected ? "default" : "secondary"}
-                    className={isConnected ? "bg-green-800 text-white hover:bg-green-900" : isDisabled ? "" : "bg-red-700 text-white dark:bg-red-600"}
+                    className={`h-auto min-w-0 shrink-0 whitespace-normal text-center ${isConnected ? "bg-green-800 text-white hover:bg-green-900" : isDisabled ? "" : "bg-red-700 text-white dark:bg-red-600"}`}
                   >
                     {isDisabled ? t("status.badge.disabled") : isConnected ? t("status.badge.connected") : t("status.badge.notConnected")}
                   </Badge>
@@ -284,7 +284,7 @@ export function StatusPanel({
             </div>
             <div className="flex flex-wrap gap-1">
               {getMonitoringTypes().map((type) => (
-                <Badge key={type} variant="secondary" className="text-[10px] py-0 h-4 px-1 font-normal leading-none">
+                <Badge key={type} variant="secondary" className="text-[13px] py-0 min-h-5 px-1 font-normal leading-none">
                   {type}
                 </Badge>
               ))}
@@ -317,9 +317,9 @@ export function StatusPanel({
             )}
             {triggerLabels.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1.5">
-                <span className="text-[10px] text-muted-foreground mr-0.5">{t("status.triggers")}</span>
+                <span className="text-[13px] text-muted-foreground mr-0.5">{t("status.triggers")}</span>
                 {triggerLabels.map((label) => (
-                  <Badge key={label} variant="secondary" className="text-[10px] py-0 h-4 px-1 font-normal leading-none">
+                  <Badge key={label} variant="secondary" className="text-[13px] py-0 min-h-5 px-1 font-normal leading-none">
                     {label}
                   </Badge>
                 ))}

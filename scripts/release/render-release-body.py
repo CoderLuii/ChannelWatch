@@ -37,6 +37,9 @@ def main() -> int:
     configured_tag = f"v{str(release_config.get('version', '')).strip()}"
     configured_heading = str(release_config.get("release_heading", "")).strip()
     configured_release = requested_tag == configured_tag and bool(configured_heading)
+    configured_date_heading = configured_release and configured_heading.startswith(
+        "## "
+    )
     exporter = load_exporter()
     metadata = exporter.collect_metadata(
         requested_tag,
@@ -72,11 +75,12 @@ def main() -> int:
             heading = f"# ChannelWatch {version_tag} - {title}"
         body = [heading]
         sections = metadata.get("changelogSections") or {"Changed": highlights}
+        section_heading_level = "###" if configured_date_heading else "##"
         for heading in ("Important", "Added", "Changed", "Fixed", "Security"):
             items = sections.get(heading) or []
             if not items:
                 continue
-            body.extend(["", f"## {heading}", ""])
+            body.extend(["", f"{section_heading_level} {heading}", ""])
             body.extend(f"- {item}" for item in items)
     else:
         release_date = datetime.strptime(
@@ -93,7 +97,20 @@ def main() -> int:
             body.extend(f"- {item}" for item in items)
     if version_tag == "v0.9.10":
         body.extend(f"- {item}" for item in highlights)
-    heading_level = "##" if configured_release or version_tag in {"v0.9.10", "v0.9.12", "v0.9.13", "v0.9.14", "v0.9.15", "v0.9.16"} else "###"
+    legacy_heading_versions = {
+        "v0.9.10",
+        "v0.9.12",
+        "v0.9.13",
+        "v0.9.14",
+        "v0.9.15",
+        "v0.9.16",
+    }
+    if (configured_release and not configured_date_heading) or (
+        version_tag in legacy_heading_versions
+    ):
+        heading_level = "##"
+    else:
+        heading_level = "###"
     body.extend(
         [
             "",
@@ -122,7 +139,7 @@ def main() -> int:
         body.extend(
             [
                 "",
-                "## License and verification",
+                f"{heading_level} License and verification",
                 "",
                 "ChannelWatch is MIT-licensed. The container and app-update bundle "
                 "include the project notices, applicable complete copyleft license "

@@ -33,6 +33,19 @@ class _SimulatedPowerLoss(BaseException):
     pass
 
 
+@pytest.mark.parametrize("launcher_protocol,expected_suffix", [(3, "/v2/stable.json"), (4, "/v3/stable.json")])
+def test_default_catalog_matches_image_launcher(tmp_path, launcher_protocol, expected_suffix):
+    manager = UpdateManager(config_dir=tmp_path, current_version="1.6.0", launcher_protocol=launcher_protocol)
+    assert manager.manifest_url.endswith(expected_suffix)
+
+
+@pytest.mark.parametrize("launcher_protocol", [3, 4])
+def test_custom_catalog_is_preserved(tmp_path, launcher_protocol):
+    url = "https://channelwatch.coderluii.dev/updates/custom/stable.json"
+    manager = UpdateManager(config_dir=tmp_path, current_version="1.6.0", launcher_protocol=launcher_protocol, manifest_url=url)
+    assert manager.manifest_url == url
+
+
 class _FalseRestartOutcomeWithRaisingDiagnostic:
     def __bool__(self) -> bool:
         return False

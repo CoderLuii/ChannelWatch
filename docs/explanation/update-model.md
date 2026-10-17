@@ -15,7 +15,9 @@ Published v1.0.0 through v1.4.x lines follow one image milestone per minor line:
 
 For example, v1.2.0 establishes the container runtime for v1.2.1 through v1.2.9. Published versions keep their original delivery requirements. Patch numbers still stop at 9.
 
-After the verified protocol-4 image milestone at v1.5.3, v1.5.4 retains that image floor and delivers a complete signed runtime generation. A later minor line may retain a proven image floor only with the exact immutable bootstrap identity plus compatibility, restart, and rollback evidence on both native AMD64 and native ARM64. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
+After the verified protocol-4 image milestone at v1.5.3, the v1.6.0 candidate retains that image floor and is intended to deliver a complete signed runtime generation. A later minor line may retain a proven image floor only with the exact immutable bootstrap identity plus compatibility, restart, and rollback evidence on both native AMD64 and native ARM64. Without that evidence, the new `.0` release requires its matching image. Changes to the interpreter, OS, Supervisor, or image-owned verification code still require an image milestone.
+
+v1.6.0 also provides a signed application-only update for v1.4.0, v1.4.1 and v1.4.5 images. Those installations can update directly in Update Center without recreating the container. Their existing Python packages remain unchanged. The older launcher uses the schema-2 update feed before and after installation; protocol-4 images use schema 3. Both feeds refer to the same signed application bundle. Publication requires native AMD64 and ARM64 checks for installation, restart, saved configuration and rollback on every supported image and prior app selection.
 
 An image milestone without a published GitHub release can be recovered by a later patch in the same minor line. The release tooling verifies that every intervening tag has no GitHub release, keeps those versions out of signed update catalog history, and requires the replacement's matching image. v1.5.3 follows this path after v1.5.0 failed in source testing, v1.5.1 failed during candidate signing because its publication time preceded the candidate commit, and v1.5.2 failed during native migration qualification because the release verifier environment lacked `httpx`. None produced a GitHub release, release assets, or container image; all three original tags remain unchanged. Future runtime generations must name the actual published image and its exact digest.
 
@@ -71,7 +73,7 @@ Preserve `/config` and any external storage key during that image update.
 v1.5.0, v1.5.1, and v1.5.2 failed before release assets or images were published.
 v1.5.3 recovers that milestone and is the first published image with this authority.
 It supplies the image foundation and does not publish a runtime-generation
-payload. v1.5.4 is the first compatible release to use that foundation: it
+payload. The v1.6.0 candidate uses that foundation: it
 updates the application and its complete 40-package official Python closure
 together without recreating the container.
 
@@ -80,7 +82,7 @@ remains open. Its cause has not been proven, and this image foundation does not
 present it as resolved.
 
 This capability covers compatible Python packages, including qualified binary
-wheels. v1.5.4 updates eight packages while signing and validating the complete
+wheels. v1.6.0 updates eight packages while signing and validating the complete
 40-package closure. It does not replace Python itself, the operating system, glibc,
 Supervisor or the image-owned verifier. Those components still need image
 maintenance. Updating a worker package does not repair a vulnerability in the

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -19,6 +22,109 @@ def _module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _verifier_module():
+    path = Path(__file__).resolve().parents[3] / "scripts/release/verify-runtime-capability.py"
+    spec = importlib.util.spec_from_file_location("runtime_capability_verifier", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _classifier_module():
+    path = Path(__file__).resolve().parents[3] / "scripts/release/classify-release-impact.py"
+    spec = importlib.util.spec_from_file_location("release_capability_classifier", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_rollback_response_states_match_the_product_contract_across_consumers():
+    aggregate = _module()
+    classifier = _classifier_module()
+    source_version = "1.6.0"
+    target_version = "1.5.3"
+    restarting = {
+        "job_id": "c" * 32,
+        "operation": "rollback",
+        "status": "restarting",
+        "version": source_version,
+        "rolled_back_from": source_version,
+        "restart_required": True,
+    }
+    marker = {
+        "healthy": True,
+        "version": target_version,
+        "ready_at": "2026-10-16T20:40:00Z",
+    }
+    validating = {
+        **restarting,
+        "status": "validating",
+        "rollback_applied": True,
+        "restart_required": True,
+        "restored_version": target_version,
+        "startup_components": {"core": marker},
+    }
+    success = {
+        **validating,
+        "status": "success",
+        "restart_required": False,
+        "startup_components": {
+            "core": marker,
+            "ui": {**marker, "ready_at": "2026-10-16T20:40:01Z"},
+        },
+        "validated_at": "2026-10-16T20:40:01Z",
+    }
+
+    for module in (aggregate, classifier):
+        for response in (restarting, validating, success):
+            assert module._rollback_response_valid(
+                response,
+                source_version=source_version,
+                target_version=target_version,
+            )
+        for response in (
+            {**restarting, "status": "succeeded"},
+            {**restarting, "status": "failed"},
+            {**restarting, "restart_required": False},
+            {
+                key: value
+                for key, value in restarting.items()
+                if key != "restart_required"
+            },
+            {**success, "version": target_version},
+            {**success, "restored_version": "1.4.5"},
+            {**success, "rollback_applied": False},
+        ):
+            assert not module._rollback_response_valid(
+                response,
+                source_version=source_version,
+                target_version=target_version,
+            )
+
+
+def test_aggregate_classifier_loads_app_contract_in_isolated_python():
+    root = Path(__file__).resolve().parents[3]
+    aggregate = root / "scripts/release/aggregate-runtime-capability.py"
+    code = (
+        "import runpy; "
+        f"namespace=runpy.run_path({str(aggregate)!r}); "
+        "namespace['_release_classifier'](); "
+        "import core.runtime_generation, core.update_center"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _worker_runtime(pid: int, *, selected_root: str | None = None) -> dict:
@@ -153,7 +259,11 @@ def _selected_operational_state(generation: str) -> dict:
             "runtime_generation_id": generation,
             "runtime_descriptor_sha256": generation,
             "dependency_inventory_sha256": "d" * 64,
-            "process_runtime": _worker_runtime(pid, selected_root=root),
+            "process_runtime": {
+                key: value
+                for key, value in _worker_runtime(pid, selected_root=root).items()
+                if key != "verified_generation"
+            },
         }
         for component, pid in (("core", 21), ("ui", 22))
     }
@@ -233,6 +343,11 @@ def _publication_proof(
             "status": "passed", "apply_requests": 1, "rollback_requests": 1,
             "target_version": version, "final_version": image_version,
             "final_active_bundle": None, "observed_progress": True,
+            "expected_console_events": {
+                "unauthenticated_bootstrap": 2,
+                "apply_restart_transport": 5,
+                "rollback_restart_transport": 1,
+            },
             "console_errors": [], "page_errors": [],
             "final_health": {
                 "startup": {"status": "ready"},
@@ -387,7 +502,8 @@ def _probe_proof(
             },
             "rollback_response": {
                 "job_id": "c" * 32, "operation": "rollback", "status": "restarting",
-                "rolled_back_from": version,
+                "version": version, "rolled_back_from": version,
+                "restart_required": True,
             },
             "rollback_status": {
                 "current_version": image_version,
@@ -483,6 +599,32 @@ def test_publication_requires_both_native_faults_and_amd64_live_checks():
     )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda state: state["runtime_components"]["core"]["process_runtime"].pop(
+            "python_prefix"
+        ),
+        lambda state: state["runtime_components"]["ui"]["process_runtime"].update(
+            verified_generation=copy.deepcopy(
+                state["status_worker"]["verified_generation"]
+            )
+        ),
+        lambda state: state["runtime_components"]["core"].update(
+            dependency_inventory_sha256="e" * 64
+        ),
+    ],
+)
+def test_damaged_native_selected_components_require_exact_producer_shape(mutation):
+    module = _module()
+    proof = _publication_proof()
+    state = proof["damaged_native_recovery"]["selected_state_before_damage"]
+    mutation(state)
+
+    with pytest.raises(ValueError, match="selected process evidence"):
+        module.validate_release_qualification("amd64", proof, "1.5.4", "1.5.3")
+
+
 @pytest.mark.parametrize("mutation", [
     lambda proof: proof.pop("damaged_native_recovery"),
     lambda proof: proof["damaged_native_recovery"].update(status="skipped"),
@@ -507,6 +649,7 @@ def test_publication_requires_both_native_faults_and_amd64_live_checks():
     lambda proof: proof["damaged_native_recovery"]["rollback_response"].update(job_id="9" * 32),
     lambda proof: proof["damaged_native_recovery"]["completed_rollback_job"].update(job_id="8" * 32),
     lambda proof: proof["damaged_native_recovery"]["completed_rollback_job"]["startup_components"]["ui"].update(healthy=False),
+    lambda proof: proof["damaged_native_recovery"]["recovery_hold_control_state"]["active.json"].update(size=1024 * 1024 + 1),
     lambda proof: proof["damaged_native_recovery"]["post_rollback_control_state"].update(**{"official-recovery-mode.json": copy.deepcopy(proof["damaged_native_recovery"]["recovery_marker"])}),
     lambda proof: proof["damaged_native_recovery"].pop("image_imports_after_recovery"),
     lambda proof: proof["damaged_native_recovery"]["image_imports_after_recovery"]["sqlalchemy"].update(version="2.1.4"),
@@ -531,6 +674,19 @@ def test_publication_requires_both_native_faults_and_amd64_live_checks():
     lambda proof: proof["live_ui"].update(target_version="1.5.5"),
     lambda proof: proof["live_ui"].update(final_version="1.5.4"),
     lambda proof: proof["live_ui"].update(observed_progress=False),
+    lambda proof: proof["live_ui"].pop("expected_console_events"),
+    lambda proof: proof["live_ui"]["expected_console_events"].pop(
+        "rollback_restart_transport"
+    ),
+    lambda proof: proof["live_ui"]["expected_console_events"].update(
+        unexpected=0
+    ),
+    lambda proof: proof["live_ui"]["expected_console_events"].update(
+        apply_restart_transport=True
+    ),
+    lambda proof: proof["live_ui"]["expected_console_events"].update(
+        rollback_restart_transport=-1
+    ),
     lambda proof: proof["live_ui"].update(console_errors=["failed"]),
     lambda proof: proof["live_ui"].update(container_id_after="0" * 64),
     lambda proof: proof["live_ui"]["final_health"]["ready"].update(ready=False),
@@ -573,6 +729,18 @@ def _receipts(tmp_path):
                 image_imports=architecture["qualification"]["image_imports_after_rollback"],
             )
         }
+        _retain_update_check(
+            tmp_path,
+            name,
+            architecture,
+            source_commit=aggregate["source_commit"],
+        )
+        _retain_rollback_status(
+            tmp_path,
+            name,
+            architecture,
+            source_commit=aggregate["source_commit"],
+        )
     header = {key: value for key, value in aggregate.items() if key not in {"architectures", "native_logs_sha256"}}
     receipts = {
         name: {**copy.deepcopy(header), "architecture": copy.deepcopy(value), "cleanup": {"status": "passed", "failures": []}, "logs_sha256": aggregate["native_logs_sha256"][name], "serialized_size_bytes": 100}
@@ -586,7 +754,14 @@ def _receipts(tmp_path):
 
 def test_aggregate_retains_exact_native_receipts(tmp_path):
     expected, receipts = _receipts(tmp_path)
-    assert _module().aggregate(receipts) == expected
+    module = _module()
+    update_checks = _verified_update_checks(module, tmp_path, receipts)
+    rollback_statuses = _verified_rollback_statuses(module, tmp_path, receipts)
+    assert module.aggregate(
+        receipts,
+        update_checks=update_checks,
+        rollback_statuses=rollback_statuses,
+    ) == expected
 
 
 @pytest.mark.parametrize("mutation", [
@@ -602,9 +777,16 @@ def test_aggregate_retains_exact_native_receipts(tmp_path):
 ])
 def test_aggregate_rejects_missing_failed_or_mismatched_proof(tmp_path, mutation):
     _expected, receipts = _receipts(tmp_path)
+    module = _module()
+    update_checks = _verified_update_checks(module, tmp_path, receipts)
+    rollback_statuses = _verified_rollback_statuses(module, tmp_path, receipts)
     mutation(receipts)
     with pytest.raises(ValueError):
-        _module().aggregate(receipts)
+        module.aggregate(
+            receipts,
+            update_checks=update_checks,
+            rollback_statuses=rollback_statuses,
+        )
 
 
 @pytest.mark.parametrize("tamper_log", [False, True])
@@ -663,6 +845,27 @@ def test_cli_verifies_signed_catalog_and_actual_logs_before_publication(tmp_path
     config.write_text(json.dumps(_config()))
     output = tmp_path / "aggregate.json"
     monkeypatch.setattr(update_center, "UPDATE_PUBLIC_KEYS", keys)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "aggregate-runtime-capability.py",
+            "--validate-evidence",
+            str(receipt_paths["arm64"]),
+            "--architecture",
+            "arm64",
+            "--catalog",
+            str(catalog),
+            "--release-config",
+            str(config),
+            "--source-commit",
+            SOURCE_COMMIT,
+        ],
+    )
+    if tamper_log:
+        with pytest.raises(ValueError, match="log hash"):
+            _module().main()
+    else:
+        assert _module().main() == 0
     monkeypatch.setattr("sys.argv", ["aggregate-runtime-capability.py", "--amd64-evidence", str(receipt_paths["amd64"]),
                                     "--arm64-evidence", str(receipt_paths["arm64"]), "--catalog", str(catalog),
                                     "--release-config", str(config), "--source-commit", SOURCE_COMMIT, "--output", str(output)])
@@ -681,19 +884,83 @@ def _retain(tmp_path, name, raw):
     return {"file": name, "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
 
 
+def _retain_update_check(tmp_path, name, architecture, *, source_commit):
+    verifier = _verifier_module()
+    checked = architecture["qualification"]["check"]
+    descriptor = verifier.retain_update_check_status(
+        tmp_path / f"{name}.json",
+        architecture=name,
+        source_commit=source_commit,
+        status=checked,
+    )
+    architecture["qualification"]["check"] = verifier.compact_update_check_evidence(
+        checked, descriptor
+    )
+
+
+def _verified_update_checks(module, tmp_path, receipts):
+    return {
+        name: module.verify_update_check_artifact(
+            tmp_path,
+            receipt["architecture"]["qualification"],
+            expected_architecture=name,
+            expected_source_commit=receipt["source_commit"],
+        )
+        for name, receipt in receipts.items()
+    }
+
+
+def _retain_rollback_status(tmp_path, name, architecture, *, source_commit):
+    verifier = _verifier_module()
+    qualification = architecture["qualification"]
+    status = qualification["rollback_status"]
+    if isinstance(status, dict) and "raw_status_artifact" in status:
+        return
+    descriptor = verifier.retain_rollback_status(
+        tmp_path / f"{name}.json",
+        architecture=name,
+        source_commit=source_commit,
+        status=status,
+    )
+    qualification["rollback_status"] = verifier.compact_rollback_status_evidence(
+        status, descriptor
+    )
+
+
+def _verified_rollback_statuses(module, tmp_path, receipts):
+    return {
+        name: module.verify_rollback_status_artifact(
+            tmp_path,
+            receipt["architecture"]["qualification"],
+            expected_architecture=name,
+            expected_source_commit=receipt["source_commit"],
+        )
+        for name, receipt in receipts.items()
+    }
+
+
 def _write_receipt(path: Path, receipt: dict) -> None:
+    checked = receipt["architecture"]["qualification"]["check"]
+    if "raw_status_artifact" not in checked:
+        _retain_update_check(
+            path.parent,
+            path.stem,
+            receipt["architecture"],
+            source_commit=receipt["source_commit"],
+        )
+    rollback_status = receipt["architecture"]["qualification"]["rollback_status"]
+    if "raw_status_artifact" not in rollback_status:
+        _retain_rollback_status(
+            path.parent,
+            path.stem,
+            receipt["architecture"],
+            source_commit=receipt["source_commit"],
+        )
     damaged = receipt["architecture"]["release_qualification"][
         "damaged_native_recovery"
     ]
     _retain_recovery_diagnostics(path.parent, path.stem, damaged)
-    receipt["serialized_size_bytes"] = 0
-    for _ in range(4):
-        encoded = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-        size = len(encoded.encode())
-        if receipt["serialized_size_bytes"] == size:
-            break
-        receipt["serialized_size_bytes"] = size
-    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_bytes(_verifier_module().serialize_bounded_receipt(receipt))
 
 
 def _retain_probe_logs(tmp_path, name, receipt):
@@ -737,6 +1004,338 @@ def test_recovery_diagnostic_artifacts_are_reopened_and_bound(tmp_path, field):
     (tmp_path / damaged[field]["file"]).write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="hash|size"):
         module.verify_recovery_diagnostic_artifacts(tmp_path, damaged)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "tampered",
+        "mode",
+        "phase",
+        "source",
+        "architecture",
+        "status",
+        "numeric-bool",
+    ],
+)
+def test_initial_update_check_artifact_is_required_and_strictly_bound(
+    tmp_path, mutation
+):
+    _expected, receipts = _receipts(tmp_path)
+    module = _module()
+    qualification = receipts["amd64"]["architecture"]["qualification"]
+    descriptor = qualification["check"]["raw_status_artifact"]
+    path = tmp_path / descriptor["file"]
+
+    if mutation == "missing":
+        path.unlink()
+    elif mutation == "tampered":
+        path.write_bytes(b"{}\n")
+    else:
+        payload = json.loads(path.read_bytes())
+        if mutation == "mode":
+            payload["mode"] = "other"
+        elif mutation == "phase":
+            payload["phase"] = "post-rollback"
+        elif mutation == "source":
+            payload["source_commit"] = "0" * 40
+        elif mutation == "architecture":
+            payload["architecture"] = "arm64"
+        else:
+            payload["status"]["update_available"] = False
+        raw = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        path.write_bytes(raw)
+        qualification["check"]["raw_status_artifact"] = {
+            "file": path.name,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "size": len(raw),
+        }
+
+    with pytest.raises(ValueError, match="missing|hash|size|differs"):
+        module.verify_update_check_artifact(
+            tmp_path,
+            qualification,
+            expected_architecture="amd64",
+            expected_source_commit=receipts["amd64"]["source_commit"],
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "tampered",
+        "mode",
+        "phase",
+        "source",
+        "architecture",
+        "status",
+        "numeric-bool",
+    ],
+)
+def test_post_rollback_status_artifact_is_required_and_strictly_bound(
+    tmp_path, mutation
+):
+    _expected, receipts = _receipts(tmp_path)
+    module = _module()
+    qualification = receipts["amd64"]["architecture"]["qualification"]
+    descriptor = qualification["rollback_status"]["raw_status_artifact"]
+    path = tmp_path / descriptor["file"]
+
+    if mutation == "missing":
+        path.unlink()
+    elif mutation == "tampered":
+        path.write_bytes(b"{}\n")
+    else:
+        payload = json.loads(path.read_bytes())
+        if mutation == "mode":
+            payload["mode"] = "other"
+        elif mutation == "phase":
+            payload["phase"] = "initial-update-check"
+        elif mutation == "source":
+            payload["source_commit"] = "0" * 40
+        elif mutation == "architecture":
+            payload["architecture"] = "arm64"
+        elif mutation == "numeric-bool":
+            payload["status"]["operation_busy"] = 0
+        else:
+            payload["status"]["current_version"] = "1.6.0"
+        raw = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        path.write_bytes(raw)
+        qualification["rollback_status"]["raw_status_artifact"] = {
+            "file": path.name,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "size": len(raw),
+        }
+
+    with pytest.raises(ValueError, match="missing|hash|size|differs"):
+        module.verify_rollback_status_artifact(
+            tmp_path,
+            qualification,
+            expected_architecture="amd64",
+            expected_source_commit=receipts["amd64"]["source_commit"],
+        )
+
+
+def test_aggregate_strictly_validates_rehydrated_post_rollback_worker(tmp_path):
+    _expected, receipts = _receipts(tmp_path)
+    module = _module()
+    rollback_statuses = _verified_rollback_statuses(module, tmp_path, receipts)
+    invalid_worker = rollback_statuses["amd64"]["worker_runtime"]
+    invalid_worker["verified_generation"] = False
+    receipts["amd64"]["architecture"]["qualification"]["rollback_status"][
+        "worker_runtime"
+    ]["verified_generation"] = False
+
+    with pytest.raises(ValueError, match="post-rollback image status"):
+        module.aggregate(
+            receipts,
+            update_checks=_verified_update_checks(module, tmp_path, receipts),
+            rollback_statuses=rollback_statuses,
+        )
+
+
+def test_aggregate_rejects_missing_verified_update_check(tmp_path):
+    _expected, receipts = _receipts(tmp_path)
+    with pytest.raises(ValueError, match="retained initial update-check"):
+        _module().aggregate(receipts)
+
+
+def test_aggregate_rejects_missing_verified_post_rollback_status(tmp_path):
+    _expected, receipts = _receipts(tmp_path)
+    module = _module()
+    with pytest.raises(ValueError, match="retained post-rollback"):
+        module.aggregate(
+            receipts,
+            update_checks=_verified_update_checks(module, tmp_path, receipts),
+        )
+
+
+def test_recovery_diagnostic_artifact_accepts_complete_bounded_control_evidence(
+    tmp_path,
+):
+    payload_text = "x" * 1_040_000
+
+    def record(payload, fill):
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        assert len(raw) <= 1024 * 1024
+        return {
+            "type": "file", "mode": "0600", "size": len(raw),
+            "sha256": fill * 64, "payload": payload,
+        }
+
+    module = _module()
+    verifier_path = Path(__file__).resolve().parents[3] / "scripts/release/verify-runtime-capability.py"
+    spec = importlib.util.spec_from_file_location("runtime_capability_verifier", verifier_path)
+    assert spec and spec.loader
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+    _expected, receipts = _receipts(tmp_path)
+    diagnostics = {}
+    serialized = {}
+    for name, receipt in receipts.items():
+        damaged = receipt["architecture"]["release_qualification"][
+            "damaged_native_recovery"
+        ]
+        damaged["recovery_hold_status"]["padding"] = payload_text
+        damaged["recovery_hold_status"]["active_bundle"]["padding"] = payload_text
+        damaged["successful_apply_job"]["padding"] = payload_text
+        damaged["recovery_hold_status"]["last_job"] = copy.deepcopy(
+            damaged["successful_apply_job"]
+        )
+        control = damaged["recovery_hold_control_state"]
+        control["active.json"] = record(
+            copy.deepcopy(damaged["recovery_hold_status"]["active_bundle"]), "1"
+        )
+        control["rollback.json"] = record({"padding": payload_text}, "2")
+        control["update-job.json"] = record(
+            copy.deepcopy(damaged["successful_apply_job"]), "3"
+        )
+        _retain_recovery_diagnostics(tmp_path, name, damaged)
+        assert damaged["recovery_hold_diagnostic"]["size"] > 4 * 1024 * 1024
+        diagnostics[name] = module.verify_recovery_diagnostic_artifacts(
+            tmp_path, damaged
+        )
+        receipt["architecture"]["release_qualification"][
+            "damaged_native_recovery"
+        ] = verifier.compact_recovery_diagnostic_evidence(damaged)
+        encoded = verifier.serialize_bounded_receipt(receipt)
+        serialized[name] = json.loads(encoded)
+
+    aggregate = module.aggregate(
+        serialized,
+        recovery_diagnostics=diagnostics,
+        update_checks=_verified_update_checks(module, tmp_path, serialized),
+        rollback_statuses=_verified_rollback_statuses(
+            module, tmp_path, serialized
+        ),
+    )
+    assert len(module.serialize_aggregate(aggregate)) <= module.MAX_AGGREGATE_BYTES
+
+
+def test_release_sized_full_receipts_and_two_architecture_aggregate_fit_bounds(
+    tmp_path,
+):
+    module = _module()
+    verifier = _verifier_module()
+    _expected, receipts = _receipts(tmp_path)
+
+    for name, receipt in receipts.items():
+        qualification = receipt["architecture"]["qualification"]
+
+        raw_status = module.verify_rollback_status_artifact(
+            tmp_path,
+            qualification,
+            expected_architecture=name,
+            expected_source_commit=receipt["source_commit"],
+        )
+        raw_status["latest"] = {"catalog_payload": "x" * (5 * 1024 * 1024)}
+        rollback_artifact = verifier.retain_rollback_status(
+            tmp_path / f"{name}.json",
+            architecture=name,
+            source_commit=receipt["source_commit"],
+            status=raw_status,
+        )
+        assert 5 * 1024 * 1024 < rollback_artifact["size"]
+        qualification["rollback_status"] = verifier.compact_rollback_status_evidence(
+            raw_status, rollback_artifact
+        )
+
+        raw_check = module.verify_update_check_artifact(
+            tmp_path,
+            qualification,
+            expected_architecture=name,
+            expected_source_commit=receipt["source_commit"],
+        )
+        descriptor = raw_check["trusted_target"]["runtime_descriptor"]
+        descriptor["files"] = [
+            {
+                "mode": "0644",
+                "path": (
+                    "dependencies/site-packages/channelwatch_release_payload/"
+                    f"generated_module_{index:04d}.py"
+                ),
+                "sha256": f"{index:064x}"[-64:],
+                "size": 1000 + index,
+            }
+            for index in range(2665)
+        ]
+        descriptor["expanded_size"] = sum(
+            record["size"] for record in descriptor["files"]
+        )
+        check_artifact = verifier.retain_update_check_status(
+            tmp_path / f"{name}.json",
+            architecture=name,
+            source_commit=receipt["source_commit"],
+            status=raw_check,
+        )
+        qualification["check"] = verifier.compact_update_check_evidence(
+            raw_check, check_artifact
+        )
+
+        inventory_raw = json.dumps(
+            {"release_inventory": "x" * 448_000}, separators=(",", ":")
+        ).encode()
+        qualification["signed_dependency_inventory"] = {
+            "sha256": hashlib.sha256(inventory_raw).hexdigest(),
+            "size": len(inventory_raw),
+            "json_base64": base64.b64encode(inventory_raw).decode(),
+        }
+        entries = [
+            {
+                "path": (
+                    "/venv/lib/python3.14/site-packages/channelwatch_release_payload/"
+                    f"generated_inventory_module_{index:04d}.py"
+                ),
+                "type": "file",
+                "mode": "0644",
+                "size": 1000 + index,
+                "sha256": f"{index:064x}"[-64:],
+            }
+            for index in range(4692)
+        ]
+        qualification["image_inventory_before"] = {
+            "sha256": hashlib.sha256(
+                json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            "path_count": len(entries),
+            "regular_file_bytes": sum(record["size"] for record in entries),
+            "entries": entries,
+        }
+
+        if name == "amd64":
+            resources = receipt["architecture"]["release_qualification"][
+                "resource_observations"
+            ]
+            resources["expanded_bytes"] = descriptor["expanded_size"]
+            resources["member_count"] = len(descriptor["files"]) + 2
+            resources["selected_generation_disk_bytes"] = descriptor["expanded_size"]
+            required = (
+                resources["bundle_bytes"]
+                + resources["expanded_bytes"]
+                + module.PREPARATION_HEADROOM_BYTES
+            )
+            refusals = receipt["architecture"]["release_qualification"][
+                "filesystem_refusals"
+            ]
+            for refusal in refusals.values():
+                refusal["required_bytes"] = required
+            refusals["noexec"]["mount"]["free_bytes"] = required + 1
+
+        encoded = verifier.serialize_bounded_receipt(receipt)
+        assert 1_900_000 < len(encoded) <= verifier.MAX_RECEIPT_BYTES
+        receipts[name] = json.loads(encoded)
+
+    update_checks = _verified_update_checks(module, tmp_path, receipts)
+    rollback_statuses = _verified_rollback_statuses(module, tmp_path, receipts)
+    aggregate = module.aggregate(
+        receipts,
+        update_checks=update_checks,
+        rollback_statuses=rollback_statuses,
+    )
+    encoded_aggregate = module.serialize_aggregate(aggregate)
+    assert 3_800_000 < len(encoded_aggregate) <= module.MAX_AGGREGATE_BYTES
 
 
 def _retain_inventory_stages(tmp_path, name, qualification):
@@ -797,6 +1396,7 @@ def test_retained_artifact_cannot_escape_evidence_directory(tmp_path, name):
 
 @pytest.mark.parametrize("mutation", [
     lambda descriptor: descriptor.update(size=True),
+    lambda descriptor: descriptor.update(size=float("nan")),
     lambda descriptor: descriptor.update(size=99),
     lambda descriptor: descriptor.update(sha256="b" * 64),
 ])
@@ -838,6 +1438,9 @@ def test_bounded_json_input_and_final_serialization_fail_before_write(tmp_path):
     output = tmp_path / "aggregate.json"
     with pytest.raises(ValueError, match="8 MiB"):
         module.serialize_aggregate({"blob": "x" * module.MAX_AGGREGATE_BYTES})
+    with pytest.raises(ValueError, match="valid JSON"):
+        module.serialize_aggregate({"duration": float("nan")})
+    assert module.serialize_aggregate({"label": "é"}) == b'{"label":"\xc3\xa9"}\n'
     assert not output.exists()
 
 

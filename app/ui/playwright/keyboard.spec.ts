@@ -38,7 +38,36 @@ test("keyboard: watch history dialog opens and closes without trapping focus", a
   await expect(page.getByRole("dialog")).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(page.getByRole("dialog")).not.toBeVisible()
+  await expect(firstActivity).toBeFocused()
   await tabTo(page, page.getByRole("textbox", { name: "Search activity history" }), 20)
+})
+
+test("keyboard: recent activity details returns focus to its trigger", async ({ page }) => {
+  await page.goto("/#overview")
+
+  const activity = page.getByRole("button", { name: /Watching HBO/i }).first()
+  await expect(activity).toBeVisible()
+  await activity.focus()
+  await page.keyboard.press("Enter")
+
+  await expect(page.getByRole("dialog")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.getByRole("dialog")).not.toBeVisible()
+  await expect(activity).toBeFocused()
+})
+
+test("keyboard: recording details returns focus to its trigger", async ({ page }) => {
+  await page.goto("/#overview")
+
+  const recording = page.getByRole("button", { name: /Evening News/i }).first()
+  await expect(recording).toBeVisible()
+  await recording.focus()
+  await page.keyboard.press("Enter")
+
+  await expect(page.getByRole("dialog")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.getByRole("dialog")).not.toBeVisible()
+  await expect(recording).toBeFocused()
 })
 
 test("keyboard: major view controls are reachable in a sensible order", async ({ page }) => {
@@ -63,8 +92,8 @@ test("keyboard: major view controls are reachable in a sensible order", async ({
   await tabTo(page, page.getByRole("combobox", { name: "Select number of log lines" }), 4)
 
   await page.goto("/#about")
-  await expect(page.getByRole("tab", { name: "Story" })).toBeVisible()
-  await page.getByRole("tab", { name: "Story" }).focus()
+  await expect(page.getByRole("tab", { name: "Project" })).toBeVisible()
+  await page.getByRole("tab", { name: "Project" }).focus()
   await page.keyboard.press("ArrowRight")
-  await expect(page.getByRole("tab", { name: "Project" })).toBeFocused()
+  await expect(page.getByRole("tab", { name: "Story" })).toBeFocused()
 })

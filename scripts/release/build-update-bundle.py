@@ -45,13 +45,13 @@ from core.runtime_archive import (  # noqa: E402
     MAX_BUNDLE_MEMBER_COUNT as MAX_RUNTIME_MEMBER_COUNT,
     _archive_files as _runtime_archive_files,
 )
+from core.runtime_catalog import validate_runtime_release_variants  # noqa: E402
 from core.runtime_generation import (  # noqa: E402
     DEPENDENCY_INVENTORY_PATH,
     DESCRIPTOR_FILENAME,
     RuntimeGenerationError,
     validate_runtime_descriptor_shape,
 )
-from core.runtime_catalog import validate_runtime_release_variants  # noqa: E402
 from core.update_center import (  # noqa: E402
     MAX_RUNTIME_CATALOG_BYTES,
     validate_trusted_url,
@@ -64,6 +64,10 @@ COPYLEFT_LICENSE_FETCHER = ROOT / "scripts" / "release" / "copyleft_licenses.py"
 CATALOG_HISTORY_FILE = ROOT / "scripts" / "release" / "update-catalog-history.json"
 INITIAL_V2_BRIDGE_VERSION = (0, 9, 18)
 MAX_CATALOG_RELEASES = 64
+LEGACY_PROTOCOL3_APP_UPDATE_SOURCES = ("1.4.0", "1.4.1", "1.4.5")
+LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
+LEGACY_PROTOCOL3_APP_UPDATE_TARGET = "1.6.0"
+VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
 LEGAL_RELEASE_FILES = {
     "LICENSE": "core/release_legal/LICENSE",
     "docs/legal/NOTICE": "core/release_legal/NOTICE",
@@ -197,6 +201,57 @@ def project_catalog_history_v2(
         if "runtime_descriptor" in release:
             raise ValueError("A runtime descriptor requires signed platform variants.")
         release.pop("runtime_variants", None)
+    return projected
+
+
+def project_current_release_v2(
+    catalog_release: dict[str, object],
+    legacy_app_update_sources: object,
+) -> dict[str, object]:
+    """Project the one-time protocol-3 bridge without changing canonical assets."""
+
+    projected = copy.deepcopy(catalog_release)
+    if legacy_app_update_sources in (None, []):
+        return projected
+    expected_sources = list(LEGACY_PROTOCOL3_APP_UPDATE_SOURCES)
+    if legacy_app_update_sources != expected_sources:
+        raise ValueError(
+            "legacy_app_update_sources must be exactly the sorted, published "
+            "v1.4 compatibility set."
+        )
+    if any(
+        _release_version(source) >= _release_version(VERIFIED_DEPENDENCY_FOUNDATION)
+        for source in expected_sources
+    ):
+        raise ValueError(
+            "Legacy app-update sources must predate the verified-dependency foundation."
+        )
+    version = str(projected.get("version") or "").strip().lstrip("v")
+    _release_version(version)
+    if (
+        version != LEGACY_PROTOCOL3_APP_UPDATE_TARGET
+        or projected.get("delivery_mode") != "app_update"
+        or projected.get("image_required") is not False
+        or projected.get("updater_protocol") != 4
+        or projected.get("minimum_image_version") != VERIFIED_DEPENDENCY_FOUNDATION
+        or projected.get("compatible_source_application_versions")
+        != [VERIFIED_DEPENDENCY_FOUNDATION]
+        or projected.get("compatible_launcher_protocols") != [4]
+    ):
+        raise ValueError(
+            "Legacy protocol-3 projection requires the verified-dependency "
+            "app-update contract."
+        )
+    projected.update(
+        {
+            "image_refresh_recommended": False,
+            "minimum_image_version": LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION,
+            "updater_protocol": 2,
+            "automatic_install_allowed": False,
+            "compatible_source_application_versions": expected_sources,
+            "compatible_launcher_protocols": [3],
+        }
+    )
     return projected
 
 
@@ -932,6 +987,7 @@ def main() -> int:
     configured_automatic_install_allowed = None
     configured_source_versions = None
     configured_launcher_protocols = None
+    configured_legacy_app_update_sources = None
     configured_unpublished_predecessor_tags = None
     runtime_generation_required = False
     try:
@@ -957,6 +1013,9 @@ def main() -> int:
             )
             configured_launcher_protocols = release_config.get(
                 "compatible_launcher_protocols"
+            )
+            configured_legacy_app_update_sources = release_config.get(
+                "legacy_app_update_sources"
             )
             configured_unpublished_predecessor_tags = release_config.get(
                 "unpublished_predecessor_tags"
@@ -1138,11 +1197,15 @@ def main() -> int:
         "revocation_state": "active",
         "publication_time": publication_time,
     }
+    legacy_catalog_release = project_current_release_v2(
+        catalog_release,
+        configured_legacy_app_update_sources,
+    )
     catalog_payload = {
         "channel": "stable",
         "published_at": publication_time,
         "releases": [
-            catalog_release,
+            legacy_catalog_release,
             *project_catalog_history_v2(catalog_history),
         ],
     }

@@ -1368,7 +1368,7 @@ class UpdateAutomationService:
         now: datetime,
         payload: Mapping[str, Any] | None,
         quarantine: bool,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         """Preserve an activation handed off just before apply raised."""
 
         state = self.store.get_state()
@@ -1380,17 +1380,21 @@ class UpdateAutomationService:
                 payload=payload,
                 quarantine=quarantine,
             )
-            return "verification-failed" if quarantine else "retry-scheduled"
+            outcome = "verification-failed" if quarantine else "retry-scheduled"
+            return outcome, None
+        terminalized_job: dict[str, Any] | None = None
         terminalizer = getattr(manager, "record_pre_handoff_apply_failure", None)
         if callable(terminalizer):
             try:
-                terminalizer(
+                terminalized = terminalizer(
                     job_id=str(attempt.get("job_id") or ""),
                     scheduler_attempt_id=str(attempt.get("attempt_id") or ""),
                     version=str(attempt.get("version") or ""),
                     bundle_sha256=str(attempt.get("bundle_sha256") or ""),
                     error=str(error),
                 )
+                if isinstance(terminalized, dict):
+                    terminalized_job = terminalized
             except (OSError, RuntimeError, ValueError, UpdateCenterError):
                 pass
         try:
@@ -1404,7 +1408,7 @@ class UpdateAutomationService:
                     "unreadable. Automatic updates remain paused for review."
                 ),
             )
-            return "activation-outcome-ambiguous"
+            return "activation-outcome-ambiguous", None
         job = manager_status.get("last_job")
         if isinstance(job, dict) and self._job_matches_attempt(job, attempt):
             result = self._reconcile_pending_attempt(
@@ -1419,7 +1423,15 @@ class UpdateAutomationService:
                     payload=payload,
                     quarantine=True,
                 )
-            return result or "activation-outcome-ambiguous"
+            outcome = result or "activation-outcome-ambiguous"
+            exact_pre_handoff_failure = (
+                outcome == "activation-failed"
+                and terminalized_job == job
+                and str(job.get("status") or "").strip().lower() == "failed"
+                and job.get("restart_required") is False
+                and job.get("rollback_applied") is False
+            )
+            return outcome, dict(job) if exact_pre_handoff_failure else None
 
         # The caller-assigned job ID was never published, so no activation
         # handoff can later complete under this attempt identity.
@@ -1430,7 +1442,8 @@ class UpdateAutomationService:
             payload=payload,
             quarantine=quarantine,
         )
-        return "verification-failed" if quarantine else "retry-scheduled"
+        outcome = "verification-failed" if quarantine else "retry-scheduled"
+        return outcome, None
 
     def apply_release(
         self, *, version: str | None = None, job_id: str | None = None
@@ -1508,13 +1521,15 @@ class UpdateAutomationService:
                 expected_bundle_sha256=selected_digest,
             )
         except Exception as exc:
-            self._reconcile_apply_exception(
+            _outcome, terminal_job = self._reconcile_apply_exception(
                 manager=manager,
                 error=exc,
                 now=now,
                 payload=payload,
                 quarantine=isinstance(exc, (UpdateManifestError, UpdateBundleError)),
             )
+            if isinstance(exc, UpdateBundleError) and terminal_job is not None:
+                return terminal_job
             raise
 
         if not self._job_matches_attempt(result, attempt):
@@ -1689,7 +1704,7 @@ class UpdateAutomationService:
                 expected_bundle_sha256=selected_digest,
             )
         except Exception as exc:
-            outcome = self._reconcile_apply_exception(
+            outcome, _terminal_job = self._reconcile_apply_exception(
                 manager=manager,
                 error=exc,
                 now=now,
@@ -2350,7 +2365,7 @@ class UpdateAutomationService:
                 self.store.put_state(changes)
                 return {"status": "install-started", "job": job, **self.status()}
             except (UpdateManifestError, UpdateBundleError) as exc:
-                outcome = self._reconcile_apply_exception(
+                outcome, _terminal_job = self._reconcile_apply_exception(
                     manager=manager,
                     error=exc,
                     now=now,
@@ -2359,7 +2374,7 @@ class UpdateAutomationService:
                 )
                 return {"status": outcome, **self.status()}
             except (OSError, UpdateCenterError) as exc:
-                outcome = self._reconcile_apply_exception(
+                outcome, _terminal_job = self._reconcile_apply_exception(
                     manager=manager,
                     error=exc,
                     now=now,

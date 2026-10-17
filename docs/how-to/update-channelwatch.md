@@ -1,10 +1,10 @@
 # Update ChannelWatch
 
-ChannelWatch v1.5.4 installs in-app on the v1.5.3 container image. If you have not installed that image, pull `coderluii/channelwatch:1.5.3` (or `ghcr.io/coderluii/channelwatch:1.5.3`) and recreate the container once with the same `/config` volume and any external storage key configuration. Then install v1.5.4 from **Settings > Updates**.
+On v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.6.0 directly from **Settings > Updates** without recreating the container. No intermediate release is needed. ChannelWatch briefly restarts its processes and reconnects; the container and saved configuration stay in place.
 
-Install v1.5.4 manually from Update Center. Automatic installation is disabled for this first package release.
+Install v1.6.0 manually from Update Center. Automatic installation is disabled for this first package release.
 
-Every published v1.4.x image needs this one-time update to receive launcher protocol 4. Update directly to v1.5.3 through Docker, Unraid, Compose, or Helm. Preserve the entire existing `/config` volume. Do not re-enter saved DVRs or credentials merely to update.
+The v1.4.x route updates the application and interface while keeping the image's existing Python packages. The v1.5.3 route updates the application and packages together. Python itself, system libraries and the image-owned launcher still require a container image update when those components change.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. **Retry now** uses the same checks when a restart briefly disconnects the dashboard. Application and immutable container image versions are reported separately.
 
@@ -18,7 +18,7 @@ Preserve the existing `/config` mount, pull `coderluii/channelwatch:1.5.3`, and 
 
 v0.9.19 migrates valid historical `activity_history.json` rows into the durable SQLite activity store automatically. Recent Activity and the 24-Hour Timeline then use the same data. Do not edit or delete activity files manually, and do not re-enter DVR credentials for this update.
 
-The Update Center remains the normal path for routine releases. Published v1.0.0 through v1.4.x use `X.Y.0` as an image milestone, while compatible `X.Y.1` through `X.Y.9` releases install in-app. v1.5.3 provides the image foundation, and v1.5.4 is its first signed application-and-package generation. A future `.0` release can retain the proven v1.5.3 image floor only after its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. After `X.Y.9`, the next release is `X.(Y+1).0`.
+The Update Center remains the normal path for routine releases. Published v1.0.0 through v1.4.x use `X.Y.0` as an image milestone, while compatible `X.Y.1` through `X.Y.9` releases install in-app. v1.5.3 provides the image foundation, and v1.6.0 is its first signed application-and-package generation. A future `.0` release can retain the proven v1.5.3 image floor only after its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. After `X.Y.9`, the next release is `X.(Y+1).0`.
 
 If the catalog includes a newer image milestone and a compatible app update for your current image, Update Center shows both choices separately. You can install the highest compatible signed app update now, then refresh the container later. The image recommendation does not hide that forward app update, and the app update does not clear the image recommendation.
 
@@ -95,7 +95,7 @@ Keep the same `/config` volume and external storage key configuration. The
 container update does not require re-entering DVRs or saved credentials.
 
 v1.5.3 supplies this bootstrap and does not publish a runtime-generation
-payload. After that bootstrap, install v1.5.4 from **Settings > Updates**.
+payload. After that bootstrap, install v1.6.0 from **Settings > Updates**.
 ChannelWatch downloads and verifies the signed application and complete
 40-package official Python closure,
 prepares its Python packages without changing the active environment, then
@@ -130,7 +130,7 @@ Some releases cannot be safely applied inside the current image. ChannelWatch wi
 - container entrypoint, Supervisor, privilege, or image-owned launcher behavior;
 - persistent settings schema.
 
-v1.5.3 is the image baseline for the compatible v1.5.4 in-app generation. A future `.0` release can retain this image floor only with a complete signed runtime generation and compatibility, restart, and rollback evidence on both native AMD64 and native ARM64.
+v1.5.3 is the image baseline for the compatible v1.6.0 in-app generation. A future `.0` release can retain this image floor only with a complete signed runtime generation and compatibility, restart, and rollback evidence on both native AMD64 and native ARM64.
 
 Documentation, Compose, Helm, or Unraid presentation changes alone do not make an otherwise compatible runtime generation image-required. v1.5.3 changes the image-owned launcher and verifier and therefore requires its matching image on AMD64 or ARM64.
 

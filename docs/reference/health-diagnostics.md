@@ -93,7 +93,7 @@ What it does not check directly:
 Update status reports `current_version` separately from `image_version`.
 `worker_runtime` reports the interpreter version and executable used by the
 responding UI backend. On the v1.5.3 image fallback, this is the image
-interpreter identity and a null `verified_generation`. When a v1.5.4 selected
+interpreter identity and a null `verified_generation`. When a v1.6.0 selected
 generation is running, the status also reports the worker process ID, Python
 prefix, loaded state, version and origin for `requests`, `cryptography`,
 `sqlmodel`, `uvicorn`, `pydantic_core`, `sqlalchemy` and `httptools`, plus the
@@ -158,7 +158,7 @@ docker exec <container_name_or_id> channelwatch doctor runtime-info
 docker exec <container_name_or_id> channelwatch doctor debug bundle --output /config/channelwatch_debug_bundle.zip
 ```
 
-The wrapper always launches the doctor with the image-owned application and Python interpreter. It does not import a selected runtime generation or inherit its Python and loader paths. Its package versions and paths therefore describe the image copy, while Update Center status describes the responding selected worker when v1.5.4 is active. Configuration commands still read the normal persisted `/config` data.
+The wrapper always launches the doctor with the image-owned application and Python interpreter. It does not import a selected runtime generation or inherit its Python and loader paths. Its package versions and paths therefore describe the image copy, while Update Center status describes the responding selected worker when v1.6.0 is active. Configuration commands still read the normal persisted `/config` data.
 
 Available commands:
 

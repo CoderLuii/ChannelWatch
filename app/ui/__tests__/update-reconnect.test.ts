@@ -122,6 +122,93 @@ describe("waitForUpdatedRuntime", () => {
     expect(onJob).toHaveBeenCalledTimes(3)
   })
 
+  it("accepts the exact restored runtime from a successful matching rollback job", async () => {
+    const rollbackJob = {
+      job_id: "rollback-job-1",
+      operation: "rollback",
+      status: "success",
+      version: "1.6.0",
+      rolled_back_from: "1.6.0",
+      restored_version: "1.5.3",
+      rollback_applied: true,
+      restart_required: false,
+    }
+    const restored = {
+      ...durableStatus("1.5.3", rollbackJob),
+      active_bundle: null,
+    }
+    const fetchStatus = vi.fn().mockResolvedValue(restored)
+    const fetchJob = vi.fn().mockResolvedValue(rollbackJob)
+    const verifyReady = vi.fn().mockResolvedValue(undefined)
+
+    await expect(waitForUpdatedRuntime("1.6.0", {
+      fetchStatus,
+      fetchJob,
+      jobId: "rollback-job-1",
+      verifyReady,
+      wait: vi.fn().mockResolvedValue(undefined),
+      maxAttempts: 2,
+      intervalMs: 1,
+    })).resolves.toMatchObject({ current_version: "1.5.3", active_bundle: null })
+
+    expect(fetchJob).toHaveBeenCalledTimes(2)
+    expect(fetchStatus).toHaveBeenCalledTimes(2)
+    expect(verifyReady).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ["rollback_applied", { rollback_applied: false, restart_required: false, restored_version: "1.5.3" }],
+    ["restart_required", { rollback_applied: true, restart_required: true, restored_version: "1.5.3" }],
+    ["restored_version", { rollback_applied: true, restart_required: false, restored_version: null }],
+    ["rolled_back_from", { rollback_applied: true, restart_required: false, restored_version: "1.5.3", rolled_back_from: "1.5.9" }],
+  ])("rejects a successful rollback job with an invalid %s contract", async (_field, contract) => {
+    const rollbackJob = {
+      job_id: "rollback-job-invalid",
+      operation: "rollback",
+      status: "success",
+      version: "1.6.0",
+      rolled_back_from: "1.6.0",
+      ...contract,
+    }
+
+    await expect(waitForUpdatedRuntime("1.6.0", {
+      fetchStatus: vi.fn().mockResolvedValue({ ...status("1.5.3"), active_bundle: null }),
+      fetchJob: vi.fn().mockResolvedValue(rollbackJob),
+      jobId: "rollback-job-invalid",
+      wait: vi.fn().mockResolvedValue(undefined),
+      maxAttempts: 1,
+      intervalMs: 1,
+      requiredStableChecks: 1,
+    })).rejects.toThrow("ChannelWatch could not confirm the restored version")
+  })
+
+  it("does not accept a runtime that differs from the rollback job restored version", async () => {
+    const rollbackJob = {
+      job_id: "rollback-job-mismatch",
+      operation: "rollback",
+      status: "success",
+      version: "1.6.0",
+      rolled_back_from: "1.6.0",
+      restored_version: "1.5.3",
+      rollback_applied: true,
+      restart_required: false,
+    }
+    const verifyReady = vi.fn().mockResolvedValue(undefined)
+
+    await expect(waitForUpdatedRuntime("1.6.0", {
+      fetchStatus: vi.fn().mockResolvedValue({ ...status("1.5.2"), active_bundle: null }),
+      fetchJob: vi.fn().mockResolvedValue(rollbackJob),
+      jobId: "rollback-job-mismatch",
+      verifyReady,
+      wait: vi.fn().mockResolvedValue(undefined),
+      maxAttempts: 1,
+      intervalMs: 1,
+      requiredStableChecks: 1,
+    })).rejects.toThrow("ChannelWatch did not reconnect after applying v1.6.0")
+
+    expect(verifyReady).not.toHaveBeenCalled()
+  })
+
   it("does not spend the activation attempt budget while dependencies are preparing", async () => {
     const preparing = {
       job_id: "browser-job-preparing",

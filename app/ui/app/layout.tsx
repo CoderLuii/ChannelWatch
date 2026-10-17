@@ -2,15 +2,8 @@ import type React from "react"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/base/toaster"
 import "@/app/globals.css"
-import { Mona_Sans as FontSans } from "next/font/google"
-import { cn } from "@/lib/utils"
 import { Suspense } from "react"
 import type { Metadata } from "next"
-
-const fontSans = FontSans({
-  subsets: ["latin"],
-  variable: "--font-sans",
-})
 
 const metadataBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:8501"
 
@@ -48,7 +41,7 @@ export default function RootLayout({
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       </head>
-      <body className={cn("min-h-screen bg-background font-sans antialiased", fontSans.variable)}>
+      <body className="min-h-[100dvh] bg-background font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <Suspense fallback={<div>Loading page...</div>}>
             {children}

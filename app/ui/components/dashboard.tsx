@@ -71,7 +71,7 @@ export function resolveDashboardBootstrapShell(
 }
 
 export function Dashboard() {
-  const [activeView, setActiveView] = useState<string>(getViewFromHash)
+  const [activeView, setActiveView] = useState<string>("overview")
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [showWizard, setShowWizard] = useState(false)
@@ -168,6 +168,7 @@ export function Dashboard() {
   // Sync hash to state on popstate (back/forward)
   useEffect(() => {
     const onHashChange = () => setActiveView(getViewFromHash())
+    onHashChange()
     window.addEventListener("hashchange", onHashChange)
     return () => window.removeEventListener("hashchange", onHashChange)
   }, [])
@@ -412,19 +413,19 @@ export function Dashboard() {
         {t("common.skipToContent")}
       </a>
 
-      <div className="flex min-h-screen">
+      <div className="flex min-h-[100dvh]">
         <HeaderContext.Provider value={{ activeView, setActiveView: navigate }}>
           <DvrSelectionProvider availableDvrs={settings?.dvr_servers ?? []}>
             <Sidebar activeView={activeView} setActiveView={navigate} />
-            <div className="flex flex-col flex-1 overflow-hidden relative">
+            <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
               <Header />
               <main
                 id="main-content"
                 tabIndex={-1}
-                className="flex-1 overflow-y-auto overflow-x-hidden p-3 pt-24 md:p-6 md:pt-24"
+                className="mx-auto w-full max-w-[1440px] flex-1 overflow-y-auto overflow-x-hidden px-4 pb-[calc(var(--mobile-navigation-height,4rem)+1.5rem)] pt-[calc(var(--app-header-height,4rem)+1rem)] sm:px-6 md:px-8 md:pb-10 md:pt-[calc(var(--app-header-height,4rem)+2rem)]"
               >
                 {(runtimePreflight?.setup_required || runtimePreflight?.status === "recovery_required" || runtimePreflight?.status === "storage_unavailable") && (
-                  <div data-testid="runtime-recovery-warning" role="alert" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground">
+                  <div data-testid="runtime-recovery-warning" role="alert" className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-[13px] text-foreground shadow-[0_1px_2px_hsl(32_90%_20%/0.05)]">
                     <p className="font-medium">{t("runtimeRecovery.bannerTitle")}</p>
                     <p className="mt-1 text-muted-foreground">{t("runtimeRecovery.bannerDescription")}</p>
                     {settings ? (
@@ -442,7 +443,7 @@ export function Dashboard() {
                   </div>
                 )}
                 {(runtimePreflight?.warnings.includes("legacy_plaintext_key_migration_recommended") || runtimePreflight?.warnings.includes("legacy_envelope_migration_available")) && (
-                  <div data-testid="runtime-migration-warning" role="status" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground">
+                  <div data-testid="runtime-migration-warning" role="status" className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-[13px] text-foreground shadow-[0_1px_2px_hsl(32_90%_20%/0.05)]">
                     {t("runtimeSetup.migrationWarning")}
                   </div>
                 )}

@@ -2,12 +2,12 @@
 
 ## Supported versions
 
-Security fixes are provided for the current stable release line.
+Security fixes are provided for the current stable application release line. The application version can differ from its compatible container image foundation.
 
 | Version line | Supported |
 |---|---|
-| 1.5.x | Yes |
-| 1.4.x and earlier | No |
+| 1.6.x | Yes |
+| 1.5.x and earlier | No |
 
 If you are still on an older build, upgrade before reporting a security issue unless the issue itself blocks upgrade.
 

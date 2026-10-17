@@ -39,7 +39,7 @@ const modeCopy: Record<SecurityMode, { label: string; summary: string; tone: str
   RBAC_ONLY: {
     label: t("security.mode.rbacOnly.label"),
     summary: t("security.mode.rbacOnly.summary"),
-    tone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+    tone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
   },
 }
 
@@ -138,22 +138,22 @@ export function SecuritySectionSummary({ status }: { status: SecurityStatus }) {
         </CardHeader>
       </div>
 
-      <CardContent className="space-y-4 pt-6">
+      <CardContent className="space-y-4 pt-6 sm:pt-2">
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-blue-400/15 bg-background p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.currentMode")}</p>
-            <p className="mt-2 text-base font-semibold">{runtimeOverrideActive ? t("security.runtimeOverrideLabel") : copy.label}</p>
-            <p className="mt-2 text-sm text-muted-foreground">
+          <div className="min-w-0 rounded-xl border border-blue-400/15 bg-background p-4 [overflow-wrap:anywhere]">
+            <p className="break-words text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.currentMode")}</p>
+            <p className="mt-2 break-words text-base font-semibold">{runtimeOverrideActive ? t("security.runtimeOverrideLabel") : copy.label}</p>
+            <p className="mt-2 break-words text-sm text-muted-foreground">
               {runtimeOverrideActive ? t("security.runtimeOverrideSummary", { label: copy.label }) : copy.summary}
             </p>
             {runtimeOverrideActive ? (
               <p className="mt-3 text-xs text-muted-foreground">{t("security.runtimeOverrideConfiguredMode", { label: copy.label })}</p>
             ) : null}
           </div>
-          <div className="rounded-xl border border-blue-400/15 bg-background p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.atRestProtection")}</p>
-            <p className="mt-2 text-base font-semibold">{t("security.atRestTitle")}</p>
-            <p className="mt-2 text-sm text-muted-foreground">
+          <div className="min-w-0 rounded-xl border border-blue-400/15 bg-background p-4 [overflow-wrap:anywhere]">
+            <p className="break-words text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.atRestProtection")}</p>
+            <p className="mt-2 break-words text-base font-semibold">{t("security.atRestTitle")}</p>
+            <p className="mt-2 break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
               {t("security.atRestDesc", { path: status.encryption_key_path })}
             </p>
           </div>
@@ -458,7 +458,7 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
     <TabsContent value="security" className="space-y-6">
       {!status && !error ? (
         <Card>
-          <CardContent className="flex items-center gap-3 pt-6 text-sm text-muted-foreground">
+          <CardContent className="flex items-center gap-3 pt-6 text-sm text-muted-foreground sm:pt-6">
           <Loader2 className="h-4 w-4 animate-spin" />
           {t("security.loading")}
           </CardContent>

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -37,10 +38,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--recommended-image-version")
     parser.add_argument("--catalog-url")
+    parser.add_argument("--catalog-sha256", required=True)
     parser.add_argument("--bridge-version", default="0.9.18")
     parser.add_argument("--attempts", type=int, default=30)
     parser.add_argument("--interval", type=float, default=10.0)
     return parser.parse_args()
+
+
+def verify_catalog_digest(catalog_bytes: bytes, expected_sha256: str) -> None:
+    if len(expected_sha256) != 64 or any(character not in "0123456789abcdef" for character in expected_sha256):
+        raise ValueError("The expected v2 catalog SHA-256 is invalid.")
+    if hashlib.sha256(catalog_bytes).hexdigest() != expected_sha256:
+        raise ValueError("The live v2 catalog does not match the approved release catalog.")
 
 
 def verify(
@@ -150,6 +159,7 @@ def main() -> int:
                 args.catalog_url,
                 max_bytes=verifier.MAX_MANIFEST_BYTES,
             )
+            verify_catalog_digest(catalog_bytes, args.catalog_sha256)
             raw_catalog = json.loads(catalog_bytes.decode("utf-8"))
             trusted_catalog = verifier.normalize_catalog(
                 raw_catalog,

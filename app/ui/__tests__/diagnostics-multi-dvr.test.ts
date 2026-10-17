@@ -202,10 +202,14 @@ describe("status-overview: passes selectedDvr to StatusPanel", () => {
     expect(src).not.toContain("fetchDvrSystemInfo");
   });
 
-  it("passes server-computed disk severity from system-info into DiskSpaceCard", () => {
+  it("resolves server and threshold disk severity once for the summary and card", () => {
     const src = srcFile("../components/status-overview.tsx");
     expect(src).toContain("setDiskServerSeverity(systemInfo.disk_severity ?? undefined)");
-    expect(src).toContain("serverSeverity={diskServerSeverity}");
+    expect(src).toContain("const diskSeverity = resolveDiskSeverity({");
+    expect(src).toContain("serverSeverity: diskServerSeverity,");
+    expect(src).toContain("warningThresholdPercent: currentSettings?.ds_warning_threshold_percent,");
+    expect(src).toContain("criticalThresholdPercent: currentSettings?.ds_critical_threshold_percent,");
+    expect(src).toContain("serverSeverity={diskSeverity}");
   });
 
   it("uses a latest refresh ref for interval ticks", () => {

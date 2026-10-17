@@ -43,7 +43,7 @@ describe("SecurityModeBadge", () => {
       }),
     )
 
-    expect(html).toContain("Security: RBAC only")
+    expect(html).toContain("Security: User sign-in")
   })
 
   it("keeps the configured mode badge during a runtime override", () => {
@@ -81,7 +81,7 @@ describe("SecuritySectionSummary", () => {
     )
 
     expect(html).toContain("Temporary runtime auth bypass is active")
-    expect(html).toContain("Configured mode remains: RBAC only")
+    expect(html).toContain("Configured mode remains: User sign-in")
     expect(html).toContain("does not rewrite the saved auth mode")
   })
 

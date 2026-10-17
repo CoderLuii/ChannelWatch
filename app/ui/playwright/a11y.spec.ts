@@ -12,7 +12,7 @@ const views = [
   { hash: "#watch-history", readyName: "Watch History", kind: "title" as const },
   { hash: "#notification-log", readyName: "Notification Delivery Log", kind: "text" as const },
   { hash: "#help-feedback", readyName: "Help & Feedback", kind: "heading" as const },
-  { hash: "#about", readyName: "Story", kind: "tab" as const },
+  { hash: "#about", readyName: "Project", kind: "tab" as const },
 ]
 
 test.beforeEach(async ({ page }) => {

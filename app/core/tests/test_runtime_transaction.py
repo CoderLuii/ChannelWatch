@@ -460,7 +460,7 @@ def test_runtime_archive_rejects_original_symlinked_releases_path(tmp_path: Path
         runtime_archive.install_runtime_archive(bundle, releases, descriptor)
 
 
-def test_runtime_apply_preparation_failure_keeps_active_pointer_byte_identical(
+def test_runtime_apply_preparation_refusal_returns_exact_terminal_job(
     tmp_path: Path, monkeypatch
 ):
     private, public = _key_pair()
@@ -494,10 +494,13 @@ def test_runtime_apply_preparation_failure_keeps_active_pointer_byte_identical(
         manager_factory=lambda: manager,
     )
 
-    with pytest.raises(UpdateBundleError, match="preparation failure"):
-        service.apply_release(version="1.4.4")
+    job_id = "a" * 32
+    result = service.apply_release(version="1.4.4", job_id=job_id)
 
     job = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    assert result == job
+    assert job["job_id"] == job_id
+    assert job["scheduler_attempt_id"].startswith("manual-apply@")
     assert job["status"] == "failed"
     assert job["phase"] == "preparing"
     assert job["phase_budget_seconds"] == 600

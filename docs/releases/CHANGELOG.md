@@ -6,16 +6,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
-### Changed
-
-- Keep this section for changes that have landed after the latest drafted release entry.
-
-## [1.5.4] - 2026-10-11
+## [1.6.0] - 2026-10-16
 
 ### Important
 
-- Install the v1.5.3 container image once before using this update. Keep the existing `/config` volume and external storage key configuration.
-- On a compatible v1.5.3 image, install v1.5.4 from **Settings > Updates**. ChannelWatch prepares the signed application and Python packages, then restarts its processes inside the same container.
+- Install v1.6.0 directly from **Settings > Updates** on v1.5.3, v1.4.5, v1.4.1 or v1.4.0. No intermediate release or container recreation is needed.
+- On v1.4.x images, the signed app-only update retains the existing Python packages. On v1.5.3 images, the signed runtime generation updates the application and packages together.
 - Automatic installation is disabled for this first package release. Install it manually from Update Center.
 - Python itself, operating-system libraries, Supervisor and image-owned startup and verification tools still use the container image update path.
 
@@ -26,8 +22,18 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- Refresh the interface for desktop, tablet and mobile, with clearer text, compact navigation and show artwork where available.
+- Keep dashboard details compact until opened. Expanded Disk Space and Uptime cards align without stretching a collapsed neighbor.
+- Improve settings navigation, dropdowns, dialogs, loading states and artwork fallbacks on smaller screens.
 - Update charset-normalizer to 3.5.2, httptools to 0.9.0, Markdown to 3.11, opentelemetry-api to 1.45.1, pycparser to 3.11, python-dotenv to 1.2.4, SQLAlchemy to 2.1.4 and websockets to 17.2.
 - Sign and validate the complete 40-package official Python closure with the application, including the eight updated packages.
+
+### Fixed
+
+- Refresh the dashboard after a successful rollback to the previous runtime.
+- Keep the install result intact when checking for updates again immediately after installation.
+- Handle overlapping restart requests on v1.4.x images without aborting the active restart.
+- Show the recorded installation error instead of a generic server error when an update cannot be prepared.
 
 ### Known issues
 
@@ -980,8 +986,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.4...HEAD
-[1.5.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...v1.5.4
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...v1.6.0
 [1.5.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.0...v1.5.1

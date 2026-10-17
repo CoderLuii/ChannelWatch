@@ -81,30 +81,33 @@ function getDisplayTitle(activity: ActivityItem) {
 function DetailRow({ label, value }: { label: string; value?: string }) {
   if (!value) return null
   return (
-    <div className="flex justify-between items-start gap-4 py-1.5 border-b border-border/30 last:border-0">
-      <span className="text-xs text-muted-foreground shrink-0">{label}</span>
-      <span className="text-xs text-right">{value}</span>
+    <div className="flex min-w-0 items-start justify-between gap-4 border-b border-border/30 py-1.5 last:border-0">
+      <span className="shrink-0 text-[13px] text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-right text-[13px]">{value}</span>
     </div>
   )
 }
 
 export function ActivityDetailDialog({ activity, open, onOpenChange }: ActivityDetailDialogProps) {
+  const [failedArtwork, setFailedArtwork] = React.useState("")
+
   if (!activity) return null
 
   const badge = getTypeBadge(activity.type)
-  const hasImage = !!activity.image_url
+  const hasImage = Boolean(activity.image_url && activity.image_url !== failedArtwork)
   const extra = activity.extra || {}
   const displayTitle = getDisplayTitle(activity)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm p-0 overflow-hidden">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] min-w-0 max-w-sm overflow-x-hidden overflow-y-auto p-0">
         {hasImage && (
-          <div className="relative w-full h-40 bg-muted">
+          <div className="relative h-40 min-w-0 w-full bg-muted">
             {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
             <img
               src={activity.image_url}
               alt=""
+              onError={() => setFailedArtwork(activity.image_url || "")}
               className="w-full h-full object-cover"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-background/90 to-transparent" />
@@ -113,22 +116,22 @@ export function ActivityDetailDialog({ activity, open, onOpenChange }: ActivityD
             </div>
           </div>
         )}
-        <div className={hasImage ? "px-4 pb-4 pt-1" : "p-4"}>
-          <DialogHeader className={hasImage ? "" : "pb-2"}>
+        <div className={hasImage ? "min-w-0 px-4 pb-4 pt-1" : "min-w-0 p-4"}>
+          <DialogHeader className={hasImage ? "min-w-0" : "min-w-0 pb-2"}>
             {!hasImage && (
               <div className="flex items-center gap-2 mb-2">
                 {getActivityIcon(activity.type)}
                 <Badge className={`${badge.className} text-xs`}>{badge.label}</Badge>
               </div>
             )}
-            <DialogTitle className="text-base">{displayTitle}</DialogTitle>
-            <DialogDescription className="text-xs">
+            <DialogTitle className="min-w-0 [overflow-wrap:anywhere] text-left text-base">{displayTitle}</DialogTitle>
+            <DialogDescription className="min-w-0 [overflow-wrap:anywhere] text-left text-[13px]">
               {formatFullTimestamp(activity.timestamp)}
               {activity.dvr_name && t("dialog.activity.onDvr", { name: activity.dvr_name })}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-3 space-y-0">
+          <div className="mt-3 min-w-0 space-y-0">
             {activity.type === "watching_channel" && (
               <>
                 <DetailRow label={t("dialog.activity.field.program")} value={activity.program_title} />
@@ -150,7 +153,7 @@ export function ActivityDetailDialog({ activity, open, onOpenChange }: ActivityD
                 <DetailRow label={t("dialog.activity.field.ipAddress")} value={activity.device_ip} />
                 {extra.summary && (
                   <div className="pt-2 mt-2 border-t border-border/30">
-                    <p className="text-xs text-muted-foreground leading-relaxed">{extra.summary}</p>
+                    <p className="[overflow-wrap:anywhere] text-[13px] leading-relaxed text-muted-foreground">{extra.summary}</p>
                   </div>
                 )}
               </>
@@ -172,7 +175,7 @@ export function ActivityDetailDialog({ activity, open, onOpenChange }: ActivityD
             )}
 
             {!activity.channel_name && !activity.program_title && !extra.path && (
-              <p className="text-sm text-muted-foreground">{activity.message}</p>
+              <p className="[overflow-wrap:anywhere] text-sm text-muted-foreground">{activity.message}</p>
             )}
           </div>
         </div>

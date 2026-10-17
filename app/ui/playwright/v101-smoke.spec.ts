@@ -1,4 +1,4 @@
-import { expect, test, type Route } from "@playwright/test"
+import { expect, test, type Page, type Route } from "@playwright/test"
 
 import { installApiMocks, mockSecurityStatus, mockSettings, mockSetupStatus, mockSystemInfo } from "./support/mock-api"
 
@@ -7,6 +7,18 @@ const fulfillJson = (route: Route, body: unknown, status = 200) => route.fulfill
   contentType: "application/json",
   body: JSON.stringify(body),
 })
+
+
+async function openDashboardDetails(page: Page) {
+  if ((page.viewportSize()?.width ?? 1440) >= 1280) return
+  for (const id of ["mobile-uptime-details", "mobile-timeline-details"]) {
+    const toggle = page.locator(`[aria-controls="${id}"]`)
+    await expect(toggle).toBeVisible()
+    if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click()
+    await expect(toggle).toHaveAttribute("aria-expanded", "true")
+    await expect(page.locator(`#${id}`)).toBeVisible()
+  }
+}
 
 test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
@@ -70,7 +82,7 @@ test("temporary restart failures never expose an empty savable Settings form", a
 
   await page.goto("/#settings:general")
 
-  await expect(page.getByRole("heading", { name: "Settings are temporarily unavailable" })).toBeVisible()
+  await expect(page.getByRole("alert").getByText("Settings are temporarily unavailable", { exact: true })).toBeVisible()
   await expect(page.getByText("Your saved settings have not been changed.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Save Settings" })).toHaveCount(0)
   await expect(page.getByText("No DVR servers configured.")).toHaveCount(0)
@@ -78,7 +90,7 @@ test("temporary restart failures never expose an empty savable Settings form", a
   settingsAvailable = true
   await page.getByRole("button", { name: "Try again" }).click()
 
-  await expect(page.getByText("Core Settings", { exact: true })).toBeVisible()
+  await expect(page.getByText("DVR & App", { exact: true })).toBeVisible()
   await expect(page.getByPlaceholder("e.g., Main DVR")).toHaveValue("Main DVR")
   await expect(page.getByRole("button", { name: "Save Settings" })).toBeDisabled()
 })
@@ -103,6 +115,7 @@ test("Active Streams renders recorded-content title and clean client metadata", 
   }))
 
   await page.goto("/#overview")
+  await openDashboardDetails(page)
   await page.getByLabel("Refresh", { exact: true }).click()
 
   await expect(page.getByText("bedroom channels watching WYFF News 4 at 6pm")).toBeVisible()
@@ -127,6 +140,7 @@ test("post-update monitoring startup clears itself without a manual refresh", as
   })
 
   await page.goto("/#overview")
+  await openDashboardDetails(page)
   await expect(page.getByText("Monitoring starting on Main DVR")).toBeVisible()
   await expect(page.getByText("Monitoring starting on Main DVR")).toHaveCount(0, { timeout: 10_000 })
   expect(systemInfoRequests).toBeGreaterThanOrEqual(3)
@@ -214,6 +228,7 @@ test("Recent Activity applies an exact client without changing the aggregate tim
     new URL(response.url()).pathname === "/api/v1/activity-history/filters" && response.ok(),
   )
   await page.goto("/#overview")
+  await openDashboardDetails(page)
   await clientFiltersLoaded
   const filterButton = page.getByRole("button", { name: "Filter activity by type" })
   await expect(filterButton.locator(".animate-spin")).toHaveCount(0)
@@ -223,7 +238,7 @@ test("Recent Activity applies an exact client without changing the aggregate tim
 
   await expect.poll(() => clientQueries).toContain("Living Room Apple TV")
   await expect(page.getByText("Filtered live TV activity")).toBeVisible()
-  await expect(page.getByText("24-Hour Timeline")).toBeVisible()
+  await expect(page.locator("#mobile-timeline-details").getByText("24-Hour Timeline")).toBeVisible()
 })
 
 test("24-Hour Timeline tooltip matches a discrete event interval without an unnamed zero row", async ({ page }, testInfo) => {
@@ -261,7 +276,8 @@ test("24-Hour Timeline tooltip matches a discrete event interval without an unna
   })
 
   await page.goto("/#overview")
-  await expect(page.getByText("Detected events in each 20-minute interval")).toBeVisible()
+  await openDashboardDetails(page)
+  await expect(page.locator("#mobile-timeline-details").getByText("Detected events in each 20-minute interval")).toBeVisible()
   await expect(page.getByText("Recording 0", { exact: true })).toBeVisible()
 
   const chart = page.getByRole("img", { name: /24-hour activity timeline/ })
@@ -335,7 +351,8 @@ test("a seven-day Recent Activity selection keeps the Timeline query fixed at 24
   })
 
   await page.goto("/#overview")
-  await expect(page.getByText("Detected events in each 20-minute interval")).toBeVisible()
+  await openDashboardDetails(page)
+  await expect(page.locator("#mobile-timeline-details").getByText("Detected events in each 20-minute interval")).toBeVisible()
   activityQueries.length = 0
   await page.getByRole("combobox", { name: "Select activity time range" }).click()
   await page.getByRole("option", { name: "Last 7 Days" }).click()
@@ -444,11 +461,20 @@ test("ChannelWatch uptime keeps DVR details in a standard dialog", async ({ page
   }))
 
   await page.goto("/#overview")
-  const disclosure = page.getByRole("button", { name: /DVR uptime/ })
+  const details = page.locator("#mobile-uptime-details")
+  const disclosure = details.locator("button").filter({ hasText: "1 of 2 connected" })
+  await expect(disclosure).toContainText("DVR uptime")
+  if ((page.viewportSize()?.width ?? 1440) < 1280) {
+    const detailsToggle = page.locator('[aria-controls="mobile-uptime-details"]')
+    await detailsToggle.click()
+    await expect(detailsToggle).toHaveAttribute("aria-expanded", "true")
+  }
   await expect(disclosure).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText("ChannelWatch Uptime")).toBeVisible()
+  await expect(details).toBeVisible()
+  if ((page.viewportSize()?.width ?? 1440) >= 1280) {
+    await expect(details.getByText("ChannelWatch Uptime")).toBeVisible()
+  }
   await expect(page.getByText("DVR Health", { exact: true })).toBeVisible()
-  await expect(disclosure).toContainText("1 of 2 connected")
   await disclosure.click()
 
   const dialog = page.getByRole("dialog", { name: "DVR uptime" })
@@ -459,6 +485,29 @@ test("ChannelWatch uptime keeps DVR details in a standard dialog", async ({ page
   await dialog.getByRole("button", { name: "Close" }).first().click()
   await expect(disclosure).toBeFocused()
 })
+
+for (const diskSummaryCase of [
+  { name: "mobile warning", width: 375, severity: "warning", label: "Warning", icon: ".lucide-triangle-alert", color: /text-amber-700/ },
+  { name: "tablet critical", width: 768, severity: "critical", label: "Critical", icon: ".lucide-circle-alert", color: /text-red-700/ },
+] as const) {
+  test(`collapsed disk space shows ${diskSummaryCase.name} severity`, async ({ page }) => {
+    await page.setViewportSize({ width: diskSummaryCase.width, height: 812 })
+    await page.route("**/api/system-info", (route) => fulfillJson(route, {
+      ...mockSystemInfo,
+      disk_severity: diskSummaryCase.severity,
+    }))
+
+    await page.goto("/#overview")
+    const disclosure = page.locator('[aria-controls="mobile-disk-details"]')
+    await expect(disclosure).toBeVisible()
+    await expect(disclosure).toHaveAttribute("aria-expanded", "false")
+    const severity = disclosure.getByText(diskSummaryCase.label, { exact: true })
+    await expect(severity).toBeVisible()
+    await expect(severity).toHaveClass(diskSummaryCase.color)
+    await expect(severity.locator(diskSummaryCase.icon)).toBeVisible()
+    await expect(disclosure).toContainText("Free")
+  })
+}
 
 test("feature requests are lightweight and submit no diagnostics", async ({ page }) => {
   let submitted: Record<string, unknown> | null = null
@@ -637,7 +686,7 @@ test("Update Center ignores an older cached release and offers v1.0.1 as an app 
   }))
 
   await page.goto("/#settings:updates")
-  await expect(page.getByText("Current release v1.0.0")).toBeVisible()
+  await expect(page.getByText("Current release v1.0.0", { exact: true })).toBeVisible()
   await expect(page.getByTestId("update-stale-cache-notice")).toBeVisible()
   await expect(page.getByText("v0.9.19", { exact: true })).toHaveCount(0)
   await expect(page.getByText("These old highlights must not be rendered.")).toHaveCount(0)
@@ -645,7 +694,7 @@ test("Update Center ignores an older cached release and offers v1.0.1 as an app 
   await page.route("**/api/v1/update/check", (route) => fulfillJson(route, availableStatus))
   await page.getByRole("button", { name: "Check for updates" }).click()
   await expect(page.getByText("v1.0.1", { exact: true })).toBeVisible()
-  await expect(page.getByText("A newer container image is required.")).toHaveCount(0)
+  await expect(page.getByText("A container image update is required.", { exact: true })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Apply update" })).toBeEnabled()
 })
 
@@ -940,7 +989,7 @@ test("Update Center follows an operation started in another tab", async ({ page 
   })
 
   await page.goto("/#settings:updates")
-  await expect(page.getByRole("heading", { name: "Update operation in progress: applying." })).toBeVisible()
+  await expect(page.getByRole("alert").getByText("Update operation in progress: applying.", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Check for updates" })).toBeDisabled()
   await expect(page.getByRole("button", { name: "Apply update" })).toBeDisabled()
 

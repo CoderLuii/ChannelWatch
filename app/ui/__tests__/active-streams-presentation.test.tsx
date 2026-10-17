@@ -28,4 +28,53 @@ describe("Active Streams presentation", () => {
     expect(html).toContain(subtitle)
     expect(html).not.toContain("Unknown")
   })
+
+  it("shows configured custom artwork as a small decorative image", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(MetricCard, {
+        title: "Active Streams",
+        icon: Tv,
+        value: 1,
+        subtitle: "Living room",
+        loading: false,
+        hasError: false,
+        gradientClasses: "",
+        iconBgClass: "",
+        iconColorClass: "",
+        valueColorClass: "",
+        subtitleColorClass: "",
+        loadingColorClass: "",
+        backgroundImage: "https://example.test/custom-artwork.webp",
+      }),
+    )
+
+    expect(html).toContain('data-testid="metric-card-artwork"')
+    expect(html).toContain('src="https://example.test/custom-artwork.webp"')
+    expect(html).toContain('alt=""')
+    expect(html).toContain("pr-20")
+  })
+
+  it("omits the ChannelWatch logo fallback from content cards", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(MetricCard, {
+        title: "Active Streams",
+        icon: Tv,
+        value: 0,
+        subtitle: "No active streams",
+        loading: false,
+        hasError: false,
+        gradientClasses: "",
+        iconBgClass: "",
+        iconColorClass: "",
+        valueColorClass: "",
+        subtitleColorClass: "",
+        loadingColorClass: "",
+        backgroundImage: "/images/channelwatch-logo.png",
+      }),
+    )
+
+    expect(html).not.toContain('data-testid="metric-card-artwork"')
+    expect(html).not.toContain('src="/images/channelwatch-logo.png"')
+    expect(html).not.toContain("pr-20")
+  })
 })

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "repository": "coderluii/channelwatch",
+  "target_version": "1.6.0",
+  "legacy_sources": ["1.4.0", "1.4.1", "1.4.5"],
+  "signed_overlays": {
+    "1.4.1": {
+      "version": "1.4.1",
+      "source_commit": "dd57aa4d446ce5c37534d3cb68df7ae746ae56f9",
+      "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.4.1/channelwatch-catalog-v1.4.1.json",
+      "catalog_sha256": "bb0b636ed70b139b67b7b824d4542a5a80798be9db71a30b6a10bf8e5a2539df",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.4.1/channelwatch-app-v1.4.1.zip",
+      "bundle_sha256": "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd"
+    },
+    "1.4.5": {
+      "version": "1.4.5",
+      "source_commit": "6a9a0200bfa4ce019b3fe973ff4343c3e73793af",
+      "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.4.5/channelwatch-catalog-v1.4.5.json",
+      "catalog_sha256": "376e7f0572a7f3ebcc2ce74f1d30a703c026a690c99fca81108d08f5db31f783",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.4.5/channelwatch-app-v1.4.5.zip",
+      "bundle_sha256": "d354ea7d424e4a7c8af623fad2408665f8e536b7ec171979da8bed4afed9f362"
+    }
+  },
+  "images": {
+    "1.4.0": {
+      "source_commit": "0cc216472c089c1951a386052422a330f1ff169f",
+      "index_digest": "sha256:796a2c666cc2d4cbc7dacd9a99c8651e7ef96f56dff30315788e5879cbe9e53e",
+      "manifests": {
+        "amd64": "sha256:cdc8bacf12e0e7cc6d167cb22aa921f4c319fac297be96a9c6e2689ba2ed9371",
+        "arm64": "sha256:d251ee3c6a9591b821073d252d304f354186d825cab1e1ae58c1a4a48e277ba3"
+      }
+    },
+    "1.4.1": {
+      "source_commit": "dd57aa4d446ce5c37534d3cb68df7ae746ae56f9",
+      "index_digest": "sha256:e6830295ead13e859c01d9d66915b7bb3a6e41f858bb191795cc51ac021b9751",
+      "manifests": {
+        "amd64": "sha256:43e2e898a67ca1a1aa70fa49b3e3f581243f0e653d3e26b62e4287c05014e179",
+        "arm64": "sha256:7b7409022eb83d71227d1007349d9cc3b3d7f62b5d69ed8a9294a248b7c21ac8"
+      }
+    },
+    "1.4.5": {
+      "source_commit": "6a9a0200bfa4ce019b3fe973ff4343c3e73793af",
+      "index_digest": "sha256:a99166fc882bbf012cf1a9c98333a3b6ee2a7fead74a834ededef9888e2271e7",
+      "manifests": {
+        "amd64": "sha256:ad6ab4b98bf4ccaf61575d961d85d237186aed963d4feeba2830945cff0aa548",
+        "arm64": "sha256:5505bca41aecfa88581b27ec230e9907d6f5aceb89487b2c9ee64143fc5b0759"
+      }
+    }
+  },
+  "scenarios": [
+    {"id": "stock-1.4.0", "image_version": "1.4.0", "source_application_version": "1.4.0", "overlay_version": null},
+    {"id": "overlay-1.4.0-to-1.4.1", "image_version": "1.4.0", "source_application_version": "1.4.1", "overlay_version": "1.4.1"},
+    {"id": "overlay-1.4.0-to-1.4.5", "image_version": "1.4.0", "source_application_version": "1.4.5", "overlay_version": "1.4.5"},
+    {"id": "stock-1.4.1", "image_version": "1.4.1", "source_application_version": "1.4.1", "overlay_version": null},
+    {"id": "overlay-1.4.1-to-1.4.5", "image_version": "1.4.1", "source_application_version": "1.4.5", "overlay_version": "1.4.5"},
+    {"id": "stock-1.4.5", "image_version": "1.4.5", "source_application_version": "1.4.5", "overlay_version": null}
+  ]
+}

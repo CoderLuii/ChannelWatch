@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +28,24 @@ SCRIPT = ROOT / "scripts/release/verify-runtime-capability.py"
 
 def _load():
     spec = importlib.util.spec_from_file_location("runtime_capability_verifier", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_aggregate():
+    script = ROOT / "scripts/release/aggregate-runtime-capability.py"
+    spec = importlib.util.spec_from_file_location("runtime_capability_aggregate", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_aggregate_test_support():
+    path = ROOT / "app/core/tests/test_runtime_capability_aggregate.py"
+    spec = importlib.util.spec_from_file_location("runtime_capability_aggregate_tests", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -629,6 +647,44 @@ def test_image_inventory_probe_compiles_before_container_execution(monkeypatch):
     assert verifier.image_inventory("canary")["entries"] == entries
 
 
+def test_image_inventory_probe_uses_default_or_explicit_bootstrap_paths(monkeypatch):
+    verifier = _load()
+    observed = []
+    entries = [
+        {"path": "/venv", "type": "directory", "mode": "0755", "size": 0}
+    ]
+
+    def execute(_name, code):
+        tree = ast.parse(code)
+        required = next(
+            ast.literal_eval(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "required"
+                for target in node.targets
+            )
+        )
+        observed.append(required)
+        return {
+            "sha256": "a" * 64,
+            "path_count": 1,
+            "regular_file_bytes": 0,
+            "entries": entries,
+        }
+
+    legacy_paths = (
+        "/usr/local/bin/channelwatch",
+        "/app/core/runtime_launcher.py",
+    )
+    monkeypatch.setattr(verifier, "docker_exec_json", execute)
+
+    verifier.image_inventory("current")
+    verifier.image_inventory("legacy", bootstrap_paths=legacy_paths)
+
+    assert observed == [list(verifier.IMAGE_BOOTSTRAP_PATHS), list(legacy_paths)]
+
+
 def test_image_inventory_probe_has_exact_external_interpreter_link_policy(monkeypatch):
     verifier = _load()
     observed = {}
@@ -923,13 +979,225 @@ def test_update_check_binds_exact_signed_runtime_target():
             )
 
 
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_release_sized_update_check_is_retained_exactly_outside_bounded_receipt(
+    tmp_path: Path, architecture: str
+):
+    verifier = _load()
+    files = [
+        {
+            "mode": "0644",
+            "path": (
+                "dependencies/site-packages/channelwatch/módulo_0000.py"
+                if index == 0
+                else f"dependencies/site-packages/channelwatch/module_{index:04d}.py"
+            ),
+            "sha256": f"{index:064x}"[-64:],
+            "size": 1000 + index,
+        }
+        for index in range(2665)
+    ]
+
+    def runtime_descriptor(name: str) -> dict:
+        return {
+            "application_version": "1.6.0",
+            "architecture": name,
+            "bundle_format": 4,
+            "dependency_inventory_path": "dependencies/inventory.json",
+            "dependency_inventory_sha256": "a" * 64,
+            "expanded_size": 100_000_000,
+            "files": files,
+            "generation_id": f"1.6.0-{name}-{'b' * 12}",
+            "libc_family": "glibc",
+            "minimum_libc_version": "2.36",
+            "os_family": "linux",
+            "python_cache_tag": "cpython-314",
+            "python_implementation": "cpython",
+            "python_version": "3.14.0",
+            "required_launcher_capability": 4,
+            "schema": 4,
+            "settings_schema_version": 1,
+            "source_commit": "c" * 40,
+        }
+
+    descriptor = runtime_descriptor(architecture)
+    release = {
+        "version": "1.6.0",
+        "runtime_descriptor": descriptor,
+        "bundle_sha256": "d" * 64,
+        "runtime_variants": {
+            name: {"runtime_descriptor": runtime_descriptor(name)}
+            for name in ("amd64", "arm64")
+        },
+    }
+    checked = {
+        "update_available": True,
+        "image_required": False,
+        "catalog_state": "update_available",
+        "latest": release,
+        "trusted_target": release,
+        "compatible_app_release": release,
+        "recommended_release": release,
+    }
+    checked = verifier.validate_update_check(
+        checked,
+        version="1.6.0",
+        descriptor=descriptor,
+        bundle_sha256="d" * 64,
+    )
+    evidence = tmp_path / f"runtime-capability-{architecture}.json"
+    artifact = verifier.retain_update_check_status(
+        evidence,
+        architecture=architecture,
+        source_commit="c" * 40,
+        status=checked,
+    )
+    retained = tmp_path / artifact["file"]
+    payload = json.loads(retained.read_bytes())
+
+    assert 5 * 1024 * 1024 < artifact["size"] <= verifier.MAX_UPDATE_CHECK_ARTIFACT_BYTES
+    assert artifact["size"] == retained.stat().st_size
+    assert artifact["sha256"] == hashlib.sha256(retained.read_bytes()).hexdigest()
+    assert payload == {
+        "schema": 1,
+        "mode": verifier.UPDATE_CHECK_EVIDENCE_MODE,
+        "phase": verifier.UPDATE_CHECK_EVIDENCE_PHASE,
+        "architecture": architecture,
+        "source_commit": "c" * 40,
+        "status": checked,
+    }
+    assert "módulo_0000.py".encode() in retained.read_bytes()
+
+    compact = verifier.compact_update_check_evidence(checked, artifact)
+    assert compact["trusted_target"] == {
+        "version": "1.6.0",
+        "runtime_descriptor": descriptor,
+        "bundle_sha256": "d" * 64,
+    }
+    encoded = verifier.serialize_bounded_receipt(
+        {
+            "schema": 2,
+            "status": "passed",
+            "architecture": {"qualification": {"check": compact}},
+        }
+    )
+    assert len(encoded) <= verifier.MAX_RECEIPT_BYTES
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_release_sized_rollback_status_is_retained_exactly_outside_receipt(
+    tmp_path: Path, architecture: str
+):
+    verifier = _load()
+    status = {
+        "current_version": "1.5.3",
+        "launcher_protocol": 4,
+        "active_bundle": None,
+        "operation_busy": False,
+        "worker_runtime": {
+            "python_executable": "/venv/bin/python",
+            "python_version": "3.14.8",
+            "verified_generation": None,
+        },
+        "latest": {"release_catalog": "é" * (3 * 1024 * 1024)},
+    }
+    evidence = tmp_path / f"runtime-capability-{architecture}.json"
+    artifact = verifier.retain_rollback_status(
+        evidence,
+        architecture=architecture,
+        source_commit="c" * 40,
+        status=status,
+    )
+    retained = tmp_path / artifact["file"]
+    payload = json.loads(retained.read_bytes())
+
+    assert 5 * 1024 * 1024 < artifact["size"] <= verifier.MAX_ROLLBACK_STATUS_ARTIFACT_BYTES
+    assert artifact["size"] == retained.stat().st_size
+    assert artifact["sha256"] == hashlib.sha256(retained.read_bytes()).hexdigest()
+    assert payload == {
+        "schema": 1,
+        "mode": verifier.UPDATE_CHECK_EVIDENCE_MODE,
+        "phase": verifier.ROLLBACK_STATUS_EVIDENCE_PHASE,
+        "architecture": architecture,
+        "source_commit": "c" * 40,
+        "status": status,
+    }
+    assert "é".encode() in retained.read_bytes()
+
+    compact = verifier.compact_rollback_status_evidence(status, artifact)
+    assert compact == {
+        "current_version": "1.5.3",
+        "launcher_protocol": 4,
+        "active_bundle": None,
+        "operation_busy": False,
+        "worker_runtime": status["worker_runtime"],
+        "raw_status_artifact": artifact,
+    }
+    encoded = verifier.serialize_bounded_receipt(
+        {
+            "schema": 2,
+            "status": "passed",
+            "architecture": {"qualification": {"rollback_status": compact}},
+        }
+    )
+    assert len(encoded) <= verifier.MAX_RECEIPT_BYTES
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), "oversize"])
+def test_rollback_status_artifact_rejects_invalid_or_oversized_json(
+    tmp_path: Path, invalid
+):
+    verifier = _load()
+    status = (
+        {"invalid": invalid}
+        if invalid != "oversize"
+        else {"padding": "x" * verifier.MAX_ROLLBACK_STATUS_ARTIFACT_BYTES}
+    )
+    with pytest.raises(
+        verifier.CapabilityError, match="valid JSON|exceeds its 8 MiB bound"
+    ):
+        verifier.retain_rollback_status(
+            tmp_path / "runtime-capability-amd64.json",
+            architecture="amd64",
+            source_commit="c" * 40,
+            status=status,
+        )
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), "oversize"])
+def test_update_check_artifact_rejects_invalid_or_oversized_json(
+    tmp_path: Path, invalid
+):
+    verifier = _load()
+    status = (
+        {"invalid": invalid}
+        if invalid != "oversize"
+        else {"padding": "x" * verifier.MAX_UPDATE_CHECK_ARTIFACT_BYTES}
+    )
+    evidence = tmp_path / "runtime-capability-amd64.json"
+
+    with pytest.raises(
+        verifier.CapabilityError, match="valid JSON|exceeds its 8 MiB bound"
+    ):
+        verifier.retain_update_check_status(
+            evidence,
+            architecture="amd64",
+            source_commit="c" * 40,
+            status=status,
+        )
+
+    assert not (tmp_path / "runtime-capability-amd64-initial-update-check.json").exists()
+
+
 def test_rollback_response_and_status_are_strictly_bound():
     verifier = _load()
     job_id = "0123456789abcdef0123456789abcdef"
     response = {
         "operation": "rollback",
         "status": "restarting",
+        "version": "1.5.2",
         "rolled_back_from": "1.5.2",
+        "restart_required": True,
         "target": "1.5.0",
         "job_id": job_id,
     }
@@ -955,6 +1223,16 @@ def test_rollback_response_and_status_are_strictly_bound():
             source_version="1.5.2",
             target_version="1.5.0",
         )
+    for malformed in (
+        {key: value for key, value in response.items() if key != "restart_required"},
+        {**response, "restart_required": False},
+    ):
+        with pytest.raises(verifier.CapabilityError, match="rollback response"):
+            verifier.validate_rollback_response(
+                malformed,
+                source_version="1.5.2",
+                target_version="1.5.0",
+            )
     with pytest.raises(verifier.CapabilityError, match="post-rollback status"):
         verifier.validate_rollback_status(
             {**status, "active_bundle": {}}, target_version="1.5.0"
@@ -966,6 +1244,108 @@ def test_rollback_response_and_status_are_strictly_bound():
                 "worker_runtime": {**status["worker_runtime"], "pid": 202},
             },
             target_version="1.5.0",
+        )
+
+
+def test_rollback_response_accepts_exact_producer_handoff_states(
+    tmp_path: Path, monkeypatch
+):
+    from core.update_center import UpdateManager
+
+    verifier = _load()
+    source_version = "1.6.0"
+    target_version = "1.4.5"
+    job_id = "0123456789abcdef0123456789abcdef"
+    restarting = {
+        "job_id": job_id,
+        "operation": "rollback",
+        "status": "restarting",
+        "version": source_version,
+        "rolled_back_from": source_version,
+        "restart_required": True,
+    }
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "update-job.json").write_text(
+        json.dumps(restarting), encoding="utf-8"
+    )
+    monkeypatch.setenv("CHANNELWATCH_APP_DIR", str(image_dir))
+    monkeypatch.setenv("CHANNELWATCH_IMAGE_APP_DIR", str(image_dir))
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version=target_version,
+        image_version=target_version,
+        launcher_protocol=3,
+    )
+    manager.record_startup_success(
+        component="core",
+        running_version=target_version,
+        activation_id="",
+        healthy=True,
+    )
+    validating = json.loads(manager.job_path.read_text(encoding="utf-8"))
+    manager.record_startup_success(
+        component="ui",
+        running_version=target_version,
+        activation_id="",
+        healthy=True,
+    )
+    success = json.loads(manager.job_path.read_text(encoding="utf-8"))
+
+    for response in (restarting, validating, success):
+        assert verifier.validate_rollback_response(
+            response,
+            source_version=source_version,
+            target_version=target_version,
+        ) == response
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda response: response.update(status="succeeded"),
+        lambda response: response.update(status="failed"),
+        lambda response: response.update(version="1.5.3"),
+        lambda response: response.update(restored_version="1.4.1"),
+        lambda response: response.update(rollback_applied=False),
+        lambda response: response.update(restart_required=True),
+        lambda response: response.update(validated_at=""),
+        lambda response: response["startup_components"].pop("ui"),
+        lambda response: response["startup_components"]["core"].update(
+            version="1.4.1"
+        ),
+    ],
+)
+def test_terminal_rollback_response_rejects_foreign_or_incomplete_state(mutation):
+    verifier = _load()
+    response = {
+        "job_id": "0123456789abcdef0123456789abcdef",
+        "operation": "rollback",
+        "status": "success",
+        "version": "1.6.0",
+        "rolled_back_from": "1.6.0",
+        "rollback_applied": True,
+        "restart_required": False,
+        "restored_version": "1.4.5",
+        "startup_components": {
+            component: {
+                "healthy": True,
+                "version": "1.4.5",
+                "ready_at": f"2026-10-16T20:40:0{index}Z",
+            }
+            for index, component in enumerate(("core", "ui"))
+        },
+        "validated_at": "2026-10-16T20:40:02Z",
+    }
+    mutation(response)
+
+    with pytest.raises(verifier.CapabilityError, match="rollback response"):
+        verifier.validate_rollback_response(
+            response,
+            source_version="1.6.0",
+            target_version="1.4.5",
         )
 
 
@@ -1213,12 +1593,14 @@ def test_damaged_recovery_seals_hold_before_authenticated_explicit_rollback(
 
         def __init__(self, *_args):
             self.rollback_requested = False
+            self.rollback_job_complete = False
 
         def set_base_url(self, _url):
             pass
 
         def login(self):
-            pass
+            if self.rollback_requested:
+                events.append("login-after-readiness")
 
         def request(self, path, payload=None):
             if path == "/api/v1/update/check":
@@ -1231,7 +1613,8 @@ def test_damaged_recovery_seals_hold_before_authenticated_explicit_rollback(
                 self.rollback_requested = True
                 return {
                     "job_id": completed["job_id"], "operation": "rollback",
-                    "status": "restarting", "rolled_back_from": version,
+                    "status": "restarting", "version": version,
+                    "rolled_back_from": version, "restart_required": True,
                 }
             raise AssertionError(path)
 
@@ -1267,7 +1650,12 @@ def test_damaged_recovery_seals_hold_before_authenticated_explicit_rollback(
     monkeypatch.setattr(verifier, "seed_synthetic_rbac_settings", lambda *_args: None)
     monkeypatch.setattr(verifier, "start_probe_app", lambda **_kwargs: None)
     monkeypatch.setattr(verifier, "published_base_url", lambda *_args: "http://probe")
-    monkeypatch.setattr(verifier, "wait_for_image_health", lambda *_args: None)
+    def wait_for_health(*_args):
+        if client.rollback_requested:
+            assert client.rollback_job_complete
+            events.append("readiness-after-job")
+
+    monkeypatch.setattr(verifier, "wait_for_image_health", wait_for_health)
     monkeypatch.setattr(verifier, "capture_image_operational_state", lambda *_args, **_kwargs: {"phase": "image"})
     monkeypatch.setattr(verifier, "image_inventory", lambda *_args: {"inventory": True})
     monkeypatch.setattr(verifier, "persistent_hashes", lambda *_args: {"/config/settings.json": "c" * 64})
@@ -1288,7 +1676,12 @@ def test_damaged_recovery_seals_hold_before_authenticated_explicit_rollback(
     monkeypatch.setattr(verifier, "validate_recovery_hold_status", validate_hold)
     monkeypatch.setattr(verifier, "capture_recovery_hold_operational_state", lambda *_args, **_kwargs: {"phase": "hold"})
     monkeypatch.setattr(verifier, "selected_supervisor_processes", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(verifier, "wait_for_successful_job", lambda *_args, **_kwargs: completed)
+    def wait_for_job(*_args, **_kwargs):
+        events.append("rollback-job-success")
+        client.rollback_job_complete = True
+        return completed
+
+    monkeypatch.setattr(verifier, "wait_for_successful_job", wait_for_job)
     monkeypatch.setattr(verifier, "validate_image_inventory", lambda *_args: None)
     monkeypatch.setattr(verifier, "validate_preservation", lambda *_args: None)
     monkeypatch.setattr(verifier, "inventory_summary", lambda value: value)
@@ -1306,6 +1699,7 @@ def test_damaged_recovery_seals_hold_before_authenticated_explicit_rollback(
 
     assert events == [
         "seal-recovery-hold", "validate-hold", "rollback-request",
+        "rollback-job-success", "readiness-after-job", "login-after-readiness",
         "seal-post-rollback",
     ]
     assert result["successful_apply_job"] == apply_job
@@ -1315,6 +1709,7 @@ def test_damaged_recovery_seals_hold_before_authenticated_explicit_rollback(
 
     events.clear()
     client.rollback_requested = False
+    client.rollback_job_complete = False
 
     def reject_hold(*_args, **_kwargs):
         events.append("validate-hold")
@@ -2106,6 +2501,395 @@ def test_damage_and_refusal_terminal_jobs_require_exact_failure_causes():
         )
 
 
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("noexec", "Runtime storage does not permit execution."),
+        (
+            "low_space",
+            "Runtime storage does not have enough free space for this generation.",
+        ),
+    ],
+)
+def test_refusal_probe_accepts_v153_structured_error_then_reads_exact_job(
+    monkeypatch, kind, message
+):
+    verifier = _load()
+    job_id = "c" * 32
+    terminal = {
+        "job_id": job_id,
+        "operation": "apply",
+        "status": "failed",
+        "version": "1.6.0",
+        "bundle_sha256": "d" * 64,
+        "rollback_applied": False,
+        "restart_required": False,
+        "error": message,
+    }
+
+    class Client:
+        def request(self, path, payload=None):
+            if path == "/api/v1/update/apply":
+                assert payload == {"version": "1.6.0", "job_id": job_id}
+                body = json.dumps(
+                    {
+                        "detail": {
+                            "code": "ERR_UPDATE_APPLY_FAILED",
+                            "message": message,
+                            "remediation": "Review the failure and retry.",
+                            "docs_url": None,
+                        }
+                    }
+                ).encode()
+                raise urllib.error.HTTPError(
+                    path,
+                    500,
+                    "Internal Server Error",
+                    {"Content-Type": "application/json"},
+                    BytesIO(body),
+                )
+            if path == f"/api/v1/update/jobs/{job_id}":
+                return terminal
+            raise AssertionError(path)
+
+    monkeypatch.setattr(
+        verifier,
+        "capture_image_operational_state",
+        lambda *_args, **kwargs: {"idle": kwargs["require_idle"]},
+    )
+
+    job, samples = verifier.expect_apply_refusal(
+        Client(),
+        container="app",
+        version="1.6.0",
+        image_version="1.5.3",
+        job_id=job_id,
+        kind=kind,
+        bundle_sha256="d" * 64,
+        timeout=1,
+        initial_operational_state={"idle": True},
+    )
+
+    assert job == terminal
+    assert [sample["phase"] for sample in samples] == ["before", "during", "after"]
+
+
+def test_refusal_probe_reuses_boundary_snapshots_for_strict_aggregate(monkeypatch):
+    verifier = _load()
+    aggregate = _load_aggregate()
+    support = _load_aggregate_test_support()
+    bundle_sha256 = "d" * 64
+    job_id = "c" * 32
+    proof = support._probe_proof(
+        "1.5.3",
+        version="1.6.0",
+        bundle_sha256=bundle_sha256,
+        kind="noexec",
+    )
+
+    def with_uptime(state, seconds):
+        value = copy.deepcopy(state)
+        for service in value["services"].values():
+            service["uptime"] = f"0:00:{seconds:02d}"
+        return value
+
+    initial = with_uptime(proof["initial_operational_state"], 32)
+    during = with_uptime(initial, 35)
+    after = with_uptime(initial, 40)
+    captured = iter((during, after))
+    monkeypatch.setattr(
+        verifier,
+        "capture_image_operational_state",
+        lambda *_args, **_kwargs: copy.deepcopy(next(captured)),
+    )
+
+    terminal = {
+        "job_id": job_id,
+        "operation": "apply",
+        "status": "failed",
+        "version": "1.6.0",
+        "bundle_sha256": bundle_sha256,
+        "rollback_applied": False,
+        "restart_required": False,
+        "error": "Runtime storage does not permit execution.",
+    }
+
+    class Client:
+        def request(self, path, payload=None):
+            if path == "/api/v1/update/apply":
+                assert payload == {"version": "1.6.0", "job_id": job_id}
+                return {"job_id": job_id}
+            if path == f"/api/v1/update/jobs/{job_id}":
+                return terminal
+            raise AssertionError(path)
+
+    job, samples = verifier.expect_apply_refusal(
+        Client(),
+        container="app",
+        version="1.6.0",
+        image_version="1.5.3",
+        job_id=job_id,
+        kind="noexec",
+        bundle_sha256=bundle_sha256,
+        timeout=1,
+        initial_operational_state=initial,
+    )
+
+    assert job == terminal
+    assert samples == [
+        {"phase": "before", **initial},
+        {"phase": "during", **during},
+        {"phase": "after", **after},
+    ]
+    proof["initial_operational_state"] = initial
+    proof["health_samples"] = samples
+    proof["operational_state_after"] = after
+    proof["rollback_status"]["worker_runtime"] = copy.deepcopy(after["status_worker"])
+    aggregate._validate_filesystem_refusal(
+        "noexec",
+        proof,
+        version="1.6.0",
+        image_version="1.5.3",
+        expected_bundle_sha256=bundle_sha256,
+        expected_required_bytes=proof["required_bytes"],
+    )
+
+    invalid_proofs = []
+    pid_changed = copy.deepcopy(proof)
+    pid_changed["health_samples"][0]["processes"]["core"]["pid"] += 1
+    pid_changed["health_samples"][0]["services"]["core"]["pid"] += 1
+    invalid_proofs.append(pid_changed)
+    runtime_changed = copy.deepcopy(proof)
+    runtime_changed["health_samples"][-1]["status_worker"]["python_version"] = "3.14.9"
+    invalid_proofs.append(runtime_changed)
+    health_changed = copy.deepcopy(proof)
+    health_changed["health_samples"][-1]["health"]["ready"]["ready"] = False
+    invalid_proofs.append(health_changed)
+    for invalid in invalid_proofs:
+        with pytest.raises(ValueError):
+            aggregate._validate_filesystem_refusal(
+                "noexec",
+                invalid,
+                version="1.6.0",
+                image_version="1.5.3",
+                expected_bundle_sha256=bundle_sha256,
+                expected_required_bytes=proof["required_bytes"],
+            )
+
+
+@pytest.mark.parametrize(
+    ("image_version", "status", "body"),
+    [
+        (
+            "1.5.3",
+            409,
+            {
+                "detail": {
+                    "code": "ERR_UPDATE_APPLY_FAILED",
+                    "message": "Runtime storage does not permit execution.",
+                }
+            },
+        ),
+        (
+            "1.5.3",
+            500,
+            {"detail": {"code": "ERR_UPDATE_LOCKED", "message": "locked"}},
+        ),
+        (
+            "1.5.3",
+            500,
+            {
+                "detail": {
+                    "code": "ERR_UPDATE_APPLY_FAILED",
+                    "message": "Unexpected Update Center failure.",
+                }
+            },
+        ),
+        ("1.5.3", 500, {"detail": "Internal Server Error"}),
+        (
+            "1.6.0",
+            500,
+            {
+                "detail": {
+                    "code": "ERR_UPDATE_APPLY_FAILED",
+                    "message": "Runtime storage does not permit execution.",
+                }
+            },
+        ),
+    ],
+)
+def test_refusal_probe_rejects_other_apply_http_errors(
+    monkeypatch, image_version, status, body
+):
+    verifier = _load()
+
+    class Client:
+        @staticmethod
+        def request(path, _payload=None):
+            assert path == "/api/v1/update/apply"
+            raise urllib.error.HTTPError(
+                path,
+                status,
+                "rejected",
+                {"Content-Type": "application/json"},
+                BytesIO(json.dumps(body).encode()),
+            )
+
+    monkeypatch.setattr(
+        verifier,
+        "capture_image_operational_state",
+        lambda *_args, **_kwargs: {"idle": True},
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        verifier.expect_apply_refusal(
+            Client(),
+            container="app",
+            version="1.6.0",
+            image_version=image_version,
+            job_id="c" * 32,
+            kind="noexec",
+            bundle_sha256="d" * 64,
+            timeout=1,
+            initial_operational_state={"idle": True},
+        )
+
+    assert raised.value.code == status
+
+
+def test_refusal_probe_rejects_mismatched_terminal_job_after_expected_http_error(
+    monkeypatch,
+):
+    verifier = _load()
+    job_id = "c" * 32
+
+    class Client:
+        def request(self, path, _payload=None):
+            if path == "/api/v1/update/apply":
+                body = json.dumps(
+                    {
+                        "detail": {
+                            "code": "ERR_UPDATE_APPLY_FAILED",
+                            "message": "Runtime storage does not permit execution.",
+                        }
+                    }
+                ).encode()
+                raise urllib.error.HTTPError(
+                    path,
+                    500,
+                    "Internal Server Error",
+                    {"Content-Type": "application/json"},
+                    BytesIO(body),
+                )
+            if path == f"/api/v1/update/jobs/{job_id}":
+                return {
+                    "job_id": job_id,
+                    "operation": "apply",
+                    "status": "failed",
+                    "version": "1.6.0",
+                    "bundle_sha256": "e" * 64,
+                    "rollback_applied": False,
+                    "restart_required": False,
+                    "error": "Runtime storage does not permit execution.",
+                }
+            raise AssertionError(path)
+
+    monkeypatch.setattr(
+        verifier,
+        "capture_image_operational_state",
+        lambda *_args, **_kwargs: {"idle": True},
+    )
+
+    with pytest.raises(verifier.CapabilityError, match="pre-handoff"):
+        verifier.expect_apply_refusal(
+            Client(),
+            container="app",
+            version="1.6.0",
+            image_version="1.5.3",
+            job_id=job_id,
+            kind="noexec",
+            bundle_sha256="d" * 64,
+            timeout=1,
+            initial_operational_state={"idle": True},
+        )
+
+
+def test_refusal_status_projection_keeps_release_sized_amd64_receipt_bounded():
+    verifier = _load()
+    aggregate = _load_aggregate()
+    common_lifecycle_evidence = "e" * (2 * 1024 * 1024)
+    worker_runtime = {
+        "python_version": "3.14.8",
+        "python_executable": "/venv/bin/python",
+        "verified_generation": None,
+    }
+    release_sized_status = {
+        "current_version": "1.5.3",
+        "launcher_protocol": 4,
+        "active_bundle": None,
+        "operation_busy": False,
+        "worker_runtime": worker_runtime,
+        "latest": {"release_catalog": "x" * (2 * 1024 * 1024)},
+    }
+    def final_receipt(rollback_status):
+        return {
+            "schema": 2,
+            "status": "passed",
+            "target_application_version": "1.6.0",
+            "source_commit": "a" * 40,
+            "signed_catalog_sha256": "b" * 64,
+            "bootstrap": {
+                "status": "passed",
+                "minimum_image_version": "1.5.3",
+                "launcher_protocol": 4,
+                "immutable_bootstrap_sha256": "c" * 64,
+                "image_index_digest": "sha256:" + "c" * 64,
+            },
+            "architecture": {
+                "status": "passed",
+                "architecture": "amd64",
+                "source_commit": "a" * 40,
+                "qualification": {"lifecycle_evidence": common_lifecycle_evidence},
+                "release_qualification": {
+                    "filesystem_refusals": {
+                        kind: {"status": "passed", "rollback_status": rollback_status}
+                        for kind in ("noexec", "low_space")
+                    }
+                },
+            },
+            "logs_sha256": {"app": "d" * 64, "feed": "e" * 64},
+            "release_logs_sha256": {"app": "f" * 64},
+            "release_log_artifacts": {
+                "app": {"file": "app.log", "sha256": "f" * 64, "size": 1024}
+            },
+            "cleanup": {"status": "passed", "failures": []},
+        }
+
+    raw_receipt = final_receipt(release_sized_status)
+    with pytest.raises(verifier.CapabilityError, match="3.5 MiB"):
+        verifier.serialize_bounded_receipt(raw_receipt)
+
+    compact = verifier.compact_filesystem_refusal_status(
+        release_sized_status, target_version="1.5.3"
+    )
+    assert compact == {
+        "current_version": "1.5.3",
+        "launcher_protocol": 4,
+        "active_bundle": None,
+        "operation_busy": False,
+        "worker_runtime": worker_runtime,
+    }
+    assert aggregate._rollback_valid(
+        compact,
+        image_version="1.5.3",
+        operational_state={"status_worker": worker_runtime},
+    )
+    projected_receipt = final_receipt(compact)
+    encoded = verifier.serialize_bounded_receipt(projected_receipt)
+    assert len(encoded) > 2 * 1024 * 1024
+    assert len(encoded) <= verifier.MAX_RECEIPT_BYTES
+
+
 def test_live_ui_resource_log_and_receipt_gates_fail_closed(tmp_path: Path):
     verifier = _load()
     screenshot_records = {}
@@ -2121,6 +2905,11 @@ def test_live_ui_resource_log_and_receipt_gates_fail_closed(tmp_path: Path):
         "final_version": "1.5.3",
         "final_active_bundle": None,
         "observed_progress": True,
+        "expected_console_events": {
+            "unauthenticated_bootstrap": 2,
+            "apply_restart_transport": 5,
+            "rollback_restart_transport": 1,
+        },
         "console_errors": [],
         "page_errors": [],
         "final_health": {
@@ -2131,13 +2920,15 @@ def test_live_ui_resource_log_and_receipt_gates_fail_closed(tmp_path: Path):
         "page_title": "ChannelWatch",
         "screenshots": screenshot_records,
     }
-    assert verifier.validate_live_ui_evidence(
+    validated = verifier.validate_live_ui_evidence(
         value,
         target_version="1.5.4",
         image_version="1.5.3",
         base_url="http://127.0.0.1:1234",
         evidence_root=tmp_path,
-    )["screenshots"] == screenshot_records
+    )
+    assert validated["screenshots"] == screenshot_records
+    assert validated["expected_console_events"] == value["expected_console_events"]
     assert verifier.validate_same_container_identity("container-a", "container-a", "Live UI") == "container-a"
     with pytest.raises(verifier.CapabilityError, match="replaced its container"):
         verifier.validate_same_container_identity("container-a", "container-b", "Live UI")
@@ -2149,6 +2940,32 @@ def test_live_ui_resource_log_and_receipt_gates_fail_closed(tmp_path: Path):
             base_url="http://127.0.0.1:1234",
             evidence_root=tmp_path,
         )
+    with pytest.raises(verifier.CapabilityError, match="exact lifecycle"):
+        verifier.validate_live_ui_evidence(
+            {**value, "unexpected": "field"},
+            target_version="1.5.4",
+            image_version="1.5.3",
+            base_url="http://127.0.0.1:1234",
+            evidence_root=tmp_path,
+        )
+    invalid_event_records = []
+    for mutation in (
+        lambda events: events.pop("rollback_restart_transport"),
+        lambda events: events.update(unexpected=0),
+        lambda events: events.update(apply_restart_transport=True),
+    ):
+        invalid_console_events = copy.deepcopy(value)
+        mutation(invalid_console_events["expected_console_events"])
+        invalid_event_records.append(invalid_console_events)
+    for invalid_console_events in invalid_event_records:
+        with pytest.raises(verifier.CapabilityError, match="expected console events"):
+            verifier.validate_live_ui_evidence(
+                invalid_console_events,
+                target_version="1.5.4",
+                image_version="1.5.3",
+                base_url="http://127.0.0.1:1234",
+                evidence_root=tmp_path,
+            )
 
     observations = {
         "bundle_bytes": 1, "expanded_bytes": 2, "member_count": 3,
@@ -2177,11 +2994,74 @@ def test_live_ui_resource_log_and_receipt_gates_fail_closed(tmp_path: Path):
 
     receipt = {"schema": 2, "status": "passed"}
     encoded = verifier.serialize_bounded_receipt(receipt)
-    assert receipt["serialized_size_bytes"] == len(encoded.encode())
+    assert receipt["serialized_size_bytes"] == len(encoded)
+    assert b"\n  " not in encoded
     with pytest.raises(verifier.CapabilityError, match="3.5 MiB"):
         verifier.serialize_bounded_receipt(
             {"schema": 2, "status": "passed", "blob": "x" * verifier.MAX_RECEIPT_BYTES}
         )
+    with pytest.raises(verifier.CapabilityError, match="valid JSON"):
+        verifier.serialize_bounded_receipt(
+            {"schema": 2, "status": "passed", "duration": float("nan")}
+        )
+
+
+def test_live_ui_binds_playwright_health_wait_to_startup_timeout(monkeypatch, tmp_path):
+    verifier = _load()
+    captured = {}
+
+    class Resources:
+        def container(self, _suffix):
+            return "live-ui"
+
+        def create_volume(self, _suffix):
+            return "live-ui-config"
+
+    class Client:
+        base_url = "http://127.0.0.1:1234"
+
+        def login(self):
+            return None
+
+    monkeypatch.setattr(verifier, "seed_synthetic_rbac_settings", lambda *_args: None)
+    monkeypatch.setattr(verifier, "start_probe_app", lambda **_kwargs: None)
+    monkeypatch.setattr(verifier, "published_base_url", lambda *_args: Client.base_url)
+    monkeypatch.setattr(verifier, "ApiClient", lambda *_args: Client())
+    monkeypatch.setattr(verifier, "wait_for_image_health", lambda *_args: None)
+    monkeypatch.setattr(
+        verifier,
+        "capture_image_operational_state",
+        lambda *_args, **_kwargs: {"status": "ready"},
+    )
+    monkeypatch.setattr(
+        verifier,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="container-id\n"),
+    )
+
+    def run_playwright(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=1, stdout="", stderr="expected stop")
+
+    monkeypatch.setattr(verifier.subprocess, "run", run_playwright)
+    with pytest.raises(verifier.CapabilityError, match="headless live UI qualification failed"):
+        verifier.live_ui_qualification(
+            resources=Resources(),
+            reference="image",
+            architecture="amd64",
+            network="network",
+            ca_path=tmp_path / "ca.pem",
+            username="admin",
+            password="ephemeral-password",
+            target_version="1.6.0",
+            image_version="1.5.3",
+            evidence_json=tmp_path / "runtime-capability-amd64.json",
+            startup_timeout=180,
+            update_timeout=300,
+        )
+
+    assert captured["env"]["CHANNELWATCH_PLAYWRIGHT_HEALTH_TIMEOUT_MS"] == "180000"
+    assert captured["timeout"] == 780
 
 
 def test_control_state_rejects_unsafe_or_transient_restart_objects(monkeypatch):
@@ -2250,6 +3130,230 @@ def test_recovery_control_and_raw_status_diagnostic_are_retained_safely(
     monkeypatch.setattr(verifier, "docker_exec_json", lambda *_args: unsafe)
     with pytest.raises(verifier.CapabilityError, match="unsafe"):
         verifier.recovery_control_state("probe")
+
+
+def test_recovery_diagnostic_allows_four_individually_bounded_control_files(
+    tmp_path: Path,
+):
+    verifier = _load()
+    payload_text = "x" * 1_048_400
+    control = {}
+    for name in (
+        "active.json", "rollback.json", "update-job.json",
+        "official-recovery-mode.json",
+    ):
+        payload = {"data": payload_text}
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        assert len(raw) <= 1024 * 1024
+        control[name] = {
+            "type": "file", "mode": "0600", "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(), "payload": payload,
+        }
+
+    descriptor = verifier.retain_recovery_diagnostic(
+        tmp_path / "runtime-capability-amd64.json",
+        phase="recovery-hold",
+        status={"current_version": "1.5.3"},
+        control=control,
+    )
+
+    assert descriptor["size"] > 4 * 1024 * 1024
+    assert descriptor["size"] <= verifier.MAX_RECOVERY_DIAGNOSTIC_BYTES
+
+    damage_recovery = {
+        "recovery_hold_status": {"current_version": "1.5.3"},
+        "recovery_hold_control_state": control,
+        "recovery_hold_diagnostic": descriptor,
+        "rollback_status": {"current_version": "1.5.3"},
+        "post_rollback_control_state": control,
+        "post_rollback_diagnostic": descriptor,
+    }
+    compact = verifier.compact_recovery_diagnostic_evidence(damage_recovery)
+    assert not {
+        "recovery_hold_status",
+        "recovery_hold_control_state",
+        "rollback_status",
+        "post_rollback_control_state",
+    } & compact.keys()
+    encoded = verifier.serialize_bounded_receipt({
+        "schema": 2,
+        "status": "passed",
+        "architecture": {
+            "release_qualification": {"damaged_native_recovery": compact}
+        },
+    })
+    assert len(encoded) <= verifier.MAX_RECEIPT_BYTES
+
+
+def test_recovery_diagnostic_compacts_release_sized_status_without_losing_values(
+    tmp_path: Path,
+):
+    verifier = _load()
+    files = [
+        {
+            "mode": "0644",
+            "path": (
+                "dependencies/site-packages/channelwatch/módulo_0000.py"
+                if index == 0
+                else f"dependencies/site-packages/channelwatch/module_{index:04d}.py"
+            ),
+            "sha256": f"{index:064x}"[-64:],
+            "size": 1000 + index,
+        }
+        for index in range(2665)
+    ]
+
+    def runtime_descriptor(architecture: str) -> dict:
+        return {
+            "application_version": "1.6.0",
+            "architecture": architecture,
+            "bundle_format": 4,
+            "dependency_inventory_path": "dependencies/inventory.json",
+            "dependency_inventory_sha256": "a" * 64,
+            "expanded_size": 100_000_000,
+            "files": files,
+            "generation_id": f"1.6.0-{architecture}-{'b' * 12}",
+            "libc_family": "glibc",
+            "minimum_libc_version": "2.36",
+            "os_family": "linux",
+            "python_cache_tag": "cpython-314",
+            "python_implementation": "cpython",
+            "python_version": "3.14.0",
+            "required_launcher_capability": 4,
+            "schema": 4,
+            "settings_schema_version": 1,
+            "source_commit": "c" * 40,
+        }
+
+    release = {
+        "version": "1.6.0",
+        "runtime_variants": {
+            architecture: {
+                "architecture": architecture,
+                "bundle": f"channelwatch-runtime-v1.6.0-{architecture}.zip",
+                "bundle_sha256": digest * 64,
+                "bundle_size": size,
+                "descriptor": runtime_descriptor(architecture),
+            }
+            for architecture, digest, size in (
+                ("amd64", "d", 36_664_036),
+                ("arm64", "e", 36_362_783),
+            )
+        },
+    }
+    status = {
+        "current_version": "1.5.3",
+        "latest": release,
+        "trusted_target": release,
+        "compatible_app_release": release,
+        "recommended_release": release,
+    }
+    payload_text = "x" * 1_048_400
+    control = {}
+    for name in (
+        "active.json", "rollback.json", "update-job.json",
+        "official-recovery-mode.json",
+    ):
+        value = {"data": payload_text}
+        raw = json.dumps(value, separators=(",", ":")).encode()
+        assert len(raw) <= 1024 * 1024
+        control[name] = {
+            "type": "file", "mode": "0600", "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(), "payload": value,
+        }
+
+    expected = {
+        "schema": 1,
+        "phase": "recovery-hold",
+        "status": status,
+        "control": control,
+    }
+    legacy_pretty = (json.dumps(expected, indent=2, sort_keys=True) + "\n").encode()
+    assert len(legacy_pretty) > verifier.MAX_RECOVERY_DIAGNOSTIC_BYTES
+
+    descriptor = verifier.retain_recovery_diagnostic(
+        tmp_path / "runtime-capability-amd64.json",
+        phase="recovery-hold",
+        status=status,
+        control=control,
+    )
+    retained = tmp_path / descriptor["file"]
+    expected_bytes = (
+        json.dumps(
+            expected,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ) + "\n"
+    ).encode()
+
+    assert descriptor["size"] <= verifier.MAX_RECOVERY_DIAGNOSTIC_BYTES
+    assert descriptor["size"] == retained.stat().st_size
+    assert descriptor["sha256"] == hashlib.sha256(retained.read_bytes()).hexdigest()
+    assert retained.read_bytes() == expected_bytes
+    assert "módulo_0000.py".encode() in retained.read_bytes()
+    assert json.loads(retained.read_text(encoding="utf-8")) == expected
+
+
+def test_recovery_diagnostic_accepts_exact_bound_and_rejects_one_byte_over(
+    tmp_path: Path,
+):
+    verifier = _load()
+    phase = "recovery-hold"
+
+    def encoded_size(data: str) -> int:
+        encoded = (
+            json.dumps(
+                {
+                    "schema": 1,
+                    "phase": phase,
+                    "status": {"data": data},
+                    "control": {},
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ) + "\n"
+        ).encode()
+        return len(encoded)
+
+    empty_size = encoded_size("")
+    data_size = verifier.MAX_RECOVERY_DIAGNOSTIC_BYTES - empty_size
+    accepted = verifier.retain_recovery_diagnostic(
+        tmp_path / "accepted.json",
+        phase=phase,
+        status={"data": "x" * data_size},
+        control={},
+    )
+    assert accepted["size"] == verifier.MAX_RECOVERY_DIAGNOSTIC_BYTES
+
+    with pytest.raises(verifier.CapabilityError, match="exceeds its bound"):
+        verifier.retain_recovery_diagnostic(
+            tmp_path / "rejected.json",
+            phase=phase,
+            status={"data": "x" * (data_size + 1)},
+            control={},
+        )
+
+    assert not (tmp_path / "rejected-damaged-native-recovery-hold.json").exists()
+
+
+def test_recovery_diagnostic_rejects_non_json_numbers(tmp_path: Path):
+    verifier = _load()
+    evidence = tmp_path / "runtime-capability-amd64.json"
+
+    with pytest.raises(verifier.CapabilityError, match="valid JSON"):
+        verifier.retain_recovery_diagnostic(
+            evidence,
+            phase="recovery-hold",
+            status={"invalid": float("nan")},
+            control={},
+        )
+
+    retained = tmp_path / "runtime-capability-amd64-damaged-native-recovery-hold.json"
+    assert not retained.exists()
 
 
 def test_recovery_control_script_reads_regular_files_through_bounded_fds(

@@ -39,11 +39,11 @@ interface DestChannel {
 
 function getEventColumns(): EventColumn[] {
   return [
-    { key: "channel", label: t("routing.event.channel"), icon: Tv, accentClass: "text-blue-400", headerClass: "bg-blue-500/10 border-blue-400/20" },
-    { key: "vod", label: t("type.vod"), icon: Film, accentClass: "text-purple-400", headerClass: "bg-purple-500/10 border-purple-400/20" },
-    { key: "recording", label: t("type.recording"), icon: CircleDot, accentClass: "text-amber-400", headerClass: "bg-amber-500/10 border-amber-400/20" },
-    { key: "disk", label: t("status.monitoring.disk"), icon: HardDrive, accentClass: "text-red-400", headerClass: "bg-red-500/10 border-red-400/20" },
-    { key: "health", label: t("routing.event.health"), icon: ShieldAlert, accentClass: "text-orange-400", headerClass: "bg-orange-500/10 border-orange-400/20" },
+    { key: "channel", label: t("routing.event.channel"), icon: Tv, accentClass: "text-blue-700 dark:text-blue-300", headerClass: "bg-blue-500/10 border-blue-400/20" },
+    { key: "vod", label: t("type.vod"), icon: Film, accentClass: "text-purple-700 dark:text-purple-300", headerClass: "bg-purple-500/10 border-purple-400/20" },
+    { key: "recording", label: t("type.recording"), icon: CircleDot, accentClass: "text-amber-700 dark:text-amber-300", headerClass: "bg-amber-500/10 border-amber-400/20" },
+    { key: "disk", label: t("status.monitoring.disk"), icon: HardDrive, accentClass: "text-red-700 dark:text-red-300", headerClass: "bg-red-500/10 border-red-400/20" },
+    { key: "health", label: t("routing.event.health"), icon: ShieldAlert, accentClass: "text-orange-700 dark:text-orange-300", headerClass: "bg-orange-500/10 border-orange-400/20" },
   ]
 }
 
@@ -134,7 +134,7 @@ function RoutingCell({ dvrId, dvrName, eventKey, routing, activeChannels, onTogg
               checked={on}
               onCheckedChange={(v) => onToggle(dvrId, eventKey, ch.key, v)}
               aria-label={`${ch.label}, ${eventKey}, ${dvrName}`}
-              className={cn("scale-[0.65] shrink-0", on ? "data-[state=checked]:bg-teal-600" : "")}
+              className={cn("scale-[0.8] shrink-0", on ? "data-[state=checked]:bg-teal-600" : "")}
             />
             <span className={cn("text-xs leading-tight transition-colors", on ? "text-foreground" : "text-muted-foreground line-through")}>
               {ch.label}
@@ -190,7 +190,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
             </div>
           </CardHeader>
         </div>
-        <CardContent className="relative z-10 pt-6">
+        <CardContent className="relative z-10 pt-6 sm:pt-6">
           {servers.length === 0 ? (
             <div className="rounded-xl border border-dashed border-teal-400/30 bg-teal-500/5 p-8 text-center text-sm text-muted-foreground">
               {t("settings.routing.noDvr")}
@@ -200,7 +200,8 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
               {t("settings.routing.noDestinations")}
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={t("settings.routing.title")}>
+              <p className="mb-2 text-[13px] text-muted-foreground lg:hidden">{t("settings.routing.scrollHint")}</p>
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr>
@@ -210,12 +211,11 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                       return (
                         <th
                           key={col.key}
-                          className={cn("p-2 text-center rounded-t-lg border-x border-t", col.headerClass)}
-                          style={{ minWidth: `${Math.max(100, activeChannels.length * 18 + 32)}px` }}
+                          className={cn("min-w-36 rounded-t-lg border-x border-t p-2 text-center", col.headerClass)}
                         >
                           <div className="flex items-center justify-center gap-1.5">
                             <Icon className={cn("h-3.5 w-3.5", col.accentClass)} />
-                            <span className={cn("font-semibold text-xs uppercase tracking-wide", col.accentClass)}>{col.label}</span>
+                            <span className={cn("break-words text-xs font-semibold uppercase tracking-wide [overflow-wrap:anywhere]", col.accentClass)}>{col.label}</span>
                           </div>
                         </th>
                       )
@@ -233,10 +233,10 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                       >
                         <td className="p-3 align-top">
                           <div className="flex flex-col gap-0.5">
-                            <span className="font-medium text-sm truncate max-w-[160px]">
+                            <span className="max-w-[160px] break-words text-sm font-medium [overflow-wrap:anywhere]">
                               {server.name || server.host || server.id}
                             </span>
-                            <span className="text-xs text-muted-foreground font-mono truncate max-w-[160px]">
+                            <span className="max-w-[160px] break-all font-mono text-xs text-muted-foreground">
                               {server.host}:{server.port}
                             </span>
                           </div>
@@ -244,7 +244,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                             <button
                               type="button"
                               onClick={() => resetDvr(server.id)}
-                              className="mt-1.5 min-h-11 text-xs text-teal-400/80 hover:text-teal-400 transition-colors underline underline-offset-2 md:min-h-0"
+                              className="mt-1.5 min-h-11 text-xs text-teal-400/80 hover:text-teal-400 transition-colors underline underline-offset-2"
                             >
                               {t("settings.routing.resetToDefaults")}
                             </button>

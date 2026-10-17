@@ -1901,6 +1901,158 @@ def test_protocol_three_restart_reports_sanitized_failure_category(
     assert "private" not in str(exc_info.value).lower()
 
 
+def test_protocol_three_restart_accepts_exact_legacy_helper_contention(
+    tmp_path: Path,
+    monkeypatch,
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    socket_path = supervisor_runtime / "supervisor.sock"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "SUPERVISOR_SOCKET_FILE", str(socket_path))
+    monkeypatch.setattr(runtime_launcher, "image_launcher_protocol", lambda: 3)
+    _write_protocol_three_apply_journal(runtime_dir, target_dir)
+    expected = runtime_launcher.validate_protocol_three_restart_handoff_if_present()
+    monkeypatch.setattr(
+        runtime_launcher.subprocess, "Popen", lambda *_a, **_k: object()
+    )
+    ack_fds = set()
+
+    def ready(readers, *_args):
+        ack_fds.update(readers)
+        return (readers, [], [])
+
+    original_read = runtime_launcher.os.read
+
+    def legacy_response(fd, size):
+        if fd in ack_fds:
+            ack_fds.remove(fd)
+            return b"error:RuntimeError\n"
+        return original_read(fd, size)
+
+    monkeypatch.setattr(runtime_launcher.select, "select", ready)
+    monkeypatch.setattr(
+        runtime_launcher.os,
+        "read",
+        legacy_response,
+    )
+
+    with runtime_launcher._protocol_three_restart_helper_lock(socket_path):
+        runtime_launcher.request_container_restart()
+
+    assert (
+        runtime_launcher.validate_protocol_three_restart_handoff_if_present()
+        == expected
+    )
+    retry_attempts = []
+    monkeypatch.setattr(
+        runtime_launcher,
+        "request_container_restart",
+        lambda: retry_attempts.append(True),
+    )
+    monkeypatch.setattr(runtime_launcher.time, "sleep", lambda _delay: None)
+    assert runtime_launcher.handoff_required_restart_before_launch() is True
+    assert retry_attempts == [True]
+    assert (
+        runtime_launcher.validate_protocol_three_restart_handoff_if_present()
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_journal",
+        "malformed_journal",
+        "replaced_journal",
+        "foreign_marker",
+        "missing_lock",
+        "unlocked_helper",
+        "symlink_lock",
+        "protocol_four",
+        "different_diagnostic",
+    ],
+)
+def test_protocol_three_legacy_helper_rejection_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+    mutation: str,
+):
+    runtime_dir = tmp_path / "channelwatch-runtime"
+    supervisor_runtime = tmp_path / "supervisor-runtime"
+    supervisor_runtime.mkdir(mode=0o700)
+    socket_path = supervisor_runtime / "supervisor.sock"
+    target_dir = _bundle(tmp_path, "0.9.19")
+    runtime_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(runtime_launcher, "RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(runtime_launcher, "SUPERVISOR_SOCKET_FILE", str(socket_path))
+    monkeypatch.setattr(
+        runtime_launcher,
+        "image_launcher_protocol",
+        lambda: 4 if mutation == "protocol_four" else 3,
+    )
+    expected = _write_protocol_three_apply_journal(runtime_dir, target_dir)
+
+    def reject():
+        journal_path = runtime_dir / runtime_launcher.RESTART_REQUIRED_FILE
+        if mutation == "missing_journal":
+            journal_path.unlink()
+        elif mutation == "malformed_journal":
+            journal_path.write_text("{malformed", encoding="utf-8")
+        elif mutation == "replaced_journal":
+            replacement = json.loads(journal_path.read_text(encoding="utf-8"))
+            replacement["job_id"] = "foreign-job"
+            journal_path.write_text(json.dumps(replacement), encoding="utf-8")
+        elif mutation == "foreign_marker":
+            marker = {
+                "schema": runtime_launcher.PROTOCOL_THREE_HANDOFF_SCHEMA,
+                "journal": {**expected, "job_id": "foreign-job"},
+                "old_processes": _protocol_three_old_processes(),
+            }
+            (runtime_dir / runtime_launcher.PROTOCOL_THREE_HANDOFF_FILE).write_text(
+                json.dumps(marker), encoding="utf-8"
+            )
+        raise runtime_launcher.RestartRequestError(
+            "restart_helper_ack_timeout"
+            if mutation == "different_diagnostic"
+            else "restart_helper_rejected"
+        )
+
+    monkeypatch.setattr(
+        runtime_launcher, "_spawn_protocol_three_restart_helper", reject
+    )
+    lock_path = (
+        supervisor_runtime / runtime_launcher.PROTOCOL_THREE_RESTART_HELPER_LOCK_FILE
+    )
+    if mutation == "symlink_lock":
+        external = tmp_path / "external-lock"
+        external.write_text("external", encoding="utf-8")
+        lock_path.symlink_to(external)
+        owner = None
+    elif mutation == "unlocked_helper":
+        lock_path.write_text("", encoding="utf-8")
+        owner = None
+    elif mutation == "missing_lock":
+        owner = None
+    else:
+        owner = runtime_launcher._protocol_three_restart_helper_lock(socket_path)
+
+    with pytest.raises(runtime_launcher.RestartRequestError) as exc_info:
+        if owner is None:
+            runtime_launcher.request_container_restart()
+        else:
+            with owner:
+                runtime_launcher.request_container_restart()
+
+    assert exc_info.value.diagnostic in {
+        "restart_helper_rejected",
+        "restart_helper_ack_timeout",
+    }
+
+
 def test_protocol_four_restart_helper_uses_isolated_image_interpreter(monkeypatch):
     observed = {}
     monkeypatch.setattr(runtime_launcher, "image_launcher_protocol", lambda: 4)

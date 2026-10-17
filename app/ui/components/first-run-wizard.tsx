@@ -184,11 +184,11 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
   const stepIndex = { welcome: 0, discover: 1, manual: 1, confirm: 2 }[step]
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/85 backdrop-blur-sm" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
+      <div className="fixed inset-0 bg-black/85 backdrop-blur-sm" />
 
-      <div className="relative z-10 w-full max-w-md mx-4">
-        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden">
+      <div className="relative z-10 my-auto w-full max-w-md">
+        <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
           <div className="px-6 pt-6 pb-4">
             <StepDots current={stepIndex} total={3} />
           </div>
@@ -292,7 +292,7 @@ function WelcomeStep({
         </Button>
         <Button
           variant="outline"
-          className="w-full border-zinc-600 text-zinc-300 hover:bg-zinc-800 gap-2"
+          className="w-full border-zinc-600 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100 gap-2"
           onClick={onManual}
         >
           <PenLine className="h-4 w-4" />
@@ -303,7 +303,7 @@ function WelcomeStep({
       <div className="text-center">
         <button
           type="button"
-          className="text-xs text-zinc-500 hover:text-zinc-400 underline underline-offset-2 transition-colors"
+          className="inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-[13px] text-zinc-500 underline underline-offset-2 transition-colors hover:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
           onClick={onSkip}
         >
           {t("wizard.welcome.skip")}
@@ -333,8 +333,14 @@ function DiscoverStep({
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <button type="button" onClick={onBack} className="text-zinc-500 hover:text-zinc-300 transition-colors">
-          <ArrowLeft className="h-4 w-4" />
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          aria-label={t("common.back")}
+          title={t("common.back")}
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         </button>
         <div>
           <h2 className="text-base font-semibold text-zinc-100">{t("wizard.discover.title")}</h2>
@@ -396,7 +402,7 @@ function DiscoverStep({
       {discoveryDone && (
         <Button
           variant="outline"
-          className="w-full border-zinc-600 text-zinc-300 hover:bg-zinc-800 gap-2 text-sm"
+          className="w-full border-zinc-600 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100 gap-2 text-sm"
           onClick={onManual}
         >
           <PenLine className="h-4 w-4" />
@@ -443,8 +449,14 @@ function ManualStep({
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <button type="button" onClick={onBack} className="text-zinc-500 hover:text-zinc-300 transition-colors">
-          <ArrowLeft className="h-4 w-4" />
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          aria-label={t("common.back")}
+          title={t("common.back")}
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         </button>
         <div>
           <h2 className="text-base font-semibold text-zinc-100">{t("wizard.manual.title")}</h2>
@@ -515,10 +527,10 @@ function ManualStep({
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="grid min-w-0 grid-cols-2 gap-2">
         <Button
           variant="outline"
-          className="border-zinc-600 text-zinc-300 hover:bg-zinc-800 text-sm h-9"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal border-zinc-600 bg-zinc-900 px-2 py-2 text-center text-sm leading-tight text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
           disabled={!host.trim() || testState === "testing"}
           onClick={onTest}
         >
@@ -528,7 +540,7 @@ function ManualStep({
           {t("wizard.manual.testBtn")}
         </Button>
         <Button
-          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm h-9"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal bg-blue-600 px-2 py-2 text-center text-sm leading-tight text-white hover:bg-blue-700"
           disabled={!canProceed}
           onClick={onProceed}
         >
@@ -577,10 +589,10 @@ function ConfirmStep({
         </div>
       </div>
 
-      <div className="flex gap-2">
+      <div className="grid min-w-0 grid-cols-2 gap-2">
         <Button
           variant="outline"
-          className="border-zinc-600 text-zinc-300 hover:bg-zinc-800 text-sm h-9"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal border-zinc-600 bg-zinc-900 px-2 py-2 text-center text-sm leading-tight text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
           onClick={onBack}
           disabled={isSaving}
         >
@@ -588,7 +600,7 @@ function ConfirmStep({
           {t("common.back")}
         </Button>
         <Button
-          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm h-9"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal bg-blue-600 px-2 py-2 text-center text-sm leading-tight text-white hover:bg-blue-700"
           onClick={onSave}
           disabled={isSaving}
         >

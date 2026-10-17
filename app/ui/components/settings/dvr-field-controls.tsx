@@ -64,7 +64,7 @@ export function DvrTabBar({ cardId, helpers }: DvrTabBarProps) {
             key={server.id}
             type="button"
             className={cn(
-              "min-h-11 px-3 py-1 rounded-md text-xs font-medium transition-colors truncate max-w-[140px] shrink-0",
+              "h-auto min-h-11 max-w-56 shrink-0 break-words rounded-md px-3 py-2 text-center text-xs font-medium whitespace-normal transition-colors [overflow-wrap:anywhere]",
               active === server.id
                 ? "bg-blue-600 text-white"
                 : "text-slate-600 dark:text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -130,7 +130,7 @@ export function DvrFieldToggle({ cardId, fieldKey, label, desc, helpers }: DvrFi
         {showOverridden && (
           <button
             type="button"
-            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive dark:text-amber-300"
             aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
@@ -204,7 +204,7 @@ export function DvrFieldSelect({ cardId, fieldKey, label, desc, options, default
         {showOverridden && (
           <button
             type="button"
-            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive dark:text-amber-300"
             aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
@@ -268,7 +268,7 @@ export function DvrFieldInput({ cardId, fieldKey, label, desc, min, max, step, s
         {showOverridden && (
           <button
             type="button"
-            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive dark:text-amber-300"
             aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}
@@ -328,7 +328,7 @@ export function DvrFieldText({ cardId, fieldKey, label, desc, placeholder, helpe
         {showOverridden && (
           <button
             type="button"
-            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive md:h-8 md:w-8 dark:text-amber-300"
+            className="flex h-11 w-11 items-center justify-center text-amber-600 transition-colors hover:text-destructive dark:text-amber-300"
             aria-label={t("dvr.resetToGlobal")}
             title={t("dvr.resetToGlobal")}
             onClick={() => dvrFieldReset(cardId, settingsKey)}

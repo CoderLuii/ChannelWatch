@@ -2,7 +2,7 @@ import React from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import { DiskSpaceCard, type DiskSpaceState } from "@/components/dashboard/disk-space-card"
+import { DiskSpaceCard, resolveDiskSeverity, type DiskSpaceState } from "@/components/dashboard/disk-space-card"
 import { formatDiskSizeFromGB } from "@/lib/utils"
 
 const baseDiskSpace: DiskSpaceState = {
@@ -30,6 +30,25 @@ describe("formatDiskSizeFromGB", () => {
 })
 
 describe("DiskSpaceCard server severity", () => {
+  it("uses the same warning and critical threshold resolution as the dashboard summary", () => {
+    expect(resolveDiskSeverity({
+      usedPercent: 85,
+      warningThresholdPercent: 20,
+      criticalThresholdPercent: 10,
+    })).toBe("warning")
+    expect(resolveDiskSeverity({
+      usedPercent: 95,
+      warningThresholdPercent: 20,
+      criticalThresholdPercent: 10,
+    })).toBe("critical")
+    expect(resolveDiskSeverity({
+      usedPercent: 20,
+      serverSeverity: "warning",
+      warningThresholdPercent: 20,
+      criticalThresholdPercent: 10,
+    })).toBe("warning")
+  })
+
   it("renders TB free values without appending a hardcoded GB unit", () => {
     const html = renderToStaticMarkup(
       React.createElement(DiskSpaceCard, {
@@ -58,7 +77,7 @@ describe("DiskSpaceCard server severity", () => {
       }),
     )
 
-    expect(html).toContain("from-amber-50")
+    expect(html).toContain("text-amber-700")
     expect(html).toContain("bg-amber-600")
   })
 
@@ -72,7 +91,7 @@ describe("DiskSpaceCard server severity", () => {
       }),
     )
 
-    expect(html).toContain("from-red-50")
+    expect(html).toContain("text-red-700")
     expect(html).toContain("bg-red-600")
   })
 })

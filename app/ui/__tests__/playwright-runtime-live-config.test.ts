@@ -18,14 +18,15 @@ function listTests(args: string[], baseURL = "") {
   return {
     status: result.status,
     output: result.stdout + result.stderr,
+    stdout: result.stdout,
   }
 }
 
 describe("runtime-live Playwright isolation", () => {
-  it("keeps the normal suite at 168 tests and requires the dedicated external URL", () => {
+  it("keeps live mutations out of the normal suite and requires the dedicated external URL", () => {
     const normal = listTests([])
     expect(normal.status, normal.output).toBe(0)
-    expect(normal.output).toContain("Total: 168 tests in 13 files")
+    expect(normal.output).toMatch(/Total: \d+ tests in \d+ files/)
     expect(normal.output).not.toContain("runtime-update-live-smoke.spec.ts")
 
     const missingURL = listTests([
@@ -44,10 +45,27 @@ describe("runtime-live Playwright isolation", () => {
         "playwright.runtime-live.config.ts",
         "playwright/runtime-update-live-smoke.spec.ts",
         "--project=runtime-live",
+        "--reporter=json",
       ],
       "http://127.0.0.1:65534",
     )
     expect(dedicated.status, dedicated.output).toBe(0)
-    expect(dedicated.output).toContain("Total: 1 test in 1 file")
+    const report = JSON.parse(dedicated.stdout) as {
+      config: { globalTimeout: number, projects: Array<{ name: string, timeout: number }> }
+      suites: Array<{ specs: Array<{ title: string, tests: Array<{ timeout: number }> }> }>
+    }
+    expect(report.config.globalTimeout).toBe(25 * 60_000)
+    expect(report.config.projects).toEqual([
+      expect.objectContaining({ name: "runtime-live", timeout: 25 * 60_000 }),
+    ])
+    const specs = report.suites.flatMap((suite) => suite.specs)
+    expect(specs.map((spec) => spec.title)).toEqual([
+      "runtime polling enforces restart, rollback, and exact readiness responses",
+      "authenticated live Update Center applies and rolls back the exact candidate once",
+    ])
+    expect(specs.flatMap((spec) => spec.tests.map((listedTest) => listedTest.timeout))).toEqual([
+      25 * 60_000,
+      25 * 60_000,
+    ])
   }, 30_000)
 })

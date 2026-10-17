@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useMemo } from "react"
+import React, { useState, useMemo, useRef } from "react"
 import { t } from "@/lib/i18n"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
 import { Badge } from "@/components/base/badge"
@@ -51,6 +51,7 @@ function isTomorrow(timestamp: number): boolean {
 
 export function UpcomingRecordingsList({ recordings, count }: UpcomingRecordingsListProps) {
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null)
+  const dialogTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const groupedRecordings = useMemo(() => {
     const groups: { label: string; items: Recording[] }[] = []
@@ -69,13 +70,13 @@ export function UpcomingRecordingsList({ recordings, count }: UpcomingRecordings
 
   return (
     <>
-      <Card className="flex flex-col h-[300px] sm:h-[350px] md:h-[420px] max-w-full overflow-hidden">
-        <CardHeader className="pb-2 flex-shrink-0">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Calendar className="h-4 w-4 text-primary" />
+      <Card className="flex max-h-[480px] min-h-0 sm:min-h-[280px] max-w-full flex-col overflow-hidden border-border/70 shadow-sm">
+        <CardHeader className="flex-shrink-0 px-4 pb-3 pt-4">
+          <CardTitle className="flex items-center gap-2 text-[17px] font-semibold">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10"><Calendar className="h-[18px] w-[18px] text-amber-600 dark:text-amber-400" /></span>
             {t("recordings.title")}
             {recordings.length > 0 && (
-              <Badge variant="secondary" className="text-[10px] py-0 h-4 px-1.5 font-normal leading-none">
+              <Badge variant="secondary" className="text-[13px] py-0 min-h-5 px-1.5 font-normal leading-none">
                 {recordings.length}
               </Badge>
             )}
@@ -86,7 +87,7 @@ export function UpcomingRecordingsList({ recordings, count }: UpcomingRecordings
             groupedRecordings.map((group) => (
               <div key={group.label}>
                 <div className="sticky top-0 z-[5] bg-muted/80 backdrop-blur-sm px-3 py-1">
-                  <span className="text-[10px] font-medium text-slate-700 dark:text-slate-300 uppercase tracking-wider">{group.label}</span>
+                  <span className="text-[13px] font-medium text-slate-700 dark:text-slate-300 uppercase tracking-wider">{group.label}</span>
                 </div>
                 {group.items.map((recording) => {
                   const today = isToday(recording.start_time)
@@ -99,24 +100,27 @@ export function UpcomingRecordingsList({ recordings, count }: UpcomingRecordings
                   return (
                     <button
                       key={recording.id}
-                      onClick={() => setSelectedRecording(recording)}
-                      className={`flex items-center gap-2 p-2 transition-colors border-b border-border/20 w-full text-left cursor-pointer ${rowBg}`}
+                      onClick={(event) => {
+                        dialogTriggerRef.current = event.currentTarget
+                        setSelectedRecording(recording)
+                      }}
+                      className={`flex min-h-14 w-full cursor-pointer items-start gap-3 border-b border-border/20 px-4 py-2.5 text-left transition-colors ${rowBg}`}
                     >
                       <div className={`rounded-full ${today ? "bg-amber-500/20" : "bg-amber-500/10"} p-1.5 flex-shrink-0`}>
                         <Clock className={`h-3.5 w-3.5 ${today ? "text-amber-600 dark:text-amber-400" : "text-amber-600 dark:text-amber-400"}`} />
                       </div>
-                      <div className="flex-1 min-w-0 pr-1 overflow-hidden">
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <p className="text-sm font-medium leading-none truncate">{recording.title}</p>
+                      <div className="min-w-0 flex-1 pr-1">
+                        <div className="mb-1 flex min-w-0 flex-wrap items-start gap-1.5">
+                          <p className="min-w-0 flex-1 break-words text-sm font-medium leading-snug [overflow-wrap:anywhere]">{recording.title}</p>
                           {recording.dvr_name && (
-                            <Badge variant="outline" className="flex-shrink-0 text-[9px] py-0 h-3.5 px-1 font-normal text-muted-foreground border-muted-foreground/30">
+                            <Badge variant="outline" className="h-auto min-h-5 max-w-full whitespace-normal break-words border-muted-foreground/30 px-1 py-0 text-[13px] font-normal leading-snug text-muted-foreground [overflow-wrap:anywhere]">
                               {recording.dvr_name}
                             </Badge>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground truncate max-w-full">{recording.channel} - {recording.scheduled_time}</p>
+                        <p className="max-w-full break-words text-[13px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{recording.channel} - {recording.scheduled_time}</p>
                       </div>
-                      <Badge className={`flex-shrink-0 text-xs py-0 h-5 px-1.5 ${
+                      <Badge className={`h-auto min-h-5 max-w-[42%] flex-shrink-0 whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere] ${
                         today
                           ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/40"
                           : "bg-amber-100 text-amber-900 dark:bg-amber-900/25 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/35"
@@ -139,7 +143,14 @@ export function UpcomingRecordingsList({ recordings, count }: UpcomingRecordings
       <RecordingDetailDialog
         recording={selectedRecording}
         open={!!selectedRecording}
-        onOpenChange={(open) => { if (!open) setSelectedRecording(null) }}
+        onOpenChange={(open) => {
+          if (open) return
+          setSelectedRecording(null)
+          requestAnimationFrame(() => {
+            const trigger = dialogTriggerRef.current
+            if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
+          })
+        }}
       />
     </>
   )

@@ -28,20 +28,21 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { UptimeCard } from "@/components/dashboard/uptime-card";
 import {
   DiskSpaceCard,
+  resolveDiskSeverity,
+  type DiskSeverity,
   type DiskSpaceState,
 } from "@/components/dashboard/disk-space-card";
 import { ActivityTimeline } from "@/components/dashboard/activity-timeline";
 import { StatusPanel } from "@/components/dashboard/status-panel";
 import { RecentActivityList } from "@/components/dashboard/recent-activity-list";
 import { UpcomingRecordingsList } from "@/components/dashboard/upcoming-recordings-list";
+import { MobileDashboardDetails } from "@/components/dashboard/mobile-dashboard-details";
 import { MaintenanceWindowsCard } from "@/components/dashboard/maintenance-windows-card";
 
 interface StatusOverviewProps {
   settings: AppSettings | null;
   onNavigate?: (view: string) => void;
 }
-
-type DiskSeverity = "normal" | "warning" | "critical";
 
 export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const { selectedDvr } = useDvrSelection();
@@ -194,6 +195,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       }
       if (systemInfo.core_status) {
         setCoreProcessStatus(systemInfo.core_status);
+      } else {
+        setCoreProcessStatus("Unknown");
       }
       if (systemInfo.channelwatch_version) {
         setChannelwatchVersion(systemInfo.channelwatch_version);
@@ -226,6 +229,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       markFetchFailure("system", false);
       return nextDvrStatuses;
     } catch (error) {
+      setCoreProcessStatus("Unavailable");
       setDiskServerSeverity(undefined);
       setDiskSpace((prev: DiskSpaceState) => ({
         ...prev,
@@ -618,6 +622,18 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   };
 
   const currentSettings = refreshedSettings || settings;
+  const diskSeverity = resolveDiskSeverity({
+    usedPercent: diskSpace.usedPercent,
+    serverSeverity: diskServerSeverity,
+    warningThresholdPercent: currentSettings?.ds_warning_threshold_percent,
+    criticalThresholdPercent: currentSettings?.ds_critical_threshold_percent,
+  });
+  const diskSummaryStatus = diskSeverity === "normal"
+    ? undefined
+    : {
+        tone: diskSeverity,
+        label: t(`disk.severity.${diskSeverity}`),
+      };
 
   const filteredActivity = React.useMemo((): ActivityItem[] => {
     const sourceActivity = selectedClient ? (clientActivity ?? []) : recentActivity;
@@ -728,24 +744,25 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight md:pt-0 pt-1">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3 sm:gap-4">
+        <div className="min-w-0 flex-1 basis-56">
+          <h1 className="break-words pt-1 text-[28px] font-semibold leading-tight tracking-tight md:pt-0 md:text-[32px]">
             {t("dashboard.title")}
           </h1>
           <p
-            className={`text-sm ${failedFetches.size > 0 ? "text-red-500" : "text-muted-foreground"}`}
+            className={`mt-1 break-words text-[13px] [overflow-wrap:anywhere] ${failedFetches.size > 0 ? "text-red-500" : "text-muted-foreground"}`}
             aria-live="polite"
           >
             {t("dashboard.lastUpdated", { time: formatLastUpdated() })}
             {failedFetches.size > 0 ? t("dashboard.staleWarning") : ""}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex min-w-0 max-w-full gap-2">
           <Button
             variant="outline"
             size="sm"
+            className="h-auto min-h-11 max-w-full whitespace-normal rounded-xl px-4 py-2 text-center"
             onClick={() => refreshDashboardData(true)}
             disabled={isRefreshing}
             aria-label={t("common.refresh")}
@@ -761,7 +778,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       </div>
 
       {/* Key Metrics Section */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           title={t("dashboard.activeStreams")}
           icon={Tv}
@@ -778,13 +795,13 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           loadingColorClass="text-blue-700 dark:text-blue-400"
         />
 
-        <UptimeCard
+        <MobileDashboardDetails integratedCard id="mobile-uptime-details" title={t("uptime.title")} summary={`${coreUptime.days}d ${coreUptime.hours}h ${coreUptime.minutes}m`} className="order-last xl:order-none" hasError={failedFetches.has("system")}><UptimeCard
           coreUptime={coreUptime}
           uiUptimeDisplay={uiUptimeDisplay}
           dvrStatusList={dvrStatusList}
           loading={!dataLoaded}
           hasError={failedFetches.has("system")}
-        />
+        /></MobileDashboardDetails>
 
         <MetricCard
           title={t("dashboard.upcomingRecordings")}
@@ -802,27 +819,33 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           loadingColorClass="text-amber-700 dark:text-amber-400"
         />
 
-        <DiskSpaceCard
+        <MobileDashboardDetails
+          id="mobile-disk-details"
+          integratedCard
+          title={t("disk.title")}
+          summary={!dataLoaded ? t("common.loading") : diskSpace.error || (failedFetches.has("system") ? t("uptime.unavailable") : t("disk.free", { value: diskSpace.freeFormatted }))}
+          summaryStatus={dataLoaded && !diskSpace.error && !failedFetches.has("system") ? diskSummaryStatus : undefined}
+        ><DiskSpaceCard
           diskSpace={diskSpace}
           loading={!dataLoaded}
           hasError={failedFetches.has("system")}
-          serverSeverity={diskServerSeverity}
+          serverSeverity={diskSeverity}
           warningThresholdPercent={
             currentSettings?.ds_warning_threshold_percent
           }
           criticalThresholdPercent={
             currentSettings?.ds_critical_threshold_percent
           }
-        />
+        /></MobileDashboardDetails>
       </div>
 
       {/* Combined Streaming Activity and Status */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <ActivityTimeline
+      <div className="grid gap-4 xl:grid-cols-3">
+        <MobileDashboardDetails id="mobile-timeline-details" title={t("timeline.title")} summary={t("timeline.description")} className="order-last xl:order-none"><ActivityTimeline
           streamingData={streamingData}
           chartVisibility={chartVisibility}
           onToggleVisibility={handleToggleChartVisibility}
-        />
+        /></MobileDashboardDetails>
 
         <StatusPanel
           dvrStatusList={statusPanelDvrStatusList}
@@ -837,8 +860,13 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         />
       </div>
 
+      <MaintenanceWindowsCard
+        selectedDvr={selectedDvr}
+        refreshKey={lastUpdated?.getTime() ?? 0}
+      />
+
       {/* Recent Activity and Upcoming Recordings side by side */}
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-2">
         <RecentActivityList
           recentActivity={recentActivity}
           filteredActivity={filteredActivity}
@@ -868,10 +896,6 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         />
       </div>
 
-      <MaintenanceWindowsCard
-        selectedDvr={selectedDvr}
-        refreshKey={lastUpdated?.getTime() ?? 0}
-      />
     </div>
   );
 }

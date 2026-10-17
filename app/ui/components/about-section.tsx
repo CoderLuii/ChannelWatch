@@ -6,13 +6,15 @@ import { Button } from "@/components/base/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/base/tabs"
 import { Separator } from "@/components/base/separator"
 import { Badge } from "@/components/base/badge"
-import { Loader2, GitBranch, ExternalLink, AtSign, Code } from "lucide-react"
+import { Loader2, GitBranch, ExternalLink, AtSign, Code, ChevronDown } from "lucide-react"
 import { fetchSystemInfo } from "@/lib/api"
 import { t } from "@/lib/i18n"
+import { cn } from "@/lib/utils"
 
 export function AboutSection() {
   const [isLoading, setIsLoading] = useState(false)
   const [version, setVersion] = useState("X.X.X")
+  const [mobileProjectDetailsOpen, setMobileProjectDetailsOpen] = useState(false)
 
   useEffect(() => {
     const getSystemInfo = async () => {
@@ -49,15 +51,16 @@ export function AboutSection() {
   }
 
   return (
-    <div className="space-y-6">
-      <Card className="overflow-hidden">
+    <div className="space-y-4 sm:space-y-5">
+      <h1 className="sr-only">{aboutInfo.app_name}</h1>
+      <Card className="overflow-hidden border-border/70 shadow-sm">
         <div className="relative">
-          <div className="bg-no-repeat bg-cover bg-center h-32 md:h-48" style={{ backgroundImage: "url('/images/background-bio.webp')" }}></div>
+          <div className="h-24 bg-cover bg-center bg-no-repeat md:h-48" style={{ backgroundImage: "url('/images/background-bio.webp')" }}></div>
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/40 to-transparent"></div>
         </div>
-        <div className="px-6 relative pb-6">
-          <div className="flex flex-col md:flex-row gap-6 items-start md:items-end -mt-12">
-            <div className="h-24 w-24 rounded-xl overflow-hidden border-4 border-background bg-black flex items-center justify-center relative">
+        <div className="relative px-4 pb-4 sm:px-6 sm:pb-6">
+          <div className="-mt-10 flex flex-col items-start gap-4 md:-mt-12 md:flex-row md:items-end md:gap-6">
+            <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl border-4 border-background bg-black md:h-24 md:w-24">
               {/* eslint-disable-next-line @next/next/no-img-element -- static export: next/image optimizer is unavailable and would require width/height props that change layout */}
               <img
                 src="/images/coder-luii.png"
@@ -71,7 +74,7 @@ export function AboutSection() {
             <div className="space-y-1 flex-1">
               <div className="flex flex-col md:flex-row md:items-center gap-2 md:justify-between">
                 <div className="bg-black/70 backdrop-blur-sm px-3 py-1.5 rounded-md">
-                  <h2 className="text-2xl font-bold text-white drop-shadow-md">Coder Luii</h2>
+                  <h2 className="text-xl font-bold text-white drop-shadow-md sm:text-2xl">Coder Luii</h2>
                   <p className="text-white drop-shadow-md">{t("about.creatorSubtitle")}</p>
                 </div>
               </div>
@@ -87,114 +90,46 @@ export function AboutSection() {
         </div>
       </Card>
 
-      <Tabs defaultValue="story" className="w-full">
-        <TabsList className="grid grid-cols-3 mb-4">
-          <TabsTrigger value="story">{t("about.tab.story")}</TabsTrigger>
+      <Tabs defaultValue="project" className="w-full">
+        <TabsList className="mb-3 grid grid-cols-3 sm:mb-4">
           <TabsTrigger value="project">{t("about.tab.project")}</TabsTrigger>
+          <TabsTrigger value="story">{t("about.tab.story")}</TabsTrigger>
           <TabsTrigger value="connect">{t("about.tab.connect")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="story" className="space-y-4">
-          <Card className="overflow-hidden border-blue-400/20 dark:border-blue-500/20 shadow-lg dark:shadow-blue-900/10">
+          <Card className="overflow-hidden border-border/70 shadow-sm">
             <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-900/20 to-blue-900/20 z-0"></div>
-              <div className="absolute bottom-0 left-0 w-full h-1/3 bg-gradient-to-t from-card/80 to-transparent"></div>
-              <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-blue-500/10 backdrop-blur-3xl"></div>
-              <div className="absolute -bottom-10 -left-10 w-60 h-60 rounded-full bg-blue-500/10 backdrop-blur-3xl"></div>
-              <CardHeader className="pb-2 border-b border-blue-200/10 relative z-10">
-                <CardTitle className="text-2xl md:text-3xl font-bold text-center md:text-left relative flex flex-col md:flex-row md:items-center gap-2">
+              <div className="absolute inset-0 bg-blue-500/[0.035]"></div>
+              <CardHeader className="relative z-10 border-b border-blue-200/10 px-4 py-4 sm:px-6">
+                <CardTitle>
+                <h2 className="relative flex flex-col gap-2 text-center text-xl font-bold sm:text-2xl md:flex-row md:items-center md:text-left md:text-3xl">
                   <div className="flex gap-2 items-center justify-center md:justify-start">
                     <div className="w-10 h-10 rounded-full bg-blue-500/20 backdrop-blur-sm flex items-center justify-center">
                       {/* eslint-disable-next-line @next/next/no-img-element -- static export: next/image optimizer unavailable */}
                       <img src="/images/channelwatch-logo.png" alt={t("about.logoAlt")} className="h-7 w-auto" />
                     </div>
-                    <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-blue-600 font-extrabold">
+                    <span className="font-semibold text-foreground">
                       {t("about.story.heading")}
                     </span>
                   </div>
                   <span className="text-blue-800 dark:text-blue-200 ml-0 md:ml-1">{t("about.story.subheading")}</span>
+                </h2>
                 </CardTitle>
               </CardHeader>
             </div>
 
-            <CardContent className="prose dark:prose-invert max-w-none pt-6 space-y-6 relative z-10">
-              <div className="p-5 border-l-4 border-blue-600 bg-blue-100 dark:bg-blue-950/40 rounded-r-lg shadow-sm backdrop-blur-sm">
-                <p className="text-lg font-medium italic">
-                  Hello! I&apos;m <strong className="text-blue-800 dark:text-blue-300">Coder Luii</strong>. Many of us lead double lives - by day, I navigate the complex
-                  world of cybersecurity as a Security Analyst, focused on protection and prevention. But when the workday
-                  ends, a different kind of passion takes over: I become a tech tinkerer, driven by an insatiable
-                  curiosity for automation, self-hosted solutions, and the endless possibilities of code.
-                </p>
+            <CardContent className="prose relative z-10 max-w-none space-y-4 px-4 pt-4 dark:prose-invert sm:px-6 sm:pt-6">
+              <div className="rounded-r-lg border-l-4 border-blue-600 bg-blue-100 p-4 shadow-sm backdrop-blur-sm dark:bg-blue-950/40 sm:p-5">
+                <p className="text-base font-medium sm:text-lg">{t("about.story.intro")}</p>
               </div>
 
-              <div className="relative">
-                <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-blue-400/40 to-blue-500/40 rounded-full"></div>
-                <p className="pl-4">
-                  This blend of structured security thinking and freeform tinkering defines my approach. I believe
-                  technology should <span className="font-medium">empower us</span>, make our lives simpler, and maybe even a little more fun. It was this
-                  belief, combined with a personal need, that sparked the idea for <strong className="text-blue-800 dark:text-blue-300">ChannelWatch</strong>, my first
-                  major project.
-                </p>
-              </div>
+              <p>{t("about.story.problem")}</p>
+              <p>{t("about.story.community")}</p>
 
-              <div className="relative flex items-center space-x-2 my-6">
-                <div className="h-px flex-1 bg-gradient-to-r from-transparent to-blue-400"></div>
-                <div className="text-blue-900 dark:text-blue-200 font-bold text-lg px-4 py-1 rounded-full bg-blue-100 dark:bg-blue-900/40 backdrop-blur-sm border border-blue-300 dark:border-blue-700">{t("about.story.divider1")}</div>
-                <div className="h-px flex-1 bg-gradient-to-l from-transparent to-blue-400"></div>
-              </div>
-
-              <div className="p-4 bg-gradient-to-br from-blue-900/20 to-blue-900/5 rounded-lg backdrop-blur-sm border border-blue-400/10 shadow-sm mb-6">
-                <p>
-                  Like many Channels DVR enthusiasts, I wanted a deeper connection to my system - to know what was
-                  playing, when recordings were happening, and how my setup was performing, all in real-time. I searched
-                  for a solution, but couldn&apos;t find exactly what I envisioned.
-                </p>
-              </div>
-
-              <p>
-                So, fueled by late nights and a determination to learn, I decided to build it myself. This journey of
-                creation became more than just a project - it became a passion that continues to drive me forward.
-              </p>
-
-              <p>
-                ChannelWatch isn&apos;t just lines of code; it represents a <span className="font-medium">journey</span>. It&apos;s the result of countless hours spent
-                learning, experimenting, failing, and iterating. It embodies the <span className="italic">&quot;always optimizing, always learning&quot; </span>
-                 philosophy I strive for. From figuring out how to reliably capture DVR events to integrating various
-                notification platforms and crafting informative alerts, every feature was a challenge embraced and
-                overcome.
-              </p>
-
-              <div className="relative flex items-center space-x-2 my-6">
-                <div className="h-px flex-1 bg-gradient-to-r from-transparent to-blue-400"></div>
-                <div className="text-blue-900 dark:text-blue-200 font-bold text-lg px-4 py-1 rounded-full bg-blue-100 dark:bg-blue-900/40 backdrop-blur-sm border border-blue-300 dark:border-blue-700">{t("about.story.divider2")}</div>
-                <div className="h-px flex-1 bg-gradient-to-l from-transparent to-blue-400"></div>
-              </div>
-
-              <p>
-                Building ChannelWatch taught me more than just Python and Docker; it deepened my appreciation for the
-                open-source spirit and the power of community. Sharing this tool, seeing others find it useful, and
-                receiving feedback has been incredibly rewarding. It&apos;s proof that a spark of curiosity, combined with
-                dedication, can lead to creating something valuable that benefits others.
-              </p>
-
-              <div className="bg-blue-100 dark:bg-blue-950/40 p-5 rounded-lg border border-blue-300 dark:border-blue-700 shadow-inner backdrop-blur-sm relative overflow-hidden">
-                <div className="absolute -top-12 -right-12 w-24 h-24 rounded-full bg-blue-600/10 backdrop-blur-xl"></div>
-                <div className="absolute -bottom-8 -left-8 w-16 h-16 rounded-full bg-blue-600/10 backdrop-blur-xl"></div>
-                <p className="mb-0 relative z-10">
-                  My journey as a creator is just beginning. ChannelWatch is the first step, born from a personal passion
-                  and a desire to contribute something meaningful. I&apos;m excited to continue refining it, exploring new
-                  ideas, and tackling future challenges in the world of cybersecurity, automation, and self-hosting.
-                </p>
-              </div>
-
-              <div className="p-4 border-t border-blue-400/10 mt-6 flex flex-col items-center justify-center">
-                <p className="text-center max-w-2xl mx-auto">
-                  If my story resonates with you, or if ChannelWatch has enhanced your own setup, that&apos;s the best
-                  encouragement I could ask for. <span className="font-medium">Connecting with fellow tech enthusiasts, tinkerers, and Channels users is
-                  what fuels this ongoing adventure.</span>
-                </p>
+              <div className="flex flex-col items-center justify-center border-t border-blue-400/10 p-3 sm:p-4">
                 <div className="mt-4 flex justify-center">
-                  <div className="bg-blue-100 dark:bg-blue-900/40 px-4 py-2 rounded-full border border-blue-300 dark:border-blue-700 flex items-center gap-2 text-sm">
+                  <div className="flex flex-wrap items-center justify-center gap-1 rounded-2xl border border-blue-300 bg-blue-100 px-3 py-2 text-center text-sm dark:border-blue-700 dark:bg-blue-900/40 sm:gap-2 sm:rounded-full sm:px-4">
                     <span className="text-blue-900 dark:text-blue-200">@CoderLuii</span>
                     <span className="text-slate-700 dark:text-slate-300">{t("about.story.attribution")}</span>
                   </div>
@@ -205,11 +140,9 @@ export function AboutSection() {
         </TabsContent>
 
         <TabsContent value="project" className="space-y-4">
-          <Card className="overflow-hidden border-blue-400/20 dark:border-blue-500/20 shadow-lg dark:shadow-blue-900/10">
+          <Card className="overflow-hidden border-border/70 shadow-sm">
             <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-900/20 to-blue-900/20 z-0"></div>
-              <div className="absolute bottom-0 left-0 w-full h-1/3 bg-gradient-to-t from-card/80 to-transparent"></div>
-              <div className="absolute -bottom-14 -right-14 w-40 h-40 rounded-full bg-blue-500/10 backdrop-blur-3xl"></div>
+              <div className="absolute inset-0 bg-blue-500/[0.035]"></div>
               <CardHeader className="relative z-10 border-b border-blue-200/10">
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 backdrop-blur-sm flex items-center justify-center">
@@ -217,13 +150,13 @@ export function AboutSection() {
                     <img src="/images/channelwatch-logo.png" alt={t("about.logoAlt")} className="h-7 w-auto" />
                   </div>
                   <div>
-                    <CardTitle className="text-blue-700 dark:text-blue-300">{aboutInfo.app_name}</CardTitle>
+                    <CardTitle><h2 className="text-blue-700 dark:text-blue-300">{aboutInfo.app_name}</h2></CardTitle>
                     <CardDescription>{t("about.version", { version })}</CardDescription>
                   </div>
                 </div>
               </CardHeader>
             </div>
-            <CardContent className="space-y-6 relative z-10 pt-6">
+            <CardContent className="min-w-0 space-y-6 relative z-10 pt-6 [overflow-wrap:anywhere]">
                 <div className="p-5 border-l-4 border-blue-600 bg-blue-100 dark:bg-blue-950/40 rounded-r-lg shadow-sm backdrop-blur-sm">
                   <p className="text-lg font-medium">
                     {t("about.project.intro")}
@@ -237,8 +170,8 @@ export function AboutSection() {
                  </p>
               </div>
 
-              <div className="grid gap-6 md:grid-cols-2">
-                <div className="bg-blue-50 dark:bg-blue-950/20 backdrop-blur-sm rounded-xl p-5 space-y-3 border border-blue-200 dark:border-blue-800 shadow-sm">
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div className="min-w-0 bg-blue-50 dark:bg-blue-950/20 backdrop-blur-sm rounded-xl p-5 space-y-3 border border-blue-200 dark:border-blue-800 shadow-sm">
                   <h3 className="font-medium text-blue-900 dark:text-blue-200 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 rounded-full bg-blue-700 dark:bg-blue-300"></div>
                     {t("about.keyFeatures")}
@@ -249,13 +182,25 @@ export function AboutSection() {
                           <div className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center mt-0.5">
                             <div className="w-1.5 h-1.5 rounded-full bg-blue-700 dark:bg-blue-300"></div>
                           </div>
-                         <span>{t(`about.feature.${n}`)}</span>
+                         <span className="min-w-0 flex-1">{t(`about.feature.${n}`)}</span>
                        </li>
                      ))}
                    </ul>
                 </div>
 
-                <div className="bg-blue-50 dark:bg-blue-950/20 backdrop-blur-sm rounded-xl p-5 space-y-3 border border-blue-200 dark:border-blue-800 shadow-sm">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-auto min-h-11 min-w-0 w-full justify-between gap-2 whitespace-normal text-left md:hidden"
+                  aria-expanded={mobileProjectDetailsOpen}
+                  aria-controls="about-project-details about-project-approach"
+                  onClick={() => setMobileProjectDetailsOpen((open) => !open)}
+                >
+                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{t(mobileProjectDetailsOpen ? "about.hideProjectDetails" : "about.showProjectDetails")}</span>
+                  <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", mobileProjectDetailsOpen && "rotate-180")} aria-hidden="true" />
+                </Button>
+
+                <div id="about-project-details" className={cn("min-w-0 bg-blue-50 dark:bg-blue-950/20 backdrop-blur-sm rounded-xl p-5 space-y-3 border border-blue-200 dark:border-blue-800 shadow-sm", !mobileProjectDetailsOpen && "hidden md:block")}>
                   <h3 className="font-medium text-blue-900 dark:text-blue-200 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 rounded-full bg-blue-700 dark:bg-blue-300"></div>
                     {t("about.techStack")}
@@ -266,9 +211,9 @@ export function AboutSection() {
                           <div className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center mt-0.5">
                             <div className="w-1.5 h-1.5 rounded-full bg-blue-700 dark:bg-blue-300"></div>
                           </div>
-                          <div>
+                          <div className="min-w-0 flex-1">
                             <span className="font-medium text-blue-800 dark:text-blue-200">{t(`about.tech.${key}.name`)}</span>
-                            <p className="text-xs text-slate-700 dark:text-slate-300 mt-0.5">{t(`about.tech.${key}.desc`)}</p>
+                            <p className="mt-0.5 text-[13px] leading-5 text-slate-700 dark:text-slate-300">{t(`about.tech.${key}.desc`)}</p>
                           </div>
                        </li>
                      ))}
@@ -276,7 +221,7 @@ export function AboutSection() {
                 </div>
               </div>
 
-              <div className="bg-blue-50 dark:bg-blue-950/20 backdrop-blur-sm rounded-xl p-5 space-y-3 border border-blue-200 dark:border-blue-800 shadow-sm">
+              <div id="about-project-approach" className={cn("bg-blue-50 dark:bg-blue-950/20 backdrop-blur-sm rounded-xl p-5 space-y-3 border border-blue-200 dark:border-blue-800 shadow-sm", !mobileProjectDetailsOpen && "hidden md:block")}>
                 <h3 className="font-medium text-blue-900 dark:text-blue-200 flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-blue-700 dark:bg-blue-300"></div>
                   {t("about.devApproach")}
@@ -285,14 +230,14 @@ export function AboutSection() {
                    {(["userCentric","apiFirst","openSource"] as const).map((key) => (
                      <div key={key} className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg border border-blue-300 dark:border-blue-800">
                        <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">{t(`about.approach.${key}.title`)}</h4>
-                       <p className="text-xs text-slate-700 dark:text-slate-300">{t(`about.approach.${key}.desc`)}</p>
+                       <p className="text-[13px] leading-5 text-slate-700 dark:text-slate-300">{t(`about.approach.${key}.desc`)}</p>
                      </div>
                    ))}
                  </div>
               </div>
             </CardContent>
             <CardFooter className="flex flex-col sm:flex-row gap-3 border-t border-blue-200/10 pt-4 relative z-10">
-              <Button asChild className="w-full sm:w-auto bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-600 transition-all">
+              <Button asChild className="min-h-11 w-full rounded-xl sm:w-auto">
                 <a
                   href={aboutInfo.github_url}
                   target="_blank"
@@ -319,14 +264,16 @@ export function AboutSection() {
         </TabsContent>
 
         <TabsContent value="connect" className="space-y-4">
-          <Card className="overflow-hidden border-blue-400/20 dark:border-blue-500/20 shadow-lg dark:shadow-blue-900/10">
+          <Card className="overflow-hidden border-border/70 shadow-sm">
             <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-900/20 to-blue-900/20 z-0"></div>
+              <div className="absolute inset-0 bg-blue-500/[0.035]"></div>
               <div className="absolute -top-14 -left-14 w-32 h-32 rounded-full bg-blue-500/10 backdrop-blur-3xl"></div>
               <CardHeader className="relative z-10 border-b border-blue-200/10">
-                  <CardTitle className="flex items-center gap-2">
+                  <CardTitle>
+                  <h2 className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-blue-400"></div>
                   {t("about.connectTitle")}
+                  </h2>
                 </CardTitle>
                 <CardDescription>{t("about.connectDescription")}</CardDescription>
               </CardHeader>
@@ -386,7 +333,7 @@ export function AboutSection() {
                       </svg>
                     </div>
                     <h4 className="font-medium text-blue-700 dark:text-blue-300">{t("about.paypalLabel")}</h4>
-                    <p className="text-xs text-muted-foreground">{t("about.paypalSub")}</p>
+                    <p className="text-[13px] leading-5 text-muted-foreground">{t("about.paypalSub")}</p>
                   </a>
 
                   <a
@@ -401,7 +348,7 @@ export function AboutSection() {
                       </svg>
                     </div>
                     <h4 className="font-medium text-blue-700 dark:text-blue-300">{t("about.coffeeLabel")}</h4>
-                    <p className="text-xs text-muted-foreground">{t("about.coffeeSub")}</p>
+                    <p className="text-[13px] leading-5 text-muted-foreground">{t("about.coffeeSub")}</p>
                   </a>
                 </div>
               </div>

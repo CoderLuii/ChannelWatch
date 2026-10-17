@@ -73,19 +73,19 @@ export function UptimeCard({
   })), [dvrStatusList, elapsedSeconds])
 
   return (
-    <Card className="border-purple-200 bg-gradient-to-br from-purple-50 to-purple-100 dark:border-purple-800 dark:from-purple-950 dark:to-purple-900">
+    <Card className="border-border/70 bg-card shadow-sm">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-sm font-medium">{t("uptime.title")}</CardTitle>
         <div className="flex items-center gap-1">
           {hasError ? <AlertCircle className="h-4 w-4 text-red-500" aria-label={t("common.error")} /> : null}
-          <span className="rounded-full bg-purple-500/20 p-1">
-            <Clock className="h-4 w-4 text-purple-600 dark:text-purple-400" aria-hidden="true" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10">
+            <Clock className="h-[18px] w-[18px] text-primary" aria-hidden="true" />
           </span>
         </div>
       </CardHeader>
       <CardContent className="py-2">
         {loading ? (
-          <div className="animate-pulse space-y-2" aria-label={t("common.loading")}>
+          <div className="animate-pulse space-y-2" role="status" aria-label={t("common.loading")}>
             <div className="h-3 w-20 rounded bg-purple-500/20" />
             <div className="flex gap-3">
               {[0, 1, 2, 3].map((item) => <div key={item} className="h-8 w-10 rounded bg-purple-500/20" />)}
@@ -94,8 +94,8 @@ export function UptimeCard({
           </div>
         ) : (
           <>
-            <div className="mb-1 text-xs font-medium uppercase text-purple-600 dark:text-purple-400">{t("uptime.coreProcess")}</div>
-            <div className="grid grid-cols-4 gap-1.5" aria-label={t("uptime.coreProcess")}>
+            <div className="mb-1 text-[13px] font-medium text-muted-foreground">{t("uptime.coreProcess")}</div>
+            <div className="grid grid-cols-4 gap-1.5" role="group" aria-label={t("uptime.coreProcess")}>
               {[
                 [coreUptime.days, t("uptime.days")],
                 [coreUptime.hours, t("uptime.hours")],
@@ -103,23 +103,23 @@ export function UptimeCard({
                 [coreUptime.seconds, t("uptime.secs")],
               ].map(([value, label]) => (
                 <div key={String(label)} className="flex flex-col items-center">
-                  <span className="text-xl font-bold text-purple-700 dark:text-purple-300">{value}</span>
-                  <span className="text-xs font-medium uppercase text-purple-700 dark:text-purple-400">{label}</span>
+                  <span className="text-xl font-semibold tabular-nums text-foreground">{value}</span>
+                  <span className="text-[13px] font-medium text-muted-foreground">{label}</span>
                 </div>
               ))}
             </div>
 
-            <div className="mt-3 space-y-1 border-t border-purple-200 pt-2 dark:border-purple-700">
-              <div className="flex justify-between gap-2 text-xs">
-                <span className="text-purple-600 dark:text-purple-400">{t("uptime.uiProcess")}</span>
-                <span className="truncate font-medium text-purple-700 dark:text-purple-300">{uiUptimeDisplay}</span>
+            <div className="mt-3 space-y-1 border-t border-border/70 pt-2">
+              <div className="flex flex-wrap justify-between gap-2 text-xs">
+                <span className="text-muted-foreground">{t("uptime.uiProcess")}</span>
+                <span className="min-w-0 break-words font-medium text-foreground [overflow-wrap:anywhere]">{uiUptimeDisplay}</span>
               </div>
               <Dialog>
                 <DialogTrigger asChild>
                   <Button
                     type="button"
                     variant="ghost"
-                    className="min-h-11 w-full justify-between gap-2 px-0 text-xs text-purple-700 hover:bg-purple-500/10 hover:text-purple-800 dark:text-purple-300 dark:hover:text-purple-200"
+                    className="min-h-11 w-full justify-between gap-2 px-0 text-[13px] text-primary hover:bg-blue-500/10"
                   >
                     <span>{t("uptime.dvrUptime")}</span>
                     <span className="ml-auto font-medium">

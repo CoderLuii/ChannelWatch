@@ -487,25 +487,37 @@ export function DiagnosticsPanel() {
   const diskInfo = calculateDiskUsage();
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-bold tracking-tight">
+    <div className="space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+        <div className="min-w-0 flex flex-col gap-2">
+          <h1 className="text-[28px] font-semibold tracking-tight md:text-[32px]">
             {t("diagnostics.title")}
           </h1>
           <p className="text-muted-foreground">
             {t("diagnostics.description")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
           <ReportProblemDialog
             systemInfo={systemInfo}
             appSettings={appSettings}
+            trigger={
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
+                aria-label={t("diagnostics.reportProblem.aria")}
+                data-testid="report-problem-open"
+              >
+                <Bug className="h-3.5 w-3.5" />
+                {t("diagnostics.reportProblem.btn")}
+              </Button>
+            }
           />
           <Button
             variant="outline"
             size="sm"
-            className="gap-1.5 text-xs flex-shrink-0"
+            className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
             aria-label={t("diagnostics.debugBundle.aria")}
             disabled={debugBundleState === "loading"}
             onClick={handleDownloadDebugBundle}
@@ -531,7 +543,7 @@ export function DiagnosticsPanel() {
           <Button
             variant="outline"
             size="sm"
-            className="gap-1.5 text-xs flex-shrink-0"
+            className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
             aria-label={t("diagnostics.aria.export")}
             onClick={() => {
               const providers = getActiveProviders();
@@ -677,11 +689,12 @@ export function DiagnosticsPanel() {
       </div>
 
       {/* Live Log Terminal */}
-      <Card>
+      <Card className="border-border/70 shadow-sm">
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle>
+                <h2 className="flex items-center gap-2">
                 <Terminal className="h-5 w-5 text-primary" />
                 {t("diagnostics.logs.title")}
                 {logPaused && (
@@ -692,6 +705,7 @@ export function DiagnosticsPanel() {
                     {t("diagnostics.logs.paused")}
                   </Badge>
                 )}
+                </h2>
               </CardTitle>
               <CardDescription className="mt-1">
                 {t("diagnostics.logs.description")}
@@ -703,7 +717,7 @@ export function DiagnosticsPanel() {
                 onValueChange={(v) => setLogLineCount(Number(v))}
               >
                 <SelectTrigger
-                  className="w-[100px] h-8 text-xs"
+                  className="h-11 w-full text-[13px] sm:h-9 sm:w-32"
                   aria-label={t("diagnostics.logs.aria.lineCount")}
                 >
                   <SelectValue />
@@ -730,24 +744,24 @@ export function DiagnosticsPanel() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center gap-2 mb-2">
-            <div className="relative flex-1">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="relative basis-full sm:min-w-40 sm:flex-1 sm:basis-auto">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
                 placeholder={t("diagnostics.logs.filterPlaceholder")}
                 aria-label={t("diagnostics.logs.aria.filter")}
                 value={logFilter}
                 onChange={(e) => setLogFilter(e.target.value)}
-                className="h-8 text-xs pl-8"
+                className="h-11 pl-8 text-[13px] sm:h-9"
               />
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex flex-1 items-center gap-1 sm:flex-none">
               <Button
                 variant={
                   logLevelFilters.includes("error") ? "default" : "outline"
                 }
                 size="sm"
-                className={`h-8 px-2 text-xs ${logLevelFilters.includes("error") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+                className={`min-h-11 flex-1 px-2 text-[13px] sm:min-h-9 ${logLevelFilters.includes("error") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
                 onClick={() =>
                   setLogLevelFilters((prev) =>
                     prev.includes("error")
@@ -764,7 +778,7 @@ export function DiagnosticsPanel() {
                   logLevelFilters.includes("warn") ? "default" : "outline"
                 }
                 size="sm"
-                className={`h-8 px-2 text-xs ${logLevelFilters.includes("warn") ? "bg-yellow-600 hover:bg-yellow-700 text-white" : ""}`}
+                className={`min-h-11 flex-1 px-2 text-[13px] sm:min-h-9 ${logLevelFilters.includes("warn") ? "bg-yellow-600 hover:bg-yellow-700 text-white" : ""}`}
                 onClick={() =>
                   setLogLevelFilters((prev) =>
                     prev.includes("warn")
@@ -781,7 +795,7 @@ export function DiagnosticsPanel() {
                   logLevelFilters.includes("info") ? "default" : "outline"
                 }
                 size="sm"
-                className={`h-8 px-2 text-xs ${logLevelFilters.includes("info") ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
+                className={`min-h-11 flex-1 px-2 text-[13px] sm:min-h-9 ${logLevelFilters.includes("info") ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
                 onClick={() =>
                   setLogLevelFilters((prev) =>
                     prev.includes("info")
@@ -797,7 +811,7 @@ export function DiagnosticsPanel() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 px-2"
+              className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
               onClick={() => setLogPaused(!logPaused)}
               aria-label={
                 logPaused
@@ -819,7 +833,7 @@ export function DiagnosticsPanel() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 px-2"
+              className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
               onClick={handleCopyLogs}
               aria-label={t("diagnostics.logs.aria.copy")}
               title={t("diagnostics.logs.aria.copy")}
@@ -833,7 +847,7 @@ export function DiagnosticsPanel() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 px-2"
+              className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
               onClick={handleDownloadLogs}
               aria-label={t("diagnostics.logs.aria.download")}
               title={t("diagnostics.logs.aria.download")}
@@ -843,7 +857,7 @@ export function DiagnosticsPanel() {
           </div>
           <div
             ref={logContainerRef}
-            className="bg-zinc-950 rounded-lg border border-zinc-800 font-mono text-xs leading-5 overflow-auto h-80 p-3 select-text"
+            className="h-56 select-text overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-[13px] leading-5 sm:h-72 lg:h-80"
           >
             {filteredLogLines.length === 0 ? (
               <span className="text-zinc-500">
@@ -877,13 +891,15 @@ export function DiagnosticsPanel() {
       </Card>
 
       {/* System Information - moved above tests */}
-      <Card>
+      <Card className="border-border/70 shadow-sm">
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Server className="h-5 w-5 text-primary" />
-                {t("diagnostics.system.title")}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <CardTitle>
+                <h2 className="flex items-center gap-2">
+                  <Server className="h-5 w-5 text-primary" />
+                  {t("diagnostics.system.title")}
+                </h2>
               </CardTitle>
               <CardDescription className="mt-1">
                 {t("diagnostics.system.description")}
@@ -892,7 +908,7 @@ export function DiagnosticsPanel() {
             <Button
               variant="outline"
               size="sm"
-              className="h-7 gap-1 text-xs"
+              className="h-auto min-h-11 max-w-full gap-1 whitespace-normal px-3 py-2 text-center text-xs"
               aria-label={t("diagnostics.aria.refresh")}
               onClick={async () => {
                 setLoading(true);
@@ -1210,7 +1226,7 @@ export function DiagnosticsPanel() {
                         </div>
                         <Badge
                           variant={dvr.connected ? "default" : "secondary"}
-                          className={`text-[10px] py-0 h-4 px-1.5 font-normal leading-none flex-shrink-0 ${dvr.connected ? "bg-green-600 text-green-50" : "bg-red-700 text-white dark:bg-red-600"}`}
+                          className={`h-5 flex-shrink-0 px-2 py-0 text-[13px] font-normal leading-none ${dvr.connected ? "bg-green-600 text-green-50" : "bg-red-700 text-white dark:bg-red-600"}`}
                         >
                           {dvr.connected
                             ? t("diagnostics.system.connected")
@@ -1249,7 +1265,7 @@ export function DiagnosticsPanel() {
                             </div>
                           )}
                           {dvr.monitoring_reason && (
-                            <p className="text-[11px] text-muted-foreground/70 leading-snug">
+                            <p className="text-[13px] leading-5 text-muted-foreground/70">
                               {dvr.monitoring_reason}
                             </p>
                           )}
@@ -1264,11 +1280,13 @@ export function DiagnosticsPanel() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border/70 shadow-sm">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5 text-primary" />
-            {t("diagnostics.tests.title")}
+          <CardTitle>
+            <h2 className="flex items-center gap-2">
+              <Activity className="h-5 w-5 text-primary" />
+              {t("diagnostics.tests.title")}
+            </h2>
           </CardTitle>
           <CardDescription>
             {t("diagnostics.tests.description")}
@@ -1337,34 +1355,36 @@ export function DiagnosticsPanel() {
                 : t("diagnostics.tests.notifications");
             return (
               <div key={category} className="mb-4">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                   {categoryLabel}
-                </h4>
+                </h3>
                 <div className="grid gap-3 md:grid-cols-2">
                   {categoryTests.map((test) => (
                     <div
                       key={test.name}
-                      className="flex items-center gap-3 p-3 rounded-lg border"
+                      className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border p-3 sm:gap-3"
                     >
                       <div className="rounded-full bg-primary/10 p-2 flex-shrink-0">
                         <test.icon className="h-4 w-4 text-primary" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-sm">{test.name}</h3>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {test.description}
-                        </p>
+                        <h4 className="break-words text-sm font-medium [overflow-wrap:anywhere]">{test.name}</h4>
+                        {test.description ? (
+                          <p className="break-words text-[13px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                            {test.description}
+                          </p>
+                        ) : null}
                         {testStatus[test.name]?.status === "fail" &&
                           testStatus[test.name]?.message && (
-                            <p className="text-xs text-red-700 dark:text-red-400 truncate mt-0.5">
+                            <p className="mt-0.5 break-words text-[13px] leading-5 text-red-700 [overflow-wrap:anywhere] dark:text-red-400">
                               {testStatus[test.name].message}
                             </p>
                           )}
                       </div>
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <div className="flex flex-col items-end justify-center gap-1.5 sm:flex-row sm:items-center sm:flex-shrink-0">
                         {testStatus[test.name]?.elapsed != null &&
                           testStatus[test.name]?.status !== "running" && (
-                            <span className="text-xs text-muted-foreground">
+                            <span className="text-[13px] text-muted-foreground">
                               {testStatus[test.name].elapsed!.toFixed(1)}s
                             </span>
                           )}
@@ -1376,7 +1396,7 @@ export function DiagnosticsPanel() {
                           }
                           size="sm"
                           variant="outline"
-                          className="min-w-[60px]"
+                          className="h-auto min-h-11 min-w-[44px] whitespace-normal px-2 py-2 text-center sm:min-w-[60px]"
                         >
                           {testStatus[test.name]?.status === "running" ? (
                             <Loader2 className="h-4 w-4 animate-spin" />

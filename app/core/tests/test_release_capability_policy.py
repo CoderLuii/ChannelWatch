@@ -351,14 +351,6 @@ def _evidence(
                     "python_prefix": root + "/environment",
                     "python_version": descriptor["python_version"],
                     "dependencies": copy.deepcopy(dependencies),
-                    "verified_generation": {
-                        "path": root,
-                        "runtime_generation_id": descriptor["generation_id"],
-                        "runtime_descriptor_sha256": descriptor["generation_id"],
-                        "dependency_inventory_sha256": descriptor[
-                            "dependency_inventory_sha256"
-                        ],
-                    },
                 },
             }
             for component, pid in (("core", 123), ("ui", 124))
@@ -406,7 +398,7 @@ def _evidence(
                 },
                 "persistent_hashes_before": {path: "c" * 64 for path in ("/config/settings.json", "/config/encryption.key")},
                 "container_restart": {"status": "passed", "current_version": "1.6.0"},
-                "rollback": {"operation": "rollback", "status": "restarting", "rolled_back_from": "1.6.0", "job_id": "c" * 32},
+                "rollback": {"operation": "rollback", "status": "restarting", "version": "1.6.0", "rolled_back_from": "1.6.0", "restart_required": True, "job_id": "c" * 32},
                 "rollback_status": None,
             },
         })
@@ -628,7 +620,17 @@ def _evidence(
             return {
                 "runtime_components": current_components,
                 "status_worker_scope": "ui_status_handler_only",
-                "status_worker": copy.deepcopy(process_runtimes["ui"]),
+                "status_worker": {
+                    **copy.deepcopy(process_runtimes["ui"]),
+                    "verified_generation": {
+                        "path": root,
+                        "runtime_generation_id": descriptor["generation_id"],
+                        "runtime_descriptor_sha256": descriptor["generation_id"],
+                        "dependency_inventory_sha256": descriptor[
+                            "dependency_inventory_sha256"
+                        ],
+                    },
+                },
                 "commands": commands,
                 "processes": processes,
                 "launchers": launchers,
@@ -804,9 +806,9 @@ def test_current_release_config_retains_the_published_dependency_image_floor():
 
     policy = module.validate_release_config(config)
 
-    assert config["version"] == "1.5.4"
+    assert config["version"] == "1.6.0"
     assert config["minimum_image_version"] == "1.5.3"
-    assert config["recommended_image_version"] == "1.5.4"
+    assert config["recommended_image_version"] == "1.6.0"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     publication_time = datetime_module.datetime.fromisoformat(
@@ -825,7 +827,7 @@ def test_current_release_config_retains_the_published_dependency_image_floor():
     assert config["runtime_generation_required"] is True
     assert config["runtime_compatibility_evidence"] == {}
     assert "recovers_unpublished_image_milestone" not in config
-    assert "unpublished_predecessor_tags" not in config
+    assert config["unpublished_predecessor_tags"] == ["v1.5.4"]
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
@@ -833,6 +835,7 @@ def test_current_release_config_retains_the_published_dependency_image_floor():
         "v1.5.0",
         "v1.5.1",
         "v1.5.2",
+        "v1.5.4",
     ]
     assert policy.image_milestone is False
     assert policy.minimum_image_version == "1.5.3"
@@ -1127,6 +1130,44 @@ def test_compatible_signed_amd64_arm64_runtime_evidence_allows_app_release(
     assert result.triggering_paths == ()
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda component, _state: component["process_runtime"].pop(
+            "python_prefix"
+        ),
+        lambda component, state: component["process_runtime"].update(
+            verified_generation=copy.deepcopy(
+                state["status_worker"]["verified_generation"]
+            )
+        ),
+        lambda component, _state: component.update(
+            dependency_inventory_sha256="e" * 64
+        ),
+    ],
+)
+def test_runtime_classifier_requires_exact_component_producer_shape(
+    tmp_path: Path, mutation
+):
+    module = _load_script(
+        "classify_release_capability_component_shape",
+        "scripts/release/classify-release-impact.py",
+    )
+
+    def mutate(evidence, _catalog):
+        qualification = evidence["architectures"]["arm64"]["qualification"]
+        state = qualification["apply_operational_state"]
+        mutation(qualification["apply_runtime_components"]["core"], state)
+        mutation(state["runtime_components"]["core"], state)
+
+    result = _apply(
+        module, tmp_path, paths=("deploy/requirements/runtime.txt",), mutate=mutate
+    )
+
+    assert result.delivery_mode == "image_required"
+    assert module.RUNTIME_CAPABILITY_EVIDENCE_TRIGGER in result.triggering_paths
+
+
 def test_selected_dependency_version_must_match_the_signed_inventory(tmp_path: Path):
     module = _load_script(
         "classify_release_capability_dependency_version",
@@ -1245,9 +1286,9 @@ def test_unloaded_optional_httptools_worker_record_remains_app_update(tmp_path: 
                 state["runtime_components"] = copy.deepcopy(
                     qualification[components_field]
                 )
-                state["status_worker"] = copy.deepcopy(
-                    state["runtime_components"]["ui"]["process_runtime"]
-                )
+                state["status_worker"]["dependencies"]["httptools"] = {
+                    "loaded": False
+                }
             qualification["restart_operational_state"]["status_worker"][
                 "dependencies"
             ]["httptools"] = {"loaded": False}

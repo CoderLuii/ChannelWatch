@@ -50,6 +50,7 @@ export function Header() {
   const overlayOpen = overlayState !== "idle"
   const restartFocusRef = useRef<HTMLElement | null>(null)
   const cancelPollRef = useRef<(() => void) | null>(null)
+  const headerRef = useRef<HTMLElement | null>(null)
   const { toast } = useToast()
   const { setActiveView } = useContext(HeaderContext)
   const { selectedDvr, setSelectedDvr, availableDvrs } = useDvrSelection()
@@ -63,6 +64,19 @@ export function Header() {
     background.forEach(({ element }) => { element.inert = true })
     return () => { background.forEach(({ element, wasInert }) => { element.inert = wasInert }) }
   }, [overlayOpen, restartDialog])
+
+  useLayoutEffect(() => {
+    const header = headerRef.current
+    if (!header) return
+    const publishHeight = () => document.documentElement.style.setProperty("--app-header-height", `${Math.ceil(header.getBoundingClientRect().height)}px`)
+    publishHeight()
+    const observer = new ResizeObserver(publishHeight)
+    observer.observe(header)
+    return () => {
+      observer.disconnect()
+      document.documentElement.style.removeProperty("--app-header-height")
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -240,8 +254,8 @@ export function Header() {
 
   return (
     <>
-      <header className="fixed top-0 left-0 right-0 z-40 border-b bg-background/95 backdrop-blur-lg supports-[backdrop-filter]:bg-background/60 w-full">
-        <div className="flex h-16 w-full items-center justify-between gap-2 px-2 sm:px-4 md:px-6 md:pl-[76px]">
+      <header ref={headerRef} className="ios-navigation-material fixed inset-x-0 top-0 z-40 w-full border-b border-border/70 bg-background/88 shadow-[0_10px_30px_-30px_hsl(220_40%_10%/0.5)] backdrop-blur-xl">
+        <div className="flex min-h-16 w-full items-center justify-between gap-2 px-2 py-2 sm:px-4 md:px-6 md:pl-[84px]">
           <div data-testid="header-primary-controls" className="flex min-w-0 items-center gap-1 sm:gap-2 md:gap-4">
             <Button
               variant="ghost"
@@ -256,12 +270,13 @@ export function Header() {
             {availableDvrs.length > 0 && (
               <Select value={selectedDvr} onValueChange={setSelectedDvr}>
                 <SelectTrigger
-                  className="h-11 w-[92px] min-w-0 max-w-[92px] border-border/60 px-2 text-xs sm:w-[120px] sm:min-w-[120px] sm:max-w-[180px] md:h-8"
+                  className="h-auto min-h-11 w-[104px] min-w-0 max-w-[104px] whitespace-normal border-border/60 px-2.5 py-2 text-[13px] min-[360px]:w-[132px] min-[360px]:max-w-[132px] sm:w-[140px] sm:min-w-[140px] sm:max-w-[200px] [&>span]:break-words [&>span]:whitespace-normal [&>span]:[overflow-wrap:anywhere]"
                   aria-label={t("header.selectDvr")}
+                  title={selectedDvr === "all" ? t("header.allDvrs") : availableDvrs.find((dvr) => dvr.id === selectedDvr)?.name || availableDvrs.find((dvr) => dvr.id === selectedDvr)?.host}
                 >
-                  <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-                    <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <SelectValue placeholder={t("header.allDvrs")} />
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5 [&>span]:min-w-0 [&>span]:flex-1 [&>span]:break-words [&>span]:[overflow-wrap:anywhere]">
+                    <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground hidden min-[360px]:block" />
+                    <SelectValue className="min-w-0 break-words text-left [overflow-wrap:anywhere]" placeholder={t("header.allDvrs")} />
                   </div>
                 </SelectTrigger>
                 <SelectContent>
@@ -280,7 +295,7 @@ export function Header() {
             <Button
               variant="ghost"
               size="sm"
-              className="hidden h-8 px-2 text-xs sm:inline-flex"
+              className="hidden h-auto min-h-11 whitespace-normal px-3 py-2 text-center text-[13px] xl:inline-flex"
               onClick={() => setActiveView("settings:security")}
             >
               {securityStatus ? <SecurityModeBadge status={securityStatus} compact /> : t("header.security")}
@@ -292,13 +307,14 @@ export function Header() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="hidden md:flex items-center gap-1"
+                    className="hidden min-h-11 min-w-11 items-center gap-1.5 px-0 md:flex xl:h-auto xl:min-w-0 xl:whitespace-normal xl:px-3 xl:py-2"
+                    aria-label={t("header.restart")}
                     data-restart-trigger
                     onClick={handleRestart}
                     disabled={isRestarting}
                   >
                     <Power className={`h-4 w-4 ${isRestarting ? "animate-spin" : ""}`} />
-                    {t("header.restart")}
+                    <span className="hidden xl:inline">{t("header.restart")}</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -336,7 +352,7 @@ export function Header() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="flex min-h-11 min-w-11 items-center gap-1 px-0 sm:px-3 md:min-h-9 md:min-w-0"
+                      className="flex min-h-11 min-w-11 items-center gap-1.5 px-0 xl:h-auto xl:min-w-0 xl:whitespace-normal xl:px-3 xl:py-2"
                       onClick={handleLogout}
                       disabled={isLoggingOut}
                       aria-label={t("header.signOut")}
@@ -347,7 +363,7 @@ export function Header() {
                       ) : (
                         <LogOut className="h-4 w-4" />
                       )}
-                      <span className="hidden sm:inline">
+                      <span className="hidden xl:inline">
                         {isLoggingOut ? t("header.signingOut") : t("header.signOut")}
                       </span>
                     </Button>
@@ -371,7 +387,7 @@ export function Header() {
         }}>
         <DialogPrimitive.Portal>
         <div
-          className={`fixed inset-0 z-50 flex items-center justify-center ${
+          className={`fixed inset-0 z-50 flex items-center justify-center px-4 ${
             overlayState === "dismissing" ? "animate-overlay-out" : "animate-overlay-in"
           }`}
           onAnimationEnd={() => {
@@ -381,7 +397,7 @@ export function Header() {
           }}
         >
           {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
 
           {/* Card */}
           <DialogPrimitive.Content
@@ -396,7 +412,7 @@ export function Header() {
               event.preventDefault()
               requestAnimationFrame(() => restartFocusRef.current?.focus())
             }}
-            className={`relative z-10 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4 text-center ${
+            className={`relative z-10 w-full max-w-sm rounded-[20px] border border-zinc-700/80 bg-zinc-900 p-7 text-center shadow-[0_30px_90px_-20px_rgb(0_0_0/0.7)] ${
               overlayState === "dismissing" ? "animate-overlay-card-out" : "animate-overlay-card-in"
             }`}
           >

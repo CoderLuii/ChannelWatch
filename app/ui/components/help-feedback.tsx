@@ -27,7 +27,7 @@ function FeedbackRow({ icon, title, description, action }: FeedbackRowProps) {
   return (
     <div className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">
-        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
           {icon}
         </span>
         <div className="min-w-0">
@@ -46,7 +46,7 @@ function ExternalHelpLink({ href, children }: { href: string; children: React.Re
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
       {children}
       <ExternalLink className="h-4 w-4" aria-hidden="true" />
@@ -76,11 +76,11 @@ export function HelpFeedback({ appSettings }: HelpFeedbackProps) {
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6" data-testid="help-feedback-page">
       <div className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight">{t("feedback.title")}</h1>
+        <h1 className="text-[28px] font-semibold tracking-tight md:text-[32px]">{t("feedback.title")}</h1>
         <p className="text-sm leading-6 text-muted-foreground sm:text-base">{t("feedback.description")}</p>
       </div>
 
-      <Card>
+      <Card className="border-border/70 shadow-sm">
         <CardContent className="px-4 py-0 sm:px-6">
           <FeedbackRow
             icon={<Bug className="h-5 w-5" aria-hidden="true" />}

@@ -63,6 +63,8 @@ for (const viewport of viewports) {
     await expectNoHorizontalOverflow(page)
 
     await page.goto("/#overview")
+    const uptimeDetails = page.locator('[aria-controls="mobile-uptime-details"]')
+    if (await uptimeDetails.isVisible()) await uptimeDetails.click()
     await page.getByRole("button", { name: /DVR uptime/ }).click()
     const uptimeDialog = page.getByRole("dialog", { name: "DVR uptime" })
     await expect(uptimeDialog).toBeInViewport()
@@ -71,6 +73,42 @@ for (const viewport of viewports) {
     await expectNoHorizontalOverflow(page)
   })
 }
+
+test("dashboard metric disclosures stay compact when collapsed and align when both are open", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 })
+  await installApiMocks(page)
+  await page.goto("/#overview")
+
+  const uptime = page.locator('[aria-controls="mobile-uptime-details"]')
+  const disk = page.locator('[aria-controls="mobile-disk-details"]')
+  await expect(uptime).toHaveAttribute("aria-expanded", "false")
+  await expect(disk).toHaveAttribute("aria-expanded", "false")
+  await expect(disk).toContainText("Free")
+
+  const collapsed = await page.evaluate(() => ({
+    uptime: document.getElementById("mobile-uptime-details")?.parentElement?.getBoundingClientRect().height ?? 0,
+    disk: document.getElementById("mobile-disk-details")?.parentElement?.getBoundingClientRect().height ?? 0,
+  }))
+  expect(collapsed.uptime).toBeLessThanOrEqual(96)
+  expect(collapsed.disk).toBeLessThanOrEqual(96)
+
+  await uptime.click()
+  await disk.click()
+  await expect(uptime).toHaveAttribute("aria-expanded", "true")
+  await expect(disk).toHaveAttribute("aria-expanded", "true")
+
+  const expanded = await page.evaluate(() => {
+    const uptimeWrapper = document.getElementById("mobile-uptime-details")?.parentElement
+    const diskWrapper = document.getElementById("mobile-disk-details")?.parentElement
+    return {
+      uptime: uptimeWrapper?.getBoundingClientRect().height ?? 0,
+      disk: diskWrapper?.getBoundingClientRect().height ?? 0,
+    }
+  })
+  expect(Math.abs(expanded.uptime - expanded.disk)).toBeLessThanOrEqual(1)
+  expect(expanded.uptime).toBeGreaterThan(collapsed.uptime)
+  expect(expanded.disk).toBeGreaterThan(collapsed.disk)
+})
 
 test("modified surfaces remain usable at an effective 200 percent zoom", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 540 })
@@ -84,7 +122,6 @@ test("modified surfaces remain usable at an effective 200 percent zoom", async (
   await page.getByTestId("help-request-feature").click()
   await expect(page.getByRole("dialog", { name: "Request a feature or change" })).toBeInViewport()
 })
-
 test("modified surfaces honor reduced motion and forced colors", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce", forcedColors: "active" })
   await installApiMocks(page)

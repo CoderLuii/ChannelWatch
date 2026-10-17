@@ -28,7 +28,20 @@ MAX_AGGREGATE_BYTES = 8 * 1024 * 1024
 MAX_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_INVENTORY_ARTIFACT_BYTES = MAX_AGGREGATE_BYTES
-MAX_RECOVERY_DIAGNOSTIC_BYTES = 4 * 1024 * 1024
+MAX_UPDATE_CHECK_ARTIFACT_BYTES = 8 * 1024 * 1024
+UPDATE_CHECK_EVIDENCE_MODE = "protocol-4-runtime"
+UPDATE_CHECK_EVIDENCE_PHASE = "initial-update-check"
+MAX_ROLLBACK_STATUS_ARTIFACT_BYTES = 8 * 1024 * 1024
+ROLLBACK_STATUS_EVIDENCE_PHASE = "qualification-post-rollback"
+# Four individually bounded control files plus status and JSON envelope.
+MAX_RECOVERY_DIAGNOSTIC_BYTES = 8 * 1024 * 1024
+MAX_RECOVERY_CONTROL_BYTES = 1024 * 1024
+RECOVERY_DIAGNOSTIC_VALUE_FIELDS = {
+    "recovery_hold_status",
+    "recovery_hold_control_state",
+    "rollback_status",
+    "post_rollback_control_state",
+}
 MAX_BUNDLE_BYTES = 80 * 1024 * 1024
 MAX_EXPANDED_BYTES = 180 * 1024 * 1024
 MAX_MEMBER_COUNT = 3000
@@ -101,7 +114,12 @@ def _selected_command_valid(
     )
 
 
-def _worker_runtime_valid(value: object, *, selected_generation: str | None) -> bool:
+def _worker_runtime_valid(
+    value: object,
+    *,
+    selected_generation: str | None,
+    require_verified_generation: bool = True,
+) -> bool:
     if not isinstance(value, dict):
         return False
     if selected_generation is None:
@@ -113,10 +131,12 @@ def _worker_runtime_valid(value: object, *, selected_generation: str | None) -> 
             and bool(value["python_version"])
             and value.get("verified_generation") is None
         )
-    if set(value) != {
-        "pid", "python_executable", "python_prefix", "python_version",
-        "dependencies", "verified_generation",
-    }:
+    expected_fields = {
+        "pid", "python_executable", "python_prefix", "python_version", "dependencies",
+    }
+    if require_verified_generation:
+        expected_fields.add("verified_generation")
+    if set(value) != expected_fields:
         return False
     prefix = (
         f"/config/channelwatch-runtime/releases/{selected_generation}/environment"
@@ -129,16 +149,17 @@ def _worker_runtime_valid(value: object, *, selected_generation: str | None) -> 
         or not value["python_version"]
     ):
         return False
-    verified = value.get("verified_generation")
-    if (
-        not isinstance(verified, dict)
-        or verified.get("runtime_generation_id") != selected_generation
-        or verified.get("runtime_descriptor_sha256") != selected_generation
-        or verified.get("path")
-        != f"/config/channelwatch-runtime/releases/{selected_generation}"
-        or not _valid_sha256(verified.get("dependency_inventory_sha256"))
-    ):
-        return False
+    if require_verified_generation:
+        verified = value.get("verified_generation")
+        if (
+            not isinstance(verified, dict)
+            or verified.get("runtime_generation_id") != selected_generation
+            or verified.get("runtime_descriptor_sha256") != selected_generation
+            or verified.get("path")
+            != f"/config/channelwatch-runtime/releases/{selected_generation}"
+            or not _valid_sha256(verified.get("dependency_inventory_sha256"))
+        ):
+            return False
     dependencies = value.get("dependencies")
     if not isinstance(dependencies, dict) or set(dependencies) != TRACKED_MODULES:
         return False
@@ -250,14 +271,26 @@ def _operational_state_valid(value: object, *, selected_generation: str | None =
         components = value.get("runtime_components")
         if not isinstance(components, dict) or set(components) != {"core", "ui"}:
             return False
+        selected_inventory = worker["verified_generation"][
+            "dependency_inventory_sha256"
+        ]
         for component, record in components.items():
             if (
                 not isinstance(record, dict)
+                or set(record)
+                != {
+                    "runtime_generation_id",
+                    "runtime_descriptor_sha256",
+                    "dependency_inventory_sha256",
+                    "process_runtime",
+                }
                 or record.get("runtime_generation_id") != selected_generation
                 or record.get("runtime_descriptor_sha256") != selected_generation
-                or not _valid_sha256(record.get("dependency_inventory_sha256"))
+                or record.get("dependency_inventory_sha256") != selected_inventory
                 or not _worker_runtime_valid(
-                    record.get("process_runtime"), selected_generation=selected_generation
+                    record.get("process_runtime"),
+                    selected_generation=selected_generation,
+                    require_verified_generation=False,
                 )
                 or record["process_runtime"]["pid"] != processes[component]["pid"]
             ):
@@ -321,7 +354,7 @@ def _recovery_control_record_valid(value: object) -> bool:
         and isinstance(value.get("mode"), str)
         and re.fullmatch(r"0[0-7]{3}", value["mode"]) is not None
         and type(value.get("size")) is int
-        and value["size"] > 0
+        and 0 < value["size"] <= MAX_RECOVERY_CONTROL_BYTES
         and _valid_sha256(value.get("sha256"))
         and isinstance(value.get("payload"), dict)
     )
@@ -372,6 +405,53 @@ def _rollback_startup_components_valid(value: object, *, image_version: str) -> 
     return True
 
 
+def _rollback_response_valid(
+    value: object, *, source_version: str, target_version: str
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or value.get("operation") != "rollback"
+        or value.get("status") not in {"restarting", "validating", "success"}
+        or value.get("version") != source_version
+        or value.get("rolled_back_from") != source_version
+        or not isinstance(value.get("job_id"), str)
+        or re.fullmatch(r"[0-9a-f]{32}", value["job_id"]) is None
+    ):
+        return False
+    status = value["status"]
+    if status == "restarting":
+        return value.get("restart_required") is True
+    components = value.get("startup_components")
+    component_names = set(components) if isinstance(components, dict) else set()
+    return bool(
+        value.get("rollback_applied") is True
+        and value.get("restored_version") == target_version
+        and isinstance(components, dict)
+        and (
+            component_names == {"core", "ui"}
+            if status == "success"
+            else len(component_names) == 1
+            and component_names.issubset({"core", "ui"})
+        )
+        and all(
+            isinstance(marker, dict)
+            and set(marker) == {"healthy", "version", "ready_at"}
+            and marker.get("healthy") is True
+            and marker.get("version") == target_version
+            and isinstance(marker.get("ready_at"), str)
+            and bool(marker["ready_at"])
+            for marker in components.values()
+        )
+        and (
+            value.get("restart_required") is True
+            if status == "validating"
+            else value.get("restart_required") is False
+            and isinstance(value.get("validated_at"), str)
+            and bool(value["validated_at"])
+        )
+    )
+
+
 def _validate_damaged_recovery(
     result: object,
     *,
@@ -381,21 +461,39 @@ def _validate_damaged_recovery(
     expected_bundle_sha256: str | None,
     expected_parser: dict | None,
     expected_image_imports: dict | None,
+    recovery_diagnostics: dict | None = None,
 ) -> None:
     required = {
         "status", "job_id", "runtime_generation_id", "container_id",
         "initial_operational_state", "selected_state_before_damage", "native_parser",
         "damage", "no_selected_launch_after_restart", "successful_apply_job",
-        "recovery_hold_status", "recovery_marker",
-        "recovery_hold_operational_state", "recovery_hold_control_state",
-        "recovery_hold_diagnostic", "rollback_response", "rollback_status",
-        "completed_rollback_job", "post_rollback_control_state",
+        "recovery_marker", "recovery_hold_operational_state",
+        "recovery_hold_diagnostic", "rollback_response",
+        "completed_rollback_job",
         "post_rollback_diagnostic", "selected_processes_after_recovery",
         "post_rollback_operational_state", "image_imports_after_recovery",
         "image_inventory", "persistent_hashes",
     }
-    if not isinstance(result, dict) or set(result) != required or result.get("status") != "passed":
+    if not isinstance(result, dict) or result.get("status") != "passed":
         raise ValueError("Damaged-native recovery evidence is incomplete.")
+    embedded_fields = set(result) & RECOVERY_DIAGNOSTIC_VALUE_FIELDS
+    if embedded_fields not in (set(), RECOVERY_DIAGNOSTIC_VALUE_FIELDS):
+        raise ValueError("Damaged-native recovery diagnostic evidence is incomplete.")
+    if set(result) != required | embedded_fields:
+        raise ValueError("Damaged-native recovery evidence is incomplete.")
+    if embedded_fields:
+        diagnostic_values = {
+            field: result[field] for field in RECOVERY_DIAGNOSTIC_VALUE_FIELDS
+        }
+        if recovery_diagnostics is not None and diagnostic_values != recovery_diagnostics:
+            raise ValueError("Recovery diagnostic artifact differs from its receipt.")
+    else:
+        if (
+            not isinstance(recovery_diagnostics, dict)
+            or set(recovery_diagnostics) != RECOVERY_DIAGNOSTIC_VALUE_FIELDS
+        ):
+            raise ValueError("Damaged-native recovery diagnostic evidence is incomplete.")
+        diagnostic_values = recovery_diagnostics
     generation = result.get("runtime_generation_id")
     if not _valid_sha256(generation) or (
         expected_generation is not None and generation != expected_generation
@@ -465,7 +563,7 @@ def _validate_damaged_recovery(
     ):
         raise ValueError("Damaged-native apply job is not the retained successful activation.")
     generation_root = f"/config/channelwatch-runtime/releases/{generation}"
-    hold_status = result.get("recovery_hold_status")
+    hold_status = diagnostic_values.get("recovery_hold_status")
     active = hold_status.get("active_bundle") if isinstance(hold_status, dict) else None
     manifest = active.get("manifest") if isinstance(active, dict) else None
     hold_state = result.get("recovery_hold_operational_state")
@@ -489,9 +587,7 @@ def _validate_damaged_recovery(
             "dependency_inventory_sha256"
         ]
         or any(
-            component["process_runtime"]["verified_generation"][
-                "dependency_inventory_sha256"
-            ]
+            component["dependency_inventory_sha256"]
             != active.get("dependency_inventory_sha256")
             for component in selected_state["runtime_components"].values()
         )
@@ -502,7 +598,7 @@ def _validate_damaged_recovery(
     ):
         raise ValueError("Damaged-native recovery hold is not bound to the healthy image workers.")
     marker = result.get("recovery_marker")
-    hold_control = result.get("recovery_hold_control_state")
+    hold_control = diagnostic_values.get("recovery_hold_control_state")
     control_names = {
         "active.json", "rollback.json", "update-job.json",
         "official-recovery-mode.json",
@@ -520,12 +616,11 @@ def _validate_damaged_recovery(
     rollback_response = result.get("rollback_response")
     completed = result.get("completed_rollback_job")
     if (
-        not isinstance(rollback_response, dict)
-        or rollback_response.get("operation") != "rollback"
-        or rollback_response.get("status") not in {"restarting", "succeeded"}
-        or rollback_response.get("rolled_back_from") != version
-        or not isinstance(rollback_response.get("job_id"), str)
-        or re.fullmatch(r"[0-9a-f]{32}", rollback_response["job_id"]) is None
+        not _rollback_response_valid(
+            rollback_response,
+            source_version=version,
+            target_version=image_version,
+        )
         or rollback_response["job_id"] == apply_job.get("job_id")
         or not isinstance(completed, dict)
         or completed.get("job_id") != rollback_response["job_id"]
@@ -542,8 +637,8 @@ def _validate_damaged_recovery(
     ):
         raise ValueError("Damaged-native explicit rollback job is invalid.")
     post_state = result.get("post_rollback_operational_state")
-    rollback_status = result.get("rollback_status")
-    post_control = result.get("post_rollback_control_state")
+    rollback_status = diagnostic_values.get("rollback_status")
+    post_control = diagnostic_values.get("post_rollback_control_state")
     if (
         not _operational_state_valid(post_state)
         or result.get("selected_processes_after_recovery") != {}
@@ -725,7 +820,8 @@ def _validate_live_ui(value: object, *, version: str, image_version: str) -> Non
     required = {
         "status", "apply_requests", "rollback_requests", "target_version",
         "final_version", "final_active_bundle", "observed_progress", "console_errors",
-        "page_errors", "final_health", "page_url", "page_title", "screenshots",
+        "page_errors", "final_health", "expected_console_events", "page_url",
+        "page_title", "screenshots",
         "container_id_before", "container_id_after", "initial_operational_state",
         "final_operational_state", "evidence_json", "playwright_log",
     }
@@ -733,6 +829,9 @@ def _validate_live_ui(value: object, *, version: str, image_version: str) -> Non
         "startup": {"status": "ready"},
         "ready": {"status": "ready", "ready": True},
     }
+    expected_console_events = (
+        value.get("expected_console_events") if isinstance(value, dict) else None
+    )
     if (
         not isinstance(value, dict) or set(value) != required
         or value.get("status") != "passed" or value.get("apply_requests") != 1
@@ -741,6 +840,16 @@ def _validate_live_ui(value: object, *, version: str, image_version: str) -> Non
         or value.get("final_active_bundle", True) is not None
         or value.get("observed_progress") is not True
         or value.get("console_errors") != [] or value.get("page_errors") != []
+        or not isinstance(expected_console_events, dict)
+        or set(expected_console_events) != {
+            "unauthenticated_bootstrap",
+            "apply_restart_transport",
+            "rollback_restart_transport",
+        }
+        or any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in expected_console_events.values()
+        )
         or value.get("final_health") != expected_health
         or not isinstance(value.get("page_url"), str) or not value["page_url"]
         or not isinstance(value.get("page_title"), str) or not value["page_title"].strip()
@@ -766,6 +875,8 @@ def validate_release_qualification(
     *,
     qualification: dict | None = None,
     bundle_sha256: str | None = None,
+    recovery_diagnostics: dict | None = None,
+    raw_update_check: dict | None = None,
 ) -> None:
     """Require live release checks without changing runtime compatibility rules."""
     if not isinstance(proof, dict):
@@ -775,6 +886,10 @@ def validate_release_qualification(
     expected_image_imports = None
     if qualification is not None:
         checked = qualification.get("check")
+        if raw_update_check is None or not _update_check_summary_matches(
+            checked, raw_update_check
+        ):
+            raise ValueError("Initial update-check artifact differs from its receipt.")
         target = checked.get("trusted_target") if isinstance(checked, dict) else None
         descriptor = target.get("runtime_descriptor") if isinstance(target, dict) else None
         imports = qualification.get("selected_native_imports")
@@ -787,6 +902,7 @@ def validate_release_qualification(
         proof.get("damaged_native_recovery"), version=version, image_version=image_version,
         expected_generation=expected_generation, expected_bundle_sha256=bundle_sha256,
         expected_parser=expected_parser, expected_image_imports=expected_image_imports,
+        recovery_diagnostics=recovery_diagnostics,
     )
     if architecture == "arm64":
         return
@@ -868,10 +984,14 @@ def read_json_bounded(path: Path, *, limit: int) -> dict:
     return _decode_json_object(_read_regular_file_bounded(path, limit=limit))
 
 
+def _reject_json_constant(value: str):
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
 def _decode_json_object(raw: bytes) -> dict:
     try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(raw, parse_constant=_reject_json_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("JSON input is invalid.") from exc
     if not isinstance(value, dict):
         raise ValueError("JSON input must be an object.")
@@ -879,7 +999,19 @@ def _decode_json_object(raw: bytes) -> dict:
 
 
 def serialize_aggregate(value: dict) -> bytes:
-    encoded = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    try:
+        encoded = (
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Final native evidence is not valid JSON.") from exc
     if len(encoded) > MAX_AGGREGATE_BYTES:
         raise ValueError("Final native evidence exceeds the classifier 8 MiB bound.")
     return encoded
@@ -904,32 +1036,289 @@ def verify_image_inventory_artifacts(root: Path, qualification: dict) -> None:
             raise ValueError("Image inventory artifact differs from its receipt.")
 
 
-def verify_recovery_diagnostic_artifacts(root: Path, result: dict) -> None:
+def verify_recovery_diagnostic_artifacts(root: Path, result: dict) -> dict:
     expectations = {
-        "recovery_hold_diagnostic": {
-            "schema": 1,
-            "phase": "recovery-hold",
-            "status": result["recovery_hold_status"],
-            "control": result["recovery_hold_control_state"],
-        },
-        "post_rollback_diagnostic": {
-            "schema": 1,
-            "phase": "post-rollback",
-            "status": result["rollback_status"],
-            "control": result["post_rollback_control_state"],
-        },
+        "recovery_hold_diagnostic": (
+            "recovery-hold", "recovery_hold_status", "recovery_hold_control_state"
+        ),
+        "post_rollback_diagnostic": (
+            "post-rollback", "rollback_status", "post_rollback_control_state"
+        ),
     }
-    for name, expected in expectations.items():
+    recovered = {}
+    for name, (phase, status_field, control_field) in expectations.items():
         raw = read_retained_artifact(
             root, result.get(name), limit=MAX_RECOVERY_DIAGNOSTIC_BYTES
         )
-        if _decode_json_object(raw) != expected:
+        actual = _decode_json_object(raw)
+        if (
+            set(actual) != {"schema", "phase", "status", "control"}
+            or actual.get("schema") != 1
+            or actual.get("phase") != phase
+        ):
             raise ValueError("Recovery diagnostic artifact differs from its receipt.")
+        recovered[status_field] = actual["status"]
+        recovered[control_field] = actual["control"]
+        if (
+            status_field in result and result[status_field] != actual["status"]
+            or control_field in result and result[control_field] != actual["control"]
+        ):
+            raise ValueError("Recovery diagnostic artifact differs from its receipt.")
+    return recovered
 
 
-def aggregate(receipts: dict[str, dict]) -> dict:
+def _update_check_summary_matches(summary: object, status: object) -> bool:
+    if (
+        not isinstance(summary, dict)
+        or set(summary)
+        != {
+            "update_available",
+            "image_required",
+            "catalog_state",
+            "trusted_target",
+            "raw_status_artifact",
+        }
+        or not isinstance(status, dict)
+    ):
+        return False
+    target = status.get("trusted_target")
+    compact_target = summary.get("trusted_target")
+    return (
+        isinstance(target, dict)
+        and isinstance(compact_target, dict)
+        and set(compact_target)
+        == {"version", "runtime_descriptor", "bundle_sha256"}
+        and summary.get("update_available") == status.get("update_available")
+        and summary.get("image_required") == status.get("image_required")
+        and summary.get("catalog_state") == status.get("catalog_state")
+        and compact_target
+        == {
+            "version": target.get("version"),
+            "runtime_descriptor": target.get("runtime_descriptor"),
+            "bundle_sha256": target.get("bundle_sha256"),
+        }
+    )
+
+
+def verify_update_check_artifact(
+    root: Path,
+    qualification: dict,
+    *,
+    expected_architecture: str,
+    expected_source_commit: str,
+) -> dict:
+    if not isinstance(qualification, dict):
+        raise ValueError("Native runtime qualification is missing.")
+    summary = qualification.get("check")
+    artifact = (
+        summary.get("raw_status_artifact") if isinstance(summary, dict) else None
+    )
+    raw = read_retained_artifact(
+        root, artifact, limit=MAX_UPDATE_CHECK_ARTIFACT_BYTES
+    )
+    actual = _decode_json_object(raw)
+    if (
+        set(actual)
+        != {
+            "schema",
+            "mode",
+            "phase",
+            "architecture",
+            "source_commit",
+            "status",
+        }
+        or type(actual.get("schema")) is not int
+        or actual["schema"] != 1
+        or actual.get("mode") != UPDATE_CHECK_EVIDENCE_MODE
+        or actual.get("phase") != UPDATE_CHECK_EVIDENCE_PHASE
+        or actual.get("architecture") != expected_architecture
+        or actual.get("source_commit") != expected_source_commit
+        or not _update_check_summary_matches(summary, actual.get("status"))
+    ):
+        raise ValueError("Initial update-check artifact differs from its receipt.")
+    return actual["status"]
+
+
+def _rollback_status_summary_matches(summary: object, status: object) -> bool:
+    fields = (
+        "current_version",
+        "launcher_protocol",
+        "active_bundle",
+        "operation_busy",
+        "worker_runtime",
+    )
+    if (
+        not isinstance(summary, dict)
+        or set(summary)
+        != {
+            "current_version",
+            "launcher_protocol",
+            "active_bundle",
+            "operation_busy",
+            "worker_runtime",
+            "raw_status_artifact",
+        }
+        or not isinstance(status, dict)
+        or any(key not in status for key in fields)
+    ):
+        return False
+    try:
+        compact = json.dumps(
+            {key: summary[key] for key in fields},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        retained = json.dumps(
+            {key: status[key] for key in fields},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
+    return compact == retained
+
+
+def verify_rollback_status_artifact(
+    root: Path,
+    qualification: dict,
+    *,
+    expected_architecture: str,
+    expected_source_commit: str,
+) -> dict:
+    if not isinstance(qualification, dict):
+        raise ValueError("Native runtime qualification is missing.")
+    summary = qualification.get("rollback_status")
+    artifact = (
+        summary.get("raw_status_artifact") if isinstance(summary, dict) else None
+    )
+    raw = read_retained_artifact(
+        root, artifact, limit=MAX_ROLLBACK_STATUS_ARTIFACT_BYTES
+    )
+    actual = _decode_json_object(raw)
+    if (
+        set(actual)
+        != {
+            "schema",
+            "mode",
+            "phase",
+            "architecture",
+            "source_commit",
+            "status",
+        }
+        or type(actual.get("schema")) is not int
+        or actual["schema"] != 1
+        or actual.get("mode") != UPDATE_CHECK_EVIDENCE_MODE
+        or actual.get("phase") != ROLLBACK_STATUS_EVIDENCE_PHASE
+        or actual.get("architecture") != expected_architecture
+        or actual.get("source_commit") != expected_source_commit
+        or not _rollback_status_summary_matches(summary, actual.get("status"))
+    ):
+        raise ValueError("Post-rollback status artifact differs from its receipt.")
+    return actual["status"]
+
+
+def _validate_native_receipt(
+    name: str,
+    receipt: dict,
+    *,
+    header: dict,
+    recovery_diagnostic: dict,
+    update_check: dict,
+    rollback_status: dict,
+) -> tuple[dict, dict]:
+    if any(receipt.get(key) != value for key, value in header.items()):
+        raise ValueError("Native receipts describe different release artifacts.")
+    if receipt.get("cleanup") != {"status": "passed", "failures": []}:
+        raise ValueError("Native qualification cleanup did not pass.")
+    if (
+        type(receipt.get("serialized_size_bytes")) is not int
+        or receipt["serialized_size_bytes"] <= 0
+        or receipt["serialized_size_bytes"] > MAX_NATIVE_RECEIPT_BYTES
+    ):
+        raise ValueError("Native qualification serialized size is invalid.")
+    architecture = receipt.get("architecture")
+    if (
+        not isinstance(architecture, dict)
+        or architecture.get("architecture") != name
+        or architecture.get("status") != "passed"
+    ):
+        raise ValueError("Native architecture receipt is missing or mismatched.")
+    qualification = architecture.get("qualification")
+    if not isinstance(qualification, dict) or not _rollback_status_summary_matches(
+        qualification.get("rollback_status"), rollback_status
+    ):
+        raise ValueError("Post-rollback status artifact differs from its receipt.")
+    rollback_operational_state = {
+        "status_worker_scope": qualification.get("rollback_runtime_component_scope"),
+        "status_worker": rollback_status.get("worker_runtime"),
+        "commands": qualification.get("rollback_supervisor_processes"),
+        "processes": qualification.get("rollback_supervisor_process_identities"),
+        "services": qualification.get("rollback_supervisor_services"),
+        "health": qualification.get("rollback_health"),
+    }
+    if (
+        not _operational_state_valid(rollback_operational_state)
+        or not _rollback_valid(
+            rollback_status,
+            image_version=header["bootstrap"]["minimum_image_version"],
+            operational_state=rollback_operational_state,
+        )
+        or rollback_status.get("launcher_protocol") != 4
+        or qualification.get("rollback_runtime_components")
+        != {"ui": rollback_status.get("worker_runtime")}
+    ):
+        raise ValueError("Native qualification post-rollback image status is invalid.")
+    validate_release_qualification(
+        name,
+        architecture.get("release_qualification"),
+        header["target_application_version"],
+        header["bootstrap"]["minimum_image_version"],
+        qualification=qualification,
+        bundle_sha256=architecture.get("target_variant_bundle_sha256"),
+        recovery_diagnostics=recovery_diagnostic,
+        raw_update_check=update_check,
+    )
+    hashes = receipt.get("logs_sha256")
+    if not isinstance(hashes, dict) or set(hashes) != {"app", "feed"}:
+        raise ValueError("Native qualification logs are missing.")
+    required_logs = (
+        {"damaged-native", "noexec", "low-space", "live-ui"}
+        if name == "amd64"
+        else {"damaged-native"}
+    )
+    release_logs = receipt.get("release_log_artifacts")
+    release_hashes = receipt.get("release_logs_sha256")
+    if (
+        not isinstance(release_logs, dict)
+        or set(release_logs) != required_logs
+        or not isinstance(release_hashes, dict)
+        or set(release_hashes) != required_logs
+        or any(
+            not isinstance(item, dict) or item.get("sha256") != release_hashes[key]
+            for key, item in release_logs.items()
+        )
+    ):
+        raise ValueError("Native fault and live probe logs are missing or mismatched.")
+    return {**architecture, "release_log_artifacts": release_logs}, hashes
+
+
+def aggregate(
+    receipts: dict[str, dict],
+    *,
+    recovery_diagnostics: dict[str, dict] | None = None,
+    update_checks: dict[str, dict] | None = None,
+    rollback_statuses: dict[str, dict] | None = None,
+) -> dict:
     if set(receipts) != {"amd64", "arm64"}:
         raise ValueError("Both native architecture receipts are required.")
+    if update_checks is None or set(update_checks) != {"amd64", "arm64"}:
+        raise ValueError("Both retained initial update-check artifacts are required.")
+    if rollback_statuses is None or set(rollback_statuses) != {"amd64", "arm64"}:
+        raise ValueError("Both retained post-rollback status artifacts are required.")
     first = receipts["amd64"]
     if first.get("schema") != 2 or first.get("status") != "passed":
         raise ValueError("Native qualification did not pass with schema 2.")
@@ -937,108 +1326,208 @@ def aggregate(receipts: dict[str, dict]) -> dict:
     architectures = {}
     logs = {}
     for name, receipt in receipts.items():
-        if any(receipt.get(key) != value for key, value in header.items()):
-            raise ValueError("Native receipts describe different release artifacts.")
-        if receipt.get("cleanup") != {"status": "passed", "failures": []}:
-            raise ValueError("Native qualification cleanup did not pass.")
-        if (
-            type(receipt.get("serialized_size_bytes")) is not int
-            or receipt["serialized_size_bytes"] <= 0
-            or receipt["serialized_size_bytes"] > MAX_NATIVE_RECEIPT_BYTES
-        ):
-            raise ValueError("Native qualification serialized size is invalid.")
-        architecture = receipt.get("architecture")
-        if not isinstance(architecture, dict) or architecture.get("architecture") != name or architecture.get("status") != "passed":
-            raise ValueError("Native architecture receipt is missing or mismatched.")
-        validate_release_qualification(
-            name, architecture.get("release_qualification"),
-            header["target_application_version"], header["bootstrap"]["minimum_image_version"],
-            qualification=architecture.get("qualification"),
-            bundle_sha256=architecture.get("target_variant_bundle_sha256"),
+        architectures[name], logs[name] = _validate_native_receipt(
+            name,
+            receipt,
+            header=header,
+            recovery_diagnostic=(
+                recovery_diagnostics.get(name)
+                if recovery_diagnostics is not None
+                else None
+            ),
+            update_check=update_checks[name],
+            rollback_status=rollback_statuses[name],
         )
-        architectures[name] = architecture
-        hashes = receipt.get("logs_sha256")
-        if not isinstance(hashes, dict) or set(hashes) != {"app", "feed"}:
-            raise ValueError("Native qualification logs are missing.")
-        required_logs = {"damaged-native", "noexec", "low-space", "live-ui"} if name == "amd64" else {"damaged-native"}
-        release_logs = receipt.get("release_log_artifacts")
-        release_hashes = receipt.get("release_logs_sha256")
-        if (not isinstance(release_logs, dict) or set(release_logs) != required_logs
-                or not isinstance(release_hashes, dict) or set(release_hashes) != required_logs
-                or any(not isinstance(item, dict) or item.get("sha256") != release_hashes[key]
-                       for key, item in release_logs.items())):
-            raise ValueError("Native fault and live probe logs are missing or mismatched.")
-        architectures[name] = {**architecture, "release_log_artifacts": release_logs}
-        logs[name] = hashes
     return {**header, "architectures": architectures, "native_logs_sha256": logs}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--amd64-evidence", type=Path, required=True)
-    parser.add_argument("--arm64-evidence", type=Path, required=True)
-    parser.add_argument("--catalog", type=Path, required=True)
-    parser.add_argument("--release-config", type=Path, required=True)
-    parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    receipt_paths = {
-        "amd64": args.amd64_evidence, "arm64": args.arm64_evidence,
-    }
-    receipt_bytes = {
-        name: _read_regular_file_bounded(path, limit=MAX_NATIVE_RECEIPT_BYTES)
-        for name, path in receipt_paths.items()
-    }
-    receipts = {
-        name: _decode_json_object(raw) for name, raw in receipt_bytes.items()
-    }
-    for name, raw in receipt_bytes.items():
-        if receipts[name].get("serialized_size_bytes") != len(raw):
-            raise ValueError("Native qualification serialized size does not match its file.")
-    read_json_bounded(args.catalog, limit=MAX_CATALOG_BYTES)
-    release_config = read_json_bounded(args.release_config, limit=MAX_CONFIG_BYTES)
-    result = aggregate(receipts)
-    for name, path in receipt_paths.items():
-        for component, expected_hash in result["native_logs_sha256"][name].items():
-            if component not in {"app", "feed"}:
-                raise ValueError("Native qualification log component is invalid.")
-            log = path.with_name(path.stem + "-" + component + ".log")
-            raw_log = _read_regular_file_bounded(log, limit=64 * 1024 * 1024)
-            if hashlib.sha256(raw_log).hexdigest() != expected_hash:
-                raise ValueError("Native qualification log hash does not match its receipt.")
-        architecture = result["architectures"][name]
-        verify_image_inventory_artifacts(path.parent, architecture["qualification"])
-        verify_recovery_diagnostic_artifacts(
-            path.parent,
-            architecture["release_qualification"]["damaged_native_recovery"],
-        )
-        for descriptor in architecture["release_log_artifacts"].values():
-            read_retained_artifact(path.parent, descriptor, limit=64 * 1024 * 1024)
-        if name == "amd64":
-            ui = architecture["release_qualification"]["live_ui"]
-            raw_ui = json.loads(read_retained_artifact(path.parent, ui.get("evidence_json"), limit=64 * 1024))
-            expected_raw_ui = {
-                key: value
-                for key, value in ui.items()
-                if key
-                not in {
-                    "container_id_before", "container_id_after",
-                    "initial_operational_state", "final_operational_state",
-                    "evidence_json", "playwright_log",
-                }
-            }
-            if raw_ui != expected_raw_ui:
-                raise ValueError("Live UI artifact differs from its receipt.")
-            read_retained_artifact(path.parent, ui.get("playwright_log"), limit=64 * 1024 * 1024)
-            for screenshot in ui["screenshots"].values():
-                raw = read_retained_artifact(path.parent, screenshot, limit=10 * 1024 * 1024)
-                if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
-                    raise ValueError("Live UI screenshot is not a PNG.")
-    spec = importlib.util.spec_from_file_location("release_impact", Path(__file__).with_name("classify-release-impact.py"))
+def _release_classifier():
+    spec = importlib.util.spec_from_file_location(
+        "release_impact", Path(__file__).with_name("classify-release-impact.py")
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("Release classifier could not be loaded.")
     classifier = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(classifier)
+    return classifier
+
+
+def _read_native_receipt(path: Path) -> dict:
+    raw = _read_regular_file_bounded(path, limit=MAX_NATIVE_RECEIPT_BYTES)
+    receipt = _decode_json_object(raw)
+    if receipt.get("serialized_size_bytes") != len(raw):
+        raise ValueError("Native qualification serialized size does not match its file.")
+    return receipt
+
+
+def _verify_native_receipt_files(
+    path: Path,
+    name: str,
+    architecture: dict,
+    hashes: dict,
+) -> None:
+    for component, expected_hash in hashes.items():
+        if component not in {"app", "feed"}:
+            raise ValueError("Native qualification log component is invalid.")
+        log = path.with_name(path.stem + "-" + component + ".log")
+        raw_log = _read_regular_file_bounded(log, limit=64 * 1024 * 1024)
+        if hashlib.sha256(raw_log).hexdigest() != expected_hash:
+            raise ValueError("Native qualification log hash does not match its receipt.")
+    verify_image_inventory_artifacts(path.parent, architecture["qualification"])
+    for descriptor in architecture["release_log_artifacts"].values():
+        read_retained_artifact(path.parent, descriptor, limit=64 * 1024 * 1024)
+    if name != "amd64":
+        return
+    ui = architecture["release_qualification"]["live_ui"]
+    raw_ui = json.loads(
+        read_retained_artifact(path.parent, ui.get("evidence_json"), limit=64 * 1024)
+    )
+    expected_raw_ui = {
+        key: value
+        for key, value in ui.items()
+        if key
+        not in {
+            "container_id_before",
+            "container_id_after",
+            "initial_operational_state",
+            "final_operational_state",
+            "evidence_json",
+            "playwright_log",
+        }
+    }
+    if raw_ui != expected_raw_ui:
+        raise ValueError("Live UI artifact differs from its receipt.")
+    read_retained_artifact(
+        path.parent, ui.get("playwright_log"), limit=64 * 1024 * 1024
+    )
+    for screenshot in ui["screenshots"].values():
+        raw = read_retained_artifact(path.parent, screenshot, limit=10 * 1024 * 1024)
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("Live UI screenshot is not a PNG.")
+
+
+def validate_native_receipt_file(
+    path: Path,
+    *,
+    architecture: str,
+    catalog_path: Path,
+    release_config: dict,
+    source_commit: str,
+) -> tuple[dict, dict, dict, dict]:
+    receipt = _read_native_receipt(path)
+    if receipt.get("schema") != 2 or receipt.get("status") != "passed":
+        raise ValueError("Native qualification did not pass with schema 2.")
+    header = {key: receipt[key] for key in HEADER_FIELDS}
+    qualification = receipt["architecture"]["qualification"]
+    update_check = verify_update_check_artifact(
+        path.parent,
+        qualification,
+        expected_architecture=architecture,
+        expected_source_commit=source_commit,
+    )
+    rollback_status = verify_rollback_status_artifact(
+        path.parent,
+        qualification,
+        expected_architecture=architecture,
+        expected_source_commit=source_commit,
+    )
+    damaged = receipt["architecture"]["release_qualification"][
+        "damaged_native_recovery"
+    ]
+    recovery_diagnostic = verify_recovery_diagnostic_artifacts(path.parent, damaged)
+    validated_architecture, hashes = _validate_native_receipt(
+        architecture,
+        receipt,
+        header=header,
+        recovery_diagnostic=recovery_diagnostic,
+        update_check=update_check,
+        rollback_status=rollback_status,
+    )
+    _verify_native_receipt_files(path, architecture, validated_architecture, hashes)
+    classifier = _release_classifier()
+    if not classifier.validate_protocol_four_runtime_architecture_receipt(
+        config=release_config,
+        catalog_path=catalog_path,
+        receipt=receipt,
+        architecture=architecture,
+        expected_source_commit=source_commit,
+        public_keys=None,
+    ):
+        raise ValueError(
+            "Native architecture evidence is incompatible with the signed release contract."
+        )
+    return receipt, recovery_diagnostic, update_check, rollback_status
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--amd64-evidence", type=Path)
+    parser.add_argument("--arm64-evidence", type=Path)
+    parser.add_argument("--validate-evidence", type=Path)
+    parser.add_argument("--architecture", choices=("amd64", "arm64"))
+    parser.add_argument("--catalog", type=Path, required=True)
+    parser.add_argument("--release-config", type=Path, required=True)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    read_json_bounded(args.catalog, limit=MAX_CATALOG_BYTES)
+    release_config = read_json_bounded(args.release_config, limit=MAX_CONFIG_BYTES)
+    if args.validate_evidence is not None:
+        if (
+            args.architecture is None
+            or args.amd64_evidence is not None
+            or args.arm64_evidence is not None
+            or args.output is not None
+        ):
+            parser.error(
+                "--validate-evidence requires --architecture and cannot be combined "
+                "with aggregate inputs or --output"
+            )
+        validate_native_receipt_file(
+            args.validate_evidence,
+            architecture=args.architecture,
+            catalog_path=args.catalog,
+            release_config=release_config,
+            source_commit=args.source_commit,
+        )
+        print(json.dumps({"status": "passed", "architecture": args.architecture}))
+        return 0
+    if (
+        args.amd64_evidence is None
+        or args.arm64_evidence is None
+        or args.output is None
+        or args.architecture is not None
+    ):
+        parser.error(
+            "aggregate mode requires --amd64-evidence, --arm64-evidence, and --output"
+        )
+    receipt_paths = {
+        "amd64": args.amd64_evidence, "arm64": args.arm64_evidence,
+    }
+    receipts = {}
+    recovery_diagnostics = {}
+    update_checks = {}
+    rollback_statuses = {}
+    for name, path in receipt_paths.items():
+        (
+            receipts[name],
+            recovery_diagnostics[name],
+            update_checks[name],
+            rollback_statuses[name],
+        ) = validate_native_receipt_file(
+            path,
+            architecture=name,
+            catalog_path=args.catalog,
+            release_config=release_config,
+            source_commit=args.source_commit,
+        )
+    result = aggregate(
+        receipts,
+        recovery_diagnostics=recovery_diagnostics,
+        update_checks=update_checks,
+        rollback_statuses=rollback_statuses,
+    )
+    classifier = _release_classifier()
     encoded_result = serialize_aggregate(result)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".runtime-capability-", dir=args.output.parent)

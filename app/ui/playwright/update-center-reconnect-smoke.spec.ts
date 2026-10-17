@@ -70,11 +70,55 @@ const readyStatus = {
   last_job: successfulJob,
 }
 
+const pendingRollbackJob = {
+  job_id: TEST_JOB_ID,
+  operation: "rollback",
+  status: "restarting",
+  version: "1.4.2",
+  rolled_back_from: "1.4.2",
+  message: "Rollback activated. Restarting ChannelWatch.",
+  restart_required: true,
+}
+
+const successfulRollbackJob = {
+  ...pendingRollbackJob,
+  status: "success",
+  message: "Rollback completed and the previous ChannelWatch runtime started successfully.",
+  restart_required: false,
+  rollback_applied: true,
+  restored_version: "1.4.0",
+}
+
+const rolledBackStatus = {
+  ...readyStatus,
+  current_version: "1.4.0",
+  runtime_source: "image",
+  active_bundle: null,
+  operation_state: "idle",
+  operation_busy: false,
+  last_job: successfulRollbackJob,
+  rollback_available: false,
+}
+
 async function trackDocumentLoads(page: Page) {
   await page.addInitScript(() => {
+    if (window.top !== window) return
     const loads = Number(window.sessionStorage.getItem("update-center-test-loads") ?? "0")
     window.sessionStorage.setItem("update-center-test-loads", String(loads + 1))
   })
+}
+
+async function currentTopDocumentLoads(page: Page): Promise<number | null> {
+  try {
+    return Number(await page.evaluate(
+      () => window.sessionStorage.getItem("update-center-test-loads") ?? "0",
+    ))
+  } catch (error) {
+    if (error instanceof Error && /Execution context was destroyed|Cannot find context with specified id/i.test(error.message)) {
+      return null
+    }
+    throw error
+  }
 }
 
 async function policyButtonGeometryViolations(page: Page, state: string) {
@@ -183,10 +227,27 @@ test("mobile policy controls fit before Apply and while dependencies are prepari
 test("one Apply action survives a restart disconnect and refreshes once after the durable job is ready", async ({ page }, testInfo) => {
   let applyRequests = 0
   let jobRequests = 0
+  let documentRequests = 0
   let updateStarted = false
+  let initialDocumentSeen = false
   let releaseApply!: () => void
+  let releaseReload!: () => void
   const applyGate = new Promise<void>((resolve) => {
     releaseApply = resolve
+  })
+  const reloadGate = new Promise<void>((resolve) => {
+    releaseReload = resolve
+  })
+
+  await page.route("**/*", async (route) => {
+    if (route.request().resourceType() !== "document") return route.fallback()
+    documentRequests += 1
+    if (!initialDocumentSeen) {
+      initialDocumentSeen = true
+      return route.continue()
+    }
+    await reloadGate
+    return route.continue()
   })
 
   await page.route("**/api/v1/update/status", (route) => fulfillJson(route, updateStarted ? readyStatus : availableStatus))
@@ -205,6 +266,8 @@ test("one Apply action survives a restart disconnect and refreshes once after th
 
   await page.goto("/#settings:updates")
   await page.setViewportSize({ width: 375, height: 812 })
+  const loadsBeforeApply = await currentTopDocumentLoads(page)
+  expect(loadsBeforeApply).not.toBeNull()
   const applyButton = page.getByRole("button", { name: "Apply update" })
   await expect(applyButton).toBeEnabled()
 
@@ -214,17 +277,64 @@ test("one Apply action survives a restart disconnect and refreshes once after th
     element.click()
   })
 
-  await expect(page.getByRole("heading", { name: "Downloading", exact: true })).toBeVisible()
+  await expect(page.getByRole("alert").getByText("Downloading", { exact: true })).toBeVisible()
   await expect(page.getByText("The dashboard will refresh when ready.")).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath("update-waiting-mobile.png"),
     fullPage: true,
   })
   releaseApply()
-  await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
   await expect.poll(() => applyRequests).toBe(1)
   await expect.poll(() => jobRequests).toBeGreaterThanOrEqual(3)
-  await expect.poll(() => page.evaluate(() => window.sessionStorage.getItem("update-center-test-loads"))).toBe("2")
+  await expect.poll(() => documentRequests).toBe(2)
+  releaseReload()
+  await expect.poll(() => currentTopDocumentLoads(page)).toBeGreaterThan(loadsBeforeApply!)
+  await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
+  await page.goto("/#settings:updates")
+  await expect(page).toHaveURL(/#settings:updates$/)
+  await expect(page.getByRole("button", { name: "Roll back" })).toBeEnabled()
+})
+
+test("one Roll back action survives a restart disconnect and restores the exact image runtime", async ({ page }) => {
+  let rollbackRequests = 0
+  let jobRequests = 0
+  let rollbackReady = false
+
+  await page.route("**/api/v1/update/status", (route) => fulfillJson(route, rollbackReady ? rolledBackStatus : readyStatus))
+  await page.route("**/api/v1/update/rollback", (route) => {
+    rollbackRequests += 1
+    return fulfillJson(route, pendingRollbackJob)
+  })
+  await page.route(`**/api/v1/update/jobs/${TEST_JOB_ID}`, (route) => {
+    jobRequests += 1
+    if (jobRequests === 1) return route.abort("connectionreset")
+    if (jobRequests === 2) return fulfillJson(route, pendingRollbackJob)
+    rollbackReady = true
+    return fulfillJson(route, successfulRollbackJob)
+  })
+
+  await page.goto("/#settings:updates")
+  const rollbackButton = page.getByRole("button", { name: "Roll back" })
+  await expect(rollbackButton).toBeEnabled()
+  await rollbackButton.click()
+
+  await expect(page.getByText("Restarting", { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
+  expect(rollbackRequests).toBe(1)
+  expect(jobRequests).toBeGreaterThanOrEqual(3)
+  const finalStatus = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/update/status")
+    if (!response.ok) throw new Error(`Unexpected status ${response.status}`)
+    return response.json()
+  })
+  expect(finalStatus).toMatchObject({
+    current_version: "1.4.0",
+    runtime_source: "image",
+    active_bundle: null,
+    operation_busy: false,
+    last_job: successfulRollbackJob,
+  })
+  await expect.poll(() => currentTopDocumentLoads(page)).toBeGreaterThan(1)
 })
 
 test("a restored update job resumes its bounded wait without submitting Apply again", async ({ page }) => {
@@ -262,7 +372,7 @@ test("a restored update job resumes its bounded wait without submitting Apply ag
 
   await page.goto("/#settings:updates")
 
-  await expect(page.getByRole("heading", { name: "Downloading", exact: true })).toBeVisible()
+  await expect(page.getByRole("alert").getByText("Downloading", { exact: true })).toBeVisible()
   await expect(page.getByText("The dashboard will refresh when ready.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Apply update" })).toHaveCount(0)
   expect(applyRequests).toBe(0)

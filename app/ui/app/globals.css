@@ -5,26 +5,26 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 220 17% 96%;
+    --foreground: 220 20% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 220 20% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
+    --popover-foreground: 220 20% 10%;
+    --primary: 211 100% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 93%;
+    --secondary-foreground: 220 20% 13%;
+    --muted: 220 14% 93%;
+    --muted-foreground: 220 9% 38%;
+    --accent: 211 100% 95%;
+    --accent-foreground: 211 100% 37%;
+    --destructive: 0 72.2% 50.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --border: 220 13% 86%;
+    --input: 220 13% 82%;
+    --ring: 211 100% 48%;
+    --radius: 1.25rem;
     --green-light: 142.1 76.2% 36.3%;
     --red-light: 346.8 77.2% 49.8%;
     --amber-light: 32.1 94.6% 43.7%;
@@ -36,25 +36,25 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --background: 220 11% 7%;
+    --foreground: 220 14% 94%;
+    --card: 220 10% 11%;
+    --card-foreground: 220 14% 94%;
+    --popover: 220 10% 13%;
+    --popover-foreground: 220 14% 94%;
+    --primary: 211 100% 58%;
+    --primary-foreground: 220 20% 7%;
+    --secondary: 220 9% 16%;
+    --secondary-foreground: 220 14% 94%;
+    --muted: 220 9% 16%;
+    --muted-foreground: 220 8% 66%;
+    --accent: 211 60% 20%;
+    --accent-foreground: 211 100% 76%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --border: 220 8% 21%;
+    --input: 220 8% 26%;
+    --ring: 211 100% 58%;
     --chart-streams: #a5a0f0;
     --chart-recordings: #98e0b0;
     --chart-vod: #ffd480;
@@ -69,6 +69,24 @@
   }
   body {
     @apply bg-background text-foreground;
+    min-width: 320px;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    letter-spacing: -0.006em;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "tnum" 1, "kern" 1;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
   }
 }
 
@@ -79,7 +97,7 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(var(--background));
+  background: transparent;
   border-radius: 5px;
 }
 
@@ -105,13 +123,56 @@
 }
 
 .card-hover:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
+  box-shadow: 0 16px 38px -28px hsl(220 40% 20% / 0.32);
 }
 
 @layer components {
   .container {
-    @apply px-4;
+    @apply mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-8;
+  }
+}
+
+#main-content h1 {
+  font-size: 2rem;
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+
+#main-content h2,
+#main-content [data-card-title] {
+  font-size: 1.0625rem;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+}
+
+.text-xs {
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+}
+
+@media (max-width: 767px) {
+  #main-content h1 {
+    font-size: 1.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .ios-navigation-material {
+    background: hsl(var(--background)) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 }
 

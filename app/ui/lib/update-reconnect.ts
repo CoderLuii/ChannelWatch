@@ -19,6 +19,7 @@ export type ReconnectOptions<T extends RuntimeStatus> = {
 
 export type RestartJob = {
   job_id?: string | null
+  operation?: string | null
   restart_required?: boolean
   status?: string | null
   phase?: string | null
@@ -26,6 +27,9 @@ export type RestartJob = {
   phase_deadline_at?: string | null
   version?: string | null
   message?: string | null
+  rollback_applied?: boolean | null
+  rolled_back_from?: string | null
+  restored_version?: string | null
 }
 
 const PENDING_UPDATE_JOB_STATUSES = new Set([
@@ -319,6 +323,29 @@ function observeJob(job: RestartJob | null, onJob?: (job: RestartJob) => void): 
   return job
 }
 
+function expectedActiveRuntimeVersion(job: RestartJob | null, targetVersion: string): string {
+  const jobStatus = job?.status?.trim().toLowerCase() ?? ""
+  if (job?.operation?.trim().toLowerCase() !== "rollback" || !SUCCESSFUL_UPDATE_JOB_STATUSES.has(jobStatus)) {
+    return targetVersion
+  }
+
+  const restoredVersion = job.restored_version?.trim() ?? ""
+  const rolledBackFrom = job.rolled_back_from?.trim() ?? ""
+  if (
+    job.rollback_applied !== true
+    || job.restart_required !== false
+    || !restoredVersion
+    || !rolledBackFrom
+    || normalizeVersion(rolledBackFrom) !== normalizeVersion(targetVersion)
+  ) {
+    throw new Error(
+      "ChannelWatch could not confirm the restored version. "
+      + "Refresh the page and check Update Center before trying again.",
+    )
+  }
+  return restoredVersion
+}
+
 function throwIfImageRequired(job: RestartJob | null): void {
   if (job?.status?.trim().toLowerCase() === "image_required") {
     throw new UpdateJobError(job)
@@ -418,7 +445,10 @@ export async function waitForUpdatedRuntime<T extends RuntimeStatus>(
         const durableJobSucceeded = !trackedJobId || SUCCESSFUL_UPDATE_JOB_STATUSES.has(
           job?.status?.trim().toLowerCase() ?? "",
         )
-        if (durableJobSucceeded && isTargetRuntimeActive(status, targetVersion)) {
+        const expectedRuntimeVersion = durableJobSucceeded
+          ? expectedActiveRuntimeVersion(job, targetVersion)
+          : targetVersion
+        if (durableJobSucceeded && isTargetRuntimeActive(status, expectedRuntimeVersion)) {
           try {
             if (verifyReady) {
               await waitWithinReconnect(verifyReady(), deadline!, targetVersion, signal)

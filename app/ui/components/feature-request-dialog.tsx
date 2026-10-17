@@ -98,6 +98,7 @@ function validateScreenshot(file: File, config: ReportConfig | null): string | n
 
 export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
+  const discardConfirmationRef = useRef<HTMLDivElement | null>(null)
   const submissionAbortRef = useRef<AbortController | null>(null)
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<FeatureRequestForm>(initialForm)
@@ -113,6 +114,18 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
   const [preparing, setPreparing] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  useEffect(() => {
+    if (confirmDiscard) {
+      const body = discardConfirmationRef.current?.closest<HTMLElement>('[data-testid="feature-request-form"]')
+      if (!body) return
+      const revealConfirmation = () => { body.scrollTop = body.scrollHeight }
+      revealConfirmation()
+      const observer = new ResizeObserver(revealConfirmation)
+      observer.observe(body.firstElementChild ?? body)
+      return () => observer.disconnect()
+    }
+  }, [confirmDiscard])
 
   const hasDraft = Boolean(
     form.summary.trim()
@@ -295,7 +308,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto pr-1" data-testid="feature-request-form">
-              <div className="space-y-5 pb-2">
+              <div className="space-y-4 pb-4 sm:space-y-5">
             {configError ? (
               <Alert variant="destructive">
                 <AlertTitle>{t("feedback.feature.configErrorTitle")}</AlertTitle>
@@ -328,7 +341,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                 id="feature-expected"
                 value={form.expected}
                 onChange={(event) => updateField("expected", event.target.value)}
-                className="min-h-28"
+                className="min-h-20 sm:min-h-28"
                 maxLength={2000}
                 aria-invalid={Boolean(errors.expected)}
                 aria-describedby={errors.expected ? "feature-expected-error" : undefined}
@@ -342,7 +355,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                 id="feature-use_case"
                 value={form.use_case}
                 onChange={(event) => updateField("use_case", event.target.value)}
-                className="min-h-24"
+                className="min-h-20 sm:min-h-24"
                 maxLength={2000}
                 aria-invalid={Boolean(errors.use_case)}
                 aria-describedby={errors.use_case ? "feature-use-case-error" : undefined}
@@ -423,7 +436,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
             ) : null}
 
             {confirmDiscard ? (
-              <div className="flex flex-col gap-3 rounded-lg border border-destructive/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div ref={discardConfirmationRef} className="flex flex-col gap-3 rounded-lg border border-destructive/40 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm">{t("feedback.feature.discardConfirm")}</p>
                 <div className="flex gap-2">
                   <Button type="button" variant="outline" className="min-h-11" onClick={() => setConfirmDiscard(false)}>{t("common.cancel")}</Button>
@@ -437,7 +450,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
               </div>
             </div>
 
-            <DialogFooter className="gap-2 border-t pt-4 sm:space-x-0">
+            <DialogFooter className="flex-wrap gap-2 border-t pt-4 sm:space-x-0 [&>button]:h-auto [&>button]:max-w-full [&>button]:whitespace-normal [&>button]:py-2 [&>button]:text-center">
               {hasDraft ? (
                 <Button type="button" variant="ghost" className="min-h-11" onClick={() => setConfirmDiscard(true)} disabled={submitting}>
                   {t("feedback.feature.discard")}

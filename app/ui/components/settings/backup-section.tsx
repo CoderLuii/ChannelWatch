@@ -122,7 +122,7 @@ export function BackupSettingsSection() {
           </CardHeader>
         </div>
 
-        <CardContent className="space-y-6 pt-6">
+        <CardContent className="space-y-6 pt-6 sm:pt-6">
           <div className="rounded-xl border border-blue-400/15 bg-blue-500/5 p-5 space-y-3">
             <p className="text-sm font-semibold">{t("backup.downloadSection")}</p>
             <p className="text-sm text-muted-foreground">
@@ -133,7 +133,7 @@ export function BackupSettingsSection() {
               variant="outline"
               onClick={handleDownload}
               disabled={downloadState === "loading"}
-              className="gap-2"
+              className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-2 text-center"
             >
               {downloadState === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
               {downloadState === "done" && <Check className="h-4 w-4 text-emerald-500" />}
@@ -157,7 +157,7 @@ export function BackupSettingsSection() {
               variant="outline"
               onClick={handleDownloadDebugBundle}
               disabled={debugBundleState === "loading"}
-              className="gap-2"
+              className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-2 text-center"
             >
               {debugBundleState === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
               {debugBundleState === "done" && <Check className="h-4 w-4 text-emerald-500" />}
@@ -201,7 +201,7 @@ export function BackupSettingsSection() {
                 variant="outline"
                 onClick={handleRestoreSelect}
                 disabled={restoreState === "loading"}
-                className="gap-2 border-amber-400/40 hover:border-amber-400/60"
+                className="h-auto min-h-11 max-w-full gap-2 whitespace-normal border-amber-400/40 py-2 text-center hover:border-amber-400/60"
               >
                 {restoreState === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
                 {restoreState === "done" && <Check className="h-4 w-4 text-emerald-500" />}

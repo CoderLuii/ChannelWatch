@@ -24,6 +24,7 @@ from core.update_catalog import (
 from core.update_center import (
     RUNTIME_ABI,
     RestartRequestOutcome,
+    UpdateBundleError,
     UpdateLockedError,
     UpdateManager,
     UpdateManifestError,
@@ -534,6 +535,151 @@ def test_update_manager_checks_and_applies_schema_two_catalog(tmp_path: Path):
     assert checked["update_available"] is True
     assert checked["delivery_mode"] == "app_update_with_image_refresh"
     assert manager.apply("0.9.19")["status"] == "restarting"
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_update_check_preserves_successful_apply_until_scheduler_reconciles(
+    tmp_path: Path,
+    recovery: bool,
+):
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    catalog_bytes = _catalog(private, bundle, sources=["0.9.19"])
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.19",
+        image_version="0.9.19",
+        launcher_protocol=3,
+        public_keys=public,
+        fetcher=lambda url, _limit: (
+            bundle if url.endswith(".zip") else catalog_bytes
+        ),
+    )
+    attempt_id = "manual-apply@2026-08-24T03:30:00Z#apply-job"
+    apply_job = manager._write_job(
+        {
+            "job_id": "apply-job",
+            "operation": "apply",
+            "status": "success",
+            "version": "0.9.19",
+            "bundle_sha256": "a" * 64,
+            "scheduler_attempt_id": attempt_id,
+            "message": "Update installed successfully.",
+        }
+    )
+    store = UpdatePolicyStore(tmp_path)
+    store.get_state()
+    store.put_state(
+        {
+            "last_attempt": {
+                "version": "0.9.19",
+                "bundle_sha256": "a" * 64,
+                "attempted_at": "2026-08-24T03:30:00Z",
+                "attempt_id": attempt_id,
+                "job_id": "apply-job",
+                "phase": "activation_pending",
+                "automatic": False,
+                "clear_hold_on_success": False,
+            }
+        }
+    )
+    job_before = manager.job_path.read_bytes()
+    assert json.loads(job_before) == apply_job
+
+    checked = manager.check(recovery=recovery)
+
+    assert checked["last_job"]["operation"] == "check"
+    assert checked["last_job"]["status"] == "current"
+    assert checked["last_job"]["version"] == "0.9.19"
+    assert manager.job_path.read_bytes() == job_before
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        clock=lambda: datetime(2026, 8, 24, 3, 31, tzinfo=timezone.utc),
+        timezone_provider=lambda: timezone.utc,
+    )
+    assert service.run_once(force_check=True)["status"] == "activation-succeeded"
+    completed = store.get_state()["last_attempt"]
+    assert completed["phase"] == "success"
+    assert completed["job_id"] == "apply-job"
+    assert completed["attempt_id"] == attempt_id
+    checked_after_reconciliation = manager.check(recovery=recovery)
+    assert checked_after_reconciliation["last_job"]["operation"] == "check"
+    assert json.loads(manager.job_path.read_bytes()) == checked_after_reconciliation[
+        "last_job"
+    ]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["pending-identity", "foreign-job", "malformed-scheduler", "malformed-job"],
+)
+def test_update_check_rejects_unverifiable_pending_scheduler_result(
+    tmp_path: Path,
+    damage: str,
+):
+    private, public = _key_pair()
+    bundle = _bundle("0.9.19")
+    catalog_bytes = _catalog(private, bundle)
+    manager = UpdateManager(
+        config_dir=tmp_path,
+        current_version="0.9.18",
+        image_version="0.9.18",
+        launcher_protocol=3,
+        public_keys=public,
+        fetcher=lambda url, _limit: (
+            bundle if url.endswith(".zip") else catalog_bytes
+        ),
+    )
+    attempt_id = "manual-apply@2026-08-24T03:30:00Z#apply-job"
+    manager._write_job(
+        {
+            "job_id": "apply-job",
+            "operation": "apply",
+            "status": "success",
+            "version": "0.9.19",
+            "bundle_sha256": "a" * 64,
+            "scheduler_attempt_id": attempt_id,
+        }
+    )
+    store = UpdatePolicyStore(tmp_path)
+    store.get_state()
+    store.put_state(
+        {
+            "last_attempt": {
+                "version": "0.9.19",
+                "bundle_sha256": "a" * 64,
+                "attempted_at": "2026-08-24T03:30:00Z",
+                "attempt_id": attempt_id,
+                "job_id": "apply-job",
+                "phase": "activation_pending",
+                "automatic": False,
+                "clear_hold_on_success": False,
+            }
+        }
+    )
+    scheduler_path = manager.runtime_dir / "update-scheduler.json"
+    if damage == "pending-identity":
+        scheduler = json.loads(scheduler_path.read_text(encoding="utf-8"))
+        scheduler["last_attempt"]["attempt_id"] = ""
+        scheduler_path.write_text(json.dumps(scheduler), encoding="utf-8")
+    elif damage == "foreign-job":
+        foreign = json.loads(manager.job_path.read_text(encoding="utf-8"))
+        foreign["job_id"] = "foreign-job"
+        manager.job_path.write_text(json.dumps(foreign), encoding="utf-8")
+    elif damage == "malformed-scheduler":
+        scheduler_path.write_text("{", encoding="utf-8")
+    else:
+        manager.job_path.write_text("{", encoding="utf-8")
+    job_before = manager.job_path.read_bytes()
+
+    with pytest.raises(
+        UpdateLockedError,
+        match="pending|different update job|valid JSON",
+    ):
+        manager.check()
+
+    assert manager.job_path.read_bytes() == job_before
 
 
 def test_update_manager_applies_intermediate_app_target_and_keeps_image_recommendation(
@@ -1392,6 +1538,103 @@ def test_manual_apply_preserves_browser_assigned_job_identity(tmp_path: Path):
 
     assert result["job_id"] == job_id
     assert service.store.get_state()["last_attempt"]["job_id"] == job_id
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "terminalizer-none",
+        "terminalizer-raises",
+        "status-unreadable",
+        "no-last-job",
+        "foreign-job",
+        "foreign-attempt",
+        "foreign-version",
+        "foreign-digest",
+        "pending-job",
+        "accepted-handoff",
+        "unexpected-error",
+    ],
+)
+def test_manual_apply_exception_only_returns_exact_pre_handoff_failure(
+    tmp_path: Path, mode: str
+):
+    payload = _automatic_payload()
+
+    class RefusalManager(_FakeManager):
+        def apply(self, version: str, **kwargs):
+            self.applies += 1
+            self.last_job = {
+                "job_id": kwargs["job_id"],
+                "operation": "apply",
+                "status": "applying",
+                "version": version,
+                "bundle_sha256": kwargs["expected_bundle_sha256"],
+                "scheduler_attempt_id": kwargs["scheduler_attempt_id"],
+            }
+            if mode == "unexpected-error":
+                raise AssertionError("unexpected apply fault")
+            raise UpdateBundleError("runtime preparation refused")
+
+        def record_pre_handoff_apply_failure(self, **kwargs):
+            if mode == "terminalizer-raises":
+                raise OSError("terminal outcome unreadable")
+            if mode in {"terminalizer-none", "accepted-handoff"}:
+                if mode == "accepted-handoff":
+                    self.last_job.update(
+                        {
+                            "status": "failed",
+                            "restart_required": True,
+                            "rollback_applied": True,
+                        }
+                    )
+                return None
+            terminal = {
+                **self.last_job,
+                "status": "failed",
+                "error": kwargs["error"],
+                "restart_required": False,
+                "rollback_applied": False,
+            }
+            self.last_job = dict(terminal)
+            if mode == "no-last-job":
+                self.last_job = None
+            elif mode == "foreign-job":
+                self.last_job["job_id"] = "f" * 32
+            elif mode == "foreign-attempt":
+                self.last_job["scheduler_attempt_id"] = "manual-apply@foreign"
+            elif mode == "foreign-version":
+                self.last_job["version"] = "9.9.9"
+            elif mode == "foreign-digest":
+                self.last_job["bundle_sha256"] = "f" * 64
+            elif mode == "pending-job":
+                self.last_job["status"] = "restarting"
+            return terminal
+
+        def status(self):
+            if mode == "status-unreadable":
+                raise OSError("durable outcome unreadable")
+            return super().status()
+
+    manager = RefusalManager(payload)
+    service = UpdateAutomationService(
+        config_dir=tmp_path,
+        manager_factory=lambda: manager,
+        clock=lambda: datetime(2026, 8, 24, 3, 30, tzinfo=timezone.utc),
+        timezone_provider=lambda: timezone.utc,
+    )
+
+    expected_error = AssertionError if mode == "unexpected-error" else UpdateBundleError
+    expected_message = (
+        "unexpected apply fault"
+        if mode == "unexpected-error"
+        else "runtime preparation refused"
+    )
+    with pytest.raises(expected_error, match=expected_message):
+        service.apply_release(
+            version=payload["version"],
+            job_id="0123456789abcdef0123456789abcdef",
+        )
 
 
 @pytest.mark.parametrize(

@@ -956,7 +956,7 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_154_dependency_update_on_published_153_image():
+def test_release_config_declares_160_dependency_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -965,13 +965,13 @@ def test_release_config_declares_154_dependency_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.5.4"
+    assert config["version"] == "1.6.0"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.5.4"
+    assert config["recommended_image_version"] == "1.6.0"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
@@ -986,7 +986,7 @@ def test_release_config_declares_154_dependency_update_on_published_153_image():
     )
     assert config["runtime_compatibility_evidence"] == {}
     assert "recovers_unpublished_image_milestone" not in config
-    assert "unpublished_predecessor_tags" not in config
+    assert config["unpublished_predecessor_tags"] == ["v1.5.4"]
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
@@ -994,10 +994,9 @@ def test_release_config_declares_154_dependency_update_on_published_153_image():
         "v1.5.0",
         "v1.5.1",
         "v1.5.2",
+        "v1.5.4",
     ]
-    assert config["release_heading"] == (
-        "# ChannelWatch v1.5.4 - In-app package updates"
-    )
+    assert config["release_heading"] == "## 10/16/2026"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1030,6 +1029,40 @@ def test_release_config_declares_154_dependency_update_on_published_153_image():
     assert publication.tzinfo == timezone.utc
     assert automatic.tzinfo == timezone.utc
     assert automatic - publication == timedelta(days=7)
+
+
+def test_current_release_body_uses_public_release_heading_hierarchy(
+    monkeypatch, capsys
+):
+    module = _load_script(
+        "render_release_body_current",
+        "scripts/release/render-release-body.py",
+    )
+    config = json.loads(module.RELEASE_CONFIG.read_text(encoding="utf-8"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["render-release-body.py", "--version", config["version"]],
+    )
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    assert output.splitlines()[0] == config["release_heading"]
+    assert re.fullmatch(r"## \d{2}/\d{2}/\d{4}", output.splitlines()[0])
+    assert re.findall(r"^## .+$", output, re.MULTILINE) == [
+        config["release_heading"]
+    ]
+    for heading in ("Important", "Added", "Changed", "Fixed", "Docs", "Images"):
+        assert f"\n### {heading}\n" in output
+    assert "\n### License and verification\n" in output
+    assert "\n### Security\n" not in output
+    assert "channelwatch-v1.6.0-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.0`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.0`" in output
+    assert "scratch/" not in output
+    assert "C:\\" not in output
+    assert "file://" not in output
 
 
 def test_release_version_policy_enforces_single_digit_patch_cadence():
@@ -1136,7 +1169,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_154_release():
+def test_release_version_surfaces_use_160_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1147,11 +1180,11 @@ def test_release_version_surfaces_use_154_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.5.4"
-    assert metadata["versionTag"] == "v1.5.4"
-    assert metadata["dockerTag"] == "1.5.4"
-    assert metadata["helmChartVersion"] == "1.5.4"
-    assert metadata["helmAppVersion"] == "1.5.4"
+    assert metadata["version"] == "1.6.0"
+    assert metadata["versionTag"] == "v1.6.0"
+    assert metadata["dockerTag"] == "1.6.0"
+    assert metadata["helmChartVersion"] == "1.6.0"
+    assert metadata["helmAppVersion"] == "1.6.0"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -1551,6 +1584,115 @@ def test_release_impact_classifier_accepts_exact_minimum_image_launcher_replay(
     assert result.delivery_mode == "app_update"
     assert result.image_required is False
     assert result.triggering_paths == ()
+
+
+def test_release_impact_classifier_accepts_minimum_image_replay_for_retained_floor(
+    tmp_path,
+):
+    module = _load_script(
+        "classify_release_impact_retained_minimum_image",
+        "scripts/release/classify-release-impact.py",
+    )
+    config = json.loads(
+        (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
+    )
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(b"exact retained-floor bundle")
+    phase = {"index_matches": True, "referenced_assets_verified": 12}
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "status": "passed",
+                "source_image_version": config["minimum_image_version"],
+                "image_index_digest": config["minimum_image_sha256"],
+                "platform_manifest_digest": "sha256:" + "b" * 64,
+                "pulled_image_id": "sha256:" + "c" * 64,
+                "platform": "linux/amd64",
+                "target_application_version": config["version"],
+                "bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+                "dynamic_activation": phase,
+                "ui_restart": phase,
+                "rollback_reapply": phase,
+                "container_restart": phase,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = module.apply_verified_minimum_image_app_update(
+        module.classify_paths(["app/core/runtime_launcher.py"]),
+        config=config,
+        evidence_path=evidence,
+        bundle_path=bundle,
+    )
+
+    assert result.delivery_mode == "app_update"
+    assert result.image_required is False
+    assert result.triggering_paths == ()
+
+
+def test_release_impact_classifier_rejects_minimum_image_replay_for_image_milestone(
+    tmp_path,
+):
+    module = _load_script(
+        "classify_release_impact_image_milestone",
+        "scripts/release/classify-release-impact.py",
+    )
+    config = json.loads(
+        (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
+    )
+    config.update(
+        {
+            "image_required": True,
+            "delivery_mode": "image_required",
+            "minimum_image_version": config["version"],
+            "runtime_generation_required": False,
+        }
+    )
+    config.pop("runtime_bootstrap_sha256")
+    config.pop("minimum_image_sha256")
+    policy = module.validate_release_config(config)
+    assert policy.image_milestone is True
+    assert policy.retained_capability_floor is False
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(b"image milestone bundle")
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(module.ReleaseImpactMismatch, match="validated in-app release"):
+        module.apply_verified_minimum_image_app_update(
+            module.classify_paths(["app/core/runtime_launcher.py"]),
+            config=config,
+            evidence_path=evidence,
+            bundle_path=bundle,
+        )
+
+
+def test_release_impact_classifier_rejects_patch_zero_without_validated_floor(
+    tmp_path,
+):
+    module = _load_script(
+        "classify_release_impact_invalid_retained_floor",
+        "scripts/release/classify-release-impact.py",
+    )
+    config = json.loads(
+        (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
+    )
+    config["compatible_launcher_protocols"] = [3]
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(b"invalid retained-floor bundle")
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(module.ReleaseImpactMismatch, match="validated in-app release"):
+        module.apply_verified_minimum_image_app_update(
+            module.classify_paths(["app/core/runtime_launcher.py"]),
+            config=config,
+            evidence_path=evidence,
+            bundle_path=bundle,
+        )
 
 
 def test_release_impact_classifier_rejects_minimum_image_evidence_for_other_bundle(
@@ -3033,6 +3175,18 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     ) == 3
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
+    candidate_canary = workflow.split(
+        "      - name: Verify app update frontend on the minimum compatible image",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    assert (
+        '--runtime-bundle "dist/candidate-one/channelwatch-runtime-v${version}-amd64.zip"'
+        in candidate_canary
+    )
+    assert (
+        '--runtime-catalog "dist/candidate-one/channelwatch-update-catalog-v3.json"'
+        in candidate_canary
+    )
     reverify_block = workflow.split(
         "      - name: Reverify app update frontend on the minimum compatible image",
         1,
@@ -3040,6 +3194,14 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert "VERSION: ${{ steps.version.outputs.version }}" in reverify_block
     assert '--version "${VERSION}"' in reverify_block
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in reverify_block
+    assert (
+        '--runtime-bundle "dist/update/channelwatch-runtime-${RELEASE_TAG}-amd64.zip"'
+        in reverify_block
+    )
+    assert (
+        '--runtime-catalog "dist/update/channelwatch-update-catalog-v3.json"'
+        in reverify_block
+    )
     assert "${TAG}" not in reverify_block
 
     publish_job = workflow.split("  publish-github-release:", 1)[1].split(
@@ -3383,6 +3545,17 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert attest_job.index("HOME: ${{ runner.temp }}/docker-auth") < attest_uses_index
 
 
+def test_live_catalog_requires_the_exact_approved_bytes():
+    module = _load_script("verify_live_catalog_digest", "scripts/release/verify-live-update-manifest.py")
+    catalog = b'{"payload":{"version":"1.6.0","minimum_image_version":"1.4.0"}}'
+    expected = hashlib.sha256(catalog).hexdigest()
+    module.verify_catalog_digest(catalog, expected)
+    with pytest.raises(ValueError, match="approved release catalog"):
+        module.verify_catalog_digest(catalog.replace(b"1.4.0", b"1.5.3"), expected)
+    with pytest.raises(ValueError, match="SHA-256 is invalid"):
+        module.verify_catalog_digest(catalog, "")
+
+
 def test_release_workflow_verifies_generated_and_live_update_assets():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
@@ -3668,6 +3841,7 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
         "candidate-source-gates",
         "candidate-signing",
         "runtime-capability",
+        "legacy-app-upgrade",
         "native-image-qualification",
         "candidate-qualification",
         "signed-candidate",
@@ -3683,11 +3857,18 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     assert all(job["runs-on"] == expected for job in ordinary_jobs.values())
     assert all(
         workflow["jobs"][name]["runs-on"] == "ubuntu-24.04"
-        for name in protected_jobs - {"runtime-capability", "native-image-qualification"}
+        for name in protected_jobs
+        - {"runtime-capability", "legacy-app-upgrade", "native-image-qualification"}
     )
     capability_job = workflow["jobs"]["runtime-capability"]
     assert capability_job["runs-on"] == "${{ matrix.runner }}"
     assert capability_job["strategy"]["matrix"]["include"] == [
+        {"architecture": "amd64", "runner": "ubuntu-24.04"},
+        {"architecture": "arm64", "runner": "ubuntu-24.04-arm"},
+    ]
+    legacy_job = workflow["jobs"]["legacy-app-upgrade"]
+    assert legacy_job["runs-on"] == "${{ matrix.runner }}"
+    assert legacy_job["strategy"]["matrix"]["include"] == [
         {"architecture": "amd64", "runner": "ubuntu-24.04"},
         {"architecture": "arm64", "runner": "ubuntu-24.04-arm"},
     ]
@@ -3733,6 +3914,7 @@ def test_production_signing_key_isolated_to_first_shell_step_on_fresh_runners():
     expected_jobs = {
         "candidate-signing",
         "runtime-capability",
+        "legacy-app-upgrade",
         "native-image-qualification",
         "candidate-qualification",
         "signed-candidate",
@@ -3751,14 +3933,14 @@ def test_production_signing_key_isolated_to_first_shell_step_on_fresh_runners():
         if not secret_steps:
             continue
         actual_jobs.add(name)
-        if name in {"runtime-capability", "native-image-qualification"}:
+        if name in {"runtime-capability", "legacy-app-upgrade", "native-image-qualification"}:
             assert job["runs-on"] == "${{ matrix.runner }}"
         else:
             assert job["runs-on"] == "ubuntu-24.04"
         assert len(secret_steps) == 1
         secret_index, secret_step = secret_steps[0]
         earlier_runs = [step for step in steps[:secret_index] if "run" in step]
-        if name == "runtime-capability":
+        if name in {"runtime-capability", "legacy-app-upgrade"}:
             assert len(earlier_runs) == 1
             assert earlier_runs[0]["name"] == "Install the existing headless Chromium harness"
             assert earlier_runs[0]["run"] == (
@@ -4090,6 +4272,8 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "ubuntu-24.04-arm" in capability
     assert "verify-runtime-capability.py" in capability
     assert '--architecture "${NATIVE_ARCHITECTURE}"' in capability
+    assert "--validate-evidence" in capability
+    assert '--architecture "${{ matrix.architecture }}"' in capability
     assert "docker/setup-qemu-action@" not in capability
     assert "{status:\"not_required\"" not in capability
     capability_job = workflow["jobs"]["runtime-capability"]
@@ -4099,6 +4283,7 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
         if step["name"] in {
             "Open signed assets before native qualification starts",
             "Run the native protocol-4 lifecycle verifier",
+            "Validate the complete native receipt before retention",
         }
     }
     assert set(conditional_steps.values()) == {
@@ -4120,6 +4305,10 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert native_step["env"]["CI"] == "true"
     assert native_step["env"]["BROWSER"] == "none"
     assert native_step["env"]["PLAYWRIGHT_HTML_OPEN"] == "never"
+    step_names = [step["name"] for step in capability_job["steps"]]
+    assert step_names.index("Run the native protocol-4 lifecycle verifier") < step_names.index(
+        "Validate the complete native receipt before retention"
+    ) < step_names.index("Retain native runtime capability evidence")
     retention = next(step for step in capability_job["steps"] if step["name"] == "Retain native runtime capability evidence")
     assert retention["if"] == "needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && always()"
     assert retention["with"]["path"] == "${{ runner.temp }}/runtime-capability/"

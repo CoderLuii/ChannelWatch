@@ -56,10 +56,10 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.cache && "rotate-180")} />
         </button>
         {expandedAlerts.cache && (
-          <CardContent id="settings-cache-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-cache-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
             <DvrTabBar cardId="cache" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("cache") === "global" ? (
-              <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                  {[
                    { id: "channel_cache_ttl", label: t("advanced.cache.channelList"), desc: t("advanced.cache.channelListDesc"), placeholder: "86400", hint: t("advanced.cache.channelListHint") },
                    { id: "program_cache_ttl", label: t("advanced.cache.programGuide"), desc: t("advanced.cache.programGuideDesc"), placeholder: "86400", hint: t("advanced.cache.programGuideHint") },
@@ -69,15 +69,15 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                   <div key={id} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                     <Label htmlFor={id}>
                       <span className="text-sm block">{label}</span>
-                      <span className="text-[11px] text-muted-foreground">{desc}</span>
+                      <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
                     </Label>
-                    <Input id={id} type="number" min="0" max="604800" step="1" placeholder={placeholder} {...register(id as keyof AppSettings, { valueAsNumber: true, min: { value: 0, message: t("advanced.cache.validation.minZero") }, max: { value: 604800, message: t("advanced.cache.validation.max7days") } })} className="h-8 text-sm" />
-                    <p className="text-[11px] text-muted-foreground">{hint}</p>
+                    <Input id={id} type="number" min="0" max="604800" step="1" placeholder={placeholder} {...register(id as keyof AppSettings, { valueAsNumber: true, min: { value: 0, message: t("advanced.cache.validation.minZero") }, max: { value: 604800, message: t("advanced.cache.validation.max7days") } })} className="h-11 text-sm sm:h-9" />
+                    <p className="text-[13px] leading-5 text-muted-foreground">{hint}</p>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                 <DvrFieldSelect cardId="cache" fieldKey="channel_cache_ttl" label={t("advanced.cache.channelList")} desc={t("advanced.cache.channelListDesc")} defaultValue="86400" options={[{ value: "3600", label: t("opt.1hour") }, { value: "21600", label: t("opt.6hours") }, { value: "43200", label: t("opt.12hours") }, { value: "86400", label: t("opt.24hours.default") }, { value: "259200", label: t("opt.3days") }, { value: "604800", label: t("opt.7days") }]} helpers={dvrHelpers} />
                 <DvrFieldSelect cardId="cache" fieldKey="program_cache_ttl" label={t("advanced.cache.programGuide")} desc={t("advanced.cache.programGuideDesc")} defaultValue="86400" options={[{ value: "3600", label: t("opt.1hour") }, { value: "21600", label: t("opt.6hours") }, { value: "43200", label: t("opt.12hours") }, { value: "86400", label: t("opt.24hours.default") }, { value: "259200", label: t("opt.3days") }, { value: "604800", label: t("opt.7days") }]} helpers={dvrHelpers} />
                 <DvrFieldSelect cardId="cache" fieldKey="job_cache_ttl" label={t("advanced.cache.recordingJobs")} desc={t("advanced.cache.recordingJobsDesc")} defaultValue="3600" options={[{ value: "900", label: t("opt.15min") }, { value: "1800", label: t("opt.30min") }, { value: "3600", label: t("opt.1hour.default") }, { value: "21600", label: t("opt.6hours") }, { value: "43200", label: t("opt.12hours") }, { value: "86400", label: t("opt.24hours") }]} helpers={dvrHelpers} />
@@ -102,17 +102,17 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.rate && "rotate-180")} />
         </button>
         {expandedAlerts.rate && (
-          <CardContent id="settings-rate-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-rate-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
             <DvrTabBar cardId="rate" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("rate") === "global" ? (
-              <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                 <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                   <Label>
                     <span className="text-sm block">{t("advanced.rate.maxNotif")}</span>
-                     <span className="text-[11px] text-muted-foreground">{t("advanced.rate.maxNotifDesc")}</span>
+                     <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.rate.maxNotifDesc")}</span>
                   </Label>
                   <Select value={String(watch("global_rate_limit") || 20)} onValueChange={(value) => setValue("global_rate_limit", Number(value), { shouldDirty: true })}>
-                    <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-11 text-sm sm:h-9"><SelectValue /></SelectTrigger>
                      <SelectContent>
                        <SelectItem value="5">{t("opt.5notif")}</SelectItem>
                        <SelectItem value="10">{t("opt.10notif")}</SelectItem>
@@ -125,10 +125,10 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                 <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                   <Label>
                     <span className="text-sm block">{t("advanced.rate.window")}</span>
-                     <span className="text-[11px] text-muted-foreground">{t("advanced.rate.windowDesc")}</span>
+                     <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.rate.windowDesc")}</span>
                   </Label>
                   <Select value={String(watch("global_rate_window") || 300)} onValueChange={(value) => setValue("global_rate_window", Number(value), { shouldDirty: true })}>
-                    <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-11 text-sm sm:h-9"><SelectValue /></SelectTrigger>
                      <SelectContent>
                        <SelectItem value="60">{t("opt.1min")}</SelectItem>
                        <SelectItem value="300">{t("opt.5min.default")}</SelectItem>
@@ -140,7 +140,7 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                 <DvrFieldSelect cardId="rate" fieldKey="global_rate_limit" label={t("advanced.rate.maxNotif")} desc={t("advanced.rate.maxNotifDesc")} defaultValue="20" options={[{ value: "5", label: t("opt.5notif") }, { value: "10", label: t("opt.10notif") }, { value: "20", label: t("opt.20notif.default") }, { value: "50", label: t("opt.50notif") }, { value: "100", label: t("opt.100notif") }]} helpers={dvrHelpers} />
                 <DvrFieldSelect cardId="rate" fieldKey="global_rate_window" label={t("advanced.rate.window")} desc={t("advanced.rate.windowDesc")} defaultValue="300" options={[{ value: "60", label: t("opt.1min") }, { value: "300", label: t("opt.5min.default") }, { value: "900", label: t("opt.15min") }, { value: "1800", label: t("opt.30min") }, { value: "3600", label: t("opt.1hour") }]} helpers={dvrHelpers} />
               </div>
@@ -163,7 +163,7 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.timing && "rotate-180")} />
         </button>
         {expandedAlerts.timing && (
-          <CardContent id="settings-timing-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-timing-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
             <DvrTabBar cardId="timing" helpers={dvrHelpers} />
             <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
               {dvrHelpers.getDvrTab("timing") === "global" ? (
@@ -176,10 +176,10 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                     <div key={key} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                       <Label>
                         <span className="text-sm block">{label}</span>
-                        <span className="text-[11px] text-muted-foreground">{desc}</span>
+                        <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
                       </Label>
                        <Select value={String(watch(key) || defaultVal)} onValueChange={(value) => setValue(key, Number(value), { shouldDirty: true })}>
-                        <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="h-11 text-sm sm:h-9"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {options.map((option) => (
                             <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
@@ -215,11 +215,11 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.diskAdvanced && "rotate-180")} />
         </button>
         {expandedAlerts.diskAdvanced && (
-          <CardContent id="settings-diskAdvanced-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4">
+          <CardContent id="settings-diskAdvanced-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4 sm:pt-5">
             <DvrTabBar cardId="disk" helpers={dvrHelpers} />
             <div className="flex items-start gap-2 rounded-lg border border-blue-400/10 bg-blue-500/5 p-3">
               <Info className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
+              <p className="text-[13px] leading-5 text-muted-foreground">
                 {t("advanced.diskControls.hint")}
               </p>
             </div>
@@ -228,15 +228,15 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
               <div className={cn("space-y-4", !watch("alert_disk_space") && "opacity-50 pointer-events-none")}>
                  <div className="space-y-2">
                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.severityThresholds")}</p>
-                  <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+                  <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                     {diskAdvancedThresholdFields.map(({ id, label, desc, min, max, step, suffix, placeholder }) => (
                       <div key={id} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                         <Label htmlFor={id}>
                           <span className="text-sm block">{label}</span>
-                          <span className="text-[11px] text-muted-foreground">{desc}</span>
+                          <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
                         </Label>
                         <div className="flex items-center gap-2">
-                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={watch(id) ?? ""} onChange={(event) => setValue(id, Number(event.target.value) || 0, { shouldDirty: true })} className="h-8 text-sm" />
+                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={watch(id) ?? ""} onChange={(event) => setValue(id, Number(event.target.value) || 0, { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
                           <span className="text-muted-foreground text-sm shrink-0">{suffix}</span>
                         </div>
                       </div>
@@ -246,15 +246,15 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
 
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.timingBehavior")}</p>
-                   <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+                   <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                      {diskAdvancedBehaviorFields.map(({ id, label, desc, min, max, step, suffix, placeholder }) => (
                       <div key={id} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                         <Label htmlFor={id}>
                           <span className="text-sm block">{label}</span>
-                          <span className="text-[11px] text-muted-foreground">{desc}</span>
+                          <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
                         </Label>
                         <div className="flex items-center gap-2">
-                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={watch(id) ?? ""} onChange={(event) => setValue(id, Number(event.target.value) || 0, { shouldDirty: true })} className="h-8 text-sm" />
+                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={watch(id) ?? ""} onChange={(event) => setValue(id, Number(event.target.value) || 0, { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
                           <span className="text-muted-foreground text-sm shrink-0">{suffix}</span>
                         </div>
                       </div>
@@ -268,10 +268,10 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                      <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                        <Label htmlFor="ds_test_route_override">
                          <span className="text-sm block">{t("advanced.diskControls.testRouteLabel")}</span>
-                         <span className="text-[11px] text-muted-foreground">{t("advanced.diskControls.testRouteDesc")}</span>
+                         <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteDesc")}</span>
                        </Label>
-                       <Input id="ds_test_route_override" type="text" placeholder={t("advanced.diskControls.testRoutePlaceholder")} value={watch("ds_test_route_override") ?? ""} onChange={(event) => setValue("ds_test_route_override", event.target.value, { shouldDirty: true })} className="h-8 text-sm" />
-                       <p className="text-[11px] text-muted-foreground">{t("advanced.diskControls.testRouteFallback")}</p>
+                       <Input id="ds_test_route_override" type="text" placeholder={t("advanced.diskControls.testRoutePlaceholder")} value={watch("ds_test_route_override") ?? ""} onChange={(event) => setValue("ds_test_route_override", event.target.value, { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
+                       <p className="text-[13px] leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteFallback")}</p>
                      </div>
                    </div>
                  </div>
@@ -280,7 +280,7 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
               <div className={cn("space-y-4", !dvrHelpers.dvrFieldValue("disk", "alert_disk_space").value && "opacity-50 pointer-events-none")}>
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.severityThresholds")}</p>
-                   <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+                   <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                      {diskAdvancedThresholdFields.map(({ id, label, desc, min, max, step, suffix }) => (
                        <DvrFieldInput key={id} cardId="disk" fieldKey={id} label={label} desc={desc} min={min} max={max} step={step} suffix={suffix} helpers={dvrHelpers} />
                      ))}
@@ -289,7 +289,7 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
 
                  <div className="space-y-2">
                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.timingBehavior")}</p>
-                  <div className="grid grid-cols-2 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+                  <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
                     {diskAdvancedBehaviorFields.map(({ id, label, desc, min, max, step, suffix }) => (
                       <DvrFieldInput key={id} cardId="disk" fieldKey={id} label={label} desc={desc} min={min} max={max} step={step} suffix={suffix} helpers={dvrHelpers} />
                     ))}
@@ -301,7 +301,7 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                    <div className="rounded-xl p-3 border border-blue-400/10 bg-background/50">
                      <DvrFieldText cardId="disk" fieldKey="ds_test_route_override" label={t("advanced.diskControls.testRouteLabel")} desc={t("advanced.diskControls.testRouteDesc")} placeholder={t("advanced.diskControls.testRoutePlaceholder")} helpers={dvrHelpers} />
                    </div>
-                   <p className="text-[11px] text-muted-foreground">{t("advanced.diskControls.testRouteFallbackDvr")}</p>
+                   <p className="text-[13px] leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteFallbackDvr")}</p>
                  </div>
               </div>
             )}
@@ -322,12 +322,12 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
           <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.errorReporting && "rotate-180")} />
         </button>
         {expandedAlerts.errorReporting && (
-          <CardContent id="settings-errorReporting-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2">
+          <CardContent id="settings-errorReporting-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
             <div className="rounded-xl p-3 border border-blue-400/10 bg-background/50">
               <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
                 <Label htmlFor="error_reporting_dsn">
                   <span className="text-sm block">{t("advanced.errorReporting.dsnLabel")}</span>
-                  <span className="text-[11px] text-muted-foreground">{t("advanced.errorReporting.dsnDesc")}</span>
+                  <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.errorReporting.dsnDesc")}</span>
                 </Label>
                 <Input
                   id="error_reporting_dsn"
@@ -335,7 +335,7 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                   placeholder={t("advanced.errorReporting.dsnPlaceholder")}
                   value={watch("error_reporting_dsn") ?? ""}
                   onChange={(e) => setValue("error_reporting_dsn", e.target.value, { shouldDirty: true })}
-                  className="h-8 text-sm"
+                  className="h-11 text-sm sm:h-9"
                 />
               </div>
             </div>

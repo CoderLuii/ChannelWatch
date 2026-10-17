@@ -24,7 +24,6 @@ APP_ROOT = ROOT / "app"
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
-from core.update_catalog import normalize_catalog
 from core.runtime_archive import (
     MAX_BUNDLE_MEMBER_BYTES as MAX_RUNTIME_MEMBER_BYTES,
     MAX_BUNDLE_MEMBER_COUNT as MAX_RUNTIME_MEMBER_COUNT,
@@ -40,6 +39,7 @@ from core.runtime_generation import (
     RuntimeGenerationError,
     validate_runtime_descriptor_shape,
 )
+from core.update_catalog import normalize_catalog
 from core.update_center import (
     MAX_BUNDLE_BYTES,
     MAX_MANIFEST_BYTES,
@@ -55,6 +55,11 @@ from core.update_center import (
     validate_trusted_url,
     verify_ed25519_signature,
 )
+
+LEGACY_PROTOCOL3_APP_UPDATE_SOURCES = ("1.4.0", "1.4.1", "1.4.5")
+LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
+LEGACY_PROTOCOL3_APP_UPDATE_TARGET = "1.6.0"
+VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
 
 CRITICAL_SOURCE_MEMBERS = {
     "core/__init__.py": Path("app/core/__init__.py"),
@@ -307,6 +312,75 @@ def verify_update_assets(
     return manifest
 
 
+def _validated_legacy_app_update_sources(raw: object) -> list[str]:
+    if raw in (None, []):
+        return []
+    expected = list(LEGACY_PROTOCOL3_APP_UPDATE_SOURCES)
+    if raw != expected:
+        raise UpdateBundleError(
+            "Legacy app-update sources do not match the exact published bridge set."
+        )
+    return expected
+
+
+def load_legacy_app_update_sources(
+    path: Path, *, expected_version: str
+) -> list[str]:
+    """Load the exact legacy bridge contract from bounded release configuration."""
+
+    try:
+        if path.stat().st_size > MAX_MANIFEST_BYTES:
+            raise UpdateBundleError("Release configuration exceeds size limit.")
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise UpdateBundleError("Release configuration could not be read safely.") from exc
+    if not isinstance(raw, dict):
+        raise UpdateBundleError("Release configuration must be a JSON object.")
+    configured_version = str(raw.get("version") or "").strip().lstrip("v")
+    if configured_version != expected_version.strip().lstrip("v"):
+        return []
+    sources = _validated_legacy_app_update_sources(
+        raw.get("legacy_app_update_sources")
+    )
+    if sources and configured_version != LEGACY_PROTOCOL3_APP_UPDATE_TARGET:
+        raise UpdateBundleError(
+            "Legacy app-update sources are allowed only for the v1.6.0 bridge."
+        )
+    return sources
+
+
+def verify_legacy_app_release_projection(
+    release: dict[str, Any],
+    *,
+    legacy_app_update_sources: list[str] | None,
+    expected_version: str,
+) -> None:
+    """Verify the only allowed protocol-3 projection of the current release."""
+
+    sources = _validated_legacy_app_update_sources(legacy_app_update_sources)
+    if not sources:
+        return
+    if expected_version.strip().lstrip("v") != LEGACY_PROTOCOL3_APP_UPDATE_TARGET:
+        raise UpdateBundleError(
+            "Legacy app-update projection is allowed only for the v1.6.0 bridge."
+        )
+    expected = {
+        "version": expected_version,
+        "delivery_mode": "app_update",
+        "image_required": False,
+        "image_refresh_recommended": False,
+        "minimum_image_version": LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION,
+        "updater_protocol": 2,
+        "automatic_install_allowed": False,
+        "compatible_source_application_versions": sources,
+        "compatible_launcher_protocols": [3],
+    }
+    if any(release.get(name) != value for name, value in expected.items()):
+        raise UpdateBundleError(
+            "Schema-2 release does not match the exact legacy app-update projection."
+        )
+
+
 def verify_update_catalog(
     catalog_bytes: bytes,
     bundle_bytes: bytes,
@@ -317,6 +391,7 @@ def verify_update_catalog(
     expected_runtime_abi: str,
     expected_settings_schema_version: int,
     expected_recommended_image_version: str,
+    legacy_app_update_sources: list[str] | None = None,
 ) -> dict[str, Any]:
     """Independently verify schema-2 metadata and its exact signed bundle."""
 
@@ -364,6 +439,11 @@ def verify_update_catalog(
             raise UpdateBundleError(
                 f"Update catalog {name} does not match the release contract."
             )
+    verify_legacy_app_release_projection(
+        release,
+        legacy_app_update_sources=legacy_app_update_sources,
+        expected_version=normalized_version,
+    )
     actual_hash = sha256_hex(bundle_bytes)
     if release.get("bundle_sha256") != actual_hash:
         raise UpdateBundleError("Update catalog bundle hash did not match.")
@@ -618,6 +698,7 @@ def verify_runtime_catalog_binding(
     runtime_catalog: dict[str, Any],
     *,
     expected_version: str,
+    legacy_app_update_sources: list[str] | None = None,
 ) -> None:
     """Bind independently verified catalogs to the same signed app history."""
 
@@ -640,13 +721,62 @@ def verify_runtime_catalog_binding(
         release_maps.append(by_version)
     if release_maps[0].keys() != release_maps[1].keys():
         raise UpdateBundleError("Runtime and app catalog release histories differ.")
+    legacy_sources = _validated_legacy_app_update_sources(
+        legacy_app_update_sources
+    )
     for version, app_release in release_maps[0].items():
         runtime_release = {
             name: value
             for name, value in release_maps[1][version].items()
             if name != "runtime_variants"
         }
-        if app_release != runtime_release:
+        if version == normalized_version and legacy_sources:
+            verify_legacy_app_release_projection(
+                app_release,
+                legacy_app_update_sources=legacy_sources,
+                expected_version=normalized_version,
+            )
+            expected_runtime = {
+                "version": normalized_version,
+                "delivery_mode": "app_update",
+                "image_required": False,
+                "image_refresh_recommended": False,
+                "minimum_image_version": VERIFIED_DEPENDENCY_FOUNDATION,
+                "updater_protocol": 4,
+                "automatic_install_allowed": False,
+                "compatible_source_application_versions": [
+                    VERIFIED_DEPENDENCY_FOUNDATION
+                ],
+                "compatible_launcher_protocols": [4],
+            }
+            if any(
+                runtime_release.get(name) != value
+                for name, value in expected_runtime.items()
+            ):
+                raise UpdateBundleError(
+                    "Runtime catalog does not match the protocol-4 release contract."
+                )
+            projected_fields = {
+                "minimum_image_version",
+                "updater_protocol",
+                "compatible_source_application_versions",
+                "compatible_launcher_protocols",
+            }
+            app_shared = {
+                name: value
+                for name, value in app_release.items()
+                if name not in projected_fields
+            }
+            runtime_shared = {
+                name: value
+                for name, value in runtime_release.items()
+                if name not in projected_fields
+            }
+            if app_shared != runtime_shared:
+                raise UpdateBundleError(
+                    "Legacy and runtime catalogs do not share the same signed app asset."
+                )
+        elif app_release != runtime_release:
             raise UpdateBundleError("Runtime catalog does not match the signed app release.")
 
 
@@ -714,6 +844,11 @@ def main() -> int:
     parser.add_argument("--expected-bundle-url", required=True)
     parser.add_argument("--source-root", type=Path, default=ROOT)
     parser.add_argument(
+        "--release-config",
+        type=Path,
+        default=ROOT / "scripts" / "release" / "release-config.json",
+    )
+    parser.add_argument(
         "--public-key",
         action="append",
         help=(
@@ -736,6 +871,10 @@ def main() -> int:
                 return 1
             public_keys[key_id] = value
     try:
+        legacy_app_update_sources = load_legacy_app_update_sources(
+            args.release_config,
+            expected_version=args.expected_version,
+        )
         manifest = verify_update_assets(
             _read_limited_file(args.manifest, max_bytes=MAX_MANIFEST_BYTES),
             _read_limited_file(args.bundle, max_bytes=MAX_BUNDLE_BYTES),
@@ -772,6 +911,7 @@ def main() -> int:
                 expected_recommended_image_version=(
                     args.expected_recommended_image_version or args.expected_version
                 ),
+                legacy_app_update_sources=legacy_app_update_sources,
             )
             # Compare signed records, without normalization-added defaults.
             verified_catalog = json.loads(catalog_bytes)
@@ -827,7 +967,10 @@ def main() -> int:
                 expected_bundle_urls=runtime_urls,
             )
             verify_runtime_catalog_binding(
-                verified_catalog, runtime_catalog, expected_version=args.expected_version
+                verified_catalog,
+                runtime_catalog,
+                expected_version=args.expected_version,
+                legacy_app_update_sources=legacy_app_update_sources,
             )
     except (OSError, ValueError, UpdateCenterError) as exc:
         print(f"update asset verification failed: {exc}", file=sys.stderr)

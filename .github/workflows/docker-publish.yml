@@ -753,6 +753,17 @@ jobs:
             --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
             --architecture "${NATIVE_ARCHITECTURE}" \
             --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}.json"
+      - name: Validate the complete native receipt before retention
+        if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/release/aggregate-runtime-capability.py \
+            --validate-evidence "${RUNNER_TEMP}/runtime-capability/runtime-capability-${{ matrix.architecture }}.json" \
+            --architecture "${{ matrix.architecture }}" \
+            --catalog "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-update-catalog-v3.json" \
+            --release-config scripts/release/release-config.json \
+            --source-commit "${GITHUB_SHA}"
       - name: Retain native runtime capability evidence
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -762,8 +773,155 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  legacy-app-upgrade:
+    name: Prove legacy in-app upgrade (${{ matrix.architecture }})
+    needs: [candidate-source-gates, candidate-signing, runtime-dependencies]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact legacy verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Set up Node for isolated headless browser checks
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Install the existing headless Chromium harness
+        working-directory: app/ui
+        env:
+          CI: 'true'
+          BROWSER: none
+          PLAYWRIGHT_HTML_OPEN: never
+        run: |
+          corepack enable
+          test "$(pnpm --version)" = "11.28.5"
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Download sealed signed app assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-signer-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate-signer
+      - name: Download the native verified dependency closure
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-dependencies-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-dependencies
+      - name: Open signed app assets before native qualification
+        env:
+          CHANNELWATCH_UPDATE_SIGNING_KEY: ${{ secrets.CHANNELWATCH_UPDATE_SIGNING_KEY }}
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_key="${CHANNELWATCH_UPDATE_SIGNING_KEY}"
+          test -n "${signing_key}"
+          unset CHANNELWATCH_UPDATE_SIGNING_KEY
+          archive="channelwatch-runtime-dependencies-${NATIVE_ARCHITECTURE}.tar"
+          (cd "${RUNNER_TEMP}/runtime-dependencies" && sha256sum --check "${archive}.sha256")
+          mkdir -p "${RUNNER_TEMP}/native-dependencies" "${RUNNER_TEMP}/signed-assets"
+          tar -xf "${RUNNER_TEMP}/runtime-dependencies/${archive}" -C "${RUNNER_TEMP}/native-dependencies"
+          export PYTHONPATH="${RUNNER_TEMP}/native-dependencies/dependencies/site-packages"
+          CHANNELWATCH_UPDATE_SIGNING_KEY="${signing_key}" python scripts/release/seal-candidate-artifact.py open \
+            --input "${RUNNER_TEMP}/candidate-signer/signed-assets.sealed" \
+            --output "${RUNNER_TEMP}/signed-assets.tar"
+          tar -xf "${RUNNER_TEMP}/signed-assets.tar" -C "${RUNNER_TEMP}/signed-assets"
+          rm -f "${RUNNER_TEMP}/signed-assets.tar"
+          echo "PYTHONPATH=${PYTHONPATH}" >> "${GITHUB_ENV}"
+      - name: Download and bind published legacy overlay assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/legacy-overlays"
+          for version in 1.4.1 1.4.5; do
+            curl --fail --location --silent --show-error \
+              --output "${RUNNER_TEMP}/legacy-overlays/channelwatch-catalog-v${version}.json" \
+              "https://github.com/CoderLuii/ChannelWatch/releases/download/v${version}/channelwatch-catalog-v${version}.json"
+            curl --fail --location --silent --show-error \
+              --output "${RUNNER_TEMP}/legacy-overlays/channelwatch-app-v${version}.zip" \
+              "https://github.com/CoderLuii/ChannelWatch/releases/download/v${version}/channelwatch-app-v${version}.zip"
+          done
+          echo "bb0b636ed70b139b67b7b824d4542a5a80798be9db71a30b6a10bf8e5a2539df  ${RUNNER_TEMP}/legacy-overlays/channelwatch-catalog-v1.4.1.json" | sha256sum --check
+          echo "89c4cd4f0d0aebff5224e84c5a51a28c514067cd66486ca26cbde3f17e96c8cd  ${RUNNER_TEMP}/legacy-overlays/channelwatch-app-v1.4.1.zip" | sha256sum --check
+          echo "376e7f0572a7f3ebcc2ce74f1d30a703c026a690c99fca81108d08f5db31f783  ${RUNNER_TEMP}/legacy-overlays/channelwatch-catalog-v1.4.5.json" | sha256sum --check
+          echo "d354ea7d424e4a7c8af623fad2408665f8e536b7ec171979da8bed4afed9f362  ${RUNNER_TEMP}/legacy-overlays/channelwatch-app-v1.4.5.zip" | sha256sum --check
+      - name: Run the native legacy same-container matrix
+        env:
+          NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+          CI: 'true'
+          BROWSER: none
+          PLAYWRIGHT_HTML_OPEN: never
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' scripts/release/release-config.json)"
+          test "$(jq -c '.legacy_app_update_sources' scripts/release/release-config.json)" = '["1.4.0","1.4.1","1.4.5"]'
+          tag="v${version}"
+          evidence="${RUNNER_TEMP}/legacy-app-upgrades"
+          mkdir -p "${evidence}"
+          scenarios=(
+            stock-1.4.0
+            overlay-1.4.0-to-1.4.1
+            overlay-1.4.0-to-1.4.5
+            stock-1.4.1
+            overlay-1.4.1-to-1.4.5
+            stock-1.4.5
+          )
+          for scenario in "${scenarios[@]}"; do
+            overlay_version=""
+            case "${scenario}" in
+              *to-1.4.1) overlay_version="1.4.1" ;;
+              *to-1.4.5) overlay_version="1.4.5" ;;
+            esac
+            overlay_args=()
+            if [ -n "${overlay_version}" ]; then
+              overlay_args=(
+                --overlay-catalog "${RUNNER_TEMP}/legacy-overlays/channelwatch-catalog-v${overlay_version}.json"
+                --overlay-bundle "${RUNNER_TEMP}/legacy-overlays/channelwatch-app-v${overlay_version}.zip"
+              )
+            fi
+            python scripts/release/verify-legacy-app-upgrade.py \
+              --baselines scripts/release/legacy-app-upgrade-baselines.json \
+              --release-config scripts/release/release-config.json \
+              --scenario "${scenario}" \
+              --architecture "${NATIVE_ARCHITECTURE}" \
+              --target-version "${version}" \
+              --source-commit "${GITHUB_SHA}" \
+              --catalog "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-catalog-${tag}.json" \
+              --bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-app-${tag}.zip" \
+              "${overlay_args[@]}" \
+              --receipt "${evidence}/legacy-app-upgrade-${NATIVE_ARCHITECTURE}-${scenario}.json" \
+              --log-directory "${evidence}/legacy-app-upgrade-${NATIVE_ARCHITECTURE}-${scenario}-logs"
+          done
+      - name: Retain native legacy app-upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: legacy-app-upgrade-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ runner.temp }}/legacy-app-upgrades/
+          retention-days: 7
+          if-no-files-found: error
+
   candidate-qualification:
-    needs: [docs-config, helm, security, runtime-dependencies, candidate-source-gates, candidate-signing, runtime-capability]
+    needs: [docs-config, helm, security, runtime-dependencies, candidate-source-gates, candidate-signing, runtime-capability, legacy-app-upgrade]
     name: Build and verify private signed candidate
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
@@ -798,6 +956,13 @@ jobs:
         with:
           pattern: runtime-capability-*-${{ github.sha }}
           path: ${{ runner.temp }}/runtime-capability
+          merge-multiple: true
+
+      - name: Download native legacy app-upgrade evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: legacy-app-upgrade-*-${{ github.sha }}
+          path: ${{ runner.temp }}/legacy-app-upgrades
           merge-multiple: true
 
       - name: Download native runtime dependency closures
@@ -1052,6 +1217,8 @@ jobs:
           fi
           python scripts/release/verify-minimum-image-app-update.py \
             --bundle "dist/candidate-one/channelwatch-app-v${version}.zip" \
+            --runtime-bundle "dist/candidate-one/channelwatch-runtime-v${version}-amd64.zip" \
+            --runtime-catalog "dist/candidate-one/channelwatch-update-catalog-v3.json" \
             --version "${version}" \
             --minimum-image-version "${minimum_image_version}" \
             --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
@@ -1466,6 +1633,7 @@ jobs:
             fi
           fi
           python scripts/release/verify-update-assets.py \
+            --release-config scripts/release/release-config.json \
             --manifest "dist/candidate-one/channelwatch-update-${tag}.json" \
             --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
             --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
@@ -1558,6 +1726,30 @@ jobs:
               -C "${runtime_scan_dir}" \
               -cf "dist/candidate-one/channelwatch-runtime-scan-${tag}.tar" .
           fi
+          legacy_evidence="dist/candidate-one/channelwatch-legacy-app-upgrade-${tag}-evidence.json"
+          python scripts/release/aggregate-legacy-app-upgrades.py \
+            --baselines scripts/release/legacy-app-upgrade-baselines.json \
+            --release-config scripts/release/release-config.json \
+            --receipts-directory "${RUNNER_TEMP}/legacy-app-upgrades" \
+            --target-version "${version}" \
+            --source-commit "${GITHUB_SHA}" \
+            --catalog "dist/candidate-one/channelwatch-catalog-${tag}.json" \
+            --bundle "dist/candidate-one/channelwatch-app-${tag}.zip" \
+            --output "${legacy_evidence}"
+          for architecture in amd64 arm64; do
+            while IFS= read -r scenario; do
+              receipt="${RUNNER_TEMP}/legacy-app-upgrades/legacy-app-upgrade-${architecture}-${scenario}.json"
+              test -s "${receipt}"
+              cp "${receipt}" "dist/candidate-one/channelwatch-legacy-app-upgrade-${tag}-${architecture}-${scenario}.json"
+            done < <(jq -r '.scenarios[].id' scripts/release/legacy-app-upgrade-baselines.json)
+          done
+          find "${RUNNER_TEMP}/legacy-app-upgrades" \
+            -mindepth 1 -maxdepth 1 -type d -name 'legacy-app-upgrade-*-logs' \
+            -printf '%f\0' \
+            | sort -z \
+            | tar --null -C "${RUNNER_TEMP}/legacy-app-upgrades" --files-from=- \
+                --sort=name --owner=0 --group=0 --numeric-owner --format=posix \
+                -cf "dist/candidate-one/channelwatch-legacy-app-upgrade-${tag}-logs.tar"
           checksum_tmp="${RUNNER_TEMP}/channelwatch-candidate-SHA256SUMS.txt"
           (
             cd dist/candidate-one
@@ -2159,6 +2351,17 @@ jobs:
           cp "${approved_dir}/channelwatch-app-${TAG}.zip" dist/update/
           cp "${approved_dir}/channelwatch-update-${TAG}.json" dist/update/
           cp "${approved_dir}/channelwatch-catalog-${TAG}.json" dist/update/
+          mapfile -d '' legacy_assets < <(
+            find "${approved_dir}" -maxdepth 1 -type f \
+              -name "channelwatch-legacy-app-upgrade-${TAG}-*" -print0 \
+              | sort -z
+          )
+          expected_legacy_assets=$((2 + (2 * $(jq '.scenarios | length' scripts/release/legacy-app-upgrade-baselines.json))))
+          if [ "${#legacy_assets[@]}" -ne "${expected_legacy_assets}" ] || [ ! -f "${legacy_assets[0]:-}" ]; then
+            echo "::error::The approved candidate does not contain the exact legacy upgrade evidence matrix."
+            exit 1
+          fi
+          cp "${legacy_assets[@]}" dist/update/
           if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
             cp "${approved_dir}/channelwatch-update-catalog-v3.json" dist/update/
           fi
@@ -2377,6 +2580,8 @@ jobs:
           fi
           python scripts/release/verify-minimum-image-app-update.py \
             --bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip" \
+            --runtime-bundle "dist/update/channelwatch-runtime-${RELEASE_TAG}-amd64.zip" \
+            --runtime-catalog "dist/update/channelwatch-update-catalog-v3.json" \
             --version "${VERSION}" \
             --minimum-image-version "${minimum_image_version}" \
             --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
@@ -2417,6 +2622,7 @@ jobs:
             fi
           fi
           python scripts/release/verify-update-assets.py \
+            --release-config scripts/release/release-config.json \
             --manifest "dist/update/channelwatch-update-${TAG}.json" \
             --catalog "dist/update/channelwatch-catalog-${TAG}.json" \
             --bundle "dist/update/channelwatch-app-${TAG}.zip" \
@@ -2569,6 +2775,18 @@ jobs:
             exit 1
           fi
           assets=("${bundle}" "${manifest}" "${catalog}" "${vex}")
+          legacy_evidence="dist/update/channelwatch-legacy-app-upgrade-${TAG}-evidence.json"
+          legacy_logs="dist/update/channelwatch-legacy-app-upgrade-${TAG}-logs.tar"
+          test -s "${legacy_evidence}"
+          test -s "${legacy_logs}"
+          assets+=("${legacy_evidence}" "${legacy_logs}")
+          for architecture in amd64 arm64; do
+            while IFS= read -r scenario; do
+              legacy_receipt="dist/update/channelwatch-legacy-app-upgrade-${TAG}-${architecture}-${scenario}.json"
+              test -s "${legacy_receipt}"
+              assets+=("${legacy_receipt}")
+            done < <(jq -r '.scenarios[].id' scripts/release/legacy-app-upgrade-baselines.json)
+          done
           test -s "${native_evidence}"
           assets+=("${native_evidence}")
           recovery="$(jq -r '.recovers_unpublished_image_milestone // empty' scripts/release/release-config.json)"
@@ -2863,7 +3081,14 @@ jobs:
             "channelwatch-native-image-${TAG}-amd64.log"
             "channelwatch-native-image-${TAG}-arm64.json"
             "channelwatch-native-image-${TAG}-arm64.log"
+            "channelwatch-legacy-app-upgrade-${TAG}-evidence.json"
+            "channelwatch-legacy-app-upgrade-${TAG}-logs.tar"
           )
+          for architecture in amd64 arm64; do
+            while IFS= read -r scenario; do
+              draft_assets+=("channelwatch-legacy-app-upgrade-${TAG}-${architecture}-${scenario}.json")
+            done < <(jq -r '.scenarios[].id' scripts/release/legacy-app-upgrade-baselines.json)
+          done
           if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
             draft_assets+=("channelwatch-update-catalog-v3.json")
           fi
@@ -3005,7 +3230,14 @@ jobs:
             "channelwatch-native-image-${TAG}-amd64.log"
             "channelwatch-native-image-${TAG}-arm64.json"
             "channelwatch-native-image-${TAG}-arm64.log"
+            "channelwatch-legacy-app-upgrade-${TAG}-evidence.json"
+            "channelwatch-legacy-app-upgrade-${TAG}-logs.tar"
           )
+          for architecture in amd64 arm64; do
+            while IFS= read -r scenario; do
+              required_assets+=("channelwatch-legacy-app-upgrade-${TAG}-${architecture}-${scenario}.json")
+            done < <(jq -r '.scenarios[].id' scripts/release/legacy-app-upgrade-baselines.json)
+          done
           if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
             required_assets+=("channelwatch-update-catalog-v3.json")
           fi
@@ -3721,8 +3953,15 @@ jobs:
             "channelwatch-native-image-${tag}-amd64.log" \
             "channelwatch-native-image-${tag}-arm64.json" \
             "channelwatch-native-image-${tag}-arm64.log" \
+            "channelwatch-legacy-app-upgrade-${tag}-evidence.json" \
+            "channelwatch-legacy-app-upgrade-${tag}-logs.tar" \
             "channelwatch-${tag}-SHA256SUMS.txt" \
             | sort > "${expected_assets}"
+          for architecture in amd64 arm64; do
+            while IFS= read -r scenario; do
+              echo "channelwatch-legacy-app-upgrade-${tag}-${architecture}-${scenario}.json" >> "${expected_assets}"
+            done < <(jq -r '.scenarios[].id' scripts/release/legacy-app-upgrade-baselines.json)
+          done
           if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
             echo "channelwatch-update-catalog-v3.json" >> "${expected_assets}"
           fi
@@ -3787,7 +4026,7 @@ jobs:
           done < "${RUNNER_TEMP}/expected-public-assets.txt"
 
           checksum_file="channelwatch-${TAG}-SHA256SUMS.txt"
-          expected_checksum_count=18
+          expected_checksum_count=32
           if [ "$(jq -r '.updater_protocol' scripts/release/release-config.json)" = "4" ]; then
             expected_checksum_count=$((expected_checksum_count + 1))
           fi
@@ -3836,6 +4075,7 @@ jobs:
             fi
           fi
           python scripts/release/verify-update-assets.py \
+            --release-config scripts/release/release-config.json \
             --manifest "${manifest}" \
             --catalog "${catalog}" \
             --bundle "${bundle}" \
@@ -4041,6 +4281,7 @@ jobs:
         env:
           RAW_RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RAW_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
+          EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
           RAW_IMAGE_REQUIRED: ${{ steps.release.outputs.image_required }}
           RAW_DELIVERY_MODE: ${{ steps.release.outputs.delivery_mode }}
           RAW_RECOMMENDED_IMAGE_VERSION: ${{ steps.release.outputs.recommended_image_version }}
@@ -4049,6 +4290,7 @@ jobs:
             --version "${RAW_RELEASE_VERSION}" \
             --release-url "https://github.com/CoderLuii/ChannelWatch/releases/tag/${RELEASE_TAG}" \
             --bundle-sha256 "${RAW_BUNDLE_SHA256}" \
+            --catalog-sha256 "${EXPECTED_CATALOG_SHA256}" \
             --image-required "${RAW_IMAGE_REQUIRED}" \
             --delivery-mode "${RAW_DELIVERY_MODE}" \
             --recommended-image-version "${RAW_RECOMMENDED_IMAGE_VERSION}" \
@@ -4106,6 +4348,7 @@ jobs:
             done
           fi
           python scripts/release/verify-update-assets.py \
+            --release-config scripts/release/release-config.json \
             --manifest "${manifest}" \
             --catalog "${catalog}" \
             --bundle "${bundle}" \

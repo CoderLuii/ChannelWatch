@@ -40,7 +40,20 @@ MAX_IMAGE_INVENTORY_PATHS = 100000
 MAX_IMAGE_INVENTORY_BYTES = 512 * 1024 * 1024
 # Two native receipts must leave one MiB for the aggregate envelope.
 MAX_RECEIPT_BYTES = 7 * 1024 * 1024 // 2
-MAX_RECOVERY_DIAGNOSTIC_BYTES = 4 * 1024 * 1024
+# The exact decoded update-check response is retained outside the bounded receipt.
+MAX_UPDATE_CHECK_ARTIFACT_BYTES = 8 * 1024 * 1024
+UPDATE_CHECK_EVIDENCE_MODE = "protocol-4-runtime"
+UPDATE_CHECK_EVIDENCE_PHASE = "initial-update-check"
+MAX_ROLLBACK_STATUS_ARTIFACT_BYTES = 8 * 1024 * 1024
+ROLLBACK_STATUS_EVIDENCE_PHASE = "qualification-post-rollback"
+# Four individually bounded control files plus status and JSON envelope.
+MAX_RECOVERY_DIAGNOSTIC_BYTES = 8 * 1024 * 1024
+RECOVERY_DIAGNOSTIC_VALUE_FIELDS = {
+    "recovery_hold_status",
+    "recovery_hold_control_state",
+    "rollback_status",
+    "post_rollback_control_state",
+}
 TRACKED_DEPENDENCIES = {
     "requests": "requests",
     "cryptography": "cryptography",
@@ -341,17 +354,177 @@ def validate_update_check(
     return checked
 
 
+def retain_update_check_status(
+    evidence_json: Path,
+    *,
+    architecture: str,
+    source_commit: str,
+    status: dict[str, Any],
+) -> dict[str, Any]:
+    if architecture not in {"amd64", "arm64"} or re.fullmatch(
+        r"[0-9a-f]{40}", source_commit
+    ) is None:
+        raise CapabilityError("Initial update-check evidence binding is invalid.")
+    path = evidence_json.parent / f"{evidence_json.stem}-initial-update-check.json"
+    payload = {
+        "schema": 1,
+        "mode": UPDATE_CHECK_EVIDENCE_MODE,
+        "phase": UPDATE_CHECK_EVIDENCE_PHASE,
+        "architecture": architecture,
+        "source_commit": source_commit,
+        "status": status,
+    }
+    try:
+        encoded = (
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CapabilityError("Initial update-check evidence is not valid JSON.") from exc
+    if len(encoded) > MAX_UPDATE_CHECK_ARTIFACT_BYTES:
+        raise CapabilityError("Initial update-check evidence exceeds its 8 MiB bound.")
+    path.write_bytes(encoded)
+    return artifact_descriptor(path)
+
+
+def compact_update_check_evidence(
+    checked: dict[str, Any], artifact: dict[str, Any]
+) -> dict[str, Any]:
+    target = checked.get("trusted_target")
+    if not isinstance(target, dict):
+        raise CapabilityError("Initial update-check evidence has no trusted target.")
+    return {
+        "update_available": checked.get("update_available"),
+        "image_required": checked.get("image_required"),
+        "catalog_state": checked.get("catalog_state"),
+        "trusted_target": {
+            "version": target.get("version"),
+            "runtime_descriptor": target.get("runtime_descriptor"),
+            "bundle_sha256": target.get("bundle_sha256"),
+        },
+        "raw_status_artifact": artifact,
+    }
+
+
+def retain_rollback_status(
+    evidence_path: Path,
+    *,
+    architecture: str,
+    source_commit: str,
+    status: dict[str, Any],
+) -> dict[str, Any]:
+    path = evidence_path.with_name(
+        evidence_path.stem + "-post-rollback-status.json"
+    )
+    payload = {
+        "schema": 1,
+        "mode": UPDATE_CHECK_EVIDENCE_MODE,
+        "phase": ROLLBACK_STATUS_EVIDENCE_PHASE,
+        "architecture": architecture,
+        "source_commit": source_commit,
+        "status": status,
+    }
+    try:
+        encoded = (
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CapabilityError("Post-rollback status evidence is not valid JSON.") from exc
+    if len(encoded) > MAX_ROLLBACK_STATUS_ARTIFACT_BYTES:
+        raise CapabilityError("Post-rollback status evidence exceeds its 8 MiB bound.")
+    path.write_bytes(encoded)
+    return artifact_descriptor(path)
+
+
+def compact_rollback_status_evidence(
+    status: dict[str, Any], artifact: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "current_version": status.get("current_version"),
+        "launcher_protocol": status.get("launcher_protocol"),
+        "active_bundle": status.get("active_bundle"),
+        "operation_busy": status.get("operation_busy"),
+        "worker_runtime": status.get("worker_runtime"),
+        "raw_status_artifact": artifact,
+    }
+
+
+def compact_filesystem_refusal_status(
+    status: object, *, target_version: str
+) -> dict[str, Any]:
+    validated = validate_rollback_status(status, target_version=target_version)
+    return {
+        "current_version": validated["current_version"],
+        "launcher_protocol": validated["launcher_protocol"],
+        "active_bundle": validated["active_bundle"],
+        "operation_busy": validated["operation_busy"],
+        "worker_runtime": validated["worker_runtime"],
+    }
+
+
 def validate_rollback_response(
     response: object, *, source_version: str, target_version: str
 ) -> dict[str, Any]:
-    del target_version  # The durable post-rollback status binds the image floor.
     if (
         not isinstance(response, dict)
         or response.get("operation") != "rollback"
-        or response.get("status") not in {"restarting", "succeeded"}
+        or response.get("status") not in {"restarting", "validating", "success"}
+        or response.get("version") != source_version
         or response.get("rolled_back_from") != source_version
         or not isinstance(response.get("job_id"), str)
         or re.fullmatch(r"[0-9a-f]{32}", response["job_id"]) is None
+    ):
+        raise CapabilityError("API rollback response is not bound to the selected runtime.")
+
+    status = response["status"]
+    if status == "restarting":
+        if response.get("restart_required") is not True:
+            raise CapabilityError(
+                "API rollback response is not bound to the selected runtime."
+            )
+        return response
+
+    components = response.get("startup_components")
+    expected_components = {"core", "ui"} if status == "success" else None
+    if (
+        response.get("rollback_applied") is not True
+        or response.get("restored_version") != target_version
+        or not isinstance(components, dict)
+        or not components
+        or not set(components).issubset({"core", "ui"})
+        or (expected_components is not None and set(components) != expected_components)
+        or (status == "validating" and len(components) != 1)
+        or any(
+            not isinstance(marker, dict)
+            or set(marker) != {"healthy", "version", "ready_at"}
+            or marker.get("healthy") is not True
+            or marker.get("version") != target_version
+            or not isinstance(marker.get("ready_at"), str)
+            or not marker["ready_at"]
+            for marker in components.values()
+        )
+        or (status == "validating" and response.get("restart_required") is not True)
+        or (status == "success" and response.get("restart_required") is not False)
+        or (
+            status == "success"
+            and (
+                not isinstance(response.get("validated_at"), str)
+                or not response["validated_at"]
+            )
+        )
     ):
         raise CapabilityError("API rollback response is not bound to the selected runtime.")
     return response
@@ -1039,12 +1212,17 @@ print(json.dumps(out,sort_keys=True))
     return {str(key): str(value) for key, value in docker_exec_json(name, code).items()}
 
 
-def image_inventory(name: str) -> dict[str, Any]:
+def image_inventory(
+    name: str,
+    *,
+    bootstrap_paths: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    required_paths = IMAGE_BOOTSTRAP_PATHS if bootstrap_paths is None else bootstrap_paths
     code = f"""
 import hashlib,json,os,stat
 from pathlib import Path,PurePosixPath
 roots=[Path('/venv')]
-required={list(IMAGE_BOOTSTRAP_PATHS)!r}
+required={list(required_paths)!r}
 paths=[]
 for root in roots:
  paths.append(root)
@@ -1246,16 +1424,36 @@ def validate_release_log_artifacts(
             raise CapabilityError(f"Release probe log descriptor is invalid: {suffix}")
 
 
-def serialize_bounded_receipt(receipt: dict[str, Any]) -> str:
+def serialize_bounded_receipt(receipt: dict[str, Any]) -> bytes:
     receipt["serialized_size_bytes"] = 0
-    for _ in range(4):
-        encoded = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-        size = len(encoded.encode("utf-8"))
-        if size == receipt["serialized_size_bytes"]:
-            break
-        receipt["serialized_size_bytes"] = size
-    encoded = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-    if len(encoded.encode("utf-8")) > MAX_RECEIPT_BYTES:
+    try:
+        for _ in range(4):
+            encoded = (
+                json.dumps(
+                    receipt,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+            if len(encoded) == receipt["serialized_size_bytes"]:
+                break
+            receipt["serialized_size_bytes"] = len(encoded)
+        encoded = (
+            json.dumps(
+                receipt,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CapabilityError("Runtime capability receipt is not valid JSON.") from exc
+    if len(encoded) > MAX_RECEIPT_BYTES:
         raise CapabilityError("Runtime capability receipt exceeds the 3.5 MiB per-architecture bound.")
     return encoded
 
@@ -1899,10 +2097,27 @@ def validate_live_ui_evidence(
             "ready": {"status": "ready", "ready": True},
         },
     }
-    if not isinstance(value, dict) or any(
+    required = set(expected) | {
+        "page_url", "page_title", "screenshots", "expected_console_events",
+    }
+    if not isinstance(value, dict) or set(value) != required or any(
         value.get(key) != expected_value for key, expected_value in expected.items()
     ):
         raise CapabilityError("Live UI qualification evidence does not prove the exact lifecycle.")
+    expected_console_events = value.get("expected_console_events")
+    if (
+        not isinstance(expected_console_events, dict)
+        or set(expected_console_events) != {
+            "unauthenticated_bootstrap",
+            "apply_restart_transport",
+            "rollback_restart_transport",
+        }
+        or any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in expected_console_events.values()
+        )
+    ):
+        raise CapabilityError("Live UI expected console events are invalid.")
     if not isinstance(value.get("page_url"), str) or not value["page_url"].startswith(base_url + "/"):
         raise CapabilityError("Live UI qualification page URL is not bound to the probe container.")
     if not isinstance(value.get("page_title"), str) or not value["page_title"].strip():
@@ -1930,6 +2145,7 @@ def validate_live_ui_evidence(
         "page_url": value["page_url"],
         "page_title": value["page_title"],
         "screenshots": retained_screenshots,
+        "expected_console_events": expected_console_events,
     }
 
 
@@ -1982,6 +2198,9 @@ def live_ui_qualification(
     ):
         (evidence_root / artifact_name).unlink(missing_ok=True)
     log_path = evidence_json.parent / f"{evidence_json.stem}-live-ui-playwright.log"
+    failure_output = evidence_root / "runtime-update-live-failure"
+    if failure_output.exists():
+        shutil.rmtree(failure_output)
     environment = os.environ.copy()
     environment.update(
         {
@@ -1991,6 +2210,9 @@ def live_ui_qualification(
             "CHANNELWATCH_PLAYWRIGHT_TARGET_VERSION": target_version,
             "CHANNELWATCH_PLAYWRIGHT_IMAGE_VERSION": image_version,
             "CHANNELWATCH_PLAYWRIGHT_EVIDENCE_DIR": str(evidence_root),
+            "CHANNELWATCH_PLAYWRIGHT_HEALTH_TIMEOUT_MS": str(
+                startup_timeout * 1000
+            ),
             "PLAYWRIGHT_HTML_OPEN": "never",
         }
     )
@@ -2005,6 +2227,8 @@ def live_ui_qualification(
             "playwright/runtime-update-live-smoke.spec.ts",
             "--project=runtime-live",
             "--reporter=line",
+            "--output",
+            str(failure_output),
         ],
         cwd=ROOT / "app/ui",
         env=environment,
@@ -2255,11 +2479,33 @@ def retain_recovery_diagnostic(
         "status": status,
         "control": control,
     }
-    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if len(encoded.encode("utf-8")) > MAX_RECOVERY_DIAGNOSTIC_BYTES:
+    try:
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ) + "\n"
+    except (TypeError, ValueError) as exc:
+        raise CapabilityError(
+            "Damaged-native recovery diagnostic is not valid JSON."
+        ) from exc
+    encoded_bytes = encoded.encode("utf-8")
+    if len(encoded_bytes) > MAX_RECOVERY_DIAGNOSTIC_BYTES:
         raise CapabilityError("Damaged-native recovery diagnostic exceeds its bound.")
-    path.write_text(encoded, encoding="utf-8")
+    path.write_bytes(encoded_bytes)
     return artifact_descriptor(path)
+
+
+def compact_recovery_diagnostic_evidence(result: dict[str, Any]) -> dict[str, Any]:
+    if not RECOVERY_DIAGNOSTIC_VALUE_FIELDS.issubset(result):
+        raise CapabilityError("Damaged-native recovery diagnostic evidence is incomplete.")
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in RECOVERY_DIAGNOSTIC_VALUE_FIELDS
+    }
 
 
 def validate_no_restart_transients(state: dict[str, Any]) -> None:
@@ -2301,6 +2547,35 @@ print(json.dumps({'mount_type':right_fields[0],'mount_options':sorted(set(left_f
     return value
 
 
+def expected_refusal_apply_error(
+    error: urllib.error.HTTPError, *, image_version: str
+) -> bool:
+    if image_version != "1.5.3" or error.code != 500:
+        return False
+    content_type = (
+        str(error.headers.get("Content-Type", "")).split(";", 1)[0].strip()
+    )
+    if content_type != "application/json":
+        return False
+    try:
+        raw = error.read(64 * 1024 + 1)
+        if len(raw) > 64 * 1024:
+            return False
+        payload = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if (
+        not isinstance(detail, dict)
+        or detail.get("code") != "ERR_UPDATE_APPLY_FAILED"
+    ):
+        return False
+    return detail.get("message") in {
+        "Runtime storage does not permit execution.",
+        "Runtime storage does not have enough free space for this generation.",
+    }
+
+
 def expect_apply_refusal(
     client: ApiClient,
     *,
@@ -2308,15 +2583,23 @@ def expect_apply_refusal(
     version: str,
     image_version: str,
     job_id: str,
+    kind: str,
+    bundle_sha256: str,
     timeout: int,
+    initial_operational_state: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     health_samples = [{
         "phase": "before",
-        **capture_image_operational_state(
-            container, client, image_version=image_version, require_idle=True
-        ),
+        **initial_operational_state,
     }]
-    response = client.request("/api/v1/update/apply", {"version": version, "job_id": job_id})
+    try:
+        response = client.request(
+            "/api/v1/update/apply", {"version": version, "job_id": job_id}
+        )
+    except urllib.error.HTTPError as exc:
+        if not expected_refusal_apply_error(exc, image_version=image_version):
+            raise
+        response = {"job_id": job_id}
     if response.get("job_id") != job_id:
         raise CapabilityError("Refusal probe did not bind the requested job ID.")
     health_samples.append({
@@ -2330,6 +2613,13 @@ def expect_apply_refusal(
         job = client.request(f"/api/v1/update/jobs/{job_id}")
         status = str(job.get("status") or "")
         if status in TERMINAL_FAILURES:
+            job = validate_refusal_terminal_job(
+                job,
+                kind=kind,
+                job_id=job_id,
+                version=version,
+                bundle_sha256=bundle_sha256,
+            )
             health_samples.append({
                 "phase": "after",
                 **capture_image_operational_state(
@@ -2547,14 +2837,14 @@ def damaged_native_recovery(
         update_timeout,
         "damaged-native explicit rollback",
     )
-    wait_for_image_health(client, update_timeout, "damaged-native rollback readiness")
-    client.login()
     rollback_job = wait_for_successful_job(
         client,
         job_id=rollback_response["job_id"],
         timeout=update_timeout,
         description="damaged-native rollback job",
     )
+    wait_for_image_health(client, update_timeout, "damaged-native rollback readiness")
+    client.login()
     raw_rollback_status = client.request("/api/v1/update/status")
     rollback_control = recovery_control_state(name)
     rollback_diagnostic = retain_recovery_diagnostic(
@@ -2698,14 +2988,10 @@ def filesystem_refusal(
         version=version,
         image_version=image_version,
         job_id=job_id,
-        timeout=update_timeout,
-    )
-    job = validate_refusal_terminal_job(
-        job,
         kind=kind,
-        job_id=job_id,
-        version=version,
         bundle_sha256=bundle_sha256,
+        timeout=update_timeout,
+        initial_operational_state=initial_operational_state,
     )
     status = validate_rollback_status(
         client.request("/api/v1/update/status"), target_version=image_version
@@ -2734,10 +3020,12 @@ def filesystem_refusal(
         "control_state_after": after_control,
         "control_state": after_control,
         "health_samples": health_samples,
-        "operational_state_after": capture_image_operational_state(
-            name, client, image_version=image_version, require_idle=True
+        "operational_state_after": {
+            key: value for key, value in health_samples[-1].items() if key != "phase"
+        },
+        "rollback_status": compact_filesystem_refusal_status(
+            status, target_version=image_version
         ),
-        "rollback_status": status,
         "image_inventory": inventory_summary(after_inventory),
         "persistent_hashes": after_persistent,
     }
@@ -2890,6 +3178,13 @@ def main() -> int:
             descriptor=descriptor,
             bundle_sha256=variants[architecture]["bundle_sha256"],
         )
+        checked_artifact = retain_update_check_status(
+            args.evidence_json,
+            architecture=architecture,
+            source_commit=args.source_commit,
+            status=checked,
+        )
+        compact_checked = compact_update_check_evidence(checked, checked_artifact)
         job_id = secrets.token_hex(16)
         apply_started = time.monotonic()
         applied = apply_once_and_wait(client, "/api/v1/update/apply", version=version, job_id=job_id, timeout=args.update_timeout)
@@ -2970,9 +3265,16 @@ def main() -> int:
         wait_until(lambda: client.request("/api/v1/update/status").get("current_version") == args.minimum_image_version.strip().lstrip("v"), args.update_timeout, "API rollback")
         wait_for_image_health(client, args.update_timeout, "rollback image readiness")
         client.login()
+        raw_rollback_status = client.request("/api/v1/update/status")
         rollback_status = validate_rollback_status(
-            client.request("/api/v1/update/status"),
+            raw_rollback_status,
             target_version=args.minimum_image_version.strip().lstrip("v"),
+        )
+        rollback_status_artifact = retain_rollback_status(
+            args.evidence_json,
+            architecture=architecture,
+            source_commit=args.source_commit,
+            status=raw_rollback_status,
         )
         rollback_duration = time.monotonic() - rollback_started
         rollback_imports = import_smoke(
@@ -3134,7 +3436,7 @@ def main() -> int:
                     "container_identity_after": container_identity_after,
                     "initial_status": initial_status,
                     "initial_operational_state": initial_operational_state,
-                    "check": checked,
+                    "check": compact_checked,
                     "signed_dependency_inventory": signed_inventory,
                     "apply_job_id": job_id,
                     "apply_runtime_components": components,
@@ -3165,7 +3467,9 @@ def main() -> int:
                     "persistent_hashes_after_reapply": after_reapply,
                     "container_restart": {"status": "passed", "current_version": restarted.get("current_version")},
                     "rollback": rollback,
-                    "rollback_status": rollback_status,
+                    "rollback_status": compact_rollback_status_evidence(
+                        rollback_status, rollback_status_artifact
+                    ),
                     "rollback_runtime_components": {
                         "ui": rollback_status["worker_runtime"]
                     },
@@ -3178,7 +3482,9 @@ def main() -> int:
                     "reapply_operational_state": reapply_operational_state,
                 },
                 "release_qualification": {
-                    "damaged_native_recovery": damage_recovery,
+                    "damaged_native_recovery": compact_recovery_diagnostic_evidence(
+                        damage_recovery
+                    ),
                     "resource_observations": resource_observations,
                     **(
                         {"filesystem_refusals": refusal_evidence}
@@ -3263,7 +3569,7 @@ def main() -> int:
                 "cleanup": receipt["cleanup"],
             }
             encoded_receipt = serialize_bounded_receipt(receipt)
-        args.evidence_json.write_text(encoded_receipt, encoding="utf-8")
+        args.evidence_json.write_bytes(encoded_receipt)
     print(json.dumps({"status": receipt["status"], "evidence": str(args.evidence_json)}))
     return 0 if receipt["status"] == "passed" else 1
 

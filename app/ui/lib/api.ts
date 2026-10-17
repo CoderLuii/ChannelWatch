@@ -421,7 +421,9 @@ export interface UpdateJob {
   backup_path?: string | null
   restart_required?: boolean
   validated_at?: string | null
+  rollback_applied?: boolean | null
   rolled_back_from?: string | null
+  restored_version?: string | null
 }
 
 export interface UpdateStatus {
@@ -952,7 +954,7 @@ export async function fetchActivityHistory(options: FetchActivityHistoryOptions 
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw new ApiError(await parseApiError(response))
   }
 
   return response.json()
@@ -1174,7 +1176,7 @@ export async function fetchDvrActivityHistory(
   )
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw new ApiError(await parseApiError(response))
   }
 
   return response.json()

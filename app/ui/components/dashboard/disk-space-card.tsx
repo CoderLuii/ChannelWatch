@@ -29,7 +29,7 @@ interface DiskSpaceCardProps {
   thresholdPercent?: number
 }
 
-type DiskSeverity = "normal" | "warning" | "critical"
+export type DiskSeverity = "normal" | "warning" | "critical"
 
 interface DiskThresholds {
   warningThresholdPercent: number
@@ -60,11 +60,20 @@ function getThresholdSeverity(usedPercent: number, thresholds: DiskThresholds): 
   return "normal"
 }
 
-function resolveDiskSeverity(
-  usedPercent: number,
-  thresholds: DiskThresholds,
+export function resolveDiskSeverity({
+  usedPercent,
+  serverSeverity,
+  warningThresholdPercent,
+  criticalThresholdPercent,
+  thresholdPercent,
+}: {
+  usedPercent: number
   serverSeverity?: DiskSeverity
-): DiskSeverity {
+  warningThresholdPercent?: number
+  criticalThresholdPercent?: number
+  thresholdPercent?: number
+}): DiskSeverity {
+  const thresholds = resolveDiskThresholds(warningThresholdPercent, criticalThresholdPercent, thresholdPercent)
   return serverSeverity ?? getThresholdSeverity(usedPercent, thresholds)
 }
 
@@ -74,20 +83,14 @@ function getDiskStatusColor(severity: DiskSeverity) {
   return "bg-emerald-600 dark:bg-emerald-400"
 }
 
-function getCardGradient(severity: DiskSeverity) {
-  if (severity === "critical") {
-    return "bg-gradient-to-br from-red-50 to-red-100 dark:from-red-950 dark:to-red-900 border-red-200 dark:border-red-800"
-  }
-  if (severity === "warning") {
-    return "bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-950 dark:to-amber-900 border-amber-200 dark:border-amber-800"
-  }
-  return "bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-950 dark:to-emerald-900 border-emerald-200 dark:border-emerald-800"
+function getCardGradient(_severity: DiskSeverity) {
+  return "border-border/70 bg-card shadow-sm"
 }
 
 function getTextColor(severity: DiskSeverity) {
-  if (severity === "critical") return { heading: "text-red-700 dark:text-red-300", sub: "text-red-600/80 dark:text-red-400/80", icon: "text-red-600 dark:text-red-400", iconBg: "bg-red-500/20" }
-  if (severity === "warning") return { heading: "text-amber-700 dark:text-amber-300", sub: "text-amber-600/80 dark:text-amber-400/80", icon: "text-amber-600 dark:text-amber-400", iconBg: "bg-amber-500/20" }
-  return { heading: "text-emerald-700 dark:text-emerald-300", sub: "text-emerald-600/80 dark:text-emerald-400/80", icon: "text-emerald-600 dark:text-emerald-400", iconBg: "bg-emerald-500/20" }
+  if (severity === "critical") return { heading: "text-red-700 dark:text-red-300", sub: "text-red-700 dark:text-red-400", icon: "text-red-600 dark:text-red-400", iconBg: "bg-red-500/20" }
+  if (severity === "warning") return { heading: "text-amber-700 dark:text-amber-300", sub: "text-amber-700 dark:text-amber-400", icon: "text-amber-600 dark:text-amber-400", iconBg: "bg-amber-500/20" }
+  return { heading: "text-emerald-700 dark:text-emerald-300", sub: "text-emerald-700 dark:text-emerald-400", icon: "text-emerald-600 dark:text-emerald-400", iconBg: "bg-emerald-500/20" }
 }
 
 export function DiskSpaceCard({
@@ -99,10 +102,15 @@ export function DiskSpaceCard({
   criticalThresholdPercent,
   thresholdPercent,
 }: DiskSpaceCardProps) {
-  const thresholds = resolveDiskThresholds(warningThresholdPercent, criticalThresholdPercent, thresholdPercent)
-  const severity = resolveDiskSeverity(diskSpace.usedPercent, thresholds, serverSeverity)
+  const severity = resolveDiskSeverity({
+    usedPercent: diskSpace.usedPercent,
+    serverSeverity,
+    warningThresholdPercent,
+    criticalThresholdPercent,
+    thresholdPercent,
+  })
   const colors = getTextColor(severity)
-  const cardGradient = diskSpace.loading ? "bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-950 dark:to-emerald-900 border-emerald-200 dark:border-emerald-800" : getCardGradient(severity)
+  const cardGradient = getCardGradient(severity)
 
   return (
     <Card className={cardGradient}>
@@ -110,8 +118,8 @@ export function DiskSpaceCard({
         <CardTitle className="text-sm font-medium">{t("disk.title")}</CardTitle>
         <div className="flex items-center gap-1">
           {hasError && <AlertCircle className="h-3.5 w-3.5 text-red-500" />}
-          <div className={`rounded-full ${colors.iconBg} p-1`}>
-            <HardDrive className={`h-4 w-4 ${colors.icon}`} />
+          <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${colors.iconBg}`}>
+            <HardDrive className={`h-[18px] w-[18px] ${colors.icon}`} />
           </div>
         </div>
       </CardHeader>
@@ -126,8 +134,8 @@ export function DiskSpaceCard({
           <div className="text-sm text-red-700 dark:text-red-400">{diskSpace.error}</div>
         ) : (
           <>
-            <div className={`text-3xl font-bold ${colors.heading}`}>{t("disk.free", { value: diskSpace.freeFormatted })}</div>
-            <div className="flex justify-between text-xs mt-0.5">
+            <div className={`break-words text-3xl font-bold leading-tight [overflow-wrap:anywhere] ${colors.heading}`}>{t("disk.free", { value: diskSpace.freeFormatted })}</div>
+            <div className="mt-0.5 flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs">
               <span className={colors.sub}>{t("disk.used", { value: diskSpace.usedFormatted })}</span>
               <span className={colors.sub}>{t("disk.total", { value: diskSpace.totalFormatted })}</span>
             </div>
@@ -137,10 +145,10 @@ export function DiskSpaceCard({
               indicatorClassName={getDiskStatusColor(severity)}
               aria-label={t("disk.title")}
             />
-            <div className="flex justify-between items-center mt-1">
-              <span className={`text-[10px] ${colors.sub}`}>{t("disk.percentFree", { value: diskSpace.freePercent })}</span>
+            <div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-1 mt-1">
+              <span className={`text-xs ${colors.sub}`}>{t("disk.percentFree", { value: diskSpace.freePercent })}</span>
               {(diskSpace.libraryShows > 0 || diskSpace.libraryMovies > 0) && (
-                <span className={`text-[10px] ${colors.sub}`}>
+                <span className={`text-xs ${colors.sub}`}>
                   {[
                     diskSpace.libraryShows > 0 ? t("disk.showsCount", { count: diskSpace.libraryShows }) : null,
                     diskSpace.libraryMovies > 0 ? t("disk.moviesCount", { count: diskSpace.libraryMovies }) : null,

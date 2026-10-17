@@ -121,7 +121,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none gap-1">
               <Activity className="h-6 w-6 text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground bg-background/80 px-3 py-1 rounded-md">{t("timeline.empty")}</p>
-              <p className="text-[10px] text-muted-foreground/60">{t("timeline.emptyHint")}</p>
+              <p className="text-[13px] text-muted-foreground">{t("timeline.emptyHint")}</p>
             </div>
           )}
           <ResponsiveContainer width="100%" height="100%">
@@ -146,7 +146,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                 scale="time"
                 domain={timelineStart != null && timelineEnd != null ? [timelineStart, timelineEnd] : ["auto", "auto"]}
                 ticks={timelineTicks}
-                tick={{ fontSize: 10 }}
+                tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
                 axisLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 tickLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 padding={{ left: 0, right: 0 }}
@@ -155,7 +155,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
                 height={30}
               />
               <YAxis
-                tick={{ fontSize: 10 }}
+                tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
                 axisLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 tickLine={{ stroke: 'rgba(100, 116, 139, 0.2)' }}
                 domain={[0, 'auto']}

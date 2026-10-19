@@ -284,6 +284,20 @@ export function SettingsForm({ settings: initialSettings, onSettingsSaved, activ
       "apprise_gotify", "apprise_matrix", "apprise_custom",
     ] as const
 
+    const clearFields: (typeof APPRISE_SENSITIVE_FIELDS)[number][] = []
+    if (!enabledProviders.pushover && lastFetchedRef.current?.apprise_pushover) clearFields.push("apprise_pushover")
+    if (!enabledProviders.discord && lastFetchedRef.current?.apprise_discord) clearFields.push("apprise_discord")
+    if (!enabledProviders.email && (lastFetchedRef.current?.apprise_email || lastFetchedRef.current?.apprise_email_to)) {
+      clearFields.push("apprise_email")
+      clearFields.push("apprise_email_to")
+    }
+    if (!enabledProviders.telegram && lastFetchedRef.current?.apprise_telegram) clearFields.push("apprise_telegram")
+    if (!enabledProviders.slack && lastFetchedRef.current?.apprise_slack) clearFields.push("apprise_slack")
+    if (!enabledProviders.gotify && lastFetchedRef.current?.apprise_gotify) clearFields.push("apprise_gotify")
+    if (!enabledProviders.matrix && lastFetchedRef.current?.apprise_matrix) clearFields.push("apprise_matrix")
+    if (!enabledProviders.custom && lastFetchedRef.current?.apprise_custom) clearFields.push("apprise_custom")
+    Object.assign(submittedData, { clear_apprise_fields: clearFields })
+
     for (const field of APPRISE_SENSITIVE_FIELDS) {
       if ((submittedData as Record<string, unknown>)[field] === MASKED_SENTINEL) {
         (submittedData as Record<string, unknown>)[field] = ""

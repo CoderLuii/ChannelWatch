@@ -43,6 +43,16 @@ describe("notification provider settings matrix", () => {
     }
   })
 
+  it("submits explicit clear intent for every disabled global provider", () => {
+    const src = srcFile("../components/settings-form.tsx")
+
+    expect(src).toContain("clear_apprise_fields")
+    for (const setting of providerSettings) {
+      expect(src).toContain(`clearFields.push("${setting}")`)
+    }
+    expect(src).toContain('clearFields.push("apprise_email_to")')
+  })
+
   it("keeps routing destinations aligned with provider settings", () => {
     const src = srcFile("../components/settings/routing-settings-section.tsx")
 

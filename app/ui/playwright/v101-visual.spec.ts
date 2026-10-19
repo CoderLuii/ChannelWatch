@@ -25,10 +25,17 @@ async function waitForCollapsedDesktopSidebar(page: Page) {
   await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible()
 }
 
-async function waitForMaintenanceCard(page: Page) {
+async function waitForMaintenanceCard(page: Page, expanded = false) {
   const card = page.getByTestId("maintenance-windows-card")
-  await expect(card).toContainText("Known schedule only")
-  await expect(card).toContainText("2h 30m")
+  const disclosure = card.locator('button[aria-controls="maintenance-windows-content"]')
+  await expect(disclosure).toHaveAttribute("aria-expanded", "false")
+  await expect(card.getByRole("button", { name: "Refresh Maintenance windows" })).toBeEnabled()
+  if (expanded) {
+    await disclosure.click()
+    await expect(disclosure).toHaveAttribute("aria-expanded", "true")
+    await expect(card).toContainText("Known schedule only")
+    await expect(card).toContainText("2h 30m")
+  }
   await card.scrollIntoViewIfNeeded()
   await expect(card).toBeInViewport()
   await page.evaluate(() => window.scrollTo(0, 0))
@@ -157,7 +164,7 @@ test("Dashboard maintenance windows", async ({ page }) => {
   await useTheme(page, "dark")
   await page.goto("/#overview")
   await waitForCollapsedDesktopSidebar(page)
-  const card = await waitForMaintenanceCard(page)
+  const card = await waitForMaintenanceCard(page, true)
   await expect(card).toHaveScreenshot("dashboard-maintenance-windows.png", screenshotOptions)
 })
 
@@ -170,8 +177,8 @@ test("Recent Activity client filter", async ({ page }) => {
   await expect(page.getByText("The timeline remains an aggregate across all clients.")).toBeVisible()
   await expect(page).toHaveScreenshot("recent-activity-client-filter.png", {
     ...screenshotOptions,
-    // Chromium clips off-viewport tiles while this menu is open. The separate
-    // maintenance-card snapshot retains full pixel coverage for that content.
+    // Chromium clips off-viewport tiles while this menu is open. The dedicated
+    // maintenance-card snapshot retains the expanded content.
     fullPage: false,
   })
 })

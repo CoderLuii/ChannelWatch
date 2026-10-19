@@ -956,7 +956,7 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_160_dependency_update_on_published_153_image():
+def test_release_config_declares_161_dependency_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -965,17 +965,17 @@ def test_release_config_declares_160_dependency_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.0"
+    assert config["version"] == "1.6.1"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.0"
+    assert config["recommended_image_version"] == "1.6.1"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0"]
     assert config["compatible_launcher_protocols"] == [4]
     assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
@@ -986,7 +986,7 @@ def test_release_config_declares_160_dependency_update_on_published_153_image():
     )
     assert config["runtime_compatibility_evidence"] == {}
     assert "recovers_unpublished_image_milestone" not in config
-    assert config["unpublished_predecessor_tags"] == ["v1.5.4"]
+    assert config["unpublished_predecessor_tags"] == []
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
@@ -996,7 +996,7 @@ def test_release_config_declares_160_dependency_update_on_published_153_image():
         "v1.5.2",
         "v1.5.4",
     ]
-    assert config["release_heading"] == "## 10/16/2026"
+    assert config["release_heading"] == "## 10/19/2026"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1057,9 +1057,9 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
         assert f"\n### {heading}\n" in output
     assert "\n### License and verification\n" in output
     assert "\n### Security\n" not in output
-    assert "channelwatch-v1.6.0-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.0`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.0`" in output
+    assert "channelwatch-v1.6.1-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.1`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.1`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1169,7 +1169,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_160_release():
+def test_release_version_surfaces_use_161_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1180,11 +1180,11 @@ def test_release_version_surfaces_use_160_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.0"
-    assert metadata["versionTag"] == "v1.6.0"
-    assert metadata["dockerTag"] == "1.6.0"
-    assert metadata["helmChartVersion"] == "1.6.0"
-    assert metadata["helmAppVersion"] == "1.6.0"
+    assert metadata["version"] == "1.6.1"
+    assert metadata["versionTag"] == "v1.6.1"
+    assert metadata["dockerTag"] == "1.6.1"
+    assert metadata["helmChartVersion"] == "1.6.1"
+    assert metadata["helmAppVersion"] == "1.6.1"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -1645,9 +1645,11 @@ def test_release_impact_classifier_rejects_minimum_image_replay_for_image_milest
     )
     config.update(
         {
+            "version": "1.7.0",
             "image_required": True,
             "delivery_mode": "image_required",
-            "minimum_image_version": config["version"],
+            "minimum_image_version": "1.7.0",
+            "recommended_image_version": "1.7.0",
             "runtime_generation_required": False,
         }
     )
@@ -1680,6 +1682,8 @@ def test_release_impact_classifier_rejects_patch_zero_without_validated_floor(
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
+    config["version"] = "1.7.0"
+    config["recommended_image_version"] = "1.7.0"
     config["compatible_launcher_protocols"] = [3]
     bundle = tmp_path / "bundle.zip"
     bundle.write_bytes(b"invalid retained-floor bundle")
@@ -3172,7 +3176,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
     assert workflow.count(
         '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
-    ) == 3
+        ) == 4
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     candidate_canary = workflow.split(
@@ -4271,6 +4275,12 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert 'diff -u <(cd dist/candidate-one' in signer
     assert "ubuntu-24.04-arm" in capability
     assert "verify-runtime-capability.py" in capability
+    assert "verify-runtime-source-upgrade.py" in capability
+    assert "channelwatch-runtime-v1.6.0-amd64.zip" in capability
+    assert "channelwatch-runtime-v1.6.0-arm64.zip" in capability
+    assert "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bcba53e1b39" in capability
+    assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.5.3.json" in capability
+    assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json" in capability
     assert '--architecture "${NATIVE_ARCHITECTURE}"' in capability
     assert "--validate-evidence" in capability
     assert '--architecture "${{ matrix.architecture }}"' in capability
@@ -4314,6 +4324,12 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert retention["with"]["path"] == "${{ runner.temp }}/runtime-capability/"
     assert retention["with"]["if-no-files-found"] == "error"
     assert "aggregate-runtime-capability.py" in candidate
+    assert "aggregate-runtime-source-upgrades.py" in candidate
+    for binding in (
+        "1.5.3=amd64", "1.5.3=arm64", "1.6.0=amd64", "1.6.0=arm64",
+    ):
+        assert f'--receipt "{binding}=' in candidate
+    assert "channelwatch-runtime-source-upgrades-${tag}.json" in candidate
     assert "scan-runtime-artifacts.py" in candidate
     assert "syft-version: v1.54.1" in candidate
     assert "version: v0.75.0" in candidate

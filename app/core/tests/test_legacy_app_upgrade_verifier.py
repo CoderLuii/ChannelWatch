@@ -898,12 +898,12 @@ def test_same_container_and_image_identity_is_fail_closed():
         module.validate_identity_invariant([identity, changed])
 
 
-def test_fixture_defines_exact_six_scenario_matrix():
+def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes():
     module = load_module()
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    scenarios = module.validate_baselines(fixture, target_version="1.6.0")
+    scenarios = module.validate_baselines(fixture, target_version="1.6.1")
     assert [row["id"] for row in scenarios] == [
         "stock-1.4.0",
         "overlay-1.4.0-to-1.4.1",
@@ -915,7 +915,24 @@ def test_fixture_defines_exact_six_scenario_matrix():
     broken = copy.deepcopy(fixture)
     broken["scenarios"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_baselines(broken, target_version="1.6.0")
+        module.validate_baselines(broken, target_version="1.6.1")
+
+
+def test_fixture_binds_exact_immutable_160_bridge():
+    module = load_module()
+    fixture = json.loads(
+        (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
+    )
+    module.validate_baselines(fixture, target_version="1.6.1")
+    assert fixture["qualification_modes"] == ["direct", "chained"]
+    assert fixture["bridge_release"] == {
+        "version": "1.6.0",
+        "source_commit": "b48057184752c912e4ae9b3a474374704d896073",
+        "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-catalog-v1.6.0.json",
+        "catalog_sha256": "bc9bcdb38c44af581835fdd4f29e2a2550eb8bb5d51b8308395a803110feb185",
+        "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-app-v1.6.0.zip",
+        "bundle_sha256": "f8cbdca71ef254df84b0e3b472facce8ece201b4928218caf757f4c5ddf53914",
+    }
 
 
 def test_release_config_requires_exact_legacy_source_contract():
@@ -923,12 +940,20 @@ def test_release_config_requires_exact_legacy_source_contract():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text()
     )
-    assert module.validate_release_config(config, target_version="1.6.0") == [
-        "1.4.0", "1.4.1", "1.4.5"
+    assert module.validate_release_config(config, target_version="1.6.1") == [
+        "1.4.0", "1.4.1", "1.4.5", "1.6.0"
     ]
     config["legacy_app_update_sources"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_release_config(config, target_version="1.6.0")
+        module.validate_release_config(config, target_version="1.6.1")
+
+    historical = {
+        "version": "1.6.0",
+        "legacy_app_update_sources": ["1.4.0", "1.4.1", "1.4.5"],
+    }
+    assert module.validate_release_config(
+        historical, target_version="1.6.0"
+    ) == ["1.4.0", "1.4.1", "1.4.5"]
 
 
 def test_post_activation_check_requires_a_fresh_v2_feed_request(monkeypatch):

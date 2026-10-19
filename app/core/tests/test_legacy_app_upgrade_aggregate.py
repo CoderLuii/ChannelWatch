@@ -27,27 +27,28 @@ def matrix(tmp_path):
     receipts = {}
     config_sha256 = hashlib.sha256(CONFIG.read_bytes()).hexdigest()
     for architecture in ("amd64", "arm64"):
+      for qualification_mode in ("direct", "chained"):
         for scenario in fixture["scenarios"]:
             scenario_id = scenario["id"]
-            log_dir = tmp_path / f"legacy-app-upgrade-{architecture}-{scenario_id}-logs"
+            log_dir = tmp_path / f"legacy-app-upgrade-{architecture}-{qualification_mode}-{scenario_id}-logs"
             log_dir.mkdir()
             logs = {}
             for name in ("app", "feed"):
-                data = f"{architecture}-{scenario_id}-{name}\n".encode()
+                data = f"{architecture}-{qualification_mode}-{scenario_id}-{name}\n".encode()
                 (log_dir / f"{name}.log").write_bytes(data)
                 logs[name] = hashlib.sha256(data).hexdigest()
             identity = {
-                "container_id": hashlib.sha256(f"{architecture}-{scenario_id}".encode()).hexdigest(),
+                "container_id": hashlib.sha256(f"{architecture}-{qualification_mode}-{scenario_id}".encode()).hexdigest(),
                 "image_id": "sha256:" + ("a" if architecture == "amd64" else "b") * 64,
                 "repo_digest": fixture["repository"] + "@" + fixture["images"][scenario["image_version"]]["manifests"][architecture],
             }
             selected_status = {
-                "current_version": "1.6.0",
+                "current_version": "1.6.1",
                 "image_version": scenario["image_version"],
                 "launcher_protocol": 3,
                 "runtime_source": "app_bundle",
                 "active_bundle": {
-                    "version": "1.6.0",
+                    "version": "1.6.1",
                     "manifest": {"bundle_sha256": "2" * 64},
                 },
                 "worker_runtime": {
@@ -57,23 +58,24 @@ def matrix(tmp_path):
                 },
             }
             current_check = {
-                "current_version": "1.6.0",
+                "current_version": "1.6.1",
                 "update_available": False,
                 "last_job": {"operation": "check", "status": "current"},
             }
             rollback_status = {
-                "current_version": scenario["source_application_version"],
+                "current_version": "1.6.0" if qualification_mode == "chained" else scenario["source_application_version"],
                 "image_version": scenario["image_version"],
                 "launcher_protocol": 3,
-                "runtime_source": "image" if scenario["overlay_version"] is None else "app_bundle",
+                "runtime_source": "app_bundle" if qualification_mode == "chained" or scenario["overlay_version"] is not None else "image",
             }
-            receipts[(architecture, scenario_id)] = {
-                "schema": 1,
+            receipt = {
+                "schema": 2,
                 "status": "passed",
                 "evidence_kind": "native",
                 "architecture": architecture,
+                "qualification_mode": qualification_mode,
                 "scenario": scenario,
-                "target_version": "1.6.0",
+                "target_version": "1.6.1",
                 "source_commit": "f" * 40,
                 "catalog_sha256": "1" * 64,
                 "bundle_sha256": "2" * 64,
@@ -114,6 +116,42 @@ def matrix(tmp_path):
                 )},
                 "logs_sha256": logs,
             }
+            if qualification_mode == "chained":
+                receipt["bridge_qualification"] = {
+                    "release": fixture["bridge_release"],
+                    "catalog_sha256": fixture["bridge_release"]["catalog_sha256"],
+                    "bundle_sha256": fixture["bridge_release"]["bundle_sha256"],
+                    "status": {
+                        "current_version": "1.6.0",
+                        "image_version": scenario["image_version"],
+                        "launcher_protocol": 3,
+                        "runtime_source": "app_bundle",
+                        "active_bundle": {
+                            "version": "1.6.0",
+                            "path": "/config/app-versions/1.6.0",
+                            "manifest": {
+                                "bundle_sha256": fixture["bridge_release"]["bundle_sha256"]
+                            },
+                        },
+                    },
+                    "selected_runtime_info": {
+                        "diagnostic_source": "selected_application",
+                        "application_version": "1.6.0",
+                        "application_dir": "/config/app-versions/1.6.0",
+                        "verified_generation": None,
+                        "process_runtime": {
+                            "python_executable": "/venv/bin/python",
+                            "python_prefix": "/venv",
+                            "python_version": "3.14.8",
+                        },
+                    },
+                    "identity": {"before": identity, "after": copy.deepcopy(identity)},
+                    "runtime_storage": {
+                        "before": {"dependency_generation_absent": True},
+                        "after": {"dependency_generation_absent": True},
+                    },
+                }
+            receipts[(architecture, qualification_mode, scenario_id)] = receipt
     return fixture, receipts, tmp_path
 
 
@@ -123,7 +161,7 @@ def aggregate(matrix):
     return load_module().aggregate(
         receipts,
         baselines=fixture,
-        target_version="1.6.0",
+        target_version="1.6.1",
         source_commit="f" * 40,
         catalog_sha256="1" * 64,
         bundle_sha256="2" * 64,
@@ -133,24 +171,28 @@ def aggregate(matrix):
     )
 
 
-def test_exact_twelve_receipt_native_matrix_passes(matrix):
+def test_exact_twenty_four_receipt_native_matrix_passes(matrix):
     result = aggregate(matrix)
     assert result["status"] == "passed"
-    assert result["native_receipt_count"] == 12
+    assert result["native_receipt_count"] == 24
+    assert result["direct_receipt_count"] == 12
+    assert result["chained_receipt_count"] == 12
     assert result["architectures"] == ["amd64", "arm64"]
 
 
 @pytest.mark.parametrize("case", [
     "missing", "extra", "synthetic", "arch", "source", "hash", "config",
     "identity", "check", "selected", "post_check", "job", "storage", "log",
+    "mode", "bridge", "bridge_identity", "bridge_storage",
+    "bridge_runtime", "chained_rollback",
 ])
 def test_incomplete_or_unbound_matrix_is_rejected(matrix, case):
     fixture, receipts, root = matrix
-    row = receipts[("arm64", "stock-1.4.0")]
+    row = receipts[("arm64", "direct", "stock-1.4.0")]
     if case == "missing":
-        receipts.pop(("arm64", "stock-1.4.0"))
+        receipts.pop(("arm64", "direct", "stock-1.4.0"))
     elif case == "extra":
-        receipts[("arm64", "invented")] = copy.deepcopy(row)
+        receipts[("arm64", "direct", "invented")] = copy.deepcopy(row)
     elif case == "synthetic":
         row["evidence_kind"] = "synthetic"
     elif case == "arch":
@@ -174,6 +216,28 @@ def test_incomplete_or_unbound_matrix_is_rejected(matrix, case):
     elif case == "storage":
         row["runtime_storage"]["after_apply"]["dependency_generation_absent"] = False
     elif case == "log":
-        (root / "legacy-app-upgrade-arm64-stock-1.4.0-logs" / "app.log").write_text("tampered")
+        (root / "legacy-app-upgrade-arm64-direct-stock-1.4.0-logs" / "app.log").write_text("tampered")
+    elif case == "mode":
+        row["qualification_mode"] = "chained"
+    elif case == "bridge":
+        receipts[("arm64", "chained", "stock-1.4.0")]["bridge_qualification"][
+            "bundle_sha256"
+        ] = "0" * 64
+    elif case == "bridge_identity":
+        receipts[("arm64", "chained", "stock-1.4.0")]["bridge_qualification"][
+            "identity"
+        ].pop("before")
+    elif case == "bridge_storage":
+        receipts[("arm64", "chained", "stock-1.4.0")]["bridge_qualification"][
+            "runtime_storage"
+        ].pop("before")
+    elif case == "bridge_runtime":
+        receipts[("arm64", "chained", "stock-1.4.0")]["bridge_qualification"][
+            "selected_runtime_info"
+        ]["application_version"] = "1.5.3"
+    elif case == "chained_rollback":
+        receipts[("arm64", "chained", "stock-1.4.0")]["rollback_status"][
+            "current_version"
+        ] = "1.4.0"
     with pytest.raises(ValueError):
         aggregate(matrix)

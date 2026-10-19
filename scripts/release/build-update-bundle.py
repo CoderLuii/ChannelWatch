@@ -64,9 +64,15 @@ COPYLEFT_LICENSE_FETCHER = ROOT / "scripts" / "release" / "copyleft_licenses.py"
 CATALOG_HISTORY_FILE = ROOT / "scripts" / "release" / "update-catalog-history.json"
 INITIAL_V2_BRIDGE_VERSION = (0, 9, 18)
 MAX_CATALOG_RELEASES = 64
-LEGACY_PROTOCOL3_APP_UPDATE_SOURCES = ("1.4.0", "1.4.1", "1.4.5")
+LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
+    "1.6.0": ("1.4.0", "1.4.1", "1.4.5"),
+    "1.6.1": ("1.4.0", "1.4.1", "1.4.5", "1.6.0"),
+}
+CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
+    "1.6.0": ("1.5.3",),
+    "1.6.1": ("1.5.3", "1.6.0"),
+}
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
-LEGACY_PROTOCOL3_APP_UPDATE_TARGET = "1.6.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
 LEGAL_RELEASE_FILES = {
     "LICENSE": "core/release_legal/LICENSE",
@@ -213,29 +219,26 @@ def project_current_release_v2(
     projected = copy.deepcopy(catalog_release)
     if legacy_app_update_sources in (None, []):
         return projected
-    expected_sources = list(LEGACY_PROTOCOL3_APP_UPDATE_SOURCES)
-    if legacy_app_update_sources != expected_sources:
-        raise ValueError(
-            "legacy_app_update_sources must be exactly the sorted, published "
-            "v1.4 compatibility set."
-        )
-    if any(
-        _release_version(source) >= _release_version(VERIFIED_DEPENDENCY_FOUNDATION)
-        for source in expected_sources
-    ):
-        raise ValueError(
-            "Legacy app-update sources must predate the verified-dependency foundation."
-        )
     version = str(projected.get("version") or "").strip().lstrip("v")
     _release_version(version)
+    legacy_contract = LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS.get(version)
+    canonical_contract = CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS.get(version)
+    if legacy_contract is None or canonical_contract is None:
+        raise ValueError(
+            "Legacy protocol-3 projection is not allowed for this release target."
+        )
+    expected_sources = list(legacy_contract)
+    if legacy_app_update_sources != expected_sources:
+        raise ValueError(
+            "legacy_app_update_sources must match the exact target contract."
+        )
     if (
-        version != LEGACY_PROTOCOL3_APP_UPDATE_TARGET
-        or projected.get("delivery_mode") != "app_update"
+        projected.get("delivery_mode") != "app_update"
         or projected.get("image_required") is not False
         or projected.get("updater_protocol") != 4
         or projected.get("minimum_image_version") != VERIFIED_DEPENDENCY_FOUNDATION
         or projected.get("compatible_source_application_versions")
-        != [VERIFIED_DEPENDENCY_FOUNDATION]
+        != list(canonical_contract)
         or projected.get("compatible_launcher_protocols") != [4]
     ):
         raise ValueError(

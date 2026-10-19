@@ -8,6 +8,17 @@ SecurityMode = Literal[
     "NO_AUTH", "API_KEY_ONLY", "RBAC_WITH_API_KEY_FALLBACK", "RBAC_ONLY"
 ]
 TrustedNotificationDestinationSource = Literal["apprise_custom", "webhook"]
+AppriseSettingName = Literal[
+    "apprise_pushover",
+    "apprise_discord",
+    "apprise_email",
+    "apprise_email_to",
+    "apprise_telegram",
+    "apprise_slack",
+    "apprise_gotify",
+    "apprise_matrix",
+    "apprise_custom",
+]
 
 
 def BoolTrue():
@@ -262,6 +273,11 @@ class AppSettings(BaseModel):
     apprise_gotify: Optional[str] = StrEmpty()
     apprise_matrix: Optional[str] = StrEmpty()
     apprise_custom: Optional[str] = StrEmpty()
+    clear_apprise_fields: list[AppriseSettingName] = Field(
+        default_factory=list,
+        exclude=True,
+        description="Global Apprise settings explicitly disabled by the client",
+    )
 
     error_reporting_dsn: Optional[str] = StrEmpty()
 

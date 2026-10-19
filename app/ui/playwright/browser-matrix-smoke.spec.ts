@@ -158,6 +158,46 @@ test("settings save posts the changed value before requesting core restart", asy
   expect(calls).toEqual(["settings", "restart"])
 })
 
+test("disabling saved email clears it and keeps it off after reload", async ({ page }) => {
+  let savedSettings = {
+    ...mockSettings,
+    apprise_email: "****",
+    apprise_email_to: "****",
+  }
+  let submitted: Record<string, unknown> | undefined
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() === "POST") {
+      submitted = route.request().postDataJSON() as Record<string, unknown>
+      savedSettings = {
+        ...savedSettings,
+        apprise_email: "",
+        apprise_email_to: "",
+      }
+      return fulfillJson(route, { message: "Settings saved successfully" })
+    }
+    return fulfillJson(route, savedSettings)
+  })
+  await page.route("**/api/restart_core", (route) => fulfillJson(route, {
+    message: "Restart command sent",
+  }))
+
+  await page.goto("/#settings:notifications")
+  const emailToggle = page.getByRole("switch", { name: "Email", exact: true })
+  await expect(emailToggle).toBeChecked()
+  await emailToggle.click()
+  await page.getByRole("button", { name: "Save Settings" }).click()
+
+  await expect(page.getByText("Settings saved. Restarting core process...")).toBeVisible()
+  expect(submitted?.clear_apprise_fields).toEqual([
+    "apprise_email",
+    "apprise_email_to",
+  ])
+  await expect(emailToggle).not.toBeChecked()
+
+  await page.reload()
+  await expect(page.getByRole("switch", { name: "Email", exact: true })).not.toBeChecked()
+})
+
 test("restart overlay appears and recovers from liveness and startup while monitoring is degraded", async ({ page }) => {
   let livenessChecks = 0
   await page.route("**/api/restart_container", (route) => fulfillJson(route, { message: "Restart initiated" }, 202))

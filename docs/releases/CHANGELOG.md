@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-19
+
+### Important
+
+- Install v1.6.1 directly from **Settings > Updates** on v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0. No intermediate release or container recreation is needed.
+- Automatic installation remains disabled. Install this release manually from Update Center.
+- The v1.4.x app-only route keeps the image's existing Python packages. The v1.5.3 and v1.6.0 protocol-4 route installs the signed application and official Python package generation together.
+
+### Added
+
+- Accept v1.6.0 as a direct signed Update Center source on both the current launcher and supported v1.4.x launchers.
+
+### Changed
+
+- Move Maintenance Windows below Recent Activity and Upcoming Recordings and keep it collapsed until opened, reducing dashboard scrolling without shrinking text ([#27](https://github.com/CoderLuii/ChannelWatch/issues/27)).
+- Update Next.js to 16.4.2, React to 19.3.1, Zod to 4.6.7, axe-core Playwright to 4.14.0 and Playwright to 1.64.1 without changing the signed 40-package Python closure, supported notification-provider set or v1.5.3 minimum image foundation.
+
+### Fixed
+
+- Let administrators explicitly disable Email and the other global notification providers while preserving untouched masked secrets, per-DVR overrides and encrypted settings ([#26](https://github.com/CoderLuii/ChannelWatch/issues/26)).
+- Keep activity titles, artwork rows and compact dashboard cards aligned across narrow mobile, tablet and desktop widths.
+- Give timeline, diagnostics and filter controls visible accessible names so their purpose remains clear to screen readers and automated accessibility checks.
+- Require the release gate to qualify direct legacy updates and the exact signed v1.6.0-to-v1.6.1 chain on native AMD64 and ARM64 before publication.
+
 ## [1.6.0] - 2026-10-16
 
 ### Important
@@ -986,7 +1010,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...v1.6.0
 [1.5.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.1...v1.5.2

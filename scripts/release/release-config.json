@@ -1,32 +1,32 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.5.3",
   "updater_protocol": 4,
   "minimum_launcher_protocol": 4,
-  "recommended_image_version": "1.6.0",
-  "publication_time": "2026-10-17T07:30:00Z",
-  "automatic_install_after": "2026-10-24T07:30:00Z",
+  "recommended_image_version": "1.6.1",
+  "publication_time": "2026-10-19T04:20:00Z",
+  "automatic_install_after": "2026-10-26T04:20:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
-    "1.5.3"
+    "1.5.3",
+    "1.6.0"
   ],
   "legacy_app_update_sources": [
     "1.4.0",
     "1.4.1",
-    "1.4.5"
+    "1.4.5",
+    "1.6.0"
   ],
   "compatible_launcher_protocols": [
     4
   ],
   "runtime_generation_required": true,
   "runtime_compatibility_evidence": {},
-  "release_heading": "## 10/16/2026",
+  "release_heading": "## 10/19/2026",
   "verification_assets": true,
-  "unpublished_predecessor_tags": [
-    "v1.5.4"
-  ],
+  "unpublished_predecessor_tags": [],
   "unpublished_release_tags": [
     "v1.4.2",
     "v1.4.3",

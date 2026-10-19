@@ -485,6 +485,14 @@ export function DiagnosticsPanel() {
   };
 
   const diskInfo = calculateDiskUsage();
+  const debugBundleButtonLabel =
+    debugBundleState === "loading"
+      ? t("diagnostics.debugBundle.downloadingBtn")
+      : debugBundleState === "done"
+        ? t("diagnostics.debugBundle.downloadedBtn")
+        : debugBundleState === "error"
+          ? t("diagnostics.debugBundle.failedBtn")
+          : t("diagnostics.debugBundle.btn");
 
   return (
     <div className="space-y-5">
@@ -506,8 +514,8 @@ export function DiagnosticsPanel() {
                 variant="outline"
                 size="sm"
                 className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
-                aria-label={t("diagnostics.reportProblem.aria")}
                 data-testid="report-problem-open"
+                aria-label={`${t("diagnostics.reportProblem.btn")}. ${t("diagnostics.reportProblem.aria")}`}
               >
                 <Bug className="h-3.5 w-3.5" />
                 {t("diagnostics.reportProblem.btn")}
@@ -518,9 +526,9 @@ export function DiagnosticsPanel() {
             variant="outline"
             size="sm"
             className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
-            aria-label={t("diagnostics.debugBundle.aria")}
             disabled={debugBundleState === "loading"}
             onClick={handleDownloadDebugBundle}
+            aria-label={`${debugBundleButtonLabel}. ${t("diagnostics.debugBundle.aria")}`}
           >
             {debugBundleState === "loading" && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -532,13 +540,7 @@ export function DiagnosticsPanel() {
               <AlertCircle className="h-3.5 w-3.5 text-red-500" />
             )}
             {debugBundleState === "idle" && <Bug className="h-3.5 w-3.5" />}
-            {debugBundleState === "loading"
-              ? t("diagnostics.debugBundle.downloadingBtn")
-              : debugBundleState === "done"
-                ? t("diagnostics.debugBundle.downloadedBtn")
-                : debugBundleState === "error"
-                  ? t("diagnostics.debugBundle.failedBtn")
-                  : t("diagnostics.debugBundle.btn")}
+            {debugBundleButtonLabel}
           </Button>
           <Button
             variant="outline"
@@ -769,9 +771,8 @@ export function DiagnosticsPanel() {
                       : [...prev, "error"],
                   )
                 }
-                aria-label={t("diagnostics.logs.aria.filterErrors")}
               >
-                ERR
+                ERR<span className="sr-only"> {t("diagnostics.logs.aria.filterErrors")}</span>
               </Button>
               <Button
                 variant={
@@ -786,9 +787,8 @@ export function DiagnosticsPanel() {
                       : [...prev, "warn"],
                   )
                 }
-                aria-label={t("diagnostics.logs.aria.filterWarnings")}
               >
-                WARN
+                WARN<span className="sr-only"> {t("diagnostics.logs.aria.filterWarnings")}</span>
               </Button>
               <Button
                 variant={
@@ -803,9 +803,8 @@ export function DiagnosticsPanel() {
                       : [...prev, "info"],
                   )
                 }
-                aria-label={t("diagnostics.logs.aria.filterInfo")}
               >
-                INFO
+                INFO<span className="sr-only"> {t("diagnostics.logs.aria.filterInfo")}</span>
               </Button>
             </div>
             <Button

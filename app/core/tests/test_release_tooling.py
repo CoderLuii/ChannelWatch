@@ -1007,6 +1007,15 @@ def test_release_config_declares_161_dependency_update_on_published_153_image():
             encoding="utf-8"
         )
     )["releases"]
+    predecessor = next(
+        release for release in history if release["version"] == "1.6.0"
+    )
+    assert predecessor["bundle_sha256"] == (
+        "f8cbdca71ef254df84b0e3b472facce8ece201b4928218caf757f4c5ddf53914"
+    )
+    assert predecessor["delivery_mode"] == "app_update"
+    assert predecessor["minimum_image_version"] == "1.4.0"
+    assert predecessor["updater_protocol"] == 2
     assert "1.5.0" not in {release["version"] for release in history}
     assert "1.5.1" not in {release["version"] for release in history}
     assert "1.5.2" not in {release["version"] for release in history}

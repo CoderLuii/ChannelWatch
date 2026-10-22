@@ -996,7 +996,7 @@ def test_release_config_declares_161_dependency_update_on_published_153_image():
         "v1.5.2",
         "v1.5.4",
     ]
-    assert config["release_heading"] == "## 10/19/2026"
+    assert config["release_heading"] == "## 10/21/2026"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False

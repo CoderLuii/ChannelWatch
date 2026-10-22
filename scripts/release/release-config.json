@@ -6,8 +6,8 @@
   "updater_protocol": 4,
   "minimum_launcher_protocol": 4,
   "recommended_image_version": "1.6.1",
-  "publication_time": "2026-10-19T04:20:00Z",
-  "automatic_install_after": "2026-10-26T04:20:00Z",
+  "publication_time": "2026-10-22T01:55:00Z",
+  "automatic_install_after": "2026-10-29T01:55:00Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.5.3",
@@ -24,7 +24,7 @@
   ],
   "runtime_generation_required": true,
   "runtime_compatibility_evidence": {},
-  "release_heading": "## 10/19/2026",
+  "release_heading": "## 10/21/2026",
   "verification_assets": true,
   "unpublished_predecessor_tags": [],
   "unpublished_release_tags": [

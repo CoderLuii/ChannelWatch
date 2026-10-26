@@ -20,6 +20,12 @@ from core.update_center import (
 _START_RESTART_REQUIRED_WATCHDOG = runtime_launcher.start_restart_required_watchdog
 
 
+@pytest.fixture(autouse=True)
+def restore_launcher_working_directory(monkeypatch):
+    # The selected application changes cwd; in-process probes must restore it.
+    monkeypatch.chdir(Path.cwd())
+
+
 def test_image_launcher_imports_image_core_before_inherited_selected_pythonpath(
     tmp_path: Path,
 ):

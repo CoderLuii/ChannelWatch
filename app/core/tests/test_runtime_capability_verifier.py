@@ -9,8 +9,10 @@ import json
 import pathlib
 import socket
 import ssl
+import subprocess
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import zipfile
@@ -50,6 +52,139 @@ def _load_aggregate_test_support():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("operation", ["run", "run_bytes"])
+def test_commands_have_finite_defaults_and_preserve_explicit_long_deadlines(monkeypatch, operation):
+    verifier = _load()
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append(kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout="ok" if operation == "run" else b"ok")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    function = getattr(verifier, operation)
+    function(["docker", "info"])
+    function(["docker", "pull", "pinned-image"], timeout=1200)
+    function(["docker", "info"], timeout=None)
+    assert observed == [180, 1200, 180]
+
+
+@pytest.mark.parametrize("operation", ["run", "run_bytes"])
+def test_command_timeout_fails_closed_without_exposing_sensitive_arguments(monkeypatch, operation):
+    verifier = _load()
+    command = ["docker", "run", "--env", "CW_ADMIN_PASS=private-test-secret"]
+
+    def execute(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output="private-test-secret", stderr="private-test-secret")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    kwargs = {"check": False} if operation == "run" else {}
+    with pytest.raises(verifier.CapabilityError, match="command deadline") as failure:
+        getattr(verifier, operation)(command, **kwargs)
+    rendered = "".join(traceback.format_exception(failure.value))
+    assert "private-test-secret" not in rendered
+    assert "CW_ADMIN_PASS" not in rendered
+    assert "docker exceeded" in str(failure.value)
+
+
+def test_cleanup_timeout_records_failures_continues_and_invalidates_qualification(monkeypatch):
+    verifier = _load()
+    resources = verifier.DockerResources("cap")
+    resources.containers.update({"cap-inspect", "cap-remove", "cap-success"})
+    resources.volumes.add("cap-volume")
+    resources.networks.add("cap-network")
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append((command, kwargs["timeout"]))
+        name = command[-1]
+        if (name == "cap-inspect" and "inspect" in command) or (name in {"cap-remove", "cap-network"} and "rm" in command):
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout="channelwatch-runtime-capability\n", stderr="")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    failures = resources.cleanup()
+    assert failures == ["container:cap-inspect:inspect_timeout", "container:cap-remove:remove_timeout", "network:cap-network:remove_timeout"]
+    assert all(0 < timeout <= 15 for _command, timeout in observed)
+    assert any("rm" in command and command[-1] == "cap-success" for command, _timeout in observed)
+    assert any("rm" in command and command[-1] == "cap-volume" for command, _timeout in observed)
+    assert not any("rm" in command and command[-1] == "cap-inspect" for command, _timeout in observed)
+    receipt = {"status": "passed", "architecture": {"status": "passed"}}
+    verifier.apply_secondary_failures(receipt, failures)
+    assert receipt["status"] == "failed"
+    assert receipt["architecture"]["status"] == "failed"
+
+
+def test_cleanup_has_an_aggregate_deadline_and_records_unvisited_resources(monkeypatch):
+    verifier = _load()
+    resources = verifier.DockerResources("cap")
+    resources.containers.update(f"cap-{index:02}" for index in range(20))
+    elapsed = {"seconds": 0}
+    observed = []
+    monkeypatch.setattr(verifier.time, "monotonic", lambda: elapsed["seconds"])
+
+    def execute(command, **kwargs):
+        observed.append(command)
+        elapsed["seconds"] += kwargs["timeout"]
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    failures = resources.cleanup()
+    assert elapsed["seconds"] == 120
+    assert len(observed) == 8
+    assert len(failures) == 20
+    assert all(failure.endswith(":inspect_timeout") for failure in failures)
+
+
+def test_log_capture_has_short_deadlines_and_continues_after_timeout(monkeypatch, tmp_path):
+    verifier = _load()
+    resources = verifier.DockerResources("cap")
+    resources.containers.update({"cap-app", "cap-feed"})
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append(kwargs["timeout"])
+        if command[-1] == "cap-app":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout="feed log\n", stderr="")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    lifecycle, release, artifacts, failures = verifier.capture_container_logs(
+        resources, prefix="cap", app="cap-app", feed="cap-feed",
+        evidence_json=tmp_path / "receipt.json",
+    )
+    assert observed == [15, 15]
+    assert set(lifecycle) == {"feed"}
+    assert release == artifacts == {}
+    assert failures == ["docker_logs:app:capture_error"]
+
+
+@pytest.mark.parametrize("kind", ["network", "volume"])
+@pytest.mark.parametrize("matching_owner", [True, False])
+def test_uncertain_create_timeout_keeps_named_resource_for_label_checked_cleanup(monkeypatch, kind, matching_owner):
+    verifier = _load()
+    resources = verifier.DockerResources("cap")
+    name = "cap-network" if kind == "network" else "cap-config"
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append(command)
+        if "create" in command:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        owner = "channelwatch-runtime-capability" if matching_owner else "unrelated-owner"
+        return SimpleNamespace(returncode=0, stdout=owner + "\n", stderr="")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    with pytest.raises(verifier.CommandTimeoutError):
+        getattr(resources, "create_" + kind)()
+    assert name in getattr(resources, kind + "s")
+    failures = resources.cleanup()
+    assert any("inspect" in command and command[-1] == name for command in observed)
+    removed = any("rm" in command and command[-1] == name for command in observed)
+    assert removed is matching_owner
+    assert failures == ([] if matching_owner else [f"{kind}:{name}:ownership_mismatch"])
 
 
 def _descriptor() -> dict:
@@ -291,7 +426,7 @@ def test_feed_serves_only_exact_approved_signed_paths(tmp_path: Path):
     catalog.write_bytes(b"catalog")
     bundle.write_bytes(b"bundle")
 
-    script = verifier.write_feed(
+    staged = verifier.write_feed(
         tmp_path / "feed",
         {
             "https://channelwatch.coderluii.dev/updates/v3/stable.json": catalog,
@@ -299,7 +434,9 @@ def test_feed_serves_only_exact_approved_signed_paths(tmp_path: Path):
         },
     )
 
+    script = tmp_path / "feed" / "feed.py"
     source = script.read_text(encoding="utf-8")
+    assert staged[verifier.DEFAULT_CATALOG_URL].read_bytes() == b"catalog"
     assert "channelwatch.coderluii.dev/updates/v3/stable.json" in source
     assert "github.com/CoderLuii/ChannelWatch/releases/download/v1.5.2/runtime.zip" in source
     assert sorted(path.read_bytes() for path in (script.parent / "assets").iterdir()) == [
@@ -319,10 +456,11 @@ def test_feed_includes_exact_synthetic_dvr_health_contract(tmp_path: Path):
     catalog = tmp_path / "catalog.json"
     catalog.write_bytes(b"catalog")
 
-    source = verifier.write_feed(
+    verifier.write_feed(
         tmp_path / "feed",
         {"https://channelwatch.coderluii.dev/updates/v3/stable.json": catalog},
-    ).read_text(encoding="utf-8")
+    )
+    source = (tmp_path / "feed" / "feed.py").read_text(encoding="utf-8")
 
     for path in (
         "/status",
@@ -362,6 +500,121 @@ def test_feed_includes_exact_synthetic_dvr_health_contract(tmp_path: Path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_live_feed_catalog_switch_preserves_the_same_route_and_bundle(tmp_path, monkeypatch):
+    verifier = _load()
+    catalog = tmp_path / "active-catalog.json"
+    target = tmp_path / "target-catalog.json"
+    bundle = tmp_path / "runtime.zip"
+    catalog.write_bytes(b'{"version":"1.6.0"}')
+    target.write_bytes(b'{"version":"1.6.1"}')
+    bundle.write_bytes(b"immutable signed bundle")
+    bundle_url = "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.1/runtime.zip"
+    feed = tmp_path / "feed"
+    staged = verifier.write_feed(
+        feed, {verifier.DEFAULT_CATALOG_URL: catalog, bundle_url: bundle}
+    )
+    source = (feed / "feed.py").read_text(encoding="utf-8")
+    namespace = {}
+    exec(compile(source.split("dvr=http.server.ThreadingHTTPServer", 1)[0], "feed.py", "exec"), namespace)
+    namespace["Path"] = lambda path: feed / "assets" if path == "/feed/assets" else Path(path)
+    server = namespace["http"].server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), namespace["FeedHandler"]
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def fetch(url):
+        parsed = urllib.parse.urlsplit(url)
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}{parsed.path}",
+            headers={"Host": parsed.hostname},
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.read()
+
+    try:
+        assert fetch(verifier.DEFAULT_CATALOG_URL) == catalog.read_bytes()
+        assert fetch(bundle_url) == bundle.read_bytes()
+        replace = verifier.os.replace
+        replacements = []
+
+        def replace_catalog(temporary, destination):
+            assert destination == staged[verifier.DEFAULT_CATALOG_URL]
+            assert fetch(verifier.DEFAULT_CATALOG_URL) == catalog.read_bytes()
+            assert fetch(bundle_url) == bundle.read_bytes()
+            replacements.append(destination)
+            replace(temporary, destination)
+
+        monkeypatch.setattr(verifier.os, "replace", replace_catalog)
+        digest = verifier.publish_feed_catalog(target, staged[verifier.DEFAULT_CATALOG_URL])
+        assert digest == hashlib.sha256(target.read_bytes()).hexdigest()
+        assert fetch(verifier.DEFAULT_CATALOG_URL) == target.read_bytes()
+        assert fetch(bundle_url) == bundle.read_bytes()
+        assert catalog.read_bytes() == b'{"version":"1.6.0"}'
+        assert replacements == [staged[verifier.DEFAULT_CATALOG_URL]]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_feed_catalog_publish_rejects_failed_readback(tmp_path, monkeypatch):
+    verifier = _load()
+    source = tmp_path / "target.json"
+    served = tmp_path / "asset-0"
+    source.write_bytes(b"target catalog")
+    served.write_bytes(b"source catalog")
+    replace = verifier.os.replace
+
+    def corrupt_after_replace(temporary, destination):
+        replace(temporary, destination)
+        destination.write_bytes(b"unexpected catalog")
+
+    monkeypatch.setattr(verifier.os, "replace", corrupt_after_replace)
+    with pytest.raises(verifier.CapabilityError, match="catalog.*readback"):
+        verifier.publish_feed_catalog(source, served)
+    assert list(tmp_path.glob(".asset-0.*")) == []
+
+
+def test_feed_catalog_publish_preserves_served_readability(tmp_path):
+    verifier = _load()
+    if verifier.os.name == "nt":
+        pytest.skip("POSIX served-file permission contract")
+    source = tmp_path / "target.json"
+    served = tmp_path / "asset-0"
+    source.write_bytes(b"target catalog")
+    served.write_bytes(b"source catalog")
+    served.chmod(0o644)
+
+    verifier.publish_feed_catalog(source, served)
+
+    assert served.stat().st_mode & 0o777 == 0o644
+
+
+def test_wrong_update_target_retains_raw_status_before_rejection(tmp_path):
+    verifier = _load()
+    status = {
+        "update_available": False,
+        "catalog_state": "current",
+        "current_version": "1.6.0",
+        "trusted_target": None,
+    }
+
+    class Client:
+        def request(self, path, payload):
+            assert path == "/api/v1/update/check" and payload == {}
+            return status
+
+    evidence = tmp_path / "chain-target.json"
+    with pytest.raises(verifier.CapabilityError, match="exact signed runtime target"):
+        verifier.check_update(
+            Client(), evidence, architecture="arm64", source_commit="c" * 40,
+            version="1.6.1", descriptor=_descriptor(), bundle_sha256="d" * 64,
+        )
+    retained = tmp_path / "chain-target-initial-update-check.json"
+    assert json.loads(retained.read_bytes())["status"] == status
 
 
 def test_synthetic_rbac_settings_include_one_enabled_dvr(monkeypatch):
@@ -517,7 +770,8 @@ def test_tls_material_passes_python_strict_server_verification(tmp_path: Path):
             try:
                 connection, _address = listener.accept()
                 with server_context.wrap_socket(connection, server_side=True) as secure:
-                    secure.recv(1)
+                    assert secure.recv(1) == b"x"
+                    secure.sendall(b"y")
             except BaseException as exc:  # pragma: no cover - asserted by caller
                 failures.append(exc)
             finally:
@@ -529,6 +783,7 @@ def test_tls_material_passes_python_strict_server_verification(tmp_path: Path):
             with socket.create_connection(listener.getsockname()) as connection:
                 with context.wrap_socket(connection, server_hostname=hostname) as secure:
                     secure.sendall(b"x")
+                    assert secure.recv(1) == b"y"
         finally:
             thread.join(timeout=5)
             assert not thread.is_alive()

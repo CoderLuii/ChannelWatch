@@ -147,8 +147,8 @@ def _platform(module, *, wheel_platform: str = "manylinux_2_36_x86_64"):
     return module.TargetPlatform(
         architecture="amd64",
         python_implementation="cpython",
-        python_cache_tag="cpython-314",
-        python_version="3.14.8",
+        python_cache_tag=sys.implementation.cache_tag,
+        python_version=".".join(map(str, sys.version_info[:3])),
         os_family="linux",
         libc_family=libc_family,
         minimum_libc_version=libc_baseline,
@@ -199,7 +199,7 @@ def test_builds_real_wheel_offline_and_emits_strict_inventory(tmp_path):
         "pip_version",
     }
     assert inventory["build"]["builder_image_digest"] == BUILDER_IMAGE_DIGEST
-    assert inventory["build"]["python_version"] == "3.14.8"
+    assert inventory["build"]["python_version"] == ".".join(map(str, sys.version_info[:3]))
     assert inventory["build"]["pip_version"]
     assert set(inventory["platform"]) == {
         "architecture",
@@ -489,7 +489,8 @@ def test_file_inventory_uses_serialized_posix_path_order(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX interpreter path portability")
-def test_console_scripts_are_removed_and_build_is_root_independent(tmp_path):
+@pytest.mark.parametrize("toolchain", ["toolchain", "long-" + "l" * 130, "toolchain with spaces"])
+def test_console_scripts_are_removed_and_build_is_root_independent(tmp_path, toolchain):
     module = _load_builder()
     inventories = []
     outputs = []
@@ -498,7 +499,7 @@ def test_console_scripts_are_removed_and_build_is_root_independent(tmp_path):
     for root_name in ("first-root", "second-root"):
         root = tmp_path / root_name
         root.mkdir()
-        interpreter = root / "toolchain/bin/python"
+        interpreter = root / toolchain / "bin/python"
         interpreter.parent.mkdir(parents=True)
         interpreter.symlink_to(sys.executable)
         interpreter_paths.append(str(interpreter))
@@ -533,6 +534,100 @@ def test_console_scripts_are_removed_and_build_is_root_independent(tmp_path):
             path.read_bytes() for path in site_packages.rglob("*") if path.is_file()
         )
         assert all(path.encode() not in payload for path in interpreter_paths)
+
+
+def _installed_console_launcher(tmp_path, payload):
+    wheel = _write_wheel(tmp_path, console_scripts=(("example-cli", "example_app:main"),))
+    _requirements, _lock, wheelhouse = _write_inputs(tmp_path, [wheel])
+    site = tmp_path / "site-packages"
+    script = site / "bin/example-cli"
+    script.parent.mkdir(parents=True)
+    script.write_bytes(payload)
+    metadata = site / "example_app-1.0.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Name: example-app\nVersion: 1.0.0\n")
+    (metadata / "RECORD").write_text("../../bin/example-cli,,\n")
+    return site, wheelhouse, script
+
+
+@pytest.mark.parametrize("executable", ["/owned/bin/python", "/" + "l" * 150 + "/python", "/owned path/bin/python", "/" + "é" * 75 + "/python"])
+def test_console_launcher_accepts_only_exact_canonical_pip_headers(tmp_path, executable):
+    module = _load_builder()
+    encoded = executable.encode()
+    quoted = b'"' + encoded + b'"' if b" " in encoded else encoded
+    header = b"#!/bin/sh\n'''exec' " + quoted + b' "$0" "$@"\n\' \'\'\'\n'
+    site, wheelhouse, script = _installed_console_launcher(tmp_path, header + b"import sys\n")
+    module._remove_generated_console_scripts(site, wheelhouse, executable)
+    assert not script.exists()
+    assert not (site / "bin").exists()
+
+
+@pytest.mark.parametrize("header", [
+    b"#!/unexpected/owned/bin/python-suffix\n",
+    b"#!/owned/bin/python -I\n",
+    b"#!/bin/sh\nexec /owned/bin/python \"$0\" \"$@\"\n",
+    b"#!/bin/sh\n'''exec' /wrong/python \"$0\" \"$@\"\n' '''\n",
+    b"#!/bin/sh\n'''exec' /owned/bin/python-suffix \"$0\" \"$@\"\n' '''\n",
+    b"#!/bin/sh\n'''exec' /owned/bin/python \"$0\" \"$@\"; echo unsafe\n' '''\n",
+    b"#!/bin/sh -e\n'''exec' /owned/bin/python \"$0\" \"$@\"\n' '''\n",
+    b"#!/bin/sh\n'''exec' /owned/bin/python \"$0\" \"$@\"\n' '''; echo unsafe\n",
+    b"#!/bin/sh\r\n'''exec' /owned/bin/python \"$0\" \"$@\"\r\n' '''\r\n",
+])
+def test_console_launcher_rejects_wrong_interpreters_and_unsafe_headers(tmp_path, header):
+    module = _load_builder()
+    site, wheelhouse, script = _installed_console_launcher(tmp_path, header + b"import sys\n")
+    with pytest.raises(module.DependencyBuildError, match="generated launcher"):
+        module._remove_generated_console_scripts(site, wheelhouse, "/owned/bin/python")
+    assert script.exists()
+
+
+@pytest.mark.parametrize(("mode", "links"), [(stat.S_IFIFO | 0o600, 1), (stat.S_IFREG | 0o644, 2), (stat.S_IFLNK | 0o777, 1)])
+def test_unsafe_console_launcher_is_rejected_before_reading(tmp_path, monkeypatch, mode, links):
+    module = _load_builder()
+    site, wheelhouse, script = _installed_console_launcher(tmp_path, b"#!/owned/bin/python\n")
+    real_lstat = Path.lstat
+    real_read = Path.read_bytes
+
+    def inspect(path):
+        if path == script:
+            return type("Metadata", (), {"st_mode": mode, "st_nlink": links})()
+        return real_lstat(path)
+
+    def read(path):
+        assert path != script, "nonregular launcher must not be opened"
+        return real_read(path)
+
+    monkeypatch.setattr(Path, "lstat", inspect)
+    monkeypatch.setattr(Path, "read_bytes", read)
+    with pytest.raises(module.DependencyBuildError, match="generated launcher"):
+        module._remove_generated_console_scripts(site, wheelhouse, "/owned/bin/python")
+
+
+@pytest.mark.parametrize("executable", ["/owned/$USER/python", "/owned;echo/python", "/owned path/$USER/python", "/owned path/`id`/python", '/owned path/"quoted"/python'])
+def test_shell_wrapper_cannot_expand_or_reinterpret_its_interpreter(tmp_path, executable):
+    module = _load_builder()
+    encoded = executable.encode()
+    quoted = b'"' + encoded + b'"' if b" " in encoded else encoded
+    header = b"#!/bin/sh\n'''exec' " + quoted + b' "$0" "$@"\n\' \'\'\'\n'
+    site, wheelhouse, script = _installed_console_launcher(tmp_path, header + b"import sys\n")
+    with pytest.raises(module.DependencyBuildError, match="generated launcher"):
+        module._remove_generated_console_scripts(site, wheelhouse, executable)
+    assert script.exists()
+
+
+@pytest.mark.parametrize("mutation", ["entry-points", "record-owner", "record-entry"])
+def test_generated_launcher_still_requires_exact_entrypoints_and_record_owner(tmp_path, mutation):
+    module = _load_builder()
+    site, wheelhouse, script = _installed_console_launcher(tmp_path, b"#!/owned/bin/python\nimport sys\n")
+    metadata = site / "example_app-1.0.0.dist-info"
+    if mutation == "entry-points":
+        (site / "bin/unexpected-cli").write_bytes(b"#!/owned/bin/python\n")
+    elif mutation == "record-owner":
+        (metadata / "METADATA").write_text("Name: unowned-package\nVersion: 1.0.0\n")
+    else:
+        (metadata / "RECORD").write_text("../../bin/unexpected-cli,,\n")
+    with pytest.raises(module.DependencyBuildError):
+        module._remove_generated_console_scripts(site, wheelhouse, "/owned/bin/python")
 
 
 def test_rejects_host_libc_newer_than_declared_target_baseline(monkeypatch):

@@ -1,10 +1,12 @@
 # Update ChannelWatch
 
-On v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.6.0 directly from **Settings > Updates** without recreating the container. No intermediate release is needed. ChannelWatch briefly restarts its processes and reconnects; the container and saved configuration stay in place.
+On v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.6.1 directly from **Settings > Updates** without recreating the container. No intermediate release is needed. ChannelWatch briefly restarts its processes and reconnects; the container and saved configuration stay in place.
 
-Install v1.6.0 manually from Update Center. Automatic installation is disabled for this first package release.
+Install v1.6.1 manually from Update Center. Automatic installation remains disabled.
 
-The v1.4.x route updates the application and interface while keeping the image's existing Python packages. The v1.5.3 route updates the application and packages together. Python itself, system libraries and the image-owned launcher still require a container image update when those components change.
+The v1.4.x route updates the application and interface while keeping the image's existing Python packages. To receive the certifi security update on v1.4.x, preserve `/config` and replace the container with the v1.6.1 image. The v1.5.3 and v1.6.0 protocol-4 route updates the application and packages together, including certifi. Python itself, system libraries and the image-owned launcher still require a container image update when those components change.
+
+The v1.6.1 image uses Python 3.14.9. Its signed package generation retains a Python 3.14.8 minimum so existing v1.5.3 and v1.6.0 containers can install it in-app. Refreshing the image is optional for the application update; it also refreshes Python and the image's own packages.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. **Retry now** uses the same checks when a restart briefly disconnects the dashboard. Application and immutable container image versions are reported separately.
 
@@ -95,7 +97,7 @@ Keep the same `/config` volume and external storage key configuration. The
 container update does not require re-entering DVRs or saved credentials.
 
 v1.5.3 supplies this bootstrap and does not publish a runtime-generation
-payload. After that bootstrap, install v1.6.0 from **Settings > Updates**.
+payload. After that bootstrap, install v1.6.1 from **Settings > Updates**.
 ChannelWatch downloads and verifies the signed application and complete
 40-package official Python closure,
 prepares its Python packages without changing the active environment, then

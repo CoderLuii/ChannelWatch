@@ -21,7 +21,8 @@ REQUIRED_CHECKS = {
 }
 PHASES = {"before", "after_apply", "after_restart", "after_rollback", "after_reapply"}
 APP_PHASES = {"after_apply", "after_restart", "after_reapply"}
-LEGACY_SOURCES = ["1.4.0", "1.4.1", "1.4.5"]
+LEGACY_SOURCES = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
+QUALIFICATION_MODES = ("direct", "chained")
 SCENARIOS = [
     ("stock-1.4.0", "1.4.0", "1.4.0", None),
     ("overlay-1.4.0-to-1.4.1", "1.4.0", "1.4.1", "1.4.1"),
@@ -104,7 +105,7 @@ def _require_current_check(value: object, *, target_version: str) -> None:
 
 
 def aggregate(
-    receipts: dict[tuple[str, str], dict[str, Any]],
+    receipts: dict[tuple[str, str, str], dict[str, Any]],
     *,
     baselines: dict[str, Any],
     target_version: str,
@@ -118,10 +119,14 @@ def aggregate(
     require(SHA40.fullmatch(source_commit) is not None, "Source commit is invalid.")
     require(HEX.fullmatch(catalog_sha256) is not None, "Catalog digest is invalid.")
     require(HEX.fullmatch(bundle_sha256) is not None, "Bundle digest is invalid.")
-    require(baselines.get("schema") == 1, "Baseline fixture schema is invalid.")
+    require(baselines.get("schema") == 2, "Baseline fixture schema is invalid.")
     require(baselines.get("target_version") == target_version, "Target version does not match fixtures.")
     require(baselines.get("repository") == "coderluii/channelwatch", "Baseline repository is invalid.")
     require(baselines.get("legacy_sources") == LEGACY_SOURCES, "Baseline legacy sources are invalid.")
+    require(
+        baselines.get("qualification_modes") == list(QUALIFICATION_MODES),
+        "Baseline qualification modes are invalid.",
+    )
     require(release_config.get("version") == target_version, "Release configuration version is unbound.")
     require(
         release_config.get("legacy_app_update_sources") == LEGACY_SOURCES,
@@ -129,15 +134,24 @@ def aggregate(
     )
     require(HEX.fullmatch(release_config_sha256) is not None, "Release configuration digest is invalid.")
     scenarios = _scenario_map(baselines)
-    expected = {(arch, scenario_id) for arch in ("amd64", "arm64") for scenario_id in scenarios}
+    expected = {
+        (arch, mode, scenario_id)
+        for arch in ("amd64", "arm64")
+        for mode in QUALIFICATION_MODES
+        for scenario_id in scenarios
+    }
     require(set(receipts) == expected, "Native legacy update receipt matrix is incomplete or has extras.")
     summaries = []
-    for architecture, scenario_id in sorted(expected):
-        receipt = receipts[(architecture, scenario_id)]
+    for architecture, qualification_mode, scenario_id in sorted(expected):
+        receipt = receipts[(architecture, qualification_mode, scenario_id)]
         scenario = scenarios[scenario_id]
-        require(receipt.get("schema") == 1 and receipt.get("status") == "passed", "Receipt did not pass.")
+        require(receipt.get("schema") == 2 and receipt.get("status") == "passed", "Receipt did not pass.")
         require(receipt.get("evidence_kind") == "native", "Synthetic evidence cannot satisfy the release gate.")
         require(receipt.get("architecture") == architecture, "Receipt architecture is unbound.")
+        require(
+            receipt.get("qualification_mode") == qualification_mode,
+            "Receipt qualification mode is unbound.",
+        )
         require(receipt.get("scenario") == scenario, "Receipt scenario is unbound.")
         require(receipt.get("target_version") == target_version, "Receipt target version is unbound.")
         require(receipt.get("source_commit") == source_commit, "Receipt source commit is unbound.")
@@ -177,14 +191,81 @@ def aggregate(
         )
         rollback_status = receipt.get("rollback_status")
         require(isinstance(rollback_status, dict), "Rollback status is missing.")
-        expected_runtime = "image" if scenario["overlay_version"] is None else "app_bundle"
+        rollback_version = (
+            "1.6.0"
+            if qualification_mode == "chained"
+            else scenario["source_application_version"]
+        )
+        expected_runtime = (
+            "app_bundle"
+            if qualification_mode == "chained" or scenario["overlay_version"] is not None
+            else "image"
+        )
         require(
-            rollback_status.get("current_version") == scenario["source_application_version"]
+            rollback_status.get("current_version") == rollback_version
             and rollback_status.get("image_version") == scenario["image_version"]
             and rollback_status.get("launcher_protocol") == 3
             and rollback_status.get("runtime_source") == expected_runtime,
             "Rollback did not restore the exact legacy source state.",
         )
+        bridge = receipt.get("bridge_qualification")
+        if qualification_mode == "chained":
+            expected_bridge = baselines.get("bridge_release")
+            require(
+                isinstance(expected_bridge, dict)
+                and set(expected_bridge) == {
+                    "version", "source_commit", "catalog_url", "catalog_sha256",
+                    "bundle_url", "bundle_sha256",
+                }
+                and expected_bridge.get("version") == "1.6.0"
+                and SHA40.fullmatch(str(expected_bridge.get("source_commit") or "")) is not None
+                and HEX.fullmatch(str(expected_bridge.get("catalog_sha256") or "")) is not None
+                and HEX.fullmatch(str(expected_bridge.get("bundle_sha256") or "")) is not None,
+                "The immutable v1.6.0 bridge contract is invalid.",
+            )
+            bridge_identity = bridge.get("identity") if isinstance(bridge, dict) else None
+            bridge_storage = bridge.get("runtime_storage") if isinstance(bridge, dict) else None
+            bridge_status = bridge.get("status") if isinstance(bridge, dict) else None
+            bridge_active = bridge_status.get("active_bundle") if isinstance(bridge_status, dict) else None
+            bridge_runtime = bridge.get("selected_runtime_info") if isinstance(bridge, dict) else None
+            bridge_process = bridge_runtime.get("process_runtime") if isinstance(bridge_runtime, dict) else None
+            require(
+                isinstance(bridge, dict)
+                and bridge.get("release") == expected_bridge
+                and bridge.get("catalog_sha256") == expected_bridge["catalog_sha256"]
+                and bridge.get("bundle_sha256") == expected_bridge["bundle_sha256"]
+                and isinstance(bridge_status, dict)
+                and bridge_status.get("current_version") == "1.6.0"
+                and bridge_status.get("image_version") == scenario["image_version"]
+                and bridge_status.get("launcher_protocol") == 3
+                and bridge_status.get("runtime_source") == "app_bundle"
+                and isinstance(bridge_active, dict)
+                and bridge_active.get("version") == "1.6.0"
+                and bridge_active.get("manifest", {}).get("bundle_sha256")
+                == expected_bridge["bundle_sha256"]
+                and isinstance(bridge_runtime, dict)
+                and bridge_runtime.get("diagnostic_source") == "selected_application"
+                and bridge_runtime.get("application_version") == "1.6.0"
+                and bridge_runtime.get("application_dir") == bridge_active.get("path")
+                and bridge_runtime.get("verified_generation") is None
+                and isinstance(bridge_process, dict)
+                and bridge_process.get("python_executable") == "/venv/bin/python"
+                and bridge_process.get("python_prefix") == "/venv"
+                and bridge_process.get("python_version") == "3.14.8"
+                and isinstance(bridge_identity, dict)
+                and set(bridge_identity) == {"before", "after"}
+                and bridge_identity["before"] == bridge_identity["after"] == first
+                and isinstance(bridge_storage, dict)
+                and set(bridge_storage) == {"before", "after"}
+                and all(
+                    isinstance(row, dict)
+                    and row.get("dependency_generation_absent") is True
+                    for row in bridge_storage.values()
+                ),
+                "Chained receipt does not prove the immutable v1.6.0 bridge.",
+            )
+        else:
+            require(bridge is None, "Direct receipt unexpectedly includes bridge evidence.")
         for name, operation in (
             ("apply_job", "apply"), ("rollback_job", "rollback"),
             ("reapply_job", "apply"),
@@ -217,13 +298,14 @@ def aggregate(
             )
         logs = receipt.get("logs_sha256")
         require(isinstance(logs, dict) and set(logs) == {"app", "feed"}, "Receipt logs are incomplete.")
-        log_dir = evidence_directory / f"legacy-app-upgrade-{architecture}-{scenario_id}-logs"
+        log_dir = evidence_directory / f"legacy-app-upgrade-{architecture}-{qualification_mode}-{scenario_id}-logs"
         for name, digest in logs.items():
             require(HEX.fullmatch(str(digest)) is not None, "Receipt log digest is invalid.")
             path = log_dir / f"{name}.log"
             require(path.is_file() and sha256_file(path) == digest, "Receipt log artifact is missing or changed.")
         summaries.append({
             "architecture": architecture,
+            "qualification_mode": qualification_mode,
             "scenario": scenario_id,
             "image_version": scenario["image_version"],
             "source_application_version": scenario["source_application_version"],
@@ -242,6 +324,12 @@ def aggregate(
         "release_config_sha256": release_config_sha256,
         "architectures": ["amd64", "arm64"],
         "native_receipt_count": len(summaries),
+        "direct_receipt_count": sum(
+            row["qualification_mode"] == "direct" for row in summaries
+        ),
+        "chained_receipt_count": sum(
+            row["qualification_mode"] == "chained" for row in summaries
+        ),
         "qualifications": summaries,
     }
 
@@ -262,11 +350,12 @@ def main() -> int:
     scenarios = _scenario_map(baselines)
     receipts = {}
     for architecture in ("amd64", "arm64"):
-        for scenario_id in scenarios:
-            path = args.receipts_directory / f"legacy-app-upgrade-{architecture}-{scenario_id}.json"
-            if not path.is_file():
-                raise SystemExit(f"Missing native receipt: {path.name}")
-            receipts[(architecture, scenario_id)] = json.loads(path.read_text(encoding="utf-8"))
+        for qualification_mode in QUALIFICATION_MODES:
+            for scenario_id in scenarios:
+                path = args.receipts_directory / f"legacy-app-upgrade-{architecture}-{qualification_mode}-{scenario_id}.json"
+                if not path.is_file():
+                    raise SystemExit(f"Missing native receipt: {path.name}")
+                receipts[(architecture, qualification_mode, scenario_id)] = json.loads(path.read_text(encoding="utf-8"))
     result = aggregate(
         receipts,
         baselines=baselines,

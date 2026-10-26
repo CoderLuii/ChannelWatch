@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from starlette.testclient import TestClient
 
 
@@ -695,6 +695,79 @@ class TestSensitiveFieldMasking:
 
 
 class TestSensitiveFieldPOSTSentinel:
+    def test_post_settings_explicitly_clears_global_apprise_providers(
+        self, client, test_settings_file
+    ):
+        from core.notifications.providers.apprise import AppriseProvider
+        from ui.backend.config import load_settings
+
+        provider_fields = [
+            "apprise_pushover",
+            "apprise_discord",
+            "apprise_email",
+            "apprise_email_to",
+            "apprise_telegram",
+            "apprise_slack",
+            "apprise_gotify",
+            "apprise_matrix",
+            "apprise_custom",
+        ]
+        persisted = json.loads(test_settings_file.read_text())
+        for field in provider_fields:
+            persisted[field] = f"secret-{field}"
+        persisted["dvr_servers"][0]["overrides"] = {
+            "apprise_discord": "dvr-webhook/secret/token"
+        }
+        test_settings_file.write_text(json.dumps(persisted))
+
+        payload = client.get(
+            "/api/settings", headers={"X-API-Key": "test-api-key-12345"}
+        ).json()
+        payload["clear_apprise_fields"] = provider_fields
+        response = client.post(
+            "/api/settings",
+            json=payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert response.status_code == 200
+        saved = json.loads(test_settings_file.read_text())
+        assert "clear_apprise_fields" not in saved
+        assert all(saved[field] == "" for field in provider_fields)
+        assert saved["error_reporting_dsn"] == "https://public:secret@example.test/1"
+        assert saved["dvr_servers"][0]["overrides"]["apprise_discord"] == (
+            "dvr-webhook/secret/token"
+        )
+        refreshed = client.get(
+            "/api/settings", headers={"X-API-Key": "test-api-key-12345"}
+        ).json()
+        assert "clear_apprise_fields" not in refreshed
+        assert all(refreshed[field] == "" for field in provider_fields)
+
+        apprise_module = MagicMock()
+        apprise_instance = MagicMock()
+        apprise_module.Apprise.return_value = apprise_instance
+        provider = AppriseProvider()
+        with patch("importlib.import_module", return_value=apprise_module):
+            assert provider.initialize(load_settings()) is False
+        apprise_instance.add.assert_not_called()
+
+    def test_post_settings_rejects_clear_intent_for_non_apprise_fields(
+        self, client, test_settings_file
+    ):
+        original_bytes = test_settings_file.read_bytes()
+        payload = json.loads(original_bytes)
+        payload["clear_apprise_fields"] = ["api_key"]
+
+        response = client.post(
+            "/api/settings",
+            json=payload,
+            headers={"X-API-Key": "test-api-key-12345"},
+        )
+
+        assert response.status_code == 422
+        assert test_settings_file.read_bytes() == original_bytes
+
     def test_post_settings_preserves_when_sentinel_submitted(
         self, client, test_settings_file
     ):
@@ -704,6 +777,7 @@ class TestSensitiveFieldPOSTSentinel:
         payload["apprise_pushover"] = "****"
         payload["apprise_discord"] = "****"
         payload["error_reporting_dsn"] = "****"
+        payload["clear_apprise_fields"] = []
         resp = client.post(
             "/api/settings",
             json=payload,

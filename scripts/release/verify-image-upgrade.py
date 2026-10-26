@@ -48,6 +48,15 @@ class ImageUpgradeError(RuntimeError):
     """Raised when native old-volume qualification does not hold."""
 
 
+class CommandTimeoutError(ImageUpgradeError):
+    """A bounded qualification command did not complete."""
+
+
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 180
+CLEANUP_COMMAND_TIMEOUT_SECONDS = 15
+CLEANUP_BUDGET_SECONDS = 120
+
+
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -64,15 +73,21 @@ def run(
     command: list[str],
     *,
     check: bool = True,
-    timeout: int | None = None,
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(  # nosec B603
-        command,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+    deadline = DEFAULT_COMMAND_TIMEOUT_SECONDS if timeout is None else timeout
+    try:
+        result = subprocess.run(  # nosec B603
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=deadline,
+        )
+    except subprocess.TimeoutExpired:
+        raise CommandTimeoutError(
+            f"{Path(command[0]).name} exceeded the {deadline:g}-second command deadline."
+        ) from None
     if check and result.returncode:
         detail = (result.stderr or result.stdout or "command failed").strip()
         raise ImageUpgradeError(f"{command[0]} failed: {detail[:500]}")
@@ -708,14 +723,14 @@ class Resources:
 
     def create_volume(self) -> str:
         value = f"{self.prefix}-config"
-        run(["docker", "volume", "create", "--label", LABEL, value])
         self.volumes.add(value)
+        run(["docker", "volume", "create", "--label", LABEL, value])
         return value
 
     def create_network(self) -> str:
         value = f"{self.prefix}-network"
-        run(["docker", "network", "create", "--label", LABEL, value])
         self.networks.add(value)
+        run(["docker", "network", "create", "--label", LABEL, value])
         return value
 
     def image(self) -> str:
@@ -737,64 +752,56 @@ class Resources:
 
     def cleanup(self) -> list[str]:
         failures: list[str] = []
-        for name in sorted(self.containers):
-            inspection = run(
-                [
-                    "docker",
-                    "inspect",
-                    "--format",
-                    f'{{{{index .Config.Labels "{LABEL_KEY}"}}}}',
-                    name,
-                ],
-                check=False,
+        deadline = time.monotonic() + CLEANUP_BUDGET_SECONDS
+
+        def cleanup_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CommandTimeoutError("Owned resource cleanup deadline was exhausted.")
+            return run(
+                command, check=False,
+                timeout=min(CLEANUP_COMMAND_TIMEOUT_SECONDS, remaining),
             )
-            if inspection.returncode:
-                if not _docker_resource_is_missing(inspection, "container", name):
-                    failures.append(f"container:{name}:inspect")
-                continue
-            if inspection.stdout.strip() != LABEL_VALUE:
-                failures.append(f"container:{name}:ownership")
-                continue
-            if run(
-                ["docker", "rm", "-f", name], check=False
-            ).returncode:
-                failures.append(f"container:{name}")
-        for kind, names in (("volume", self.volumes), ("network", self.networks)):
+
+        for kind, names in (
+            ("container", self.containers), ("volume", self.volumes),
+            ("network", self.networks), ("image", self.images),
+        ):
             for name in sorted(names):
-                inspection = run(
-                    [
-                        "docker",
-                        kind,
-                        "inspect",
-                        "--format",
-                        f'{{{{index .Labels "{LABEL_KEY}"}}}}',
-                        name,
-                    ],
-                    check=False,
-                )
+                if kind == "container":
+                    inspect_command = ["docker", "inspect", "--format", f'{{{{index .Config.Labels "{LABEL_KEY}"}}}}', name]
+                    remove_command = ["docker", "rm", "-f", name]
+                elif kind == "image":
+                    inspect_command = ["docker", "image", "inspect", name]
+                    remove_command = ["docker", "image", "rm", "-f", name]
+                else:
+                    inspect_command = ["docker", kind, "inspect", "--format", f'{{{{index .Labels "{LABEL_KEY}"}}}}', name]
+                    remove_command = ["docker", kind, "rm", name]
+                try:
+                    inspection = cleanup_command(inspect_command)
+                except CommandTimeoutError:
+                    failures.append(f"{kind}:{name}:inspect_timeout")
+                    continue
+                except Exception:
+                    failures.append(f"{kind}:{name}:inspect_error")
+                    continue
                 if inspection.returncode:
                     if not _docker_resource_is_missing(inspection, kind, name):
                         failures.append(f"{kind}:{name}:inspect")
                     continue
-                if inspection.stdout.strip() != LABEL_VALUE:
+                if kind != "image" and inspection.stdout.strip() != LABEL_VALUE:
                     failures.append(f"{kind}:{name}:ownership")
                     continue
-                if run(
-                    ["docker", kind, "rm", name], check=False
-                ).returncode:
+                try:
+                    removed = cleanup_command(remove_command)
+                except CommandTimeoutError:
+                    failures.append(f"{kind}:{name}:remove_timeout")
+                    continue
+                except Exception:
+                    failures.append(f"{kind}:{name}:remove_error")
+                    continue
+                if removed.returncode:
                     failures.append(f"{kind}:{name}")
-        for image in sorted(self.images):
-            inspection = run(
-                ["docker", "image", "inspect", image],
-                check=False,
-                timeout=30,
-            )
-            if inspection.returncode:
-                if not _docker_resource_is_missing(inspection, "image", image):
-                    failures.append(f"image:{image}:inspect")
-                continue
-            if run(["docker", "image", "rm", "-f", image], check=False).returncode:
-                failures.append(f"image:{image}")
         return failures
 
 

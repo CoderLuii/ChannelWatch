@@ -8,12 +8,12 @@ This document records the source and notice material for the Debian components i
 
 ## Exact base inputs
 
-- Image index: `docker.io/library/python@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83`
-- amd64 manifest: `sha256:a66d3a463d0be3cc537c269b0d3418746dda512417a975559a0eaa8a6406baaf`
-- arm64 manifest: `sha256:0e24db28cf5b7788413afe3fdc63075ca22bc4ecf74f5472304b391c2110e629`
+- Image index: `docker.io/library/python@sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae`
+- amd64 manifest: `sha256:7dff173021016c8829ae58d5ce112ffc388073ebe67f351aeb6ba2909e35f847`
+- arm64 manifest: `sha256:bfc44211421123c2c936e22404edef58325b96f184a968c375f5c58798e06c20`
 - Base: Debian Bookworm Slim. The pinned manifests each contain the same 97 Debian package names and versions; only the architecture differs.
-- Official Python build recipe: [`docker-library/python@7cc547b3ff8d45d540cd23144227af126a79d60c:3.14/slim-bookworm/Dockerfile`](https://github.com/docker-library/python/blob/7cc547b3ff8d45d540cd23144227af126a79d60c/3.14/slim-bookworm/Dockerfile)
-- Python source: [`Python-3.14.8.tar.xz`](https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tar.xz), SHA-256 `c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73`.
+- Official Python build recipe: [`docker-library/python@601f8899c1bf9f94d598a9bb36bd9192bd0292d3:3.14/slim-bookworm/Dockerfile`](https://github.com/docker-library/python/blob/601f8899c1bf9f94d598a9bb36bd9192bd0292d3/3.14/slim-bookworm/Dockerfile)
+- Python source: [`Python-3.14.9.tar.xz`](https://www.python.org/ftp/python/3.14.9/Python-3.14.9.tar.xz), SHA-256 `e02d9ac21cebda6e46435369744a92c65cc7cd8669697694122cf97ffacd1e53`.
 
 The official recipe verifies that Python checksum, builds with the Debian toolchain, and starts from `debian:bookworm-slim`. Keep the image index pinned; do not substitute a mutable Python tag.
 
@@ -35,7 +35,7 @@ Versions come from `/var/lib/dpkg/status` in the pinned amd64 root filesystem. W
 | [base-passwd](https://sources.debian.org/src/base-passwd/3.6.1/) | `base-passwd` `3.6.1` | GPL-family notice in package copyright |
 | [bash](https://sources.debian.org/src/bash/5.2.15-2/) | `bash` binary `5.2.15-2+b13`; source `5.2.15-2` | GPL/GFDL notices in package copyright |
 | [bzip2](https://sources.debian.org/src/bzip2/1.0.8-5/) | `libbz2-1.0` binary `1.0.8-5+b1`; source `1.0.8-5` | BSD variant and GPL-2.0 packaging notices in package copyright |
-| [ca-certificates](https://snapshot.debian.org/package/ca-certificates/20250419~deb12u1/) | `ca-certificates` `20250419~deb12u1` | GPL and MPL-2.0 notices in package copyright |
+| [ca-certificates](https://snapshot.debian.org/package/ca-certificates/20250419~deb12u2/) | `ca-certificates` `20250419~deb12u2` | GPL and MPL-2.0 notices in package copyright |
 | [coreutils](https://sources.debian.org/src/coreutils/9.1-1/) | `coreutils` `9.1-1` | GPL/GFDL notices in package copyright |
 | [dash](https://sources.debian.org/src/dash/0.5.12-2/) | `dash` `0.5.12-2` | GPL-2.0-family notice in package copyright |
 | [debconf](https://sources.debian.org/src/debconf/1.5.82/) | `debconf` `1.5.82` | GPL-family notice in package copyright |
@@ -75,7 +75,7 @@ Versions come from `/var/lib/dpkg/status` in the pinned amd64 root filesystem. W
 | [ncurses](https://sources.debian.org/src/ncurses/6.4-4/) | `libncursesw6`, `libtinfo6`, `ncurses-base`, `ncurses-bin` `6.4-4` | Mixed notices in package copyright |
 | [p11-kit](https://sources.debian.org/src/p11-kit/0.24.1-2/) | `libp11-kit0` `0.24.1-2` | LGPL-2.1 notice in package copyright |
 | [pam](https://sources.debian.org/src/pam/1.5.2-6+deb12u2/) | `libpam-modules`, `libpam-modules-bin`, `libpam-runtime`, `libpam0g` `1.5.2-6+deb12u2` | GPL/LGPL notices in package copyright |
-| [pcre2](https://snapshot.debian.org/package/pcre2/10.42-1+deb12u1/) | `libpcre2-8-0` `10.42-1+deb12u1` | GPL-family material in package copyright |
+| [pcre2](https://snapshot.debian.org/package/pcre2/10.42-1+deb12u2/) | `libpcre2-8-0` `10.42-1+deb12u2` | GPL-family material in package copyright |
 | [readline](https://sources.debian.org/src/readline/8.2-1.3/) | `libreadline8`, `readline-common` `8.2-1.3` | GPL/GFDL notices in package copyright |
 | [libseccomp](https://sources.debian.org/src/libseccomp/2.5.4-1+deb12u1/) | `libseccomp2` `2.5.4-1+deb12u1` | LGPL-2.1 notice in package copyright |
 | [libselinux](https://sources.debian.org/src/libselinux/3.4-1/) | `libselinux1` binary `3.4-1+b6`; source `3.4-1` | GPL/LGPL notices in package copyright |
@@ -89,7 +89,7 @@ Versions come from `/var/lib/dpkg/status` in the pinned amd64 root filesystem. W
 | [shadow](https://sources.debian.org/src/shadow/1%3A4.13+dfsg1-1+deb12u2/) | `login`, `passwd` `1:4.13+dfsg1-1+deb12u2` | Package copyright notice |
 | [mawk](https://sources.debian.org/src/mawk/1.3.4.20200120-3.1/) | `mawk` `1.3.4.20200120-3.1` | GPL-2.0-family notice in package copyright |
 | [netbase](https://sources.debian.org/src/netbase/6.4/) | `netbase` `6.4` | GPL-family notice in package copyright |
-| [perl](https://sources.debian.org/src/perl/5.36.0-7+deb12u3/) | `perl-base` `5.36.0-7+deb12u3` | GPL/Artistic/LGPL notices in package copyright |
+| [perl](https://sources.debian.org/src/perl/5.36.0-7+deb12u4/) | `perl-base` `5.36.0-7+deb12u4` | GPL/Artistic/LGPL notices in package copyright |
 | [sed](https://sources.debian.org/src/sed/4.9-1+deb12u1/) | `sed` `4.9-1+deb12u1` | GPL/GFDL notices in package copyright |
 | [sysvinit](https://sources.debian.org/src/sysvinit/3.06-4/) | `sysvinit-utils` `3.06-4` | GPL-family notice in package copyright |
 | [tar](https://sources.debian.org/src/tar/1.34+dfsg-1.2+deb12u1/) | `tar` `1.34+dfsg-1.2+deb12u1` | GPL/LGPL notices in package copyright |
@@ -103,7 +103,7 @@ Versions come from `/var/lib/dpkg/status` in the pinned amd64 root filesystem. W
 | Library | License | Exact source |
 |---|---|---|
 | `zeroconf 0.151.5` | LGPL-2.1-or-later | [PyPI source archive](https://files.pythonhosted.org/packages/93/20/69744d9de9d375dae2639dda9add7dae85d52d690b68c61b23b8a6468434/zeroconf-0.151.5.tar.gz), SHA-256 `28c2ec9d772007eedf11b41a9c9fd3d5c684c17b00721ff8f1ee31b20ad286a1`; [project source](https://github.com/python-zeroconf/python-zeroconf/tree/0.151.5) |
-| `certifi 2026.7.22` | MPL-2.0 | [PyPI source archive](https://files.pythonhosted.org/packages/a3/c2/24167ea9858356b47a87a50d39908bfdb72ceeefe0041586e704e5376b3a/certifi-2026.7.22.tar.gz), SHA-256 `741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55`; [project source](https://github.com/certifi/python-certifi/tree/f4bc676bc101fe2235846e37044e8c693d6cbaf4) |
+| `certifi 2026.10.19` | MPL-2.0 | [PyPI source archive](https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz), SHA-256 `035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae`; [project source](https://github.com/certifi/python-certifi/tree/662df63d7906df66f1f07c0751a3dfe9da14d914) |
 
 ## Release notices
 

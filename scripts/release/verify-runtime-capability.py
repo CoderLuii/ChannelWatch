@@ -84,29 +84,53 @@ class CapabilityError(RuntimeError):
     """Raised when native protocol-4 qualification does not hold."""
 
 
+class CommandTimeoutError(CapabilityError):
+    """A bounded qualification command did not complete."""
+
+
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 180
+CLEANUP_COMMAND_TIMEOUT_SECONDS = 15
+CLEANUP_BUDGET_SECONDS = 120
+
+
 def run(
-    command: list[str], *, check: bool = True, timeout: int | None = None
+    command: list[str], *, check: bool = True,
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(  # nosec B603
-        command,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+    deadline = DEFAULT_COMMAND_TIMEOUT_SECONDS if timeout is None else timeout
+    try:
+        result = subprocess.run(  # nosec B603
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=deadline,
+        )
+    except subprocess.TimeoutExpired:
+        raise CommandTimeoutError(
+            f"{Path(command[0]).name} exceeded the {deadline:g}-second command deadline."
+        ) from None
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout or "command failed").strip()
         raise CapabilityError(f"{command[0]} failed: {detail[:500]}")
     return result
 
 
-def run_bytes(command: list[str], *, timeout: int | None = None) -> bytes:
-    result = subprocess.run(  # nosec B603
-        command,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+def run_bytes(
+    command: list[str], *, timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS
+) -> bytes:
+    deadline = DEFAULT_COMMAND_TIMEOUT_SECONDS if timeout is None else timeout
+    try:
+        result = subprocess.run(  # nosec B603
+            command,
+            capture_output=True,
+            check=False,
+            timeout=deadline,
+        )
+    except subprocess.TimeoutExpired:
+        raise CommandTimeoutError(
+            f"{Path(command[0]).name} exceeded the {deadline:g}-second command deadline."
+        ) from None
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or b"command failed")[:500].decode(
             "utf-8", errors="replace"
@@ -391,6 +415,21 @@ def retain_update_check_status(
         raise CapabilityError("Initial update-check evidence exceeds its 8 MiB bound.")
     path.write_bytes(encoded)
     return artifact_descriptor(path)
+
+
+def check_update(
+    client: Any, evidence_json: Path, *, architecture: str, source_commit: str,
+    version: str, descriptor: dict[str, Any], bundle_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    checked = client.request("/api/v1/update/check", {})
+    artifact = retain_update_check_status(
+        evidence_json, architecture=architecture, source_commit=source_commit,
+        status=checked,
+    )
+    return validate_update_check(
+        checked, version=version, descriptor=descriptor,
+        bundle_sha256=bundle_sha256,
+    ), artifact
 
 
 def compact_update_check_evidence(
@@ -850,14 +889,14 @@ class DockerResources:
 
     def create_network(self) -> str:
         name = f"{self.prefix}-network"
-        run(["docker", "network", "create", "--label", LABEL, name])
         self.networks.add(name)
+        run(["docker", "network", "create", "--label", LABEL, name])
         return name
 
     def create_volume(self, suffix: str = "config") -> str:
         name = f"{self.prefix}-{suffix}"
-        run(["docker", "volume", "create", "--label", LABEL, name])
         self.volumes.add(name)
+        run(["docker", "volume", "create", "--label", LABEL, name])
         return name
 
     def container(self, suffix: str) -> str:
@@ -867,12 +906,25 @@ class DockerResources:
 
     def cleanup(self) -> list[str]:
         failures: list[str] = []
+        deadline = time.monotonic() + CLEANUP_BUDGET_SECONDS
+
+        def cleanup_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CommandTimeoutError("Owned resource cleanup deadline was exhausted.")
+            return run(
+                command, check=False,
+                timeout=min(CLEANUP_COMMAND_TIMEOUT_SECONDS, remaining),
+            )
+
         for name in sorted(self.containers):
             try:
-                inspected = run(
+                inspected = cleanup_command(
                     ["docker", "inspect", "--format", '{{index .Config.Labels "codex.task"}}', name],
-                    check=False,
                 )
+            except CommandTimeoutError:
+                failures.append(f"container:{name}:inspect_timeout")
+                continue
             except Exception:
                 failures.append(f"container:{name}:inspect_error")
                 continue
@@ -883,7 +935,10 @@ class DockerResources:
                 failures.append(f"container:{name}:ownership_mismatch")
                 continue
             try:
-                removed = run(["docker", "rm", "-f", name], check=False)
+                removed = cleanup_command(["docker", "rm", "-f", name])
+            except CommandTimeoutError:
+                failures.append(f"container:{name}:remove_timeout")
+                continue
             except Exception:
                 failures.append(f"container:{name}:remove_error")
                 continue
@@ -892,10 +947,12 @@ class DockerResources:
         for kind, names in (("volume", self.volumes), ("network", self.networks)):
             for name in sorted(names):
                 try:
-                    inspected = run(
+                    inspected = cleanup_command(
                         ["docker", kind, "inspect", "--format", '{{index .Labels "codex.task"}}', name],
-                        check=False,
                     )
+                except CommandTimeoutError:
+                    failures.append(f"{kind}:{name}:inspect_timeout")
+                    continue
                 except Exception:
                     failures.append(f"{kind}:{name}:inspect_error")
                     continue
@@ -906,7 +963,10 @@ class DockerResources:
                     failures.append(f"{kind}:{name}:ownership_mismatch")
                     continue
                 try:
-                    removed = run(["docker", kind, "rm", name], check=False)
+                    removed = cleanup_command(["docker", kind, "rm", name])
+                except CommandTimeoutError:
+                    failures.append(f"{kind}:{name}:remove_timeout")
+                    continue
                 except Exception:
                     failures.append(f"{kind}:{name}:remove_error")
                     continue
@@ -1020,8 +1080,27 @@ def create_tls_material(root: Path) -> tuple[Path, Path, Path]:
     return ca_path, cert_path, key_path
 
 
-def write_feed(root: Path, routes: dict[str, Path]) -> Path:
+def publish_feed_catalog(source: Path, served: Path) -> str:
+    data = source.read_bytes()
+    expected = hashlib.sha256(data).hexdigest()
+    served_mode = served.stat().st_mode & 0o777
+    descriptor, name = tempfile.mkstemp(prefix=f".{served.name}.", dir=served.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+        temporary.chmod(served_mode)
+        os.replace(temporary, served)
+        if hashlib.sha256(served.read_bytes()).hexdigest() != expected:
+            raise CapabilityError("Published feed catalog failed readback verification.")
+    finally:
+        temporary.unlink(missing_ok=True)
+    return expected
+
+
+def write_feed(root: Path, routes: dict[str, Path]) -> dict[str, Path]:
     route_map: dict[str, str] = {}
+    staged_routes: dict[str, Path] = {}
     assets = root / "assets"
     assets.mkdir(parents=True)
     for index, (url, source) in enumerate(sorted(routes.items())):
@@ -1031,6 +1110,7 @@ def write_feed(root: Path, routes: dict[str, Path]) -> Path:
         key = f"asset-{index}"
         shutil.copyfile(source, assets / key)
         route_map[f"{parsed.hostname}{parsed.path}"] = key
+        staged_routes[url] = assets / key
     script = root / "feed.py"
     dvr_responses = {
         "/status": {"version": "mock-1.0", "name": "Capability DVR"},
@@ -1078,7 +1158,7 @@ def write_feed(root: Path, routes: dict[str, Path]) -> Path:
         "ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.load_cert_chain('/feed/server.pem','/feed/server-key.pem');server.socket=ctx.wrap_socket(server.socket,server_side=True);server.serve_forever()\n",
         encoding="utf-8",
     )
-    return script
+    return staged_routes
 
 
 class ApiClient:
@@ -2021,7 +2101,10 @@ def capture_container_logs(
     for name in sorted(resources.containers):
         suffix = name.removeprefix(prefix + "-")
         try:
-            result = run(["docker", "logs", name], check=False)
+            result = run(
+                ["docker", "logs", name], check=False,
+                timeout=CLEANUP_COMMAND_TIMEOUT_SECONDS,
+            )
         except Exception:
             failures.append(f"docker_logs:{suffix}:capture_error")
             continue
@@ -3172,17 +3255,13 @@ def main() -> int:
         ).stdout.strip()
         sampler = MemorySampler(app)
         sampler.start()
-        checked = validate_update_check(
-            client.request("/api/v1/update/check", {}),
+        checked, checked_artifact = check_update(
+            client, args.evidence_json,
+            architecture=architecture,
+            source_commit=args.source_commit,
             version=version,
             descriptor=descriptor,
             bundle_sha256=variants[architecture]["bundle_sha256"],
-        )
-        checked_artifact = retain_update_check_status(
-            args.evidence_json,
-            architecture=architecture,
-            source_commit=args.source_commit,
-            status=checked,
         )
         compact_checked = compact_update_check_evidence(checked, checked_artifact)
         job_id = secrets.token_hex(16)

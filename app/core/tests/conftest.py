@@ -34,8 +34,8 @@ def isolate_ui_rate_limiter_between_tests():
 def immutable_image_python(tmp_path: Path) -> Path:
     """Provide an immutable test-owned launcher for the current interpreter."""
 
-    interpreter = Path(sys.executable).resolve(strict=True)
-    library_dir = interpreter.parent.parent / "lib"
+    interpreter = Path(sys.executable).absolute()
+    library_dir = interpreter.resolve(strict=True).parent.parent / "lib"
     launcher = tmp_path / "image-python"
     launcher.write_text(
         "#!/bin/sh\n"

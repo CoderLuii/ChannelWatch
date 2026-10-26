@@ -64,9 +64,15 @@ COPYLEFT_LICENSE_FETCHER = ROOT / "scripts" / "release" / "copyleft_licenses.py"
 CATALOG_HISTORY_FILE = ROOT / "scripts" / "release" / "update-catalog-history.json"
 INITIAL_V2_BRIDGE_VERSION = (0, 9, 18)
 MAX_CATALOG_RELEASES = 64
-LEGACY_PROTOCOL3_APP_UPDATE_SOURCES = ("1.4.0", "1.4.1", "1.4.5")
+LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
+    "1.6.0": ("1.4.0", "1.4.1", "1.4.5"),
+    "1.6.1": ("1.4.0", "1.4.1", "1.4.5", "1.6.0"),
+}
+CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
+    "1.6.0": ("1.5.3",),
+    "1.6.1": ("1.5.3", "1.6.0"),
+}
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
-LEGACY_PROTOCOL3_APP_UPDATE_TARGET = "1.6.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
 LEGAL_RELEASE_FILES = {
     "LICENSE": "core/release_legal/LICENSE",
@@ -213,29 +219,26 @@ def project_current_release_v2(
     projected = copy.deepcopy(catalog_release)
     if legacy_app_update_sources in (None, []):
         return projected
-    expected_sources = list(LEGACY_PROTOCOL3_APP_UPDATE_SOURCES)
-    if legacy_app_update_sources != expected_sources:
-        raise ValueError(
-            "legacy_app_update_sources must be exactly the sorted, published "
-            "v1.4 compatibility set."
-        )
-    if any(
-        _release_version(source) >= _release_version(VERIFIED_DEPENDENCY_FOUNDATION)
-        for source in expected_sources
-    ):
-        raise ValueError(
-            "Legacy app-update sources must predate the verified-dependency foundation."
-        )
     version = str(projected.get("version") or "").strip().lstrip("v")
     _release_version(version)
+    legacy_contract = LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS.get(version)
+    canonical_contract = CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS.get(version)
+    if legacy_contract is None or canonical_contract is None:
+        raise ValueError(
+            "Legacy protocol-3 projection is not allowed for this release target."
+        )
+    expected_sources = list(legacy_contract)
+    if legacy_app_update_sources != expected_sources:
+        raise ValueError(
+            "legacy_app_update_sources must match the exact target contract."
+        )
     if (
-        version != LEGACY_PROTOCOL3_APP_UPDATE_TARGET
-        or projected.get("delivery_mode") != "app_update"
+        projected.get("delivery_mode") not in {"app_update", "app_update_with_image_refresh"}
         or projected.get("image_required") is not False
         or projected.get("updater_protocol") != 4
         or projected.get("minimum_image_version") != VERIFIED_DEPENDENCY_FOUNDATION
         or projected.get("compatible_source_application_versions")
-        != [VERIFIED_DEPENDENCY_FOUNDATION]
+        != list(canonical_contract)
         or projected.get("compatible_launcher_protocols") != [4]
     ):
         raise ValueError(
@@ -244,6 +247,7 @@ def project_current_release_v2(
         )
     projected.update(
         {
+            "delivery_mode": "app_update",
             "image_refresh_recommended": False,
             "minimum_image_version": LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION,
             "updater_protocol": 2,
@@ -616,6 +620,19 @@ def resolve_automatic_install_after(
     )
 
 
+def resolve_timing_override(
+    explicit_value: str | None, configured_value: str | None, *, name: str
+) -> str | None:
+    if explicit_value and configured_value and _parse_utc(
+        explicit_value, name=name
+    ) != _parse_utc(configured_value, name=name):
+        raise ValueError(
+            f"{name} override must match release-config.json; prepare synchronized "
+            "release dates before building the candidate."
+        )
+    return explicit_value or configured_value
+
+
 def resolve_publication_time(
     created_at: str,
     explicit_value: str | None,
@@ -623,7 +640,9 @@ def resolve_publication_time(
 ) -> str:
     """Return a deterministic planned publication not earlier than its source."""
 
-    selected = explicit_value or configured_value
+    selected = resolve_timing_override(
+        explicit_value, configured_value, name="publication_time"
+    )
     if not isinstance(selected, str) or not selected.strip():
         raise ValueError("A planned publication_time is required.")
     publication_time = selected.strip()
@@ -1040,6 +1059,10 @@ def main() -> int:
             if not isinstance(configured_automatic_install_allowed, bool):
                 raise ValueError(
                     "release-config.json automatic_install_allowed must be a boolean."
+                )
+            for field in ("publication_time", "automatic_install_after"):
+                resolve_timing_override(
+                    getattr(args, field), release_config.get(field), name=field
                 )
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("release-config.json could not be read safely.") from exc

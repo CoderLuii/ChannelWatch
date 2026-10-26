@@ -10,8 +10,8 @@ ChannelWatch is built on open-source software. This file lists the major runtime
 
 | Package | Version (minimum) | License | Notes |
 |---------|-------------------|---------|-------|
-| [setuptools](https://github.com/pypa/setuptools) | >=84.0.0 | MIT | Python packaging |
-| [pip](https://pip.pypa.io/) | >=26.2.1 | MIT | Package installer |
+| [setuptools](https://github.com/pypa/setuptools) | >=84.2.1 | MIT | Python packaging |
+| [pip](https://pip.pypa.io/) | >=26.2.2 | MIT | Package installer |
 | [requests](https://requests.readthedocs.io/) | >=2.34.2 | Apache 2.0 | HTTP client |
 | [httpx](https://www.python-httpx.org/) | >=0.28.1 | BSD 3-Clause | Async HTTP client |
 | [pytz](https://pythonhosted.org/pytz/) | >=2026.5 | MIT | Timezone support |
@@ -34,7 +34,7 @@ The packages above pull in additional dependencies. This table records the exact
 | Package | Locked version | License | Notes |
 |---------|----------------|---------|-------|
 | [anyio](https://anyio.readthedocs.io/) | 4.15.1 | MIT | Async compatibility layer |
-| [certifi](https://github.com/certifi/python-certifi) | 2026.7.22 | MPL 2.0 | CA certificate bundle |
+| [certifi](https://github.com/certifi/python-certifi) | 2026.10.19 | MPL 2.0 | CA certificate bundle |
 | [charset-normalizer](https://github.com/jawah/charset_normalizer) | 3.5.2 | MIT | Character encoding detection |
 | [click](https://click.palletsprojects.com/) | 8.5.0 | BSD 3-Clause | CLI framework used by uvicorn |
 | [h11](https://github.com/python-hyper/h11) | 0.16.0 | MIT | HTTP/1.1 implementation |
@@ -81,7 +81,7 @@ No modifications have been made to the `zeroconf` library itself.
 
 ## Container base packages
 
-The published image contains unmodified Debian Bookworm packages from the official Python 3.14.8 image. Both Python stages use image index `sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83`. The image retains Debian package copyright files under `/usr/share/doc` and full common-license texts under `/usr/share/common-licenses`.
+The published image contains unmodified Debian Bookworm packages from the official Python 3.14.9 image. Both Python stages use image index `sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae`. The image retains Debian package copyright files under `/usr/share/doc` and full common-license texts under `/usr/share/common-licenses`.
 
 The image and app-update archive include the complete GPL 1.0, GPL 2.0,
 GPL 3.0, LGPL 2.0, LGPL 2.1, LGPL 3.0, and GCC Runtime Library Exception 3.1

@@ -2507,6 +2507,192 @@ def verify_declared_impact(
     )
 
 
+def optional_base_digest_refresh(before: str | None, after: str | None) -> bool:
+    """Recognize only the existing official base lines with new immutable pins."""
+    if before is None or after is None:
+        return False
+    pattern = re.compile(
+        r"^(FROM (?:--platform=\$BUILDPLATFORM )?"
+        r"(node:24-alpine|python:3\.14-slim-bookworm)@sha256:)"
+        r"([0-9a-f]{64})( AS [A-Za-z0-9_-]+)?$"
+    )
+    normalized = []
+    identities = []
+    for content in (before, after):
+        lines = []
+        bases: dict[str, list[str]] = {}
+        for line in _without_docker_release_metadata(content).splitlines():
+            match = pattern.fullmatch(line)
+            if match:
+                bases.setdefault(match[2], []).append(match[3])
+                line = match[1] + "<immutable-digest>" + (match[4] or "")
+            lines.append(line)
+        if (
+            set(bases) != {"node:24-alpine", "python:3.14-slim-bookworm"}
+            or len(bases["node:24-alpine"]) != 1
+            or len(bases["python:3.14-slim-bookworm"]) != 2
+            or len(set(bases["python:3.14-slim-bookworm"])) != 1
+        ):
+            return False
+        normalized.append(lines)
+        identities.append(bases)
+    return normalized[0] == normalized[1] and identities[0] != identities[1]
+
+
+def _optional_proof_json(path: Path) -> object:
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 4 * 1024 * 1024:
+        raise ValueError("Optional-image proof is not a bounded regular file.")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _optional_proof_sha256(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Optional-image artifact is not a regular file.")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_optional_native_image_proof(
+    evidence_directory: Path | None, archive: Path | None, descriptor_path: Path | None,
+    *, version: str, source_commit: str,
+) -> bool:
+    """Rebind both native image receipts and logs to the sealed OCI bytes."""
+    if evidence_directory is None or archive is None or descriptor_path is None:
+        return False
+    try:
+        descriptor = _optional_proof_json(descriptor_path)
+        platforms = descriptor["platforms"]
+        if descriptor.get("schema") != 1 or len(platforms) != 2:
+            return False
+        by_arch = {row["platform"]: row for row in platforms}
+        if set(by_arch) != {"linux/amd64", "linux/arm64"}:
+            return False
+        archive_sha = _optional_proof_sha256(archive)
+        descriptor_sha = _optional_proof_sha256(descriptor_path)
+        for architecture in ("amd64", "arm64"):
+            row = _optional_proof_json(evidence_directory / f"native-image-{architecture}.json")
+            platform = by_arch[f"linux/{architecture}"]
+            if type(row.get("schema")) is not int or row.get("native") is not True:
+                return False
+            expected = {
+                "schema": 1, "status": "passed", "native": True,
+                "architecture": architecture, "source_commit": source_commit,
+                "version": version, "oci_archive_sha256": archive_sha,
+                "descriptor_sha256": descriptor_sha,
+                "image_index_digest": descriptor["image_index"]["digest"],
+                "platform_manifest_digest": platform["manifest"]["digest"],
+                "config_digest": platform["config"]["digest"],
+                "launcher_protocol": 4, "python_version": "3.14.9",
+                "container_log_sha256": _optional_proof_sha256(evidence_directory / f"native-image-{architecture}.log"),
+            }
+            if any(row.get(key) != value for key, value in expected.items()):
+                return False
+            if any(re.fullmatch(r"sha256:[0-9a-f]{64}", str(row.get(key))) is None for key in (
+                "image_index_digest", "platform_manifest_digest", "config_digest",
+            )):
+                return False
+            if any(row.get(key) is not True for key in (
+                "runtime_ready", "cli", "headless_browser", "same_container_restart", "persistence",
+            )):
+                return False
+            preserved = row.get("settings_key_preserved")
+            if not isinstance(preserved, dict) or set(preserved) != {"/config/settings.json", "/config/encryption.key"}:
+                return False
+            if any(_HEX_64_RE.fullmatch(str(value)) is None for value in preserved.values()):
+                return False
+        return True
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def verify_optional_legacy_proof(
+    *, config: dict[str, object], config_path: Path,
+    receipts_directory: Path | None, catalog: Path | None, bundle: Path | None,
+    source_commit: str,
+) -> bool:
+    """Reuse signed-asset checks and the complete direct/chained native matrix."""
+    if receipts_directory is None or catalog is None or bundle is None:
+        return False
+    try:
+        modules = []
+        for name in ("verify-legacy-app-upgrade", "aggregate-legacy-app-upgrades"):
+            spec = importlib.util.spec_from_file_location(name.replace("-", "_"), SCRIPT_DIR / f"{name}.py")
+            if spec is None or spec.loader is None:
+                return False
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            modules.append(module)
+        verifier, aggregate = modules
+        verifier.verify_signed_assets(catalog, bundle, version=str(config["version"]), source_commit=source_commit)
+        baselines = _optional_proof_json(SCRIPT_DIR / "legacy-app-upgrade-baselines.json")
+        receipts = {
+            (architecture, mode, scenario[0]): _optional_proof_json(
+                receipts_directory / f"legacy-app-upgrade-{architecture}-{mode}-{scenario[0]}.json"
+            )
+            for architecture in ("amd64", "arm64")
+            for mode in aggregate.QUALIFICATION_MODES
+            for scenario in aggregate.SCENARIOS
+        }
+        result = aggregate.aggregate(
+            receipts, baselines=baselines, target_version=str(config["version"]),
+            source_commit=source_commit, catalog_sha256=_optional_proof_sha256(catalog),
+            bundle_sha256=_optional_proof_sha256(bundle), evidence_directory=receipts_directory,
+            release_config=config, release_config_sha256=_optional_proof_sha256(config_path),
+        )
+        return result.get("status") == "passed" and result.get("native_receipt_count") == 24
+    except Exception:
+        return False
+
+
+def apply_optional_base_refresh(
+    result: ReleaseImpact, *, before: dict[str, str | None], after: dict[str, str | None],
+    config: dict[str, object], args: argparse.Namespace, source_commit: str,
+    public_keys: dict[str, str] | None,
+) -> tuple[ReleaseImpact, bool]:
+    path = "deploy/docker/Dockerfile"
+    if path not in result.triggering_paths or not optional_base_digest_refresh(before.get(path), after.get(path)):
+        return result, False
+    if (
+        public_keys is not None or config.get("version") != "1.6.1"
+        or config.get("minimum_image_version") != "1.5.3"
+        or config.get("image_required") is not False
+        or config.get("delivery_mode") != "app_update_with_image_refresh"
+        or config.get("compatible_source_application_versions") != ["1.5.3", "1.6.0"]
+        or config.get("legacy_app_update_sources") != ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
+        or args.runtime_catalog is None or args.runtime_capability_evidence is None
+    ):
+        return result, False
+    signed = _signed_protocol_four_runtime_variants(
+        config=config, catalog_path=args.runtime_catalog,
+        expected_source_commit=source_commit, public_keys=None,
+    )
+    if signed is None or any(
+        descriptor.get("python_version") != "3.14.8"
+        or descriptor.get("python_cache_tag") != "cpython-314"
+        or descriptor.get("minimum_libc_version") != [2, 36]
+        for descriptor in signed[1].values()
+    ):
+        return result, False
+    if not _read_protocol_four_runtime_evidence(
+        config=config, catalog_path=args.runtime_catalog,
+        evidence_path=args.runtime_capability_evidence,
+        expected_source_commit=source_commit, public_keys=None,
+    ) or not verify_optional_legacy_proof(
+        config=config, config_path=Path(args.config), receipts_directory=args.legacy_app_receipts,
+        catalog=args.legacy_app_catalog, bundle=args.legacy_app_bundle, source_commit=source_commit,
+    ):
+        return result, False
+    if not args.pre_image_phase and not verify_optional_native_image_proof(
+        args.native_image_evidence, args.candidate_image_archive, args.candidate_image_descriptor,
+        version=str(config["version"]), source_commit=source_commit,
+    ):
+        return result, False
+    return _impact(set(result.triggering_paths) - {path}, set(result.refresh_paths) | {path}), args.pre_image_phase
+
+
 def changed_paths(base_ref: str, target_ref: str) -> list[str]:
     result = subprocess.run(
         ["git", "diff", "--name-only", f"{base_ref}..{target_ref}"],
@@ -2538,6 +2724,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--minimum-image-app-update-bundle", type=Path)
     parser.add_argument("--runtime-catalog", type=Path)
     parser.add_argument("--runtime-capability-evidence", type=Path)
+    parser.add_argument("--legacy-app-receipts", type=Path)
+    parser.add_argument("--legacy-app-catalog", type=Path)
+    parser.add_argument("--legacy-app-bundle", type=Path)
+    parser.add_argument("--native-image-evidence", type=Path)
+    parser.add_argument("--candidate-image-archive", type=Path)
+    parser.add_argument("--candidate-image-descriptor", type=Path)
+    parser.add_argument("--pre-image-phase", action="store_true")
     parser.add_argument(
         "--public-key",
         action="append",
@@ -2634,13 +2827,20 @@ def main(argv: list[str] | None = None) -> int:
         expected_source_commit=target_commit,
         public_keys=public_keys,
     )
+    result, pending_image = apply_optional_base_refresh(
+        result, before=before, after=after, config=config, args=args,
+        source_commit=target_commit, public_keys=public_keys,
+    )
     result = apply_release_version_policy(result, version_policy)
     verify_declared_impact(
         result,
         declared_image_required=declared,
         declared_delivery_mode=declared_delivery_mode,
     )
-    print(json.dumps(result._asdict(), indent=2))
+    output = result._asdict()
+    if pending_image:
+        output.update(status="pending_native_image", publishable=False)
+    print(json.dumps(output, indent=2))
     return 0
 
 

@@ -26,6 +26,7 @@ SHA40 = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 ARCHITECTURES = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 LABEL = "channelwatch.native-image-qualification=true"
+IMAGE_PYTHON_VERSION = "3.14.9"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -272,10 +273,13 @@ def _preservation(runner: Runner, container: str) -> dict[str, str]:
 
 def _image_runtime_identity(runner: Runner, container: str, version: str) -> int:
     probe = (
-        "import json,runpy,sys;sys.path.insert(0,'/app');"
+        "import json,platform,runpy,sys;sys.path.insert(0,'/app');"
         "scope=runpy.run_path('/app/core/runtime_launcher.py');"
         "assert str(scope['IMAGE_APP_DIR'])=='/app';"
-        "print(json.dumps(scope['launcher_protocol_status']()))"
+        "identity=scope['launcher_protocol_status']();"
+        "identity.update(python_version=platform.python_version(),"
+        "python_executable=sys.executable,python_prefix=sys.prefix);"
+        "print(json.dumps(identity))"
     )
     result = _run(
         runner,
@@ -293,6 +297,12 @@ def _image_runtime_identity(runner: Runner, container: str, version: str) -> int
         or identity["launcher_protocol"] != 4
     ):
         raise NativeImageError("Candidate image did not report the expected protocol-4 identity.")
+    if (
+        identity.get("python_version") != IMAGE_PYTHON_VERSION
+        or identity.get("python_executable") != "/venv/bin/python"
+        or identity.get("python_prefix") != "/venv"
+    ):
+        raise NativeImageError("Candidate image did not report the expected image-owned Python runtime.")
     return identity["launcher_protocol"]
 
 
@@ -389,6 +399,7 @@ def qualify(args: argparse.Namespace, *, runner: Runner = subprocess.run) -> dic
                 "config_digest": platform_row["config"]["digest"],
                 "runtime_ready": bool(startup), "cli": True, "headless_browser": True,
                 "launcher_protocol": launcher_protocol,
+                "python_version": IMAGE_PYTHON_VERSION,
                 "same_container_restart": True, "persistence": True,
                 "settings_key_preserved": before,
                 "cli_output_sha256": hashlib.sha256(cli.stdout.encode()).hexdigest(),

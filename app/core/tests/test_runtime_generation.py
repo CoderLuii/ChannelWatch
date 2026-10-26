@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -187,6 +188,32 @@ def test_valid_descriptor_is_accepted():
     from core.runtime_generation import validate_runtime_descriptor
 
     validate_runtime_descriptor(_valid_descriptor_for_validation(), _platform())
+
+
+@pytest.mark.parametrize("image_python", [(3, 14, 8), (3, 14, 9)])
+def test_retained_python_floor_accepts_old_and_new_image_patches(monkeypatch, image_python):
+    from core import runtime_generation
+
+    descriptor = _valid_descriptor_for_validation()
+    descriptor.update(python_version="3.14.8", python_cache_tag="cpython-314")
+    _refresh_generation_id(descriptor)
+    platform_value = replace(_platform(), python_cache_tag="cpython-314")
+    monkeypatch.setattr(runtime_generation.sys, "version_info", image_python)
+
+    runtime_generation.validate_runtime_descriptor(descriptor, platform_value)
+
+
+def test_newer_python_floor_cannot_exclude_a_retained_image_silently(monkeypatch):
+    from core import runtime_generation
+
+    descriptor = _valid_descriptor_for_validation()
+    descriptor.update(python_version="3.14.9", python_cache_tag="cpython-314")
+    _refresh_generation_id(descriptor)
+    platform_value = replace(_platform(), python_cache_tag="cpython-314")
+    monkeypatch.setattr(runtime_generation.sys, "version_info", (3, 14, 8))
+
+    with pytest.raises(RuntimeGenerationError, match="different CPython"):
+        runtime_generation.validate_runtime_descriptor(descriptor, platform_value)
 
 
 @pytest.mark.parametrize(

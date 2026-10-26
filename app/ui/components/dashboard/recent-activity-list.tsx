@@ -198,7 +198,7 @@ export function RecentActivityList({
             <div className="flex flex-wrap items-center gap-2">
               <Popover open={filtersOpen} onOpenChange={setFiltersOpen}>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="min-h-11 max-w-44 gap-1 text-xs sm:min-h-8" aria-label={t("activity.aria.filterType")}>
+                  <Button variant="outline" size="sm" className="min-h-11 max-w-44 gap-1 text-xs sm:min-h-8" aria-label={`${filterButtonLabel}. ${t("activity.aria.filterType")}`}>
                     <Filter className="h-3 w-3" />
                     <span className="truncate">{filterButtonLabel}</span>
                   </Button>
@@ -337,8 +337,9 @@ export function RecentActivityList({
                         ) : <Video className="h-4 w-4 text-muted-foreground/70" />}
                       </div>
                       <div className="min-w-0 flex-1 pr-1">
-                        <div className="mb-1 flex min-w-0 flex-wrap items-start gap-1">
-                          <p className="min-w-0 flex-1 break-words text-sm font-medium leading-snug [overflow-wrap:anywhere]">{displayTitle}</p>
+                        <p className="min-w-0 break-words text-sm font-medium leading-snug [overflow-wrap:anywhere]">{displayTitle}</p>
+                        <p className="mt-1 max-w-full break-words text-[13px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{activity.message}</p>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
                           {isTestAlert && (
                             <Badge
                               variant="outline"
@@ -350,10 +351,12 @@ export function RecentActivityList({
                           {activity.dvr_name && (
                             <Badge variant="secondary" className="h-auto min-h-5 min-w-0 max-w-full whitespace-normal break-words px-1 py-0 text-xs font-normal leading-snug [overflow-wrap:anywhere]" title={activity.dvr_name}>{activity.dvr_name}</Badge>
                           )}
+                          <Badge variant="outline" className="h-auto min-h-5 max-w-full whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere] sm:hidden">
+                            {formatTimeAgo(activity.timestamp)}
+                          </Badge>
                         </div>
-                        <p className="max-w-full break-words text-[13px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{activity.message}</p>
                       </div>
-                      <Badge variant="outline" className="h-auto min-h-5 max-w-[35%] flex-shrink-0 whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere]">
+                      <Badge variant="outline" className="hidden h-auto min-h-5 max-w-[35%] flex-shrink-0 whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere] sm:inline-flex">
                         {formatTimeAgo(activity.timestamp)}
                       </Badge>
                     </button>

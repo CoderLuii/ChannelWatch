@@ -113,6 +113,13 @@ def main() -> int:
     last_errors: list[str] = []
     for attempt in range(1, args.attempts + 1):
         try:
+            legacy_sources = verifier.load_legacy_app_update_sources(
+                VERIFIER.with_name("release-config.json"),
+                expected_version=args.version,
+            )
+            catalog_delivery_mode = (
+                "app_update" if legacy_sources else args.delivery_mode or "app_update"
+            )
             bridge_manifest_bytes = verifier.fetch_bytes(
                 args.url,
                 max_bytes=verifier.MAX_MANIFEST_BYTES,
@@ -178,6 +185,16 @@ def main() -> int:
             )
             if not isinstance(current_release, dict):
                 raise ValueError("The signed v2 catalog is missing the current release.")
+            raw_current_release = next(
+                item
+                for item in raw_catalog["payload"]["releases"]
+                if item.get("version") == args.version
+            )
+            verifier.verify_legacy_app_release_projection(
+                raw_current_release,
+                legacy_app_update_sources=legacy_sources,
+                expected_version=args.version,
+            )
             current_bundle = verifier.fetch_bytes(
                 str(current_release.get("bundle_url") or ""),
                 max_bytes=verifier.MAX_BUNDLE_BYTES,
@@ -192,12 +209,14 @@ def main() -> int:
                 expected_recommended_image_version=(
                     args.recommended_image_version or args.version
                 ),
+                legacy_app_update_sources=legacy_sources,
             )
             last_errors.extend(
                 verify(
                     {"payload": current_release},
                     args,
                     expected_bundle_sha256=args.bundle_sha256,
+                    expected_delivery_mode=catalog_delivery_mode,
                 )
             )
             if not last_errors:

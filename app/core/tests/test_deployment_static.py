@@ -51,7 +51,7 @@ def test_dockerfile_pins_reviewed_official_python_base_for_both_python_stages():
 
     pinned_base = (
         "python:3.14-slim-bookworm@sha256:"
-        "48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83"
+        "945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae"
     )
     assert dockerfile.count(f"FROM {pinned_base}") == 2
     assert f"FROM {pinned_base} AS python-deps" in dockerfile
@@ -114,7 +114,7 @@ def test_dockerfile_builds_static_ui_on_native_build_platform():
 
     assert (
         "FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:"
-        "ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 "
+        "06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 "
         "AS ui-builder"
     ) in dockerfile
     assert "FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/python" not in dockerfile

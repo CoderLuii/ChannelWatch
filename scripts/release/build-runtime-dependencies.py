@@ -423,6 +423,28 @@ def _declared_console_scripts(wheelhouse: Path) -> dict[str, str]:
     return scripts
 
 
+def _generated_console_script_header(payload: bytes, executable: bytes) -> bool:
+    if not executable or any(value < 32 or value == 127 for value in executable):
+        return False
+    if b" " not in executable and payload.startswith(b"#!" + executable + b"\n"):
+        return True
+    if not executable.startswith(b"/"):
+        return False
+    if b" " in executable:
+        if any(value in executable for value in (b'"', b"\\", b"$", b"`")):
+            return False
+        shell_executable = b'"' + executable + b'"'
+    else:
+        if any(value in executable for value in b"'\"\\$`;&|<>()*?[]{}"):
+            return False
+        shell_executable = executable
+    header = (
+        b"#!/bin/sh\n'''exec' " + shell_executable
+        + b' "$0" "$@"\n\' \'\'\'\n'
+    )
+    return payload.startswith(header)
+
+
 def _remove_generated_console_scripts(
     site_packages: Path, wheelhouse: Path, python_executable: str
 ) -> None:
@@ -442,15 +464,14 @@ def _remove_generated_console_scripts(
     executable = python_executable.encode("utf-8")
     for name, path in sorted(actual.items()):
         metadata = path.lstat()
-        payload = path.read_bytes()
-        first_line = payload.splitlines()[:1]
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
-            or not first_line
-            or not first_line[0].startswith(b"#!")
-            or executable not in first_line[0]
         ):
+            raise DependencyBuildError(
+                f"Installed console script is not a generated launcher: {name}"
+            )
+        if not _generated_console_script_header(path.read_bytes(), executable):
             raise DependencyBuildError(
                 f"Installed console script is not a generated launcher: {name}"
             )

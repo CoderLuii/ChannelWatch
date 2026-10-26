@@ -860,13 +860,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         />
       </div>
 
-      <MaintenanceWindowsCard
-        selectedDvr={selectedDvr}
-        refreshKey={lastUpdated?.getTime() ?? 0}
-      />
-
       {/* Recent Activity and Upcoming Recordings side by side */}
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div data-testid="dashboard-activity-recordings" className="grid gap-4 xl:grid-cols-2">
         <RecentActivityList
           recentActivity={recentActivity}
           filteredActivity={filteredActivity}
@@ -895,6 +890,11 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           count={upcomingRecordings}
         />
       </div>
+
+      <MaintenanceWindowsCard
+        selectedDvr={selectedDvr}
+        refreshKey={lastUpdated?.getTime() ?? 0}
+      />
 
     </div>
   );

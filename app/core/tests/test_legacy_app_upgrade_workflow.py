@@ -40,6 +40,10 @@ def test_legacy_upgrade_job_runs_exact_native_matrix_headlessly():
     ]
     assert all(f"            {scenario}\n" in text for scenario in scenarios)
     assert "python scripts/release/verify-legacy-app-upgrade.py" in text
+    assert "for qualification_mode in direct chained" in text
+    assert '--qualification-mode "${qualification_mode}"' in text
+    assert "--bridge-catalog" in text
+    assert "--bridge-bundle" in text
     assert "--release-config scripts/release/release-config.json" in text
     assert "BROWSER: none" in text
     assert "PLAYWRIGHT_HTML_OPEN: never" in text
@@ -58,6 +62,7 @@ def test_legacy_upgrade_gate_is_mandatory_and_aggregates_all_receipts():
     assert "for architecture in amd64 arm64" in text
     assert "jq -r '.scenarios[].id' scripts/release/legacy-app-upgrade-baselines.json" in text
     assert "channelwatch-legacy-app-upgrade-${tag}-logs.tar" in text
+    assert "for qualification_mode in direct chained" in text
 
 
 def test_legacy_upgrade_evidence_is_carried_through_release_and_public_checksums():
@@ -67,16 +72,16 @@ def test_legacy_upgrade_evidence_is_carried_through_release_and_public_checksums
     for fragment in (
         "channelwatch-legacy-app-upgrade-${TAG}-evidence.json",
         "channelwatch-legacy-app-upgrade-${TAG}-logs.tar",
-        "channelwatch-legacy-app-upgrade-${TAG}-${architecture}-${scenario}.json",
+        "channelwatch-legacy-app-upgrade-${TAG}-${architecture}-${qualification_mode}-${scenario}.json",
     ):
         assert fragment in release
     for fragment in (
         "channelwatch-legacy-app-upgrade-${tag}-evidence.json",
         "channelwatch-legacy-app-upgrade-${tag}-logs.tar",
-        "channelwatch-legacy-app-upgrade-${tag}-${architecture}-${scenario}.json",
+        "channelwatch-legacy-app-upgrade-${tag}-${architecture}-${qualification_mode}-${scenario}.json",
     ):
         assert fragment in public
-    assert "expected_checksum_count=32" in public
+    assert "expected_checksum_count=44" in public
 
 
 def test_every_update_asset_verification_is_explicitly_config_bound():

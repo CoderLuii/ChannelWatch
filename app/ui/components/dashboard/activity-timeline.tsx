@@ -233,7 +233,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             type="button"
             onClick={() => onToggleVisibility('streams')}
             className="flex min-h-11 items-center gap-1.5 rounded-md px-2 opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            aria-label={t("timeline.ariaToggleLiveTV")}
+            aria-label={`${t("timeline.liveTV")}. ${t("timeline.ariaToggleLiveTV")}`}
             aria-pressed={chartVisibility.streams}
           >
             <div className="w-4 h-4 rounded flex items-center justify-center" style={{ backgroundColor: chartVisibility.streams ? 'var(--chart-streams)' : 'transparent', border: '1px solid var(--chart-streams)' }}>
@@ -245,7 +245,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             type="button"
             onClick={() => onToggleVisibility('recordings')}
             className="flex min-h-11 items-center gap-1.5 rounded-md px-2 opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            aria-label={t("timeline.ariaToggleRecordings")}
+            aria-label={`${t("timeline.recordings")}. ${t("timeline.ariaToggleRecordings")}`}
             aria-pressed={chartVisibility.recordings}
           >
             <div className="w-4 h-4 rounded flex items-center justify-center" style={{ backgroundColor: chartVisibility.recordings ? 'var(--chart-recordings)' : 'transparent', border: '1px solid var(--chart-recordings)' }}>
@@ -257,7 +257,7 @@ export function ActivityTimeline({ streamingData, chartVisibility, onToggleVisib
             type="button"
             onClick={() => onToggleVisibility('vod')}
             className="flex min-h-11 items-center gap-1.5 rounded-md px-2 opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            aria-label={t("timeline.ariaToggleVod")}
+            aria-label={`${t("timeline.vod")}. ${t("timeline.ariaToggleVod")}`}
             aria-pressed={chartVisibility.vod}
           >
             <div className="w-4 h-4 rounded flex items-center justify-center" style={{ backgroundColor: chartVisibility.vod ? 'var(--chart-vod)' : 'transparent', border: '1px solid var(--chart-vod)' }}>

@@ -650,6 +650,18 @@ SENSITIVE_FIELDS = {
     "webhooks.secret",
 }
 
+APPRISE_SENSITIVE_FIELDS = {
+    "apprise_pushover",
+    "apprise_discord",
+    "apprise_email",
+    "apprise_email_to",
+    "apprise_telegram",
+    "apprise_slack",
+    "apprise_gotify",
+    "apprise_matrix",
+    "apprise_custom",
+}
+
 MASKED_SENTINEL = "****"
 
 # Deliberately empty: all SENSITIVE_FIELDS are masked on GET /api/settings;
@@ -1877,8 +1889,15 @@ def _resolve_masked_settings_and_save(settings: AppSettings) -> None:
 
     with configuration_maintenance_lock(backend_config.CONFIG_DIR):
         existing = backend_config._load_settings_locked()
+        clear_apprise_fields = set(settings.clear_apprise_fields)
         for field_name in SENSITIVE_FIELDS:
             if "." in field_name:
+                continue
+            if (
+                field_name in APPRISE_SENSITIVE_FIELDS
+                and field_name in clear_apprise_fields
+            ):
+                setattr(settings, field_name, "")
                 continue
             incoming = getattr(settings, field_name, "")
             if incoming in ("", None, MASKED_SENTINEL):

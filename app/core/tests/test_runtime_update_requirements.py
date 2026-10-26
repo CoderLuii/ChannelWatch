@@ -103,3 +103,21 @@ def test_runtime_dependency_builder_accepts_release_inputs():
     assert len(locked) == 40
     assert {item.name: item.version for item in locked}["sqlalchemy"] == "2.1.4"
     assert all(item.name != "greenlet" for item in locked)
+
+
+def test_certifi_lock_and_constraints_include_the_compromised_ca_fix():
+    for path in (
+        CONSTRAINTS,
+        ROOT / "deploy/requirements/dev.constraints.txt",
+        LOCK,
+    ):
+        version = pins(path)["certifi"]
+        assert tuple(int(part) for part in version.split(".")) >= (2026, 10, 19)
+
+
+def test_fixed_management_pip_cannot_downgrade_or_enter_the_signed_closure():
+    for path in (CONSTRAINTS, ROOT / "deploy/requirements/dev.constraints.txt"):
+        assert pins(path)["pip"] == "26.2.2"
+    assert "pip>=26.2.2" in RUNTIME.read_text(encoding="utf-8")
+    assert "pip" not in direct_names(REQ)
+    assert "pip" not in pins(LOCK)

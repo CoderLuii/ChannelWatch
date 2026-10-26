@@ -37,6 +37,18 @@ EXPECTED_SCENARIOS = [
     ("overlay-1.4.1-to-1.4.5", "1.4.1", "1.4.5", "1.4.5"),
     ("stock-1.4.5", "1.4.5", "1.4.5", None),
 ]
+LEGACY_SOURCE_CONTRACTS = {
+    "1.6.0": ["1.4.0", "1.4.1", "1.4.5"],
+    "1.6.1": ["1.4.0", "1.4.1", "1.4.5", "1.6.0"],
+}
+BRIDGE_RELEASE_160 = {
+    "version": "1.6.0",
+    "source_commit": "b48057184752c912e4ae9b3a474374704d896073",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-catalog-v1.6.0.json",
+    "catalog_sha256": "bc9bcdb38c44af581835fdd4f29e2a2550eb8bb5d51b8308395a803110feb185",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-app-v1.6.0.zip",
+    "bundle_sha256": "f8cbdca71ef254df84b0e3b472facce8ece201b4928218caf757f4c5ddf53914",
+}
 LEGACY_IMAGE_BOOTSTRAP_PATHS = (
     "/usr/local/bin/channelwatch",
     "/app/channelwatch-image.json",
@@ -79,14 +91,21 @@ def sha256_file(path: Path) -> str:
 
 
 def validate_baselines(value: object, *, target_version: str) -> list[dict[str, Any]]:
-    if not isinstance(value, dict) or value.get("schema") != 1:
+    expected_schema = 1 if target_version == "1.6.0" else 2
+    if not isinstance(value, dict) or value.get("schema") != expected_schema:
         raise LegacyAppUpgradeError("Legacy baseline fixture schema is invalid.")
     if value.get("target_version") != target_version:
         raise LegacyAppUpgradeError("Legacy baseline target version is invalid.")
     if value.get("repository") != "coderluii/channelwatch":
         raise LegacyAppUpgradeError("Legacy baseline repository is invalid.")
-    if value.get("legacy_sources") != ["1.4.0", "1.4.1", "1.4.5"]:
+    expected_sources = LEGACY_SOURCE_CONTRACTS.get(target_version)
+    if expected_sources is None or value.get("legacy_sources") != expected_sources:
         raise LegacyAppUpgradeError("Legacy source versions are incomplete.")
+    if target_version == "1.6.1":
+        if value.get("qualification_modes") != ["direct", "chained"]:
+            raise LegacyAppUpgradeError("Legacy qualification modes are incomplete.")
+        if value.get("bridge_release") != BRIDGE_RELEASE_160:
+            raise LegacyAppUpgradeError("Legacy bridge release is not the immutable v1.6.0 release.")
     scenarios = value.get("scenarios")
     expected = [
         {"id": key, "image_version": image, "source_application_version": source, "overlay_version": overlay}
@@ -114,7 +133,7 @@ def validate_release_config(value: object, *, target_version: str) -> list[str]:
     if not isinstance(value, dict) or value.get("version") != target_version:
         raise LegacyAppUpgradeError("Release configuration target version is invalid.")
     sources = value.get("legacy_app_update_sources")
-    if sources != ["1.4.0", "1.4.1", "1.4.5"]:
+    if sources != LEGACY_SOURCE_CONTRACTS.get(target_version):
         raise LegacyAppUpgradeError("Release configuration legacy sources are incomplete.")
     return sources
 
@@ -136,7 +155,9 @@ def verify_signed_assets(catalog: Path, bundle: Path, *, version: str, source_co
         raise LegacyAppUpgradeError("Candidate legacy catalog or app bundle is not validly signed.") from exc
     if metadata.get("git_sha") != source_commit:
         raise LegacyAppUpgradeError("Candidate app bundle source commit does not match.")
-    expected_sources = ["1.4.0", "1.4.1", "1.4.5"]
+    expected_sources = LEGACY_SOURCE_CONTRACTS.get(version)
+    if expected_sources is None:
+        raise LegacyAppUpgradeError("Candidate target is not an approved legacy app-only release.")
     expected = {
         "delivery_mode": "app_update", "image_required": False,
         "image_refresh_recommended": False, "minimum_image_version": "1.4.0",
@@ -1283,14 +1304,30 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
         )
         if sha256_file(args.overlay_catalog) != overlay["catalog_sha256"] or sha256_file(args.overlay_bundle) != overlay["bundle_sha256"] or overlay_url != overlay["bundle_url"]:
             raise LegacyAppUpgradeError("Overlay assets do not match the published v1.4.5 fixture.")
+    bridge_release = bridge_url = None
+    if args.qualification_mode == "chained":
+        bridge = baselines["bridge_release"]
+        bridge_release, bridge_url = verify_signed_assets(
+            args.bridge_catalog,
+            args.bridge_bundle,
+            version=bridge["version"],
+            source_commit=bridge["source_commit"],
+        )
+        if (
+            sha256_file(args.bridge_catalog) != bridge["catalog_sha256"]
+            or sha256_file(args.bridge_bundle) != bridge["bundle_sha256"]
+            or bridge_url != bridge["bundle_url"]
+        ):
+            raise LegacyAppUpgradeError("Bridge assets do not match the immutable v1.6.0 release.")
     prefix = f"cw-legacy-{architecture}-{secrets.token_hex(5)}"
     resources = image_tool.Resources(prefix)
     root = Path(tempfile.mkdtemp(prefix=prefix + "-"))
     app = resources.container("app")
     feed = resources.container("feed")
     receipt: dict[str, Any] = {
-        "schema": 1, "status": "running", "evidence_kind": "native",
+        "schema": 2, "status": "running", "evidence_kind": "native",
         "architecture": architecture, "scenario": scenario,
+        "qualification_mode": args.qualification_mode,
         "target_version": args.target_version, "source_commit": args.source_commit,
         "catalog_sha256": sha256_file(args.catalog), "bundle_sha256": sha256_file(args.bundle),
         "release_config_sha256": sha256_file(args.release_config),
@@ -1309,10 +1346,12 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
         routes = {CATALOG_URL: args.catalog.resolve(), bundle_url: args.bundle.resolve()}
         if overlay_url:
             routes[overlay_url] = args.overlay_bundle.resolve()
+        if bridge_url:
+            routes[bridge_url] = args.bridge_bundle.resolve()
         capability_tool.write_feed(feed_root, routes)
         catalog_asset = _catalog_asset(feed_root)
         if scenario["overlay_version"]:
-            shutil.copyfile(args.overlay_catalog, catalog_asset)
+            capability_tool.publish_feed_catalog(args.overlay_catalog, catalog_asset)
         image_tool.run([
             "docker", "run", "-d", "--name", feed, "--label", LABEL, "--network", network,
             "--network-alias", "github.com", "--network-alias", "channelwatch.coderluii.dev",
@@ -1413,7 +1452,137 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
                 "before": overlay_identity_before_restart,
                 "after": overlay_identity_after_restart,
             }
-            shutil.copyfile(args.catalog, catalog_asset)
+            capability_tool.publish_feed_catalog(args.catalog, catalog_asset)
+        if args.qualification_mode == "chained":
+            bridge = baselines["bridge_release"]
+            bridge_scenario = {
+                **scenario,
+                "source_application_version": bridge["version"],
+                "overlay_version": bridge["version"],
+            }
+            bridge_before_identity = container_identity(
+                app, f"{baselines['repository']}@{manifest}"
+            )
+            bridge_before_inventory = legacy_image_inventory(
+                app, image_version=scenario["image_version"]
+            )
+            bridge_before_storage = runtime_storage(app)
+            bridge_before_hashes = image_tool.persistent_hashes(app)
+            bridge_before_db = database_canary(app, create=True)
+            capability_tool.publish_feed_catalog(args.bridge_catalog, catalog_asset)
+            checked = client.request("/api/v1/update/check", {})
+            wait_for_available_check_idle(
+                client,
+                checked=checked,
+                target_version=bridge["version"],
+                bundle_sha256=bridge["bundle_sha256"],
+                timeout=args.update_timeout,
+                description="v1.6.0 bridge update check idle",
+                status_validator=lambda value: validate_source_status(
+                    value, scenario=scenario
+                ),
+            )
+            bridge_job = wait_job(
+                client,
+                endpoint="/api/v1/update/apply",
+                version=bridge["version"],
+                timeout=args.update_timeout,
+                image_version=scenario["image_version"],
+            )
+            wait_for_overlay_idle(
+                client,
+                scenario=bridge_scenario,
+                overlay_job=bridge_job,
+                bundle_sha256=bridge["bundle_sha256"],
+                timeout=args.update_timeout,
+            )
+            bridge_attempt_id = str(bridge_job.get("scheduler_attempt_id") or "")
+            if not bridge_attempt_id:
+                raise LegacyAppUpgradeError(
+                    "v1.6.0 bridge update did not return a scheduler attempt identity."
+                )
+            bridge_observation: dict[str, Any] = {}
+            bridge_reconciled = restart_after_reconciliation(
+                app,
+                version=bridge["version"],
+                bundle_sha256=bridge["bundle_sha256"],
+                job_id=bridge_job["job_id"],
+                attempt_id=bridge_attempt_id,
+                timeout=args.update_timeout,
+                observation=bridge_observation,
+            )
+            client.set_base_url(image_tool.published_base_url(app))
+            image_tool.wait_until(
+                lambda: client.request("/healthz/startup").get("status") == "ready",
+                args.startup_timeout,
+                "v1.6.0 bridge reconciliation restart",
+            )
+            client.login()
+            require_persisted_reconciliation(
+                app,
+                version=bridge["version"],
+                bundle_sha256=bridge["bundle_sha256"],
+                job_id=bridge_job["job_id"],
+                attempt_id=bridge_attempt_id,
+                expected=bridge_reconciled,
+            )
+            bridge_status = client.request("/api/v1/update/status")
+            validate_source_status(bridge_status, scenario=bridge_scenario)
+            bridge_runtime = selected_runtime_info(
+                app,
+                version=bridge["version"],
+                application_dir=bridge_status["active_bundle"]["path"],
+            )
+            bridge_after_identity = container_identity(
+                app, f"{baselines['repository']}@{manifest}"
+            )
+            bridge_after_inventory = legacy_image_inventory(
+                app, image_version=scenario["image_version"]
+            )
+            capability_tool.validate_image_inventory(
+                bridge_before_inventory, bridge_after_inventory
+            )
+            validate_identity_invariant(
+                [bridge_before_identity, bridge_after_identity]
+            )
+            if (
+                image_tool.persistent_hashes(app) != bridge_before_hashes
+                or database_canary(app) != bridge_before_db
+                or not image_tool.credential_api_semantics(client)
+            ):
+                raise LegacyAppUpgradeError(
+                    "Persistent state changed while applying the v1.6.0 bridge."
+                )
+            bridge_after_storage = runtime_storage(
+                app, active_path=bridge_status["active_bundle"]["path"]
+            )
+            if not (
+                bridge_before_storage["dependency_generation_absent"]
+                and bridge_after_storage["dependency_generation_absent"]
+            ):
+                raise LegacyAppUpgradeError(
+                    "The v1.6.0 bridge created a dependency generation on a legacy image."
+                )
+            receipt["bridge_qualification"] = {
+                "release": bridge,
+                "catalog_sha256": sha256_file(args.bridge_catalog),
+                "bundle_sha256": sha256_file(args.bridge_bundle),
+                "job": update_job_evidence(bridge_job),
+                "status": bridge_status,
+                "selected_runtime_info": bridge_runtime,
+                "identity": {
+                    "before": bridge_before_identity,
+                    "after": bridge_after_identity,
+                },
+                "runtime_storage": {
+                    "before": bridge_before_storage,
+                    "after": bridge_after_storage,
+                },
+                "scheduler_attempt": bridge_reconciled,
+                "scheduler_observation": bridge_observation,
+            }
+            capability_tool.publish_feed_catalog(args.catalog, catalog_asset)
+            scenario = bridge_scenario
         source_status = client.request("/api/v1/update/status")
         validate_source_status(source_status, scenario=scenario)
         require_legacy_encrypted_settings(app, client)
@@ -1737,6 +1906,11 @@ def main() -> int:
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--overlay-catalog", type=Path)
     parser.add_argument("--overlay-bundle", type=Path)
+    parser.add_argument(
+        "--qualification-mode", choices=("direct", "chained"), required=True
+    )
+    parser.add_argument("--bridge-catalog", type=Path)
+    parser.add_argument("--bridge-bundle", type=Path)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--log-directory", type=Path, required=True)
     parser.add_argument("--startup-timeout", type=int, default=240)
@@ -1747,6 +1921,10 @@ def main() -> int:
         raise SystemExit("Source commit must be a complete lowercase Git SHA.")
     if args.scenario.startswith("overlay-") and (args.overlay_catalog is None or args.overlay_bundle is None):
         raise SystemExit("Overlay scenarios require the exact signed v1.4.5 assets.")
+    if args.qualification_mode == "chained" and (
+        args.bridge_catalog is None or args.bridge_bundle is None
+    ):
+        raise SystemExit("Chained qualification requires the exact signed v1.6.0 assets.")
     receipt = qualify(args)
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

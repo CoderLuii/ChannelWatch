@@ -4,6 +4,7 @@ import importlib.util
 import inspect
 import json
 import subprocess
+import traceback
 import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
@@ -849,6 +850,141 @@ def test_process_commands_reject_duplicate_pid(monkeypatch):
 
     with pytest.raises(verifier.ImageUpgradeError, match="duplicate PID"):
         verifier.image_process_commands("candidate")
+
+
+def test_commands_have_finite_defaults_and_preserve_explicit_long_deadlines(monkeypatch):
+    verifier = _load()
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append(kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    verifier.run(["docker", "info"])
+    verifier.run(["docker", "pull", "pinned-image"], timeout=1200)
+    verifier.run(["docker", "info"], timeout=None)
+    assert observed == [180, 1200, 180]
+
+
+@pytest.mark.parametrize("check", [True, False])
+def test_command_timeout_is_sanitized_and_fails_closed(monkeypatch, check):
+    verifier = _load()
+    command = ["docker", "run", "--env", "CW_ADMIN_PASS=private-test-secret"]
+
+    def execute(argv, **kwargs):
+        raise subprocess.TimeoutExpired(
+            argv, kwargs["timeout"], output="private-test-secret", stderr="private-test-secret"
+        )
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    with pytest.raises(verifier.ImageUpgradeError, match="command deadline") as failure:
+        verifier.run(command, check=check)
+    assert isinstance(failure.value, verifier.CommandTimeoutError)
+    rendered = "".join(traceback.format_exception(failure.value))
+    assert "private-test-secret" not in rendered
+    assert "CW_ADMIN_PASS" not in rendered
+    assert str(failure.value) == "docker exceeded the 180-second command deadline."
+
+
+@pytest.mark.parametrize("kind", ["container", "volume", "network", "image"])
+@pytest.mark.parametrize("phase", ["inspect", "remove"])
+def test_cleanup_deadlines_continue_every_owned_resource_kind(monkeypatch, kind, phase):
+    verifier = _load()
+    resources = verifier.Resources("owned")
+    names = {resource: "owned-" + resource for resource in ("container", "volume", "network", "image")}
+    for resource, name in names.items():
+        getattr(resources, resource + "s").add(name)
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append((command, kwargs["timeout"]))
+        operation = "inspect" if "inspect" in command else "remove"
+        if command[-1] == names[kind] and operation == phase:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, verifier.LABEL_VALUE + "\n", "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    assert resources.cleanup() == [f"{kind}:{names[kind]}:{phase}_timeout"]
+    assert all(0 < timeout <= 15 for _command, timeout in observed)
+    for resource, name in names.items():
+        if resource != kind:
+            assert any("rm" in command and command[-1] == name for command, _timeout in observed)
+    if phase == "inspect":
+        assert not any("rm" in command and command[-1] == names[kind] for command, _timeout in observed)
+
+
+def test_cleanup_budget_accounts_for_all_remaining_kinds_without_more_commands(monkeypatch):
+    verifier = _load()
+    resources = verifier.Resources("owned")
+    resources.containers.update(f"owned-{index:02}" for index in range(20))
+    resources.volumes.add("owned-config")
+    resources.networks.add("owned-network")
+    resources.images.add("owned-image")
+    elapsed = {"seconds": 0}
+    observed = []
+    monkeypatch.setattr(verifier.time, "monotonic", lambda: elapsed["seconds"])
+
+    def execute(command, **kwargs):
+        observed.append(command)
+        elapsed["seconds"] += kwargs["timeout"]
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    failures = resources.cleanup()
+    assert elapsed["seconds"] == 120
+    assert len(observed) == 8
+    assert len(failures) == 23
+    assert all(failure.endswith(":inspect_timeout") for failure in failures)
+    assert "image:owned-image:inspect_timeout" in failures
+
+
+@pytest.mark.parametrize("kind", ["network", "volume"])
+@pytest.mark.parametrize("matching_owner", [True, False])
+def test_create_timeout_retains_intent_for_label_checked_cleanup(monkeypatch, kind, matching_owner):
+    verifier = _load()
+    resources = verifier.Resources("owned")
+    name = "owned-network" if kind == "network" else "owned-config"
+    observed = []
+
+    def execute(command, **kwargs):
+        observed.append(command)
+        if "create" in command:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        owner = verifier.LABEL_VALUE if matching_owner else "unrelated-owner"
+        return subprocess.CompletedProcess(command, 0, owner + "\n", "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    with pytest.raises(verifier.ImageUpgradeError):
+        getattr(resources, "create_" + kind)()
+    assert name in getattr(resources, kind + "s")
+    failures = resources.cleanup()
+    assert any("inspect" in command and command[-1] == name for command in observed)
+    removed = any("rm" in command and command[-1] == name for command in observed)
+    assert removed is matching_owner
+    assert failures == ([] if matching_owner else [f"{kind}:{name}:ownership"])
+
+
+def test_cleanup_command_errors_do_not_skip_later_resources(monkeypatch):
+    verifier = _load()
+    resources = verifier.Resources("owned")
+    resources.containers.add("owned-app")
+    resources.volumes.add("owned-config")
+    resources.images.add("owned-image")
+    removed = []
+
+    def execute(command, **kwargs):
+        if "inspect" in command and command[-1] == "owned-app":
+            raise OSError("local Docker connection failed")
+        if "rm" in command:
+            removed.append(command[-1])
+            if command[-1] == "owned-image":
+                raise OSError("local Docker connection failed")
+        return subprocess.CompletedProcess(command, 0, verifier.LABEL_VALUE + "\n", "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    assert resources.cleanup() == ["container:owned-app:inspect_error", "image:owned-image:remove_error"]
+    assert removed == ["owned-config", "owned-image"]
 
 
 def test_cleanup_removes_only_exact_owned_resources(monkeypatch):

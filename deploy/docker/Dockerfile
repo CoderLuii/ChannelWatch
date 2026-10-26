@@ -1,7 +1,7 @@
 #-----------------------------------------------------------------------------
 # Stage 1: UI Build
 #-----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS ui-builder
+FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS ui-builder
 
 ARG GIT_SHA=unknown
 ENV CHANNELWATCH_BUILD_ID="${GIT_SHA}"
@@ -18,7 +18,7 @@ RUN pnpm build
 #-----------------------------------------------------------------------------
 # Stage 2: Python Dependencies
 #-----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS python-deps
+FROM python:3.14-slim-bookworm@sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae AS python-deps
 
 # This build-only stage installs dependencies and is not the shipped runtime.
 # hadolint ignore=DL3002,DL3066
@@ -41,7 +41,7 @@ RUN ["/usr/local/bin/python", "/tmp/copyleft_licenses.py", "--output-dir", "/rel
 #-----------------------------------------------------------------------------
 # Stage 3: Application
 #-----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
+FROM python:3.14-slim-bookworm@sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae
 
 # The entrypoint needs root only to repair /config ownership for configurable
 # PUID/PGID, then verifies a fail-closed UID/GID and group drop before exec.
@@ -50,7 +50,7 @@ FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
-ARG VERSION=1.6.0
+ARG VERSION=1.6.1
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG RUNTIME_ABI=channelwatch-runtime-v1

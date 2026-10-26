@@ -56,9 +56,15 @@ from core.update_center import (
     verify_ed25519_signature,
 )
 
-LEGACY_PROTOCOL3_APP_UPDATE_SOURCES = ("1.4.0", "1.4.1", "1.4.5")
+LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
+    "1.6.0": ("1.4.0", "1.4.1", "1.4.5"),
+    "1.6.1": ("1.4.0", "1.4.1", "1.4.5", "1.6.0"),
+}
+CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
+    "1.6.0": ("1.5.3",),
+    "1.6.1": ("1.5.3", "1.6.0"),
+}
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
-LEGACY_PROTOCOL3_APP_UPDATE_TARGET = "1.6.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
 
 CRITICAL_SOURCE_MEMBERS = {
@@ -312,10 +318,17 @@ def verify_update_assets(
     return manifest
 
 
-def _validated_legacy_app_update_sources(raw: object) -> list[str]:
+def _validated_legacy_app_update_sources(
+    raw: object, *, target_version: str
+) -> list[str]:
     if raw in (None, []):
         return []
-    expected = list(LEGACY_PROTOCOL3_APP_UPDATE_SOURCES)
+    expected_contract = LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS.get(target_version)
+    if expected_contract is None:
+        raise UpdateBundleError(
+            "Legacy app-update sources are not allowed for this supported release target."
+        )
+    expected = list(expected_contract)
     if raw != expected:
         raise UpdateBundleError(
             "Legacy app-update sources do not match the exact published bridge set."
@@ -340,12 +353,8 @@ def load_legacy_app_update_sources(
     if configured_version != expected_version.strip().lstrip("v"):
         return []
     sources = _validated_legacy_app_update_sources(
-        raw.get("legacy_app_update_sources")
+        raw.get("legacy_app_update_sources"), target_version=configured_version
     )
-    if sources and configured_version != LEGACY_PROTOCOL3_APP_UPDATE_TARGET:
-        raise UpdateBundleError(
-            "Legacy app-update sources are allowed only for the v1.6.0 bridge."
-        )
     return sources
 
 
@@ -357,15 +366,14 @@ def verify_legacy_app_release_projection(
 ) -> None:
     """Verify the only allowed protocol-3 projection of the current release."""
 
-    sources = _validated_legacy_app_update_sources(legacy_app_update_sources)
+    version = expected_version.strip().lstrip("v")
+    sources = _validated_legacy_app_update_sources(
+        legacy_app_update_sources, target_version=version
+    )
     if not sources:
         return
-    if expected_version.strip().lstrip("v") != LEGACY_PROTOCOL3_APP_UPDATE_TARGET:
-        raise UpdateBundleError(
-            "Legacy app-update projection is allowed only for the v1.6.0 bridge."
-        )
     expected = {
-        "version": expected_version,
+        "version": version,
         "delivery_mode": "app_update",
         "image_required": False,
         "image_refresh_recommended": False,
@@ -425,8 +433,11 @@ def verify_update_catalog(
     )
     if not isinstance(release, dict):
         raise UpdateBundleError("Update catalog is missing the expected release.")
+    legacy_sources = _validated_legacy_app_update_sources(
+        legacy_app_update_sources, target_version=normalized_version
+    )
     expected_fields = {
-        "delivery_mode": expected_delivery_mode,
+        "delivery_mode": "app_update" if legacy_sources else expected_delivery_mode,
         "runtime_abi": expected_runtime_abi,
         "settings_schema_version": expected_settings_schema_version,
         "recommended_image_version": expected_recommended_image_version.strip().lstrip(
@@ -722,7 +733,8 @@ def verify_runtime_catalog_binding(
     if release_maps[0].keys() != release_maps[1].keys():
         raise UpdateBundleError("Runtime and app catalog release histories differ.")
     legacy_sources = _validated_legacy_app_update_sources(
-        legacy_app_update_sources
+        legacy_app_update_sources,
+        target_version=expected_version.strip().lstrip("v"),
     )
     for version, app_release in release_maps[0].items():
         runtime_release = {
@@ -736,6 +748,13 @@ def verify_runtime_catalog_binding(
                 legacy_app_update_sources=legacy_sources,
                 expected_version=normalized_version,
             )
+            canonical_sources = CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS.get(
+                normalized_version
+            )
+            if canonical_sources is None:
+                raise UpdateBundleError(
+                    "Runtime catalog target is not an approved protocol-4 release."
+                )
             expected_runtime = {
                 "version": normalized_version,
                 "delivery_mode": "app_update",
@@ -744,11 +763,11 @@ def verify_runtime_catalog_binding(
                 "minimum_image_version": VERIFIED_DEPENDENCY_FOUNDATION,
                 "updater_protocol": 4,
                 "automatic_install_allowed": False,
-                "compatible_source_application_versions": [
-                    VERIFIED_DEPENDENCY_FOUNDATION
-                ],
+                "compatible_source_application_versions": list(canonical_sources),
                 "compatible_launcher_protocols": [4],
             }
+            if normalized_version == "1.6.1" and runtime_release.get("delivery_mode") == "app_update_with_image_refresh":
+                expected_runtime.update(delivery_mode="app_update_with_image_refresh", image_refresh_recommended=True)
             if any(
                 runtime_release.get(name) != value
                 for name, value in expected_runtime.items()
@@ -757,6 +776,8 @@ def verify_runtime_catalog_binding(
                     "Runtime catalog does not match the protocol-4 release contract."
                 )
             projected_fields = {
+                "delivery_mode",
+                "image_refresh_recommended",
                 "minimum_image_version",
                 "updater_protocol",
                 "compatible_source_application_versions",

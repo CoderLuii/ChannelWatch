@@ -110,21 +110,28 @@ export function UpcomingRecordingsList({ recordings, count }: UpcomingRecordings
                         <Clock className={`h-3.5 w-3.5 ${today ? "text-amber-600 dark:text-amber-400" : "text-amber-600 dark:text-amber-400"}`} />
                       </div>
                       <div className="min-w-0 flex-1 pr-1">
-                        <div className="mb-1 flex min-w-0 flex-wrap items-start gap-1.5">
-                          <p className="min-w-0 flex-1 break-words text-sm font-medium leading-snug [overflow-wrap:anywhere]">{recording.title}</p>
+                        <p className="min-w-0 break-words text-sm font-medium leading-snug [overflow-wrap:anywhere]">{recording.title}</p>
+                        <p className="mt-1 max-w-full break-words text-[13px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{recording.channel} - {recording.scheduled_time}</p>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
                           {recording.dvr_name && (
                             <Badge variant="outline" className="h-auto min-h-5 max-w-full whitespace-normal break-words border-muted-foreground/30 px-1 py-0 text-[13px] font-normal leading-snug text-muted-foreground [overflow-wrap:anywhere]">
                               {recording.dvr_name}
                             </Badge>
                           )}
+                          <Badge className={`h-auto min-h-5 max-w-full whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere] sm:hidden ${
+                            today
+                              ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/40"
+                              : "bg-amber-100 text-amber-900 dark:bg-amber-900/25 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/35"
+                         }`}>
+                            {today ? t("recordings.today") : t("recordings.scheduled")}
+                          </Badge>
                         </div>
-                        <p className="max-w-full break-words text-[13px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{recording.channel} - {recording.scheduled_time}</p>
                       </div>
-                      <Badge className={`h-auto min-h-5 max-w-[42%] flex-shrink-0 whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere] ${
+                      <Badge className={`hidden h-auto min-h-5 max-w-[42%] flex-shrink-0 whitespace-normal break-words px-1.5 py-0 text-center text-xs leading-snug [overflow-wrap:anywhere] sm:inline-flex ${
                         today
                           ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/40"
                           : "bg-amber-100 text-amber-900 dark:bg-amber-900/25 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/35"
-                       }`}>
+                      }`}>
                         {today ? t("recordings.today") : t("recordings.scheduled")}
                       </Badge>
                     </button>

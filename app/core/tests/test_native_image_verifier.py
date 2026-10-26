@@ -161,10 +161,36 @@ def test_image_runtime_identity_resolves_the_image_owned_launcher():
         assert "launcher_protocol_status" in command[-1]
         assert "runpy.run_path" in command[-1]
         return subprocess.CompletedProcess(
-            command, 0, '{"image_version":"1.5.0","launcher_protocol":4}', ""
+            command, 0, json.dumps({
+                "image_version": "1.5.0", "launcher_protocol": 4,
+                "python_version": "3.14.9", "python_executable": "/venv/bin/python",
+                "python_prefix": "/venv",
+            }), ""
         )
 
     assert module._image_runtime_identity(runner, "owned-container", "1.5.0") == 4
+
+
+@pytest.mark.parametrize("mutation", [
+    {"python_version": "3.14.8"},
+    {"python_version": "3.14.10"},
+    {"python_version": None},
+    {"python_executable": "/usr/local/bin/python"},
+    {"python_prefix": "/usr/local"},
+])
+def test_image_runtime_identity_rejects_the_wrong_python_runtime(mutation):
+    module = _module("native_image_python_identity_reject")
+    identity = {
+        "image_version": "1.6.1", "launcher_protocol": 4,
+        "python_version": "3.14.9", "python_executable": "/venv/bin/python",
+        "python_prefix": "/venv", **mutation,
+    }
+
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 0, json.dumps(identity), "")
+
+    with pytest.raises(module.NativeImageError, match="image-owned Python"):
+        module._image_runtime_identity(runner, "owned-container", "1.6.1")
 
 
 def test_qualification_binds_exact_oci_and_preserves_same_container(monkeypatch, tmp_path):
@@ -248,7 +274,11 @@ def test_qualification_binds_exact_oci_and_preserves_same_container(monkeypatch,
         elif any("auth-bootstrap-shell" in str(item) for item in command):
             output = json.dumps({"title": "ChannelWatch", "hydrated_shell": True}) + "\n"
         elif command[:2] == ["docker", "exec"] and "launcher_protocol_status" in command[-1]:
-            output = '{"image_version":"1.5.0","launcher_protocol":4}\n'
+            output = json.dumps({
+                "image_version": "1.5.0", "launcher_protocol": 4,
+                "python_version": "3.14.9", "python_executable": "/venv/bin/python",
+                "python_prefix": "/venv",
+            })
         elif command[:2] == ["docker", "exec"]:
             output = "configuration valid\n"
         return subprocess.CompletedProcess(command, 0, output, stderr)
@@ -272,6 +302,7 @@ def test_qualification_binds_exact_oci_and_preserves_same_container(monkeypatch,
     assert receipt["status"] == "passed"
     assert receipt["native"] is True
     assert receipt["launcher_protocol"] == 4
+    assert receipt["python_version"] == "3.14.9"
     assert sum("launcher_protocol_status" in command[-1] for command in commands) == 2
     assert receipt["config_digest"] == config_digest
     assert readiness_ports == [49152, 49153]
@@ -333,7 +364,11 @@ def test_qualification_preserves_failure_logs_and_checks_cleanup(monkeypatch, tm
             return subprocess.CompletedProcess(command, 2, "", "browser failed")
         if command[:2] == ["docker", "exec"] and "launcher_protocol_status" in command[-1]:
             return subprocess.CompletedProcess(
-                command, 0, '{"image_version":"1.5.0","launcher_protocol":4}', ""
+                command, 0, json.dumps({
+                    "image_version": "1.5.0", "launcher_protocol": 4,
+                    "python_version": "3.14.9", "python_executable": "/venv/bin/python",
+                    "python_prefix": "/venv",
+                }), ""
             )
         if command[:2] == ["docker", "logs"]:
             return subprocess.CompletedProcess(command, 0, "stdout log\n", "stderr log\n")

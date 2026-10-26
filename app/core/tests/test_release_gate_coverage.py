@@ -25,8 +25,9 @@ def test_tag_candidate_requires_existing_deployment_docs_and_security_gates():
 
 def test_both_browser_paths_retain_first_attempt_diagnostics_before_signing():
     workflow = yaml.load((ROOT / '.github/workflows/docker-publish.yml').read_text(), Loader=yaml.BaseLoader)
-    for name in ('browser', 'candidate-qualification'):
-        steps = workflow['jobs'][name]['steps']
+    jobs = workflow['jobs']
+    for name in ('browser', 'candidate-source-gates'):
+        steps = jobs[name]['steps']
         uploads = [step for step in steps if 'browser diagnostics' in step.get('name', '')]
         assert len(uploads) == 1
         upload = uploads[0]
@@ -35,6 +36,13 @@ def test_both_browser_paths_retain_first_attempt_diagnostics_before_signing():
         assert upload['with']['path'].splitlines() == ['app/ui/playwright-report/', 'app/ui/test-results/']
         browser = next(i for i, step in enumerate(steps) if 'pnpm exec playwright test' in step.get('run', ''))
         assert steps.index(upload) > browser
-        if name == 'signed-candidate':
-            signing = next(i for i, step in enumerate(steps) if 'CHANNELWATCH_UPDATE_SIGNING_KEY' in str(step.get('env', {})))
-            assert steps.index(upload) < signing
+
+    assert 'candidate-source-gates' in jobs['candidate-signing']['needs']
+    assert 'candidate-source-gates' in jobs['candidate-qualification']['needs']
+    assert jobs['candidate-source-gates']['permissions'] == {'contents': 'read'}
+    assert 'secrets.' not in str(jobs['candidate-source-gates'])
+    assert 'CHANNELWATCH_UPDATE_SIGNING_KEY' not in str(jobs['candidate-source-gates'])
+    assert any('CHANNELWATCH_UPDATE_SIGNING_KEY' in str(step.get('env', {}))
+               for step in jobs['candidate-signing']['steps'])
+    assert not any('pnpm exec playwright test' in step.get('run', '')
+                   for step in jobs['candidate-qualification']['steps'])

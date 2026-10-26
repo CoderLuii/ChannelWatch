@@ -19,11 +19,15 @@ def load_module():
     return module
 
 
-@pytest.fixture
-def matrix(tmp_path):
+@pytest.fixture(params=["1.6.1", "1.6.2"])
+def matrix(tmp_path, request):
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
+    target_version = request.param
+    fixture["target_version"] = target_version
+    if target_version == "1.6.1":
+        fixture["legacy_sources"] = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
     receipts = {}
     config_sha256 = hashlib.sha256(CONFIG.read_bytes()).hexdigest()
     for architecture in ("amd64", "arm64"):
@@ -43,12 +47,12 @@ def matrix(tmp_path):
                 "repo_digest": fixture["repository"] + "@" + fixture["images"][scenario["image_version"]]["manifests"][architecture],
             }
             selected_status = {
-                "current_version": "1.6.1",
+                "current_version": target_version,
                 "image_version": scenario["image_version"],
                 "launcher_protocol": 3,
                 "runtime_source": "app_bundle",
                 "active_bundle": {
-                    "version": "1.6.1",
+                    "version": target_version,
                     "manifest": {"bundle_sha256": "2" * 64},
                 },
                 "worker_runtime": {
@@ -58,7 +62,7 @@ def matrix(tmp_path):
                 },
             }
             current_check = {
-                "current_version": "1.6.1",
+                "current_version": target_version,
                 "update_available": False,
                 "last_job": {"operation": "check", "status": "current"},
             }
@@ -75,7 +79,7 @@ def matrix(tmp_path):
                 "architecture": architecture,
                 "qualification_mode": qualification_mode,
                 "scenario": scenario,
-                "target_version": "1.6.1",
+                "target_version": target_version,
                 "source_commit": "f" * 40,
                 "catalog_sha256": "1" * 64,
                 "bundle_sha256": "2" * 64,
@@ -158,10 +162,12 @@ def matrix(tmp_path):
 def aggregate(matrix):
     fixture, receipts, root = matrix
     release_config = json.loads(CONFIG.read_text())
+    release_config["version"] = fixture["target_version"]
+    release_config["legacy_app_update_sources"] = fixture["legacy_sources"]
     return load_module().aggregate(
         receipts,
         baselines=fixture,
-        target_version="1.6.1",
+        target_version=fixture["target_version"],
         source_commit="f" * 40,
         catalog_sha256="1" * 64,
         bundle_sha256="2" * 64,

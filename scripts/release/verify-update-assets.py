@@ -59,10 +59,12 @@ from core.update_center import (
 LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.4.0", "1.4.1", "1.4.5"),
     "1.6.1": ("1.4.0", "1.4.1", "1.4.5", "1.6.0"),
+    "1.6.2": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1"),
 }
 CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.5.3",),
     "1.6.1": ("1.5.3", "1.6.0"),
+    "1.6.2": ("1.5.3", "1.6.0", "1.6.1"),
 }
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
@@ -766,7 +768,7 @@ def verify_runtime_catalog_binding(
                 "compatible_source_application_versions": list(canonical_sources),
                 "compatible_launcher_protocols": [4],
             }
-            if normalized_version == "1.6.1" and runtime_release.get("delivery_mode") == "app_update_with_image_refresh":
+            if normalized_version in {"1.6.1", "1.6.2"} and runtime_release.get("delivery_mode") == "app_update_with_image_refresh":
                 expected_runtime.update(delivery_mode="app_update_with_image_refresh", image_refresh_recommended=True)
             if any(
                 runtime_release.get(name) != value

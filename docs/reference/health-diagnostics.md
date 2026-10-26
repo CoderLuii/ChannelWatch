@@ -250,6 +250,8 @@ The page shows:
 * Connectivity and notification test actions using `POST /api/run_test/{test_name_url}`.
 * Health warnings for offline DVRs, degraded monitoring, missing DVR configuration, no notification providers, and no enabled alert types.
 
+**DVR Connection** checks whether the DVR is reachable. **DVR API** checks the Channels DVR API endpoints. Notification tests send sample alerts through your configured destinations, and **Run All Tests** includes those notification tests. A failed result shows the reported error; a destination that is not configured or cannot be reached will fail even when monitoring is running.
+
 ## Report a Problem flow
 
 The **Report a Problem** flow is intended for support cases where a normal issue body is not enough. It guides the operator through a sanitized report preview and keeps private attachments separate from the public issue text.

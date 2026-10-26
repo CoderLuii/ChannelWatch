@@ -3,7 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import path from "node:path"
 
-import { expect, test, type APIRequestContext, type APIResponse, type Page } from "@playwright/test"
+import { expect, test, type APIRequestContext, type APIResponse, type Page, type Request } from "@playwright/test"
 
 const username = process.env.CHANNELWATCH_PLAYWRIGHT_ADMIN_USERNAME?.trim()
 const password = process.env.CHANNELWATCH_PLAYWRIGHT_ADMIN_PASSWORD?.trim()
@@ -57,6 +57,117 @@ function expectedConsoleError(
     if (match) return { kind: "restart_transport", phase, jobId: match[1] }
   }
   return null
+}
+
+function createBrowserConsoleAudit(page: Page, expectedOrigin: string, currentPhase: () => BrowserAuditPhase) {
+  type Restart = { phase: "apply_restart" | "rollback_restart", jobId: string }
+  type Problem = { text: string, url: string, phase: BrowserAuditPhase }
+  type Tracked = {
+    id: number, request: Request, phase: BrowserAuditPhase, restart: Restart | null, owned: boolean,
+    failure?: { text: string, sequence: number }, status?: number, finished?: number, consoleMatched?: boolean,
+  }
+  type ConsoleRecord = Problem & { expected: ExpectedConsoleError | null, request?: Tracked }
+  const requests = new Map<Request, Tracked>()
+  const consoles: ConsoleRecord[] = []
+  const pageErrors: Problem[] = []
+  let sequence = 0
+  let restart: Restart | null = null
+  let activeRestart: Restart | null = null
+  const isStatusGet = (request: Request) => {
+    const url = new URL(request.url())
+    return request.method() === "GET" && url.origin === expectedOrigin
+      && url.pathname === "/api/v1/update/status" && !url.search && !url.hash
+  }
+  const matchFailures = () => {
+    for (const record of consoles) {
+      if (record.expected || record.request) continue
+      const candidates = [...requests.values()].filter((tracked) => !tracked.consoleMatched
+        && tracked.failure && tracked.request.url() === record.url
+        && record.text === `Failed to load resource: ${tracked.failure.text}`)
+      if (candidates.length !== 1) continue
+      const tracked = candidates[0]
+      const matchingConsole = consoles.filter((other) => !other.expected && !other.request
+        && other.url === record.url && other.text === record.text)
+      if (matchingConsole.length !== 1) continue
+      tracked.consoleMatched = true
+      record.request = tracked
+    }
+  }
+  page.on("request", (request) => {
+    const phase = currentPhase()
+    requests.set(request, { id: ++sequence, request, phase, restart,
+      owned: isStatusGet(request) && restart !== null && activeRestart === restart && restart.phase === phase })
+  })
+  page.on("requestfailed", (request) => {
+    const tracked = requests.get(request)
+    if (tracked) tracked.failure = { text: request.failure()?.errorText ?? "unknown transport failure", sequence: ++sequence }
+    matchFailures()
+  })
+  page.on("response", (response) => {
+    const tracked = requests.get(response.request())
+    if (tracked) tracked.status = response.status()
+  })
+  page.on("requestfinished", (request) => {
+    const tracked = requests.get(request)
+    if (tracked) tracked.finished = ++sequence
+  })
+  page.on("console", (message) => {
+    if (message.type() !== "error") return
+    const text = message.text().slice(0, 500)
+    const url = message.location().url
+    const phase = currentPhase()
+    consoles.push({ text, url, phase, expected: expectedConsoleError(text, url, phase, expectedOrigin) })
+    matchFailures()
+  })
+  page.on("pageerror", (error) => pageErrors.push({ text: error.message.slice(0, 500), url: page.url(), phase: currentPhase() }))
+  const acknowledge = (phase: Restart["phase"], jobId: string) => {
+    if (currentPhase() !== phase || !/^[0-9a-f]{32}$/.test(jobId)) throw new Error("Restart acknowledgement is not bound to an owned job and phase.")
+    restart = { phase, jobId }
+    activeRestart = restart
+  }
+  return {
+    requestId(request: Request) { return requests.get(request)?.id },
+    acknowledge,
+    endRestart() { activeRestart = null },
+    acknowledgedRestart() { return activeRestart },
+    observeApplyAcknowledgements(version: string, ownedJobId: () => string | null) {
+      page.on("response", (response) => {
+        const request = response.request()
+        const url = new URL(response.url())
+        if (request.method() !== "POST" || response.status() !== 202 || url.origin !== expectedOrigin
+          || url.pathname !== "/api/v1/update/apply" || url.search || url.hash || currentPhase() !== "apply_restart") return
+        void response.json().then((payload) => {
+          if (currentPhase() !== "apply_restart" || !payload || typeof payload !== "object"
+            || typeof payload.job_id !== "string" || !/^[0-9a-f]{32}$/.test(payload.job_id)
+            || payload.job_id !== ownedJobId() || payload.job_id !== request.postDataJSON()?.job_id
+            || payload.operation !== "apply" || payload.status !== "restarting"
+            || payload.version !== version || payload.restart_required !== true) return
+          acknowledge("apply_restart", payload.job_id)
+        }).catch(() => { /* An absent or unreadable reply authorizes no exception. */ })
+      })
+    },
+    report() {
+      const expected: ExpectedConsoleError[] = []
+      const unexpected: (Problem & { requestId?: number, requestPhase?: BrowserAuditPhase, reason?: string })[] = []
+      const acceptedStatusRequests: { requestId: number, recoveryRequestId: number, phase: Restart["phase"], jobId: string, url: string }[] = []
+      for (const record of consoles) {
+        if (record.expected) { expected.push(record.expected); continue }
+        const tracked = record.request
+        const recovery = tracked?.failure && [...requests.values()].find((candidate) => candidate.id > tracked.failure!.sequence
+          && candidate.restart === tracked.restart && candidate.request.url() === tracked.request.url()
+          && isStatusGet(candidate.request) && candidate.status === 200 && candidate.finished && !candidate.failure)
+        if (tracked?.owned && tracked.restart && tracked.failure?.text === "net::ERR_CONNECTION_RESET" && recovery) {
+          expected.push({ kind: "restart_transport", phase: tracked.restart.phase, jobId: tracked.restart.jobId })
+          acceptedStatusRequests.push({ requestId: tracked.id, recoveryRequestId: recovery.id, phase: tracked.restart.phase, jobId: tracked.restart.jobId, url: record.url })
+        } else {
+          unexpected.push({ text: record.text, url: record.url, phase: record.phase,
+            requestId: tracked?.id, requestPhase: tracked?.phase,
+            reason: !tracked ? "No unique matching requestfailed event." : !tracked.owned ? "Request did not start during an acknowledged owned restart." : !recovery ? "No later completed HTTP200 recovery for this restart." : "Transport failure is not an owned status reset." })
+        }
+      }
+      return { expected, unexpected, pageErrors, acceptedStatusRequests }
+    },
+  }
 }
 
 function required(value: string | undefined, name: string): string {
@@ -504,6 +615,110 @@ async function waitForRollbackOutcome(
   throw new Error(`Roll back did not reach its exact restored runtime within ${timeout}ms; last outage: ${lastRestartOutage}`)
 }
 
+for (const scenario of ["rollback", "apply", "unobserved_apply_ack", "steady", "unacknowledged", "started_before_ack", "stale_ack", "wrong_origin", "query", "method", "static", "unrecovered", "javascript", "pageerror"] as const) {
+  test(`status reset audit binds request identity and recovery (${scenario})`, async ({ page }) => {
+    const jobId = "e".repeat(32)
+    const operation = scenario === "apply" || scenario === "unobserved_apply_ack" ? "apply" : "rollback"
+    const restartPhase = operation === "apply" ? "apply_restart" : "rollback_restart"
+    const restoredVersion = operation === "apply" ? "1.6.2" : "1.5.3"
+    const runtimeSource = operation === "apply" ? "app_bundle" : "image"
+    let phase: BrowserAuditPhase = "authenticated"
+    let mode: "hold" | "reset" | "ready" = "hold"
+    let signalHeld: () => void = () => {}
+    const held = new Promise<void>((resolve) => { signalHeld = resolve })
+    let resetHeld: () => void = () => { throw new Error("No status request is held.") }
+    const server = createServer((incoming, response) => {
+      const pathname = incoming.url?.split("?")[0]
+      if (pathname === `/api/v1/update/${operation}` && incoming.method === "POST") {
+        response.writeHead(202, { "content-type": "application/json" })
+        response.end(JSON.stringify({ job_id: jobId, operation, status: "restarting", version: "1.6.2", rolled_back_from: "1.6.2", restart_required: true }))
+      } else if ((pathname === "/api/v1/update/status" || pathname === "/asset.js") && mode !== "ready") {
+        resetHeld = () => incoming.socket.resetAndDestroy()
+        signalHeld()
+        if (mode === "reset") resetHeld()
+      } else if (pathname === "/api/v1/update/status") {
+        response.writeHead(200, { "content-type": "application/json" })
+        response.end(JSON.stringify({ current_version: restoredVersion, runtime_source: runtimeSource, operation_busy: false, last_job: { job_id: jobId, operation, status: "success", rolled_back_from: "1.6.2" } }))
+      } else if (incoming.url === "/healthz/startup" || incoming.url === "/healthz/ready") {
+        response.writeHead(200, { "content-type": "application/json" })
+        response.end(JSON.stringify(incoming.url === "/healthz/startup" ? { status: "ready" } : { status: "ready", ready: true }))
+      } else {
+        response.writeHead(200, { "content-type": "text/html" })
+        response.end("<!doctype html><title>Local restart audit fixture</title>")
+      }
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject)
+      server.listen(0, "127.0.0.1", resolve)
+    })
+    try {
+      const address = server.address()
+      if (!address || typeof address === "string") throw new Error("Local fixture has no TCP address.")
+      const origin = `http://127.0.0.1:${address.port}`
+      const audit = createBrowserConsoleAudit(page, scenario === "wrong_origin" ? "http://127.0.0.1:1" : origin, () => phase)
+      audit.observeApplyAcknowledgements("1.6.2", () => jobId)
+      await page.goto(origin)
+      phase = restartPhase
+      const response = scenario === "apply"
+        ? await page.evaluate(async ({ url, id }) => {
+          const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ job_id: id }) })
+          return { status: response.status, payload: await response.json() }
+        }, { url: `${origin}/api/v1/update/apply`, id: jobId })
+        : await page.request.post(`${origin}/api/v1/update/${operation}`)
+      const accepted = "payload" in response ? response.payload
+        : operation === "rollback" ? await queuedRollbackJob(response, "1.6.2") : await response.json()
+      expect("payload" in response ? response.status : response.status()).toBe(202)
+      expect(accepted).toMatchObject({ job_id: jobId, operation, status: "restarting", restart_required: true })
+      expect(accepted.job_id).toBe(jobId)
+      if (scenario === "apply") await expect.poll(() => audit.acknowledgedRestart()?.jobId).toBe(jobId)
+      else if (scenario !== "unacknowledged" && scenario !== "started_before_ack" && scenario !== "unobserved_apply_ack") audit.acknowledge(restartPhase, accepted.job_id)
+      if (scenario === "steady" || scenario === "started_before_ack") phase = "authenticated"
+      if (scenario === "stale_ack") { phase = "authenticated"; audit.endRestart(); phase = restartPhase }
+      const failedURL = `${origin}${scenario === "static" ? "/asset.js" : "/api/v1/update/status"}${scenario === "query" ? "?unexpected=1" : ""}`
+      const failed = page.waitForEvent("requestfailed", (request) => request.url() === failedURL)
+      const consoleFailure = page.waitForEvent("console", (message) => message.type() === "error" && message.location().url === failedURL)
+      await page.evaluate(({ url, method }) => { void fetch(url, { method }).catch(() => null) }, { url: failedURL, method: scenario === "method" ? "POST" : "GET" })
+      await held
+      if (scenario === "started_before_ack") { phase = restartPhase; audit.acknowledge(restartPhase, accepted.job_id) }
+      mode = "reset"
+      resetHeld()
+      const failedRequest = await failed
+      expect(failedRequest.failure()?.errorText).toBe("net::ERR_CONNECTION_RESET")
+      await consoleFailure
+      mode = "ready"
+      const recovered = scenario === "unrecovered"
+        ? await (await page.request.get(`${origin}/api/v1/update/status`)).json()
+        : await page.evaluate(async (url) => (await fetch(url)).json(), `${origin}/api/v1/update/status`)
+      expect(recovered).toMatchObject({ current_version: restoredVersion, runtime_source: runtimeSource, operation_busy: false, last_job: { job_id: jobId, operation, status: "success", rolled_back_from: "1.6.2" } })
+      await expect(waitForExactHealth(page.request, { baseURL: origin, timeout: 1_000, interval: 1 })).resolves.toEqual({ startup: { status: "ready" }, ready: { status: "ready", ready: true } })
+      if (scenario === "javascript") await page.evaluate(() => console.error("Deliberate local JavaScript console error"))
+      if (scenario === "pageerror") {
+        const error = page.waitForEvent("pageerror")
+        await page.evaluate(() => { setTimeout(() => { throw new Error("Deliberate local page error") }, 0) })
+        await error
+      }
+      if (scenario === "rollback" || scenario === "apply") {
+        await expect.poll(() => audit.report().acceptedStatusRequests.length).toBe(1)
+        expect(audit.report().acceptedStatusRequests[0]).toMatchObject({ phase: restartPhase, jobId, url: `${origin}/api/v1/update/status`, requestId: audit.requestId(failedRequest) })
+        expect(audit.report().unexpected).toEqual([])
+        expect(audit.report().pageErrors).toEqual([])
+      } else if (scenario === "pageerror") {
+        expect(audit.report().pageErrors).toHaveLength(1)
+      } else {
+        expect(audit.report().unexpected.length).toBeGreaterThan(0)
+        expect(audit.report().unexpected[0]).toHaveProperty("url")
+        expect(audit.report().unexpected[0]).toHaveProperty("phase")
+      }
+    const fixtureEvidence = test.info().outputPath("status-reset-audit.json")
+    await mkdir(path.dirname(fixtureEvidence), { recursive: true })
+    await writeFile(fixtureEvidence, `${JSON.stringify({ fixture_scenario: scenario, expected_classification: scenario === "rollback" || scenario === "apply" ? "owned_restart_reset" : "fatal_error", audit: audit.report() }, null, 2)}\n`, "utf8")
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    }
+  })
+}
+
 test("authenticated live Update Center applies and rolls back the exact candidate once", async ({ page }) => {
   const adminUsername = required(username, "CHANNELWATCH_PLAYWRIGHT_ADMIN_USERNAME")
   const adminPassword = required(password, "CHANNELWATCH_PLAYWRIGHT_ADMIN_PASSWORD")
@@ -526,25 +741,13 @@ test("authenticated live Update Center applies and rolls back the exact candidat
     window.sessionStorage.setItem(key, String(loads + 1))
   })
 
-  const consoleErrors: string[] = []
-  const expectedConsoleErrors: ExpectedConsoleError[] = []
-  const pageErrors: string[] = []
   let auditPhase: BrowserAuditPhase = "unauthenticated_bootstrap"
+  const consoleAudit = createBrowserConsoleAudit(page, expectedOrigin, () => auditPhase)
   let applyRequests = 0
   let rollbackRequests = 0
   let applyJobId: string | null = null
   let observedProgress = false
-  page.on("console", (message) => {
-    if (message.type() !== "error") return
-    const text = message.text().slice(0, 500)
-    const expected = expectedConsoleError(text, message.location().url, auditPhase, expectedOrigin)
-    if (expected) {
-      expectedConsoleErrors.push(expected)
-      return
-    }
-    consoleErrors.push(text)
-  })
-  page.on("pageerror", (error) => pageErrors.push(error.message.slice(0, 500)))
+  consoleAudit.observeApplyAcknowledgements(expectedVersion, () => applyJobId)
   page.on("request", (request) => {
     if (request.method() !== "POST") return
     if (request.url().endsWith("/api/v1/update/apply")) {
@@ -604,6 +807,7 @@ test("authenticated live Update Center applies and rolls back the exact candidat
     status: "success",
     version: expectedVersion,
   })
+  consoleAudit.endRestart()
   auditPhase = "authenticated"
 
   await page.goto("/#settings:updates")
@@ -622,6 +826,7 @@ test("authenticated live Update Center applies and rolls back the exact candidat
   auditPhase = "rollback_restart"
   await page.getByRole("button", { name: "Roll back" }).click()
   const rollbackJob = await queuedRollbackJob(await rollbackResponsePromise, expectedVersion)
+  consoleAudit.acknowledge("rollback_restart", rollbackJob.job_id)
 
   const [{ status: finalStatus }] = await Promise.all([
     waitForRollbackOutcome(page, {
@@ -636,17 +841,21 @@ test("authenticated live Update Center applies and rolls back the exact candidat
     { timeout: 60_000 },
   ).toBeGreaterThan(loadsBeforeRollback!)
   const finalHealth = await waitForExactHealth(page.request, { timeout: healthTimeout })
+  consoleAudit.endRestart()
   auditPhase = "authenticated"
   await page.goto("/#settings:updates")
   await expect(page).toHaveURL(/#settings:updates$/)
   await expect(page.getByTestId("auth-login-shell")).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Check for updates" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Check for updates" })).toBeEnabled({ timeout: 60_000 })
+  await expect(page.getByRole("alert").filter({ hasText: "Update Center error" })).toHaveCount(0)
   const rollbackScreenshot = path.join(evidenceRoot, "runtime-update-rollback.png")
   await page.screenshot({ path: rollbackScreenshot, fullPage: true })
 
   expect(applyRequests).toBe(1)
   expect(rollbackRequests).toBe(1)
   expect(observedProgress).toBe(true)
+  const { unexpected: consoleErrors, expected: expectedConsoleErrors, pageErrors } = consoleAudit.report()
   for (const expected of expectedConsoleErrors) {
     if (expected.kind !== "restart_transport") continue
     expect(expected.jobId).toBe(expected.phase === "apply_restart" ? applyJobId : rollbackJob.job_id)

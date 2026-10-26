@@ -1179,6 +1179,62 @@
       ],
       "revocation_state": "active",
       "publication_time": "2026-10-17T07:30:00Z"
+    },
+    {
+      "version": "1.6.1",
+      "version_tag": "v1.6.1",
+      "channel": "stable",
+      "runtime_abi": "channelwatch-runtime-v1",
+      "settings_schema_version": 7,
+      "image_required": false,
+      "delivery_mode": "app_update",
+      "image_refresh_recommended": false,
+      "minimum_image_version": "1.4.0",
+      "updater_protocol": 2,
+      "recommended_image_version": "1.6.1",
+      "automatic_install_allowed": false,
+      "recovery_compatible": true,
+      "release_url": "https://github.com/CoderLuii/ChannelWatch/releases/tag/v1.6.1",
+      "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.1/channelwatch-app-v1.6.1.zip",
+      "bundle_sha256": "7aeb4c418aaa9f5a9a14a2ab03ebff94c19732e33dc497f30f6028f9edb631d0",
+      "bundle_signature": "2Rw2ubecyTCfdvv7FV6sCXJNuW+kj4usBWbp8/YwnmdLYKIhmeztMSoWiJ2i0eqUoZppM/wznwaXdlSG6OHRBg==",
+      "key_id": "channelwatch-update-ed25519-2026-06",
+      "published_at": "2026-10-26T00:48:33Z",
+      "highlights": [
+        "Install v1.6.1 directly from **Settings > Updates** on v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0. No intermediate release or container recreation is needed.",
+        "Automatic installation remains disabled. Install this release manually from Update Center.",
+        "The v1.4.x app-only route keeps the image's existing Python packages, so those users can install the application in-app but need to replace the container with the v1.6.1 image to receive certifi 2026.10.19. The v1.5.3 and v1.6.0 protocol-4 route installs the signed application and official Python package generation together.",
+        "Accept v1.6.0 as a direct signed Update Center source on both the current launcher and supported v1.4.x launchers.",
+        "Move Maintenance Windows below Recent Activity and Upcoming Recordings and keep it collapsed until opened, reducing dashboard scrolling without shrinking text ([#27](https://github.com/CoderLuii/ChannelWatch/issues/27)).",
+        "Update Next.js to 16.4.2, React to 19.3.1, Zod to 4.6.7, axe-core Playwright to 4.14.0 and Playwright to 1.64.1 without changing the supported notification-provider set or v1.5.3 minimum image foundation.",
+        "Let administrators explicitly disable Email and the other global notification providers while preserving untouched masked secrets, per-DVR overrides and encrypted settings ([#26](https://github.com/CoderLuii/ChannelWatch/issues/26)).",
+        "Keep activity titles, artwork rows and compact dashboard cards aligned across narrow mobile, tablet and desktop widths.",
+        "Give timeline, diagnostics and filter controls visible accessible names so their purpose remains clear to screen readers and automated accessibility checks.",
+        "Require the release gate to qualify direct legacy updates and the exact signed v1.6.0-to-v1.6.1 chain on native AMD64 and ARM64 before publication.",
+        "Bound Docker qualification and cleanup commands so an unresponsive daemon fails the check instead of hanging it.",
+        "Handle pip's generated launchers on long build paths while keeping console scripts out of runtime packages.",
+        "Refresh the official Python image to 3.14.9 with pip 26.2.2 and update the pinned Node build image. Keep the signed package generation compatible with Python 3.14.8 so retained containers can still update in-app.",
+        "Update the signed Python runtime generation to certifi 2026.10.19 after the compromise of eight eMudhra intermediate CA keys. This version restores unaffected emSign roots and no longer trusts the affected emSign ECC Root CA G3 ([GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2)).",
+        "Update the Vitest test toolchain to 4.1.12, which includes the upstream fixes for two @vitest/mocker advisories."
+      ],
+      "automatic_install_after": "2026-11-02T00:48:33Z",
+      "compatible_source_application_versions": [
+        "1.4.0",
+        "1.4.1",
+        "1.4.5",
+        "1.6.0"
+      ],
+      "compatible_runtime_abis": [
+        "channelwatch-runtime-v1"
+      ],
+      "compatible_settings_schema_versions": [
+        7
+      ],
+      "compatible_launcher_protocols": [
+        3
+      ],
+      "revocation_state": "active",
+      "publication_time": "2026-10-26T00:48:33Z"
     }
   ]
 }

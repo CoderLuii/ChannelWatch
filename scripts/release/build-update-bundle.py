@@ -67,10 +67,12 @@ MAX_CATALOG_RELEASES = 64
 LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.4.0", "1.4.1", "1.4.5"),
     "1.6.1": ("1.4.0", "1.4.1", "1.4.5", "1.6.0"),
+    "1.6.2": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1"),
 }
 CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.5.3",),
     "1.6.1": ("1.5.3", "1.6.0"),
+    "1.6.2": ("1.5.3", "1.6.0", "1.6.1"),
 }
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"

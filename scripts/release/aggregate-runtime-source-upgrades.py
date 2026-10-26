@@ -14,10 +14,19 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_AGGREGATE = ROOT / "scripts/release/aggregate-runtime-capability.py"
-EXPECTED_KEYS = {
-    (source, architecture)
-    for source in ("1.5.3", "1.6.0")
-    for architecture in ("amd64", "arm64")
+SOURCE_CONTRACTS = {
+    "1.6.1": ["1.5.3", "1.6.0"],
+    "1.6.2": ["1.5.3", "1.6.0", "1.6.1"],
+}
+SOURCE_IDENTITIES = {
+    "1.6.0": (
+        "b48057184752c912e4ae9b3a474374704d896073",
+        "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bcba53e1b39",
+    ),
+    "1.6.1": (
+        "f2e2943097451480bb11ec926bafb1be5ca5fbdc",
+        "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34",
+    ),
 }
 REQUIRED_CHAIN_CHECKS = {
     "signed_source", "signed_target", "source_apply_restart",
@@ -59,6 +68,7 @@ def validate_chained_receipt(
     target_version: str,
     target_commit: str,
     target_catalog_sha256: str,
+    source_version: str = "1.6.0",
 ) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     require(
@@ -68,12 +78,14 @@ def validate_chained_receipt(
         "Chained protocol-4 receipt did not pass natively.",
     )
     require(value.get("architecture") == architecture, "Receipt architecture is unbound.")
+    source_identity = SOURCE_IDENTITIES.get(source_version)
     require(
-        value.get("source_application_version") == "1.6.0"
-        and value.get("source_commit") == "b48057184752c912e4ae9b3a474374704d896073"
-        and value.get("source_catalog_sha256")
-        == "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bcba53e1b39",
-        "Chained receipt is not bound to the immutable v1.6.0 source.",
+        source_identity is not None
+        and source_version in SOURCE_CONTRACTS.get(target_version, [])
+        and value.get("source_application_version") == source_version
+        and value.get("source_commit") == source_identity[0]
+        and value.get("source_catalog_sha256") == source_identity[1],
+        f"Chained receipt is not bound to the immutable v{source_version} source.",
     )
     require(
         value.get("target_application_version") == target_version
@@ -110,9 +122,10 @@ def validate_chained_receipt(
         "Chained receipt image inventory is unbound.",
     )
     checks = value.get("checks")
+    required_checks = (REQUIRED_CHAIN_CHECKS - {"rollback_to_1.6.0"}) | {f"rollback_to_{source_version}"}
     require(
         isinstance(checks, dict)
-        and set(checks) == REQUIRED_CHAIN_CHECKS
+        and set(checks) == required_checks
         and all(result is True for result in checks.values()),
         "Chained protocol-4 checks are incomplete.",
     )
@@ -170,25 +183,31 @@ def main() -> int:
     args = parser.parse_args()
     release_config = json.loads(args.release_config.read_text(encoding="utf-8"))
     target_version = str(release_config.get("version") or "")
-    require(target_version == "1.6.1", "Source matrix is bounded to v1.6.1.")
+    sources = SOURCE_CONTRACTS.get(target_version)
+    require(sources is not None, "Source matrix is bounded to v1.6.1 and v1.6.2.")
     require(
         release_config.get("compatible_source_application_versions")
-        == ["1.5.3", "1.6.0"],
+        == sources,
         "Canonical protocol-4 sources are not exact.",
     )
     target_catalog_sha256 = sha256_file(args.target_catalog)
+    expected_keys = {
+        (source, architecture)
+        for source in sources
+        for architecture in ("amd64", "arm64")
+    }
     mapped: dict[tuple[str, str], Path] = {}
     for item in args.receipt:
         parts = item.split("=", 2)
         require(len(parts) == 3, "Receipt binding must be source=architecture=path.")
         source, architecture, raw_path = parts
         key = (source, architecture)
-        require(key in EXPECTED_KEYS and key not in mapped, "Receipt binding is invalid or duplicated.")
+        require(key in expected_keys and key not in mapped, "Receipt binding is invalid or duplicated.")
         mapped[key] = Path(raw_path)
-    require(set(mapped) == EXPECTED_KEYS, "Protocol-4 source receipt matrix is incomplete or has extras.")
+    require(set(mapped) == expected_keys, "Protocol-4 source receipt matrix is incomplete or has extras.")
     runtime_aggregate = _load_runtime_aggregate()
     summaries = []
-    for source, architecture in sorted(EXPECTED_KEYS):
+    for source, architecture in sorted(expected_keys):
         path = mapped[(source, architecture)]
         require(path.is_file(), f"Missing native receipt: {path}")
         if source == "1.5.3":
@@ -206,6 +225,7 @@ def main() -> int:
                 target_version=target_version,
                 target_commit=args.target_commit,
                 target_catalog_sha256=target_catalog_sha256,
+                source_version=source,
             )
         summaries.append({
             "source_application_version": source,
@@ -219,9 +239,9 @@ def main() -> int:
         "target_application_version": target_version,
         "target_commit": args.target_commit,
         "target_catalog_sha256": target_catalog_sha256,
-        "source_application_versions": ["1.5.3", "1.6.0"],
+        "source_application_versions": sources,
         "architectures": ["amd64", "arm64"],
-        "native_receipt_count": 4,
+        "native_receipt_count": len(expected_keys),
         "qualifications": summaries,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

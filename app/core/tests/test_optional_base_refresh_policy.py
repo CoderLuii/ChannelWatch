@@ -32,6 +32,18 @@ def dockerfiles():
     return before, before.replace("a" * 64, "c" * 64).replace("b" * 64, "d" * 64).replace("VERSION=1.6.0", "VERSION=1.6.1")
 
 
+@pytest.fixture
+def release_161_config():
+    return {
+        "version": "1.6.1",
+        "minimum_image_version": "1.5.3",
+        "image_required": False,
+        "delivery_mode": "app_update_with_image_refresh",
+        "compatible_source_application_versions": ["1.5.3", "1.6.0"],
+        "legacy_app_update_sources": ["1.4.0", "1.4.1", "1.4.5", "1.6.0"],
+    }
+
+
 def test_only_immutable_same_line_base_digests_can_be_optional():
     tool = load()
     before, after = dockerfiles()
@@ -114,10 +126,10 @@ def test_final_native_image_proof_rejects_missing_tampered_or_wrong_bindings(nat
     (True, False, True, False, False, True),
     (True, True, False, False, False, True),
 ])
-def test_pre_image_phase_is_explicit_and_final_phase_requires_native_proof(monkeypatch, phase, legacy, runtime, native, expected_pending, expected_required):
+def test_pre_image_phase_is_explicit_and_final_phase_requires_native_proof(monkeypatch, release_161_config, phase, legacy, runtime, native, expected_pending, expected_required):
     tool = load()
     before, after = dockerfiles()
-    config = json.loads((ROOT / "scripts/release/release-config.json").read_text())
+    config = release_161_config
     args = SimpleNamespace(pre_image_phase=phase, runtime_catalog=Path("catalog"), runtime_capability_evidence=Path("runtime"), legacy_app_receipts=Path("legacy"), legacy_app_catalog=Path("app-catalog"), legacy_app_bundle=Path("app-bundle"), config=ROOT / "scripts/release/release-config.json", native_image_evidence=Path("native"), candidate_image_archive=Path("archive"), candidate_image_descriptor=Path("descriptor"))
     descriptors = {arch: {"python_version": "3.14.8", "python_cache_tag": "cpython-314", "minimum_libc_version": [2, 36]} for arch in ("amd64", "arm64")}
     monkeypatch.setattr(tool, "_signed_protocol_four_runtime_variants", lambda **kwargs: (b"signed", descriptors, {}) if runtime else None)
@@ -132,10 +144,10 @@ def test_pre_image_phase_is_explicit_and_final_phase_requires_native_proof(monke
 
 
 @pytest.mark.parametrize("raised_floor", ["python", "image", "sources", "key"])
-def test_optional_refresh_never_raises_the_retained_floor_or_changes_trust(monkeypatch, raised_floor):
+def test_optional_refresh_never_raises_the_retained_floor_or_changes_trust(monkeypatch, release_161_config, raised_floor):
     tool = load()
     before, after = dockerfiles()
-    config = json.loads((ROOT / "scripts/release/release-config.json").read_text())
+    config = release_161_config
     args = SimpleNamespace(pre_image_phase=True, runtime_catalog=Path("catalog"), runtime_capability_evidence=Path("runtime"))
     descriptor = {"python_version": "3.14.9" if raised_floor == "python" else "3.14.8", "python_cache_tag": "cpython-314", "minimum_libc_version": [2, 36]}
     monkeypatch.setattr(tool, "_signed_protocol_four_runtime_variants", lambda **kwargs: (b"signed", {arch: descriptor for arch in ("amd64", "arm64")}, {}))
@@ -144,6 +156,26 @@ def test_optional_refresh_never_raises_the_retained_floor_or_changes_trust(monke
     if raised_floor == "sources":
         config["legacy_app_update_sources"] = ["1.4.1", "1.4.5", "1.6.0"]
     result, pending = tool.apply_optional_base_refresh(tool._impact({"deploy/docker/Dockerfile"}, set()), before={"deploy/docker/Dockerfile": before}, after={"deploy/docker/Dockerfile": after}, config=config, args=args, source_commit="f" * 40, public_keys={} if raised_floor == "key" else None)
+    assert result.image_required is True
+    assert pending is False
+
+
+@pytest.mark.parametrize("version", ["1.6.2", "1.6.3"])
+def test_optional_base_refresh_exception_does_not_extend_to_new_releases(monkeypatch, release_161_config, version):
+    tool = load()
+    before, after = dockerfiles()
+    config = {**release_161_config, "version": version}
+    args = SimpleNamespace(pre_image_phase=True, runtime_catalog=Path("catalog"), runtime_capability_evidence=Path("runtime"))
+    descriptors = {arch: {"python_version": "3.14.8", "python_cache_tag": "cpython-314", "minimum_libc_version": [2, 36]} for arch in ("amd64", "arm64")}
+    monkeypatch.setattr(tool, "_signed_protocol_four_runtime_variants", lambda **kwargs: (b"signed", descriptors, {}))
+    monkeypatch.setattr(tool, "_read_protocol_four_runtime_evidence", lambda **kwargs: True)
+    monkeypatch.setattr(tool, "verify_optional_legacy_proof", lambda **kwargs: True)
+    monkeypatch.setattr(tool, "verify_optional_native_image_proof", lambda *args, **kwargs: True)
+    result, pending = tool.apply_optional_base_refresh(
+        tool._impact({"deploy/docker/Dockerfile"}, set()),
+        before={"deploy/docker/Dockerfile": before}, after={"deploy/docker/Dockerfile": after},
+        config=config, args=args, source_commit="f" * 40, public_keys=None,
+    )
     assert result.image_required is True
     assert pending is False
 

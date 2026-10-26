@@ -971,7 +971,55 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_release_config_declares_161_dependency_update_on_published_153_image():
+def test_current_release_delivery_matches_changes_since_published_161(monkeypatch):
+    monkeypatch.chdir(ROOT)
+    module = _load_script(
+        "classify_current_release_delivery",
+        "scripts/release/classify-release-impact.py",
+    )
+    base_ref = "v1.6.1"
+    baseline = subprocess.run(
+        ["git", "rev-parse", base_ref],
+        check=True, capture_output=True, text=True, cwd=ROOT,
+    ).stdout.strip()
+    assert baseline == "f2e2943097451480bb11ec926bafb1be5ca5fbdc"
+    paths = subprocess.run(
+        ["git", "diff", "--name-only", base_ref],
+        check=True, capture_output=True, text=True, cwd=ROOT,
+    ).stdout.splitlines()
+    assert paths
+    structured = {
+        path for path in paths
+        if module.normalize_path(path)
+        in module.STRUCTURED_RELEASE_PATHS | module.AUDITED_RUNTIME_COMPATIBILITY_PATHS
+    }
+    before = {path: module.file_at_ref(base_ref, path) for path in structured}
+    after = {
+        path: (ROOT / path).read_text(encoding="utf-8")
+        if (ROOT / path).is_file() else None
+        for path in structured
+    }
+    structured_impact = module.classify_changes(before, after)
+    ordinary = module.classify_paths([path for path in paths if path not in structured])
+    impact = module._impact(
+        set(structured_impact.triggering_paths) | set(ordinary.triggering_paths),
+        set(structured_impact.refresh_paths) | set(ordinary.refresh_paths),
+    )
+    config = json.loads(
+        (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
+    )
+    impact = module.apply_release_version_policy(
+        impact, module.validate_release_config(config)
+    )
+
+    module.verify_declared_impact(
+        impact,
+        declared_image_required=config["image_required"],
+        declared_delivery_mode=config["delivery_mode"],
+    )
+
+
+def test_release_config_declares_162_in_app_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -980,17 +1028,17 @@ def test_release_config_declares_161_dependency_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.1"
+    assert config["version"] == "1.6.2"
     assert config["image_required"] is False
-    assert config["delivery_mode"] == "app_update_with_image_refresh"
+    assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.1"
+    assert config["recommended_image_version"] == "1.6.2"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1"]
     assert config["compatible_launcher_protocols"] == [4]
     assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
@@ -1033,6 +1081,18 @@ def test_release_config_declares_161_dependency_update_on_published_153_image():
     assert predecessor["delivery_mode"] == "app_update"
     assert predecessor["minimum_image_version"] == "1.4.0"
     assert predecessor["updater_protocol"] == 2
+    predecessor_161 = next(
+        release for release in history if release["version"] == "1.6.1"
+    )
+    assert predecessor_161["bundle_sha256"] == (
+        "7aeb4c418aaa9f5a9a14a2ab03ebff94c19732e33dc497f30f6028f9edb631d0"
+    )
+    assert predecessor_161["publication_time"] == "2026-10-26T00:48:33Z"
+    assert predecessor_161["minimum_image_version"] == "1.4.0"
+    assert predecessor_161["updater_protocol"] == 2
+    assert predecessor_161["compatible_source_application_versions"] == [
+        "1.4.0", "1.4.1", "1.4.5", "1.6.0"
+    ]
     assert "1.5.0" not in {release["version"] for release in history}
     assert "1.5.1" not in {release["version"] for release in history}
     assert "1.5.2" not in {release["version"] for release in history}
@@ -1079,17 +1139,13 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
     assert re.findall(r"^## .+$", output, re.MULTILINE) == [
         config["release_heading"]
     ]
-    for heading in ("Important", "Added", "Changed", "Fixed", "Docs", "Images"):
+    for heading in ("Fixed", "Docs", "Images", "License and verification"):
         assert f"\n### {heading}\n" in output
-    assert "\n### License and verification\n" in output
-    assert "\n### Security\n" in output
-    assert "certifi 2026.10.19" in output
-    assert "replace the container with the v1.6.1 image to receive certifi 2026.10.19" in output
-    assert "need the v1.5.3 image to receive the certifi fix" not in output
-    assert "two @vitest/mocker advisories" in output
-    assert "channelwatch-v1.6.1-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.1`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.1`" in output
+    assert "[#28](https://github.com/CoderLuii/ChannelWatch/issues/28)" in output
+    assert "[#29](https://github.com/CoderLuii/ChannelWatch/issues/29)" in output
+    assert "channelwatch-v1.6.2-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.2`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.2`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1210,11 +1266,11 @@ def test_release_version_surfaces_use_161_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.1"
-    assert metadata["versionTag"] == "v1.6.1"
-    assert metadata["dockerTag"] == "1.6.1"
-    assert metadata["helmChartVersion"] == "1.6.1"
-    assert metadata["helmAppVersion"] == "1.6.1"
+    assert metadata["version"] == "1.6.2"
+    assert metadata["versionTag"] == "v1.6.2"
+    assert metadata["dockerTag"] == "1.6.2"
+    assert metadata["helmChartVersion"] == "1.6.2"
+    assert metadata["helmAppVersion"] == "1.6.2"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3206,7 +3262,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
     assert workflow.count(
         '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
-        ) == 4
+        ) == 5
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     candidate_canary = workflow.split(
@@ -3326,19 +3382,22 @@ def test_release_workflow_has_one_candidate_publication_run_per_release():
 
 
 def test_release_runs_the_complete_backend_suite_without_retry():
-    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
-        encoding="utf-8"
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
     )
-    release_job = workflow.split("  build-update-bundle-and-release:", 1)[1].split(
-        "\n  build-and-push:",
-        1,
-    )[0]
-    gate = release_job.split("      - name: Run Python release gates", 1)[1].split(
-        "\n      - name: Build frontend for app bundle",
-        1,
-    )[0]
+    jobs = workflow["jobs"]
+    source = jobs["candidate-source-gates"]
+    gate_step = next(step for step in source["steps"] if step.get("name") == "Run source gates")
+    assert source["permissions"] == {"contents": "read"}
+    assert source.get("continue-on-error", False) is False
+    assert "if" not in gate_step
+    assert gate_step.get("continue-on-error", False) is False
+    assert "candidate-source-gates" in jobs["candidate-qualification"]["needs"]
+    assert "candidate-qualification" in jobs["signed-candidate"]["needs"]
+    assert "signed-candidate" in jobs["build-update-bundle-and-release"]["needs"]
+    gate = gate_step["run"]
 
-    assert "python -m pytest app/core/tests" in gate
+    assert "PYTHONPATH=app python -m pytest app/core/tests" in gate
     assert "--deselect" not in gate
     assert "retry" not in gate.lower()
     assert "||" not in gate
@@ -3848,6 +3907,114 @@ def test_ci_trivy_scan_renders_helm_and_fails_if_chart_targets_are_skipped():
     assert '"templates/secret.yaml"' in security_job
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"(?:PYTHONPATH=app )?python -m pytest app/core/tests",
+        r"python -m compileall app/core app/ui/backend",
+        r"python scripts/release/release_version_policy\.py",
+        r"pnpm typecheck",
+        r"pnpm lint",
+        r"pnpm test",
+        r"pnpm exec playwright test",
+    ],
+)
+def test_tag_release_runs_each_source_suite_once(command):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    producers = [
+        name
+        for name, job in workflow["jobs"].items()
+        if job.get("if") != "github.event_name == 'pull_request'"
+        for step in job["steps"]
+        for _ in re.finditer(rf"(?m)^\s*{command}\s*$", step.get("run", ""))
+    ]
+    assert producers == ["candidate-source-gates"]
+
+
+def test_release_source_result_is_required_before_candidate_promotion():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    assert workflow["env"]["RELEASE_SHA"] == "${{ github.sha }}"
+    source = jobs["candidate-source-gates"]
+    assert source["permissions"] == {"contents": "read"}
+    assert "${{ secrets." not in json.dumps(source)
+    for consumer, prerequisites in {
+        "candidate-signing": {"candidate-source-gates", "runtime-dependencies"},
+        "candidate-qualification": {
+            "candidate-source-gates", "candidate-signing", "runtime-capability",
+            "legacy-app-upgrade",
+        },
+        "signed-candidate": {"candidate-signing", "candidate-qualification"},
+        "build-update-bundle-and-release": {"signed-candidate", "native-image-qualification"},
+    }.items():
+        job = jobs[consumer]
+        assert prerequisites <= set(job["needs"])
+        assert job.get("if") == "startsWith(github.ref, 'refs/tags/v')"
+        assert job.get("continue-on-error", False) is False
+        checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        assert checkout["with"]["ref"] in {"${{ github.sha }}", "${{ env.RELEASE_SHA }}"}
+        assert checkout["with"]["persist-credentials"] is False
+    static_upload = next(step for step in source["steps"] if step.get("name") == "Retain verified static frontend")
+    assert static_upload.get("if") is None
+    assert static_upload["with"]["name"] == "release-static-${{ github.sha }}"
+    static_download = next(
+        step for step in jobs["candidate-signing"]["steps"]
+        if step.get("name") == "Download verified static frontend"
+    )
+    assert static_download["with"]["name"] == static_upload["with"]["name"]
+    assert "run-id" not in static_download["with"]
+    approved_download = next(
+        step for step in jobs["build-update-bundle-and-release"]["steps"]
+        if step.get("name") == "Download the exact qualified candidate seal"
+    )
+    assert approved_download["with"]["artifact-ids"] == "${{ needs.signed-candidate.outputs.artifact_id }}"
+
+
+def test_release_reuse_preserves_independent_payload_images_and_native_gates():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    candidate = jobs["candidate-qualification"]
+    shell = "\n".join(step.get("run", "") for step in candidate["steps"])
+    assert "pnpm build" in shell
+    assert "cmp --silent" in shell
+    assert '"${comparison_dir}/channelwatch-app-${tag}.zip"' in shell
+    assert '"${runtime_bundle}"' in shell
+    assert 'cmp --silent "${descriptor}" "${RUNNER_TEMP}/channelwatch-image-second.json"' in shell
+    assert 'cmp --silent "${digest}" "${RUNNER_TEMP}/channelwatch-image-second.digest"' in shell
+    assert 'cmp --silent "${archive}" "${second_archive}"' in shell
+    independent_builds = [
+        step for step in candidate["steps"]
+        if step.get("with", {}).get("no-cache") is True
+    ]
+    assert len(independent_builds) == 2
+    assert all(step["with"]["platforms"] == "${{ env.DOCKER_PLATFORMS }}" for step in independent_builds)
+    assert len({step["with"]["outputs"] for step in independent_builds}) == 2
+    for job_name in ("runtime-capability", "legacy-app-upgrade", "native-image-qualification"):
+        assert [row["architecture"] for row in jobs[job_name]["strategy"]["matrix"]["include"]] == ["amd64", "arm64"]
+    assert "aggregate-runtime-source-upgrades.py" in shell
+    assert "aggregate-legacy-app-upgrades.py" in shell
+    assert "scan-runtime-artifacts.py" in shell
+    assert "candidate-transport.py encrypt" in shell
+    assert "verify-update-assets.py" in shell
+    assert jobs["advance-compatible-aliases"]["needs"] == ["build-and-push", "verify-live-update-manifest"]
+
+
+def test_runtime_capability_outer_budget_includes_native_setup():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["runtime-capability"]
+    # Passing native checks and setup exceeded the former 30-minute job budget.
+    assert job["timeout-minutes"] > 30
+    assert job["strategy"]["fail-fast"] is False
+
+
 def test_ci_python_job_disables_cross_trust_dependency_caching():
     workflow = (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(
         encoding="utf-8"
@@ -4335,6 +4502,15 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bcba53e1b39" in capability
     assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.5.3.json" in capability
     assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json" in capability
+    assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.1.json" in capability
+    assert "--source-version 1.6.1" in capability
+    assert 'if [ "${version}" = "1.6.2" ]; then' in capability
+    for digest in (
+        "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34",
+        "2da567d8b3554b156b5f8a8916f539fddce94bec27cf75c6c3460342f76c5b7a",
+        "a027707047a04dc5f0e52d1c50e3595f136a96b56e7efcfdce731802b8e925cd",
+    ):
+        assert digest in capability
     assert '--architecture "${NATIVE_ARCHITECTURE}"' in capability
     assert "--validate-evidence" in capability
     assert '--architecture "${{ matrix.architecture }}"' in capability
@@ -4381,6 +4557,7 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "aggregate-runtime-source-upgrades.py" in candidate
     for binding in (
         "1.5.3=amd64", "1.5.3=arm64", "1.6.0=amd64", "1.6.0=arm64",
+        "1.6.1=amd64", "1.6.1=arm64",
     ):
         assert f'--receipt "{binding}=' in candidate
     assert "channelwatch-runtime-source-upgrades-${tag}.json" in candidate

@@ -324,66 +324,76 @@ export function DiagnosticsPanel() {
 
   const tests = [
     {
+      id: "Test Connectivity",
       name: t("diagnostics.test.connectivity.name"),
       description: t("diagnostics.test.connectivity.desc"),
       icon: Wifi,
       category: "connectivity",
     },
     {
+      id: "Test API Endpoints",
       name: t("diagnostics.test.apiEndpoints.name"),
       description: t("diagnostics.test.apiEndpoints.desc"),
       icon: Server,
       category: "connectivity",
     },
     {
+      id: "Test Channel Watching Alert",
       name: t("diagnostics.test.cwAlert.name"),
       description: t("diagnostics.test.cwAlert.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
+      id: "Test VOD Watching Alert",
       name: t("diagnostics.test.vodAlert.name"),
       description: t("diagnostics.test.vodAlert.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
+      id: "Test Disk Space Alert",
       name: t("diagnostics.test.diskAlert.name"),
       description: t("diagnostics.test.diskAlert.desc"),
       icon: Gauge,
       category: "notifications",
     },
     {
+      id: "Test Recording Scheduled Alert",
       name: t("diagnostics.test.recScheduled.name"),
       description: t("diagnostics.test.recScheduled.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
+      id: "Test Recording Started Alert",
       name: t("diagnostics.test.recStarted.name"),
       description: t("diagnostics.test.recStarted.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
+      id: "Test Recording Completed Alert",
       name: t("diagnostics.test.recCompleted.name"),
       description: t("diagnostics.test.recCompleted.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
+      id: "Test Recording Stopped Alert",
       name: t("diagnostics.test.recStopped.name"),
       description: t("diagnostics.test.recStopped.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
+      id: "Test Recording Cancelled Alert",
       name: t("diagnostics.test.recCancelled.name"),
       description: t("diagnostics.test.recCancelled.desc"),
       icon: Activity,
       category: "notifications",
     },
-  ];
+  ] as const;
 
   const [runAllProgress, setRunAllProgress] = useState<{
     current: number;
@@ -394,12 +404,13 @@ export function DiagnosticsPanel() {
     Record<string, { status: string; message?: string; elapsed?: number }>
   >({});
 
-  const handleRunTest = async (testName: string, partOfRunAll = false) => {
+  const handleRunTest = async (test: (typeof tests)[number]) => {
+    const testName = test.name;
     setTestStatus((prev) => ({ ...prev, [testName]: { status: "running" } }));
     const start = Date.now();
 
     try {
-      const result = await runTest(testName);
+      const result = await runTest(test.id);
       const elapsed = (Date.now() - start) / 1000;
       setTestStatus((prev) => ({
         ...prev,
@@ -434,7 +445,7 @@ export function DiagnosticsPanel() {
 
     for (let i = 0; i < tests.length; i++) {
       setRunAllProgress({ current: i, total });
-      await handleRunTest(tests[i].name, true);
+      await handleRunTest(tests[i]);
     }
 
     setRunAllElapsed((Date.now() - allStart) / 1000);
@@ -1388,7 +1399,7 @@ export function DiagnosticsPanel() {
                             </span>
                           )}
                         <Button
-                          onClick={() => handleRunTest(test.name)}
+                          onClick={() => handleRunTest(test)}
                           disabled={
                             testStatus[test.name]?.status === "running" ||
                             runAllProgress !== null

@@ -335,7 +335,20 @@ export async function fetchSystemInfo(options: { dvr_id?: string; include_all_dv
   return response.json()
 }
 
-export async function runTest(testName: string): Promise<TestResult> {
+export type DiagnosticTestName =
+  | "Test Connectivity"
+  | "Test API Endpoints"
+  | "Test Channel Watching Alert"
+  | "Test VOD Watching Alert"
+  | "Test Disk Space Alert"
+  | "Test Recording Events Alert"
+  | "Test Recording Scheduled Alert"
+  | "Test Recording Started Alert"
+  | "Test Recording Completed Alert"
+  | "Test Recording Stopped Alert"
+  | "Test Recording Cancelled Alert"
+
+export async function runTest(testName: DiagnosticTestName): Promise<TestResult> {
   // Replace spaces with underscores for the URL path
   const urlTestName = encodeURIComponent(testName.replace(/ /g, "_"))
 

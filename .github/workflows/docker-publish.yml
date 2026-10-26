@@ -657,7 +657,7 @@ jobs:
     needs: [candidate-source-gates, candidate-signing, runtime-dependencies]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
@@ -750,6 +750,24 @@ jobs:
             '865a6054f0fbddd213fe5f2e2578de5da8bc4453f322a991003516cc1bd9cadc' "${source_dir}/channelwatch-runtime-v1.6.0-amd64.zip" \
             '60f0a7a97433778ac89e17bab90ef6e83566159649697f90e2f5918afd17c2ec' "${source_dir}/channelwatch-runtime-v1.6.0-arm64.zip" \
             | sha256sum --check --strict
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ]; then
+            source_dir="${RUNNER_TEMP}/runtime-source-v1.6.1"
+            mkdir -p "${source_dir}"
+            base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.1"
+            curl --fail --silent --show-error --location \
+              --output "${source_dir}/channelwatch-update-catalog-v3.json" \
+              "${base_url}/channelwatch-update-catalog-v3.json"
+            for architecture in amd64 arm64; do
+              curl --fail --silent --show-error --location \
+                --output "${source_dir}/channelwatch-runtime-v1.6.1-${architecture}.zip" \
+                "${base_url}/channelwatch-runtime-v1.6.1-${architecture}.zip"
+            done
+            printf '%s  %s\n' \
+              'fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34' "${source_dir}/channelwatch-update-catalog-v3.json" \
+              '2da567d8b3554b156b5f8a8916f539fddce94bec27cf75c6c3460342f76c5b7a' "${source_dir}/channelwatch-runtime-v1.6.1-amd64.zip" \
+              'a027707047a04dc5f0e52d1c50e3595f136a96b56e7efcfdce731802b8e925cd' "${source_dir}/channelwatch-runtime-v1.6.1-arm64.zip" \
+              | sha256sum --check --strict
+          fi
       - name: Run the native protocol-4 lifecycle verifier
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
         env:
@@ -791,6 +809,21 @@ jobs:
             --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
             --architecture "${NATIVE_ARCHITECTURE}" \
             --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json"
+          if [ "${version}" = "1.6.2" ]; then
+            python scripts/release/verify-runtime-source-upgrade.py \
+              --source-version 1.6.1 \
+              --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.1/channelwatch-update-catalog-v3.json" \
+              --source-amd64-bundle "${RUNNER_TEMP}/runtime-source-v1.6.1/channelwatch-runtime-v1.6.1-amd64.zip" \
+              --source-arm64-bundle "${RUNNER_TEMP}/runtime-source-v1.6.1/channelwatch-runtime-v1.6.1-arm64.zip" \
+              --target-catalog "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-update-catalog-v3.json" \
+              --target-amd64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-amd64.zip" \
+              --target-arm64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-arm64.zip" \
+              --target-version "${version}" \
+              --target-commit "${GITHUB_SHA}" \
+              --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
+              --architecture "${NATIVE_ARCHITECTURE}" \
+              --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.1.json"
+          fi
       - name: Validate the complete native receipt before retention
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
         shell: bash
@@ -913,7 +946,11 @@ jobs:
         run: |
           set -euo pipefail
           version="$(jq -r '.version' scripts/release/release-config.json)"
-          test "$(jq -c '.legacy_app_update_sources' scripts/release/release-config.json)" = '["1.4.0","1.4.1","1.4.5","1.6.0"]'
+          legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0"]'
+          if [ "${version}" = "1.6.2" ]; then
+            legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0","1.6.1"]'
+          fi
+          test "$(jq -c '.legacy_app_update_sources' scripts/release/release-config.json)" = "${legacy_sources}"
           tag="v${version}"
           evidence="${RUNNER_TEMP}/legacy-app-upgrades"
           mkdir -p "${evidence}"
@@ -1117,30 +1154,16 @@ jobs:
           python -m pip install --upgrade \
             -c deploy/requirements/runtime.constraints.txt \
             -r deploy/requirements/runtime.txt
-          python -m pip install --upgrade \
-            -c deploy/requirements/dev.constraints.txt \
-            -r deploy/requirements/runtime.txt \
-            -r deploy/requirements/dev.txt
 
-      - name: Run source gates
-        run: |
-          python scripts/release/release_version_policy.py
-          python -m compileall app/core app/ui/backend
-          PYTHONPATH=app python -m pytest app/core/tests
-
-      - name: Build verified static frontend
+      # Source suites passed through needs; rebuild only for independent comparison.
+      - name: Rebuild static frontend for payload comparison
         working-directory: app/ui
         env:
           CHANNELWATCH_BUILD_ID: ${{ github.sha }}
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-          pnpm typecheck
-          pnpm lint
-          pnpm test
           pnpm build
-          pnpm exec playwright install --with-deps chromium firefox webkit
-          pnpm exec playwright test
 
       - name: Rebuild and compare the complete application payload
         env:
@@ -1219,18 +1242,6 @@ jobs:
           cmp --silent \
             "dist/candidate-one/channelwatch-app-${tag}.zip" \
             "${comparison_dir}/channelwatch-app-${tag}.zip"
-
-      # Browser checks use disposable API fixtures and run before signing secrets.
-      - name: Retain browser diagnostics, including first failed attempts
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-browser-${{ github.sha }}
-          path: |
-            app/ui/playwright-report/
-            app/ui/test-results/
-          retention-days: 7
-          if-no-files-found: warn
 
       - name: Verify and extract native runtime dependency closures
         shell: bash
@@ -1734,11 +1745,19 @@ jobs:
               --release-config scripts/release/release-config.json \
               --source-commit "${GITHUB_SHA}" \
               --output "${capability_evidence}"
+            source_receipt_args=()
+            if [ "${version}" = "1.6.2" ]; then
+              source_receipt_args=(
+                --receipt "1.6.1=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.1.json"
+                --receipt "1.6.1=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.1.json"
+              )
+            fi
             python scripts/release/aggregate-runtime-source-upgrades.py \
               --receipt "1.5.3=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.5.3.json" \
               --receipt "1.5.3=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.5.3.json" \
               --receipt "1.6.0=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.0.json" \
               --receipt "1.6.0=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.0.json" \
+              "${source_receipt_args[@]}" \
               --target-catalog "dist/candidate-one/channelwatch-update-catalog-v3.json" \
               --release-config scripts/release/release-config.json \
               --target-commit "${GITHUB_SHA}" \
@@ -2574,12 +2593,6 @@ jobs:
             '.log_archive_sha256 = $sha256' "${manifest}" > "${updated}"
           mv "${updated}" "${manifest}"
 
-      - name: Set up pinned Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
       - name: Reject stale release tag
         if: github.event_name == 'push'
         run: >-
@@ -2617,29 +2630,6 @@ jobs:
           python -m pip install --upgrade \
             -c deploy/requirements/runtime.constraints.txt \
             -r deploy/requirements/runtime.txt
-          python -m pip install --upgrade \
-            -c deploy/requirements/dev.constraints.txt \
-            -r deploy/requirements/runtime.txt \
-            -r deploy/requirements/dev.txt
-
-      - name: Run Python release gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/release/release_version_policy.py
-          python -m pytest app/core/tests
-          python -m compileall app/core app/ui/backend
-
-      - name: Build frontend for app bundle
-        working-directory: app/ui
-        env:
-          CHANNELWATCH_BUILD_ID: ${{ github.sha }}
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile
-          pnpm test
-          pnpm typecheck
-          pnpm build
 
       - name: Reverify app update frontend on the minimum compatible image
         env:

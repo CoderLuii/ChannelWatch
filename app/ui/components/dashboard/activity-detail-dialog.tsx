@@ -108,7 +108,7 @@ export function ActivityDetailDialog({ activity, open, onOpenChange }: ActivityD
               src={activity.image_url}
               alt=""
               onError={() => setFailedArtwork(activity.image_url || "")}
-              className="w-full h-full object-cover"
+              className="w-full h-full object-contain"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-background/90 to-transparent" />
             <div className="absolute bottom-3 left-4 right-4">

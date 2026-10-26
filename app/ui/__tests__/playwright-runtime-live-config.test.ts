@@ -61,11 +61,24 @@ describe("runtime-live Playwright isolation", () => {
     const specs = report.suites.flatMap((suite) => suite.specs)
     expect(specs.map((spec) => spec.title)).toEqual([
       "runtime polling enforces restart, rollback, and exact readiness responses",
+      "status reset audit binds request identity and recovery (rollback)",
+      "status reset audit binds request identity and recovery (apply)",
+      "status reset audit binds request identity and recovery (unobserved_apply_ack)",
+      "status reset audit binds request identity and recovery (steady)",
+      "status reset audit binds request identity and recovery (unacknowledged)",
+      "status reset audit binds request identity and recovery (started_before_ack)",
+      "status reset audit binds request identity and recovery (stale_ack)",
+      "status reset audit binds request identity and recovery (wrong_origin)",
+      "status reset audit binds request identity and recovery (query)",
+      "status reset audit binds request identity and recovery (method)",
+      "status reset audit binds request identity and recovery (static)",
+      "status reset audit binds request identity and recovery (unrecovered)",
+      "status reset audit binds request identity and recovery (javascript)",
+      "status reset audit binds request identity and recovery (pageerror)",
       "authenticated live Update Center applies and rolls back the exact candidate once",
     ])
-    expect(specs.flatMap((spec) => spec.tests.map((listedTest) => listedTest.timeout))).toEqual([
-      25 * 60_000,
-      25 * 60_000,
-    ])
+    expect(specs.flatMap((spec) => spec.tests.map((listedTest) => listedTest.timeout))).toEqual(
+      Array(16).fill(25 * 60_000),
+    )
   }, 30_000)
 })

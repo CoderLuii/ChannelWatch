@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the signed v1.6.0 runtime can update to the candidate in place."""
+"""Prove an immutable signed runtime can update to the candidate in place."""
 
 from __future__ import annotations
 
@@ -23,6 +23,21 @@ SOURCE_CATALOG_SHA256 = "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bc
 SOURCE_BUNDLE_SHA256 = {
     "amd64": "865a6054f0fbddd213fe5f2e2578de5da8bc4453f322a991003516cc1bd9cadc",
     "arm64": "60f0a7a97433778ac89e17bab90ef6e83566159649697f90e2f5918afd17c2ec",
+}
+SOURCE_RELEASES = {
+    "1.6.0": {
+        "source_commit": SOURCE_COMMIT,
+        "catalog_sha256": SOURCE_CATALOG_SHA256,
+        "bundles": SOURCE_BUNDLE_SHA256,
+    },
+    "1.6.1": {
+        "source_commit": "f2e2943097451480bb11ec926bafb1be5ca5fbdc",
+        "catalog_sha256": "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34",
+        "bundles": {
+            "amd64": "2da567d8b3554b156b5f8a8916f539fddce94bec27cf75c6c3460342f76c5b7a",
+            "arm64": "a027707047a04dc5f0e52d1c50e3595f136a96b56e7efcfdce731802b8e925cd",
+        },
+    },
 }
 SHA40 = re.compile(r"[0-9a-f]{40}")
 
@@ -85,23 +100,26 @@ def selected_status(
 
 
 def qualify(args: argparse.Namespace) -> dict[str, Any]:
+    source_version = args.source_version
+    source_release = SOURCE_RELEASES[source_version]
+    source_commit = source_release["source_commit"]
     architecture = tool.native_architecture(args.architecture)
-    if sha256_file(args.source_catalog) != SOURCE_CATALOG_SHA256:
-        raise tool.CapabilityError("The v1.6.0 source catalog digest is not immutable.")
+    if sha256_file(args.source_catalog) != source_release["catalog_sha256"]:
+        raise tool.CapabilityError(f"The v{source_version} source catalog digest is not immutable.")
     source_bundles = {
         "amd64": args.source_amd64_bundle.resolve(),
         "arm64": args.source_arm64_bundle.resolve(),
     }
     for name, path in source_bundles.items():
-        if sha256_file(path) != SOURCE_BUNDLE_SHA256[name]:
+        if sha256_file(path) != source_release["bundles"][name]:
             raise tool.CapabilityError(
-                f"The v1.6.0 {name} runtime bundle digest is not immutable."
+                f"The v{source_version} {name} runtime bundle digest is not immutable."
             )
     source_catalog_bytes, _source_release, source_variants = tool.verify_assets(
         args.source_catalog.resolve(),
         source_bundles,
-        version=SOURCE_VERSION,
-        source_commit=SOURCE_COMMIT,
+        version=source_version,
+        source_commit=source_commit,
     )
     target_bundles = {
         "amd64": args.target_amd64_bundle.resolve(),
@@ -134,8 +152,8 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
         "status": "running",
         "evidence_kind": "native",
         "architecture": architecture,
-        "source_application_version": SOURCE_VERSION,
-        "source_commit": SOURCE_COMMIT,
+        "source_application_version": source_version,
+        "source_commit": source_commit,
         "target_application_version": args.target_version,
         "target_commit": args.target_commit,
         "source_catalog_sha256": hashlib.sha256(source_catalog_bytes).hexdigest(),
@@ -192,29 +210,29 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
         source_check, _source_check_artifact = tool.check_update(
             client, args.evidence_json.with_name(f"{args.evidence_json.stem}-source.json"),
             architecture=architecture,
-            source_commit=SOURCE_COMMIT,
-            version=SOURCE_VERSION,
+            source_commit=source_commit,
+            version=source_version,
             descriptor=source_descriptor,
             bundle_sha256=source_variants[architecture]["bundle_sha256"],
         )
         source_job = tool.apply_once_and_wait(
             client,
             "/api/v1/update/apply",
-            version=SOURCE_VERSION,
+            version=source_version,
             job_id=secrets.token_hex(16),
             timeout=args.update_timeout,
         )
-        tool.wait_for_image_health(client, args.update_timeout, "v1.6.0 readiness")
+        tool.wait_for_image_health(client, args.update_timeout, f"v{source_version} readiness")
         source_apply = selected_status(
-            app, client, version=SOURCE_VERSION, descriptor=source_descriptor,
+            app, client, version=source_version, descriptor=source_descriptor,
             inventory=source_inventory, completed_job=source_job,
         )
         tool.run(["docker", "restart", app], timeout=120)
         client.set_base_url(tool.published_base_url(app))
-        tool.wait_for_image_health(client, args.startup_timeout, "v1.6.0 restart")
+        tool.wait_for_image_health(client, args.startup_timeout, f"v{source_version} restart")
         client.login()
         source_restart = selected_status(
-            app, client, version=SOURCE_VERSION, descriptor=source_descriptor,
+            app, client, version=source_version, descriptor=source_descriptor,
             inventory=source_inventory, completed_job=None,
         )
         published_catalog_sha256 = tool.publish_feed_catalog(
@@ -254,24 +272,24 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
         rollback_response = tool.validate_rollback_response(
             client.request("/api/v1/update/rollback", {}),
             source_version=args.target_version,
-            target_version=SOURCE_VERSION,
+            target_version=source_version,
         )
         tool.wait_until(
             lambda: client.request("/api/v1/update/status").get("current_version")
-            == SOURCE_VERSION,
+            == source_version,
             args.update_timeout,
-            "rollback to v1.6.0",
+            f"rollback to v{source_version}",
         )
-        tool.wait_for_image_health(client, args.update_timeout, "v1.6.0 rollback readiness")
+        tool.wait_for_image_health(client, args.update_timeout, f"v{source_version} rollback readiness")
         client.login()
         rollback_job = tool.wait_for_successful_job(
             client,
             job_id=rollback_response["job_id"],
             timeout=args.update_timeout,
-            description="rollback to v1.6.0",
+            description=f"rollback to v{source_version}",
         )
         rollback_status = selected_status(
-            app, client, version=SOURCE_VERSION, descriptor=source_descriptor,
+            app, client, version=source_version, descriptor=source_descriptor,
             inventory=source_inventory, completed_job=None,
         )
         reapply_job = tool.apply_once_and_wait(
@@ -312,7 +330,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
                 "signed_target": True,
                 "source_apply_restart": True,
                 "target_apply_restart": True,
-                "rollback_to_1.6.0": True,
+                f"rollback_to_{source_version}": True,
                 "reapply": True,
                 "same_container": True,
                 "same_image": True,
@@ -356,6 +374,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-version", choices=tuple(SOURCE_RELEASES), default=SOURCE_VERSION)
     parser.add_argument("--source-catalog", type=Path, required=True)
     parser.add_argument("--source-amd64-bundle", type=Path, required=True)
     parser.add_argument("--source-arm64-bundle", type=Path, required=True)
@@ -372,8 +391,10 @@ def main() -> int:
     parser.add_argument("--update-timeout", type=int, default=900)
     args = parser.parse_args()
     args.target_version = args.target_version.strip().lstrip("v")
-    if args.target_version != "1.6.1" or SHA40.fullmatch(args.target_commit) is None:
-        raise SystemExit("This verifier is bounded to the exact v1.6.1 candidate.")
+    if args.target_version not in {"1.6.1", "1.6.2"} or SHA40.fullmatch(args.target_commit) is None:
+        raise SystemExit("This verifier is bounded to exact v1.6.1 and v1.6.2 candidates.")
+    if args.target_version == "1.6.1" and args.source_version != "1.6.0":
+        raise SystemExit("The v1.6.1 candidate requires its immutable v1.6.0 source.")
     args.evidence_json.parent.mkdir(parents=True, exist_ok=True)
     receipt = qualify(args)
     args.evidence_json.write_text(

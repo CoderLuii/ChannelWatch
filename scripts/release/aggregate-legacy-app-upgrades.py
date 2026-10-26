@@ -22,6 +22,10 @@ REQUIRED_CHECKS = {
 PHASES = {"before", "after_apply", "after_restart", "after_rollback", "after_reapply"}
 APP_PHASES = {"after_apply", "after_restart", "after_reapply"}
 LEGACY_SOURCES = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
+LEGACY_SOURCE_CONTRACTS = {
+    "1.6.1": LEGACY_SOURCES,
+    "1.6.2": [*LEGACY_SOURCES, "1.6.1"],
+}
 QUALIFICATION_MODES = ("direct", "chained")
 SCENARIOS = [
     ("stock-1.4.0", "1.4.0", "1.4.0", None),
@@ -122,14 +126,15 @@ def aggregate(
     require(baselines.get("schema") == 2, "Baseline fixture schema is invalid.")
     require(baselines.get("target_version") == target_version, "Target version does not match fixtures.")
     require(baselines.get("repository") == "coderluii/channelwatch", "Baseline repository is invalid.")
-    require(baselines.get("legacy_sources") == LEGACY_SOURCES, "Baseline legacy sources are invalid.")
+    sources = LEGACY_SOURCE_CONTRACTS.get(target_version)
+    require(sources is not None and baselines.get("legacy_sources") == sources, "Baseline legacy sources are invalid.")
     require(
         baselines.get("qualification_modes") == list(QUALIFICATION_MODES),
         "Baseline qualification modes are invalid.",
     )
     require(release_config.get("version") == target_version, "Release configuration version is unbound.")
     require(
-        release_config.get("legacy_app_update_sources") == LEGACY_SOURCES,
+        release_config.get("legacy_app_update_sources") == sources,
         "Release configuration legacy sources are unbound.",
     )
     require(HEX.fullmatch(release_config_sha256) is not None, "Release configuration digest is invalid.")

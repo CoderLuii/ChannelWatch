@@ -315,7 +315,7 @@ export function RecentActivityList({
                           message={activity.message}
                         />
                       </div>
-                      <div aria-hidden="true" className="flex h-12 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted">
+                      <div aria-hidden="true" className="flex h-10 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted sm:h-12 sm:w-20">
                         {hasImage ? (
                           <>
                           {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
@@ -330,7 +330,7 @@ export function RecentActivityList({
                                 return next
                               })
                             }}
-                            className="h-full w-full object-cover"
+                            className="h-full w-full object-contain"
                             loading="lazy"
                           />
                           </>

@@ -519,7 +519,7 @@ export function WatchHistory() {
                         dialogTriggerRef.current = event.currentTarget
                         setSelectedActivity(activity)
                       }}
-                      className="grid w-full grid-cols-[44px_minmax(0,1fr)] items-start gap-3 p-4 text-left transition-colors hover:bg-muted/40 sm:flex"
+                      className="grid w-full grid-cols-[80px_minmax(0,1fr)] items-start gap-3 p-4 text-left transition-colors hover:bg-muted/40 sm:flex"
                     >
                       <div className={`hidden h-9 w-9 shrink-0 items-center justify-center rounded-full sm:flex ${colorClasses.split(" ")[0]}`}>
                         <div className={colorClasses.split(" ").slice(1).join(" ")}>
@@ -527,7 +527,7 @@ export function WatchHistory() {
                         </div>
                       </div>
 
-                      <div aria-hidden="true" className="flex h-16 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted">
+                      <div aria-hidden="true" className="flex h-12 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted sm:h-14 sm:w-24">
                         {hasImage ? (
                           <>
                           {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
@@ -542,7 +542,7 @@ export function WatchHistory() {
                                 return next
                               })
                             }}
-                            className="h-full w-full object-cover"
+                            className="h-full w-full object-contain"
                             loading="lazy"
                           />
                           </>

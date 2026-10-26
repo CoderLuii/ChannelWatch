@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-26
+
+### Fixed
+
+- Show complete channel logos and program artwork in Recent Activity, Watch History and activity details instead of cropping them into narrow poster slots. Keep row text aligned when artwork is missing ([#28](https://github.com/CoderLuii/ChannelWatch/issues/28)).
+- Run the selected diagnostic using its API command rather than its display label, so individual tests and **Run All Tests** reach the correct checks. Label the DVR API check accurately ([#29](https://github.com/CoderLuii/ChannelWatch/issues/29)).
+
 ## [1.6.1] - 2026-10-26
 
 ### Important
@@ -1018,7 +1025,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...v1.6.0
 [1.5.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.2...v1.5.3

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from .logging import log, LOG_STANDARD, LOG_VERBOSE
+from .diagnostic_context import is_diagnostic_execution
 from .atomic_io import atomic_write_json
 from core.storage.activity_store import persist_activity_event
 
@@ -154,6 +155,8 @@ def _persist_with_cooldown(
     Serialize reservation and acknowledgement so a concurrent caller cannot
     mistake an in-flight failed write for a successfully recorded duplicate.
     """
+    if is_diagnostic_execution():
+        return True
     with _activity_acceptance_lock:
         if len(history) > 100:
             cleanup_notification_history(history)

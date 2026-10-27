@@ -1120,8 +1120,10 @@ curl -sS -X POST -H "X-API-Key: $API_KEY" "$BASE_URL/api/run_test/Test_Connectiv
 Example response:
 
 ```json
-{"test_name":"Test Connectivity","success":true,"message":"Test 'Test Connectivity' succeeded"}
+{"test_name":"Test Connectivity","success":true,"status":"passed","reason":null,"message":"Test 'Test Connectivity' succeeded","target_dvr":{"id":"dvr_main","name":"Main DVR"}}
 ```
+
+`status` is `passed`, `failed` or `skipped`. `success` is true only for a passed test. A disabled notification test returns `status: "skipped"`, `success: false` and a reason without initializing providers or generating a sample. Genuine delivery and connection errors return `failed`. `target_dvr` identifies the first enabled DVR, or is null when no target is available. Existing test command names remain unchanged.
 
 ### `POST /api/restart_core`
 

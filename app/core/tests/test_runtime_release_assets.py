@@ -5,6 +5,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -341,7 +342,7 @@ def test_schema_two_legacy_app_bridge_rejects_noncanonical_release(field, value)
         )
 
 
-@pytest.mark.parametrize("version", ["1.6.3", "1.7.0", "2.0.0"])
+@pytest.mark.parametrize("version", ["1.6.4", "1.7.0", "2.0.0"])
 def test_schema_two_legacy_app_bridge_rejects_any_future_target(version):
     builder = _load("legacy_160_future_target", "scripts/release/build-update-bundle.py")
     release = _release_160()
@@ -354,7 +355,7 @@ def test_schema_two_legacy_app_bridge_rejects_any_future_target(version):
 
 
 @pytest.mark.parametrize("delivery_mode", ["app_update", "app_update_with_image_refresh"])
-@pytest.mark.parametrize("version", ["1.6.1", "1.6.2"])
+@pytest.mark.parametrize("version", ["1.6.1", "1.6.2", "1.6.3"])
 def test_schema_two_projects_exact_legacy_contract_for_old_image_launchers(delivery_mode, version):
     builder = _load("legacy_161_projection", "scripts/release/build-update-bundle.py")
     verifier = _load(
@@ -366,10 +367,14 @@ def test_schema_two_projects_exact_legacy_contract_for_old_image_launchers(deliv
     canonical = _release_161()
     sources = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
     canonical_sources = ["1.5.3", "1.6.0"]
-    if version == "1.6.2":
+    if version in {"1.6.2", "1.6.3"}:
         sources.append("1.6.1")
         canonical_sources.append("1.6.1")
-        canonical = json.loads(json.dumps(canonical).replace("1.6.1", "1.6.2"))
+        canonical = json.loads(json.dumps(canonical).replace("1.6.1", version))
+        canonical["compatible_source_application_versions"] = canonical_sources
+    if version == "1.6.3":
+        sources.append("1.6.2")
+        canonical_sources.append("1.6.2")
         canonical["compatible_source_application_versions"] = canonical_sources
     canonical.update(delivery_mode=delivery_mode, image_refresh_recommended=delivery_mode == "app_update_with_image_refresh")
     canonical["bundle_sha256"] = bundle_digest.hex()
@@ -494,7 +499,7 @@ def test_asset_verifier_loads_only_the_exact_target_legacy_bridge(tmp_path: Path
     config.write_text(
         json.dumps(
             {
-                "version": "1.6.3",
+                "version": "1.6.4",
                 "legacy_app_update_sources": [
                     "1.4.0",
                     "1.4.1",
@@ -506,7 +511,7 @@ def test_asset_verifier_loads_only_the_exact_target_legacy_bridge(tmp_path: Path
         encoding="utf-8",
     )
     with pytest.raises(Exception, match="supported release target"):
-        verifier.load_legacy_app_update_sources(config, expected_version="1.6.3")
+        verifier.load_legacy_app_update_sources(config, expected_version="1.6.4")
 
 
 def test_protocol_four_161_catalog_accepts_only_153_and_160_sources():
@@ -604,7 +609,7 @@ def test_protocol_four_runtime_catalog_keeps_only_153_app_source(
         )
 
 
-@pytest.mark.parametrize("version", ["1.6.1", "1.6.2"])
+@pytest.mark.parametrize("version", ["1.6.1", "1.6.2", "1.6.3"])
 def test_protocol_four_runtime_binding_requires_exact_source_versions(
     tmp_path: Path, monkeypatch, version
 ):
@@ -616,10 +621,13 @@ def test_protocol_four_runtime_binding_requires_exact_source_versions(
     )
     canonical = _release_161()
     legacy_sources = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
-    if version == "1.6.2":
+    if version in {"1.6.2", "1.6.3"}:
         legacy_sources.append("1.6.1")
-        canonical = json.loads(json.dumps(canonical).replace("1.6.1", "1.6.2"))
+        canonical = json.loads(json.dumps(canonical).replace("1.6.1", version))
         canonical["compatible_source_application_versions"] = ["1.5.3", "1.6.0", "1.6.1"]
+    if version == "1.6.3":
+        legacy_sources.append("1.6.2")
+        canonical["compatible_source_application_versions"].append("1.6.2")
     runtime_catalog = builder.build_runtime_catalog_v3(
         catalog_release=canonical,
         catalog_history=[],
@@ -653,6 +661,82 @@ def test_protocol_four_runtime_binding_requires_exact_source_versions(
             expected_version=version,
             legacy_app_update_sources=legacy_sources,
         )
+
+
+def test_v163_real_asset_cli_accepts_the_signed_legacy_and_native_catalogs(tmp_path, monkeypatch):
+    from core.tests import test_runtime_release_assets as fixtures
+    from core.tests.test_release_tooling import _signed_update_assets
+
+    builder = _load("v163_cli_builder", "scripts/release/build-update-bundle.py")
+    verifier = _load("v163_cli_verifier", "scripts/release/verify-update-assets.py")
+    source = tmp_path / "source"
+    members = {}
+    for member, relative in {
+        **verifier.CRITICAL_SOURCE_MEMBERS,
+        **verifier.GENERATED_LEGAL_SOURCE_MEMBERS,
+    }.items():
+        data = (ROOT / relative).read_bytes()
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        members[member] = (
+            verifier.render_document(data.decode("utf-8"), "1.6.3").encode("utf-8")
+            if member in verifier.GENERATED_LEGAL_SOURCE_MEMBERS else data
+        )
+    for arguments in (
+        ["init", "-q"], ["config", "user.name", "Release Review"],
+        ["config", "user.email", "review@example.invalid"], ["add", "."],
+        ["commit", "-q", "-m", "fixture"],
+    ):
+        subprocess.run(["git", *arguments], cwd=source, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    monkeypatch.setattr(fixtures, "SOURCE_COMMIT", commit)
+    private, public = _key_pair()
+    manifest_bytes, bundle, _ = _signed_update_assets(
+        "1.6.3", git_sha=commit, member_contents=members,
+    )
+    canonical = json.loads(json.dumps(_release_161()).replace("1.6.1", "1.6.3"))
+    canonical["compatible_source_application_versions"] = ["1.5.3", "1.6.0", "1.6.1", "1.6.2"]
+    canonical["bundle_sha256"] = hashlib.sha256(bundle).hexdigest()
+    canonical["bundle_signature"] = base64.b64encode(private.sign(hashlib.sha256(bundle).digest())).decode("ascii")
+    manifest = json.loads(manifest_bytes)
+    manifest["payload"].update(canonical)
+    manifest["signature"]["value"] = base64.b64encode(private.sign(builder.canonical_payload_bytes(manifest["payload"]))).decode("ascii")
+    legacy_sources = ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"]
+    app_catalog = _signed_schema_two(builder, private, builder.project_current_release_v2(canonical, legacy_sources))
+    bundles = _runtime_archives(tmp_path / "runtime", monkeypatch, application_version="1.6.3")
+    runtime_catalog = builder.build_runtime_catalog_v3(
+        catalog_release=canonical, catalog_history=[], runtime_bundles=bundles,
+        expected_source_commit=commit, private_key=private, key_id="test-key",
+        publication_time=canonical["published_at"],
+    )
+    paths = {name: tmp_path / f"{name}.json" for name in ("manifest", "catalog", "runtime", "config")}
+    for name, value in (("manifest", manifest), ("catalog", app_catalog), ("runtime", runtime_catalog),
+                        ("config", {"version": "1.6.3", "legacy_app_update_sources": legacy_sources})):
+        paths[name].write_text(json.dumps(value), encoding="utf-8")
+    bundle_path = tmp_path / "app.zip"
+    bundle_path.write_bytes(bundle)
+    arguments = [sys.executable, "-B", str(ROOT / "scripts/release/verify-update-assets.py"),
+        "--manifest", str(paths["manifest"]), "--bundle", str(bundle_path),
+        "--catalog", str(paths["catalog"]), "--runtime-catalog", str(paths["runtime"]),
+        "--release-config", str(paths["config"]), "--source-root", str(source),
+        "--expected-version", "1.6.3", "--expected-channel", "stable",
+        "--expected-runtime-abi", "channelwatch-runtime-v1", "--expected-settings-schema-version", "7",
+        "--expected-image-required", "false", "--expected-delivery-mode", "app_update",
+        "--expected-recommended-image-version", "1.6.3", "--expected-git-sha", commit,
+        "--expected-runtime-source-commit", commit, "--expected-release-url", canonical["release_url"],
+        "--expected-bundle-url", canonical["bundle_url"], "--public-key", f"test-key={public['test-key']}"]
+    for arch, (path, url) in bundles.items():
+        arguments.extend(["--runtime-bundle", f"{arch}={path}", "--expected-runtime-bundle-url", f"{arch}={url}"])
+    result = subprocess.run(arguments, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "Verified signed update assets for v1.6.3" in result.stdout
+    app_catalog["payload"]["releases"][0]["compatible_source_application_versions"].pop()
+    app_catalog["signature"]["value"] = base64.b64encode(private.sign(builder.canonical_payload_bytes(app_catalog["payload"]))).decode("ascii")
+    paths["catalog"].write_text(json.dumps(app_catalog), encoding="utf-8")
+    result = subprocess.run(arguments, capture_output=True, text=True, check=False)
+    assert result.returncode == 1
+    assert "legacy app-update projection" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1147,3 +1231,17 @@ def test_runtime_asset_verifier_checks_inventory_and_interpreter_binding(
             expected_source_commit=SOURCE_COMMIT,
             expected_bundle_urls={arch: url for arch, (_path, url) in bundles.items()},
         )
+
+
+def test_v163_history_retains_the_exact_published_v162_legacy_record():
+    builder = _load("v163_history_builder", "scripts/release/build-update-bundle.py")
+    history = builder.load_catalog_history("1.6.3")
+    predecessor = next(release for release in history if release["version"] == "1.6.2")
+    assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "1aa1aab169f81223084cc6ace956c662a64b02cd8830a7dd8004879093728740"
+    projected = builder.project_catalog_history_v2(history)
+    assert next(release for release in projected if release["version"] == "1.6.2") == predecessor
+    verifier = _load("v163_history_verifier", "scripts/release/verify-update-assets.py")
+    verifier.verify_ed25519_signature(
+        verifier.UPDATE_PUBLIC_KEYS, predecessor["key_id"], predecessor["bundle_signature"],
+        bytes.fromhex(predecessor["bundle_sha256"]),
+    )

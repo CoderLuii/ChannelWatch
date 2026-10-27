@@ -25,6 +25,7 @@ LEGACY_SOURCES = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
 LEGACY_SOURCE_CONTRACTS = {
     "1.6.1": LEGACY_SOURCES,
     "1.6.2": [*LEGACY_SOURCES, "1.6.1"],
+    "1.6.3": [*LEGACY_SOURCES, "1.6.1", "1.6.2"],
 }
 QUALIFICATION_MODES = ("direct", "chained")
 SCENARIOS = [

@@ -167,6 +167,21 @@ async def test_recording_diagnostic_awaits_delivery_result():
 
 
 @pytest.mark.asyncio
+async def test_recording_rejection_is_not_reported_as_unconfigured(capsys):
+    manager = SimpleNamespace(
+        alert_instances={"Recording-Events": SimpleNamespace(
+            job_provider=SimpleNamespace(_jobs_cache={}),
+            _handle_recording_created=AsyncMock(return_value=False),
+        )},
+        notification_manager=SimpleNamespace(has_configured_destinations=lambda: True),
+    )
+    assert not await run_recording_scheduled_diagnostic("fixture.invalid", 8089, manager)
+    output = capsys.readouterr().out
+    assert "notification delivery failed" in output
+    assert "no notification providers configured" not in output
+
+
+@pytest.mark.asyncio
 async def test_recording_diagnostic_metadata_warmup_does_not_block_event_loop():
     release = threading.Event()
 

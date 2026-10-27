@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from ...helpers.logging import log
+from ...helpers.diagnostic_context import diagnostic_sample
 from ..output import print_test_header, print_result
 
 # ALERT TESTING
@@ -14,22 +15,18 @@ async def _setup_recording_test(alert_manager):
     if "Recording-Events" not in alert_manager.alert_instances:
         return None, False
     test_alert = alert_manager.alert_instances["Recording-Events"]
-    if hasattr(test_alert, "_cache_channels"):
-        # Cache refresh uses a bounded synchronous DVR client; keep it off the
-        # API event loop while retaining direct awaited delivery below.
-        await asyncio.to_thread(test_alert._cache_channels)
     channel_data = {
         "129": {
             "name": "MOVIE CHANNEL",
-            "logo_url": "https://tmsimg.fancybits.co/assets/s56240_h3_aa.png?w=360&h=270",
+            "logo_url": "",
         },
         "152": {
             "name": "SCI-FI CHANNEL",
-            "logo_url": "https://tmsimg.fancybits.co/assets/s28717_h3_aa.png?w=360&h=270",
+            "logo_url": "",
         },
         "137": {
             "name": "ACTION NETWORK",
-            "logo_url": "https://tmsimg.fancybits.co/assets/s10003_h3_aa.png?w=360&h=270",
+            "logo_url": "",
         },
     }
     if hasattr(test_alert, "channel_provider"):
@@ -57,47 +54,56 @@ async def _run_single_recording_test(name, host, port, alert_manager, test_fn):
         if has_providers and delivered:
             print_result(True, f"{name} event processed, notification dispatched")
             return True
-        else:
+        elif not has_providers:
             print_result(
                 False,
                 f"{name} event processed but no notification providers configured",
             )
+            return False
+        else:
+            print_result(False, f"{name} notification delivery failed")
             return False
     except Exception as e:
         print_result(False, f"Exception: {e}")
         return False
 
 
+@diagnostic_sample
 async def test_recording_scheduled_alert(host, port, alert_manager):
     return await _run_single_recording_test(
         "Scheduled", host, port, alert_manager, test_recording_scheduled
     )
 
 
+@diagnostic_sample
 async def test_recording_started_alert(host, port, alert_manager):
     return await _run_single_recording_test(
         "Started", host, port, alert_manager, test_recording_started
     )
 
 
+@diagnostic_sample
 async def test_recording_completed_alert(host, port, alert_manager):
     return await _run_single_recording_test(
         "Completed", host, port, alert_manager, test_recording_completed
     )
 
 
+@diagnostic_sample
 async def test_recording_stopped_alert(host, port, alert_manager):
     return await _run_single_recording_test(
         "Stopped", host, port, alert_manager, test_recording_stopped
     )
 
 
+@diagnostic_sample
 async def test_recording_cancelled_alert(host, port, alert_manager):
     return await _run_single_recording_test(
         "Cancelled", host, port, alert_manager, test_recording_cancelled
     )
 
 
+@diagnostic_sample
 async def test_recording_events_alert(host: str, port: int, alert_manager) -> bool:
     """Runs all 5 recording event tests."""
     results = [

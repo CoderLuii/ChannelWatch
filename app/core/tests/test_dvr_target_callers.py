@@ -277,7 +277,6 @@ def _diagnostic_settings():
     return SimpleNamespace(
         log_retention_days=7,
         dvr_servers=[{"host": "dvr.lan", "port": 8089}],
-        get_dvr_connections=lambda: [],
     )
 
 

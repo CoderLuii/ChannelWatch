@@ -2321,7 +2321,6 @@ def _normalized_package_runtime(content: str | None) -> object:
             "devDependencies",
             "peerDependencies",
             "engines",
-            "packageManager",
         )
     }
 

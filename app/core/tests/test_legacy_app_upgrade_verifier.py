@@ -903,7 +903,7 @@ def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes(
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    scenarios = module.validate_baselines(fixture, target_version="1.6.2")
+    scenarios = module.validate_baselines(fixture, target_version="1.6.3")
     assert [row["id"] for row in scenarios] == [
         "stock-1.4.0",
         "overlay-1.4.0-to-1.4.1",
@@ -915,7 +915,7 @@ def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes(
     broken = copy.deepcopy(fixture)
     broken["scenarios"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_baselines(broken, target_version="1.6.2")
+        module.validate_baselines(broken, target_version="1.6.3")
 
 
 def test_fixture_binds_exact_immutable_160_bridge():
@@ -923,7 +923,7 @@ def test_fixture_binds_exact_immutable_160_bridge():
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    module.validate_baselines(fixture, target_version="1.6.2")
+    module.validate_baselines(fixture, target_version="1.6.3")
     assert fixture["qualification_modes"] == ["direct", "chained"]
     assert fixture["bridge_release"] == {
         "version": "1.6.0",
@@ -940,12 +940,12 @@ def test_release_config_requires_exact_legacy_source_contract():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text()
     )
-    assert module.validate_release_config(config, target_version="1.6.2") == [
-        "1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1"
+    assert module.validate_release_config(config, target_version="1.6.3") == [
+        "1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"
     ]
     config["legacy_app_update_sources"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_release_config(config, target_version="1.6.2")
+        module.validate_release_config(config, target_version="1.6.3")
 
     historical = {
         "version": "1.6.0",

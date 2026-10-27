@@ -5,6 +5,7 @@ import threading
 from typing import Dict, Any, List, Optional
 
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
+from ...helpers.diagnostic_context import is_diagnostic_execution
 
 # CLEANUP MIXIN
 
@@ -45,7 +46,7 @@ class CleanupMixin:
             self.cleanup_config["interval"] = interval
             self.cleanup_config["auto_cleanup"] = auto_cleanup
 
-            if not auto_cleanup or self._cleanup_stop_event.is_set():
+            if is_diagnostic_execution() or not auto_cleanup or self._cleanup_stop_event.is_set():
                 return
             if self.cleanup_thread is not None and self.cleanup_thread.is_alive():
                 return

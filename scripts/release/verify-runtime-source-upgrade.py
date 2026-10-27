@@ -24,7 +24,20 @@ SOURCE_BUNDLE_SHA256 = {
     "amd64": "865a6054f0fbddd213fe5f2e2578de5da8bc4453f322a991003516cc1bd9cadc",
     "arm64": "60f0a7a97433778ac89e17bab90ef6e83566159649697f90e2f5918afd17c2ec",
 }
+TARGET_SOURCES = {
+    "1.6.1": ("1.6.0",),
+    "1.6.2": ("1.6.0", "1.6.1"),
+    "1.6.3": ("1.6.0", "1.6.1", "1.6.2"),
+}
 SOURCE_RELEASES = {
+    "1.6.2": {
+        "source_commit": "453deb679c6dfd67ff98437d3f96b76183cff3cb",
+        "catalog_sha256": "37e91da9638adea1b9a758642c1f97e83888c4da64b1877cbc7dbd494376c4c9",
+        "bundles": {
+            "amd64": "857089fe638de2b1379a23cba79f24786611f083ef93f1b2de4dda2b919b3637",
+            "arm64": "cbd8f030d03fb2c5432abf1f8fa25cfa332d795e8ec746020fe034850cb8f4bb",
+        },
+    },
     "1.6.0": {
         "source_commit": SOURCE_COMMIT,
         "catalog_sha256": SOURCE_CATALOG_SHA256,
@@ -391,10 +404,10 @@ def main() -> int:
     parser.add_argument("--update-timeout", type=int, default=900)
     args = parser.parse_args()
     args.target_version = args.target_version.strip().lstrip("v")
-    if args.target_version not in {"1.6.1", "1.6.2"} or SHA40.fullmatch(args.target_commit) is None:
-        raise SystemExit("This verifier is bounded to exact v1.6.1 and v1.6.2 candidates.")
-    if args.target_version == "1.6.1" and args.source_version != "1.6.0":
-        raise SystemExit("The v1.6.1 candidate requires its immutable v1.6.0 source.")
+    if args.target_version not in TARGET_SOURCES or SHA40.fullmatch(args.target_commit) is None:
+        raise SystemExit("This verifier is bounded to exact v1.6.1, v1.6.2 and v1.6.3 candidates.")
+    if args.source_version not in TARGET_SOURCES[args.target_version]:
+        raise SystemExit("This candidate requires an exact immutable predecessor source.")
     args.evidence_json.parent.mkdir(parents=True, exist_ok=True)
     receipt = qualify(args)
     args.evidence_json.write_text(

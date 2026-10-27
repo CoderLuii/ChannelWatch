@@ -41,6 +41,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.0": ["1.4.0", "1.4.1", "1.4.5"],
     "1.6.1": ["1.4.0", "1.4.1", "1.4.5", "1.6.0"],
     "1.6.2": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1"],
+    "1.6.3": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"],
 }
 BRIDGE_RELEASE_160 = {
     "version": "1.6.0",
@@ -102,7 +103,7 @@ def validate_baselines(value: object, *, target_version: str) -> list[dict[str, 
     expected_sources = LEGACY_SOURCE_CONTRACTS.get(target_version)
     if expected_sources is None or value.get("legacy_sources") != expected_sources:
         raise LegacyAppUpgradeError("Legacy source versions are incomplete.")
-    if target_version in {"1.6.1", "1.6.2"}:
+    if target_version in {"1.6.1", "1.6.2", "1.6.3"}:
         if value.get("qualification_modes") != ["direct", "chained"]:
             raise LegacyAppUpgradeError("Legacy qualification modes are incomplete.")
         if value.get("bridge_release") != BRIDGE_RELEASE_160:

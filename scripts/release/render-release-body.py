@@ -37,9 +37,10 @@ def main() -> int:
     configured_tag = f"v{str(release_config.get('version', '')).strip()}"
     configured_heading = str(release_config.get("release_heading", "")).strip()
     configured_release = requested_tag == configured_tag and bool(configured_heading)
-    configured_date_heading = configured_release and configured_heading.startswith(
-        "## "
-    )
+    if configured_release and not configured_heading.startswith(
+        f"# ChannelWatch {configured_tag} - "
+    ):
+        raise ValueError("Configured release heading must name the exact ChannelWatch version and update title.")
     exporter = load_exporter()
     metadata = exporter.collect_metadata(
         requested_tag,
@@ -75,7 +76,7 @@ def main() -> int:
             heading = f"# ChannelWatch {version_tag} - {title}"
         body = [heading]
         sections = metadata.get("changelogSections") or {"Changed": highlights}
-        section_heading_level = "###" if configured_date_heading else "##"
+        section_heading_level = "##"
         for heading in ("Important", "Added", "Changed", "Fixed", "Security"):
             items = sections.get(heading) or []
             if not items:
@@ -105,7 +106,7 @@ def main() -> int:
         "v0.9.15",
         "v0.9.16",
     }
-    if (configured_release and not configured_date_heading) or (
+    if configured_release or (
         version_tag in legacy_heading_versions
     ):
         heading_level = "##"

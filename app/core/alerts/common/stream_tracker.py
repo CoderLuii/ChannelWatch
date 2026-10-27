@@ -7,6 +7,7 @@ import httpx
 import os
 
 from ...helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
+from ...helpers.diagnostic_context import is_diagnostic_execution
 from ...helpers.type_utils import ensure_str
 from ...helpers.dvr_connection import build_dvr_base_url
 from ...helpers.dvr_target import build_safe_dvr_request
@@ -54,7 +55,7 @@ class StreamTracker:
 
     def _write_stream_count(self, count: int):
         """Safely writes the current stream count to the per-DVR file."""
-        if os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
+        if is_diagnostic_execution() or os.getenv("CHANNELWATCH_CONFIG_READ_ONLY") == "1":
             return
         try:
             with open(self._stream_count_file, "w") as f:

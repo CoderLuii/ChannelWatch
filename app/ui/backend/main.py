@@ -5351,17 +5351,22 @@ class TestResult(BaseModel):
     test_name: str
     success: bool
     message: str
+    status: Literal["passed", "failed", "skipped"] = "failed"
+    reason: Optional[str] = None
+    target_dvr: Optional[Dict[str, str]] = None
 
 
 async def _run_test_background_async(test_name: str) -> TestResult:
     """Helper function to run a test in the background."""
     message = ""
     success = False
+    target_dvr = None
     if not CORE_APP_AVAILABLE:
         return TestResult(
             test_name=test_name,
             success=False,
             message="Core app components not available for testing.",
+            reason="Core app components not available for testing.",
         )
 
     # Ensure test output goes to channelwatch.log
@@ -5393,14 +5398,20 @@ async def _run_test_background_async(test_name: str) -> TestResult:
             if hasattr(settings, "get_dvr_connections")
             else []
         )
+        if hasattr(settings, "get_dvr_connections") and not dvr_connections:
+            raise ValueError("No enabled DVR is available for testing.")
         test_dvr = dvr_connections[0] if dvr_connections else None
+        if test_dvr is not None:
+            dvr_id = test_dvr.id
+            dvr_name = test_dvr.name
+        target_dvr = {"id": dvr_id, "name": dvr_name}
         first_dvr = (
             (settings.dvr_servers or [{}])[0]
             if hasattr(settings, "dvr_servers")
             else {}
         )
-        host = first_dvr.get("host", "")
-        port = first_dvr.get("port", 8089)
+        host = test_dvr.host if test_dvr is not None else first_dvr.get("host", "")
+        port = test_dvr.port if test_dvr is not None else first_dvr.get("port", 8089)
         if not host:
             raise ValueError("DVR Host not configured in settings.")
 
@@ -5456,6 +5467,34 @@ async def _run_test_background_async(test_name: str) -> TestResult:
                     if hasattr(test_settings, key):
                         setattr(test_settings, key, value)
 
+            policy = {
+                "Channel-Watching": [("alert_channel_watching", "Channel Watching")],
+                "VOD-Watching": [("alert_vod_watching", "VOD Watching")],
+                "Disk-Space": [("alert_disk_space", "Disk Space")],
+            }
+            recording_policy = {
+                "Recording-Scheduled": ("rd_alert_scheduled", "Recording Scheduled"),
+                "Recording-Started": ("rd_alert_started", "Recording Started"),
+                "Recording-Completed": ("rd_alert_completed", "Recording Completed"),
+                "Recording-Stopped": ("rd_alert_completed", "Recording Stopped"),
+                "Recording-Cancelled": ("rd_alert_cancelled", "Recording Cancelled"),
+            }
+            required = policy.get(test_key, [])
+            if test_key.startswith("Recording-"):
+                required = [("alert_recording_events", "Recording Events")]
+                required += (
+                    list(recording_policy.values())
+                    if test_key == "Recording-Events"
+                    else [recording_policy[test_key]]
+                )
+            for setting_name, label in required:
+                if not getattr(test_settings, setting_name, True):
+                    reason = f"{label} notifications are disabled for {dvr_name}."
+                    return TestResult(
+                        test_name=test_name, success=False, status="skipped",
+                        message=reason, reason=reason, target_dvr=target_dvr,
+                    )
+
             notification_manager = None
             selected_settings = test_settings
 
@@ -5486,7 +5525,7 @@ async def _run_test_background_async(test_name: str) -> TestResult:
 
                     override_settings.apprise_custom = test_route_override
                     override_notification_manager = initialize_notifications(
-                        override_settings, test_mode=True
+                        override_settings, test_mode=True, diagnostic_mode=True
                     )
 
                     if (
@@ -5498,7 +5537,7 @@ async def _run_test_background_async(test_name: str) -> TestResult:
 
             if notification_manager is None:
                 notification_manager = initialize_notifications(
-                    test_settings, test_mode=True
+                    test_settings, test_mode=True, diagnostic_mode=True
                 )
 
             if not notification_manager:
@@ -5508,14 +5547,24 @@ async def _run_test_background_async(test_name: str) -> TestResult:
                     diagnostic_mode=True,
                 )
 
+            if not notification_manager.has_configured_destinations():
+                reason = "No notification destinations are configured for this test."
+                return TestResult(
+                    test_name=test_name, success=False, status="failed",
+                    message=reason, reason=reason, target_dvr=target_dvr,
+                )
+
             alert_manager = initialize_alerts(
-                notification_manager, selected_settings, test_mode=True, dvr=test_dvr
+                notification_manager, selected_settings, test_mode=True, dvr=test_dvr,
+                diagnostic_mode=True,
             )
             if not alert_manager:
                 return TestResult(
                     test_name=test_name,
                     success=False,
                     message="Failed to initialize alert manager",
+                    reason="Failed to initialize alert manager",
+                    target_dvr=target_dvr,
                 )
 
             diagnostic_result = run_test(test_key, host, port, alert_manager)
@@ -5537,9 +5586,14 @@ async def _run_test_background_async(test_name: str) -> TestResult:
         print(f"[TEST RUNNER] Error running test '{test_name}': {e}", flush=True)
         traceback.print_exc()
         success = False
-        message = f"Error running test '{test_name}': {e}. Check container logs."
+        detail = str(e) or ("Diagnostic timed out" if isinstance(e, TimeoutError) else type(e).__name__)
+        message = f"Error running test '{test_name}': {detail}. Check container logs."
 
-    return TestResult(test_name=test_name, success=success, message=message)
+    return TestResult(
+        test_name=test_name, success=success, message=message,
+        status="passed" if success else "failed",
+        reason=None if success else message, target_dvr=target_dvr,
+    )
 
 
 def run_test_background(test_name: str) -> TestResult:

@@ -47,8 +47,9 @@ def verify_release_timing(
         raise ValueError("Preserve the selected seven-day automatic-install delay.")
     if config.get("automatic_install_allowed") is not False:
         raise ValueError("Automatic installation must remain disabled.")
-    if config.get("release_heading") != publication.strftime("## %m/%d/%Y"):
-        raise ValueError("The release heading must match the UTC publication date.")
+    version = str(config.get("version") or "")
+    if re.fullmatch(rf"# ChannelWatch v{re.escape(version)} - [^\r\n]+", str(config.get("release_heading") or "")) is None:
+        raise ValueError("The release heading must name the exact ChannelWatch version and update title.")
     if parse_utc(vex.get("timestamp"), name="OpenVEX timestamp") != publication:
         raise ValueError("The OpenVEX timestamp must match publication_time.")
     version = str(config.get("version") or "")
@@ -79,7 +80,6 @@ def prepare_release_timing(
     config["automatic_install_after"] = (
         (publication + timedelta(days=7)).isoformat().replace("+00:00", "Z")
     )
-    config["release_heading"] = publication.strftime("## %m/%d/%Y")
     vex["timestamp"] = config["publication_time"]
     return config, vex, changelog
 

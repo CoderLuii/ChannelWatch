@@ -22,7 +22,7 @@ class ReleaseTimingTests(unittest.TestCase):
             "publication_time": "2026-10-26T04:00:00Z",
             "automatic_install_after": "2026-11-02T04:00:00Z",
             "automatic_install_allowed": False,
-            "release_heading": "## 10/26/2026",
+            "release_heading": "# ChannelWatch v1.6.1 - Diagnostic alerts and activity",
         }
         self.vex = {"timestamp": "2026-10-26T04:00:00Z"}
         self.changelog = "# Changelog\n\n## [1.6.1] - 2026-10-26\n"
@@ -54,7 +54,7 @@ class ReleaseTimingTests(unittest.TestCase):
 
     def test_public_dates_and_manual_install_delay_cannot_drift(self):
         mutations = (
-            ("heading", lambda: self.config.update(release_heading="## 10/25/2026")),
+            ("heading", lambda: self.config.update(release_heading="# ChannelWatch v1.6.2 - Wrong target")),
             ("VEX", lambda: self.vex.update(timestamp="2026-10-25T04:00:00Z")),
             ("seven-day", lambda: self.config.update(automatic_install_after="2026-11-01T04:00:00Z")),
             ("disabled", lambda: self.config.update(automatic_install_allowed=True)),
@@ -104,7 +104,7 @@ class ReleaseTimingTests(unittest.TestCase):
         changelog = (self.root / "docs/releases/CHANGELOG.md").read_text()
         self.assertEqual(config["publication_time"], "2026-10-25T12:00:00Z")
         self.assertEqual(config["automatic_install_after"], "2026-11-01T12:00:00Z")
-        self.assertEqual(config["release_heading"], "## 10/25/2026")
+        self.assertEqual(config["release_heading"], self.config["release_heading"])
         self.assertFalse(config["automatic_install_allowed"])
         self.assertEqual(vex["timestamp"], config["publication_time"])
         self.assertIn("## [1.6.1] - 2026-10-25", changelog)

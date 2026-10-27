@@ -4,11 +4,13 @@ import asyncio
 import time
 
 from ...helpers.logging import log
+from ...helpers.diagnostic_context import diagnostic_sample
 from ..output import print_test_header, print_result
 
 # ALERT TESTING
 
 
+@diagnostic_sample
 async def test_channel_watching_alert(host: str, port: int, alert_manager) -> bool:
     """Tests the Channel-Watching alert by simulating a channel viewing event."""
     print_test_header("Channel-Watching Test")
@@ -24,46 +26,37 @@ async def test_channel_watching_alert(host: str, port: int, alert_manager) -> bo
         mock_event_data = {
             "Type": "activities.set",
             "Name": "test-session-id-M3U-TEST",
-            "Value": "Watching ch7 ABC from Test Device (192.168.1.100) - 1080p",
+            "Value": "Watching ch999999 Diagnostic Channel from Test Device (192.0.2.100) - 1080p",
         }
 
         test_alert = alert_manager.alert_instances["Channel-Watching"]
 
-        channel_number = "7"
+        channel_number = "999999"
 
         def _prepare_fixture_metadata() -> None:
-            if hasattr(test_alert, "_cache_channels"):
-                test_alert._cache_channels()
-
             if not hasattr(test_alert, "channel_provider"):
                 return
-            real_channel_data = {
-                "name": "WABC",
-                "display_name": "ABC",
-                "logo_url": "https://tmsimg.fancybits.co/assets/s10003_h3_aa.png?w=360&h=270",
+            channel_data = {
+                "name": "Diagnostic Channel",
+                "display_name": "Diagnostic Channel",
+                "logo_url": "",
             }
-
-            channel_info = test_alert.channel_provider.get_channel_info(channel_number)
-            if not channel_info:
-                test_alert.channel_provider.channel_cache[channel_number] = (
-                    real_channel_data
-                )
-            elif not channel_info.get("logo_url"):
-                channel_info["logo_url"] = real_channel_data["logo_url"]
+            test_alert.channel_provider.channel_cache[channel_number] = channel_data
 
             if hasattr(test_alert, "program_provider") and hasattr(
-                test_alert.program_provider, "programs_cache"
+                test_alert.program_provider, "program_cache"
             ):
-                program_key = f"{channel_number}_{int(time.time())}"
-                test_alert.program_provider.programs_cache[program_key] = {
-                    "title": "Good Morning America",
-                    "description": "Up-to-the-minute news, weather, lifestyle and topical features.",
-                    "icon_url": "https://tmsimg.fancybits.co/assets/p184220_b_h9_aa.jpg?w=720&h=540",
-                }
+                now = int(time.time())
+                test_alert.program_provider.channel_map[channel_number] = "diagnostic"
+                test_alert.program_provider.program_cache["diagnostic"] = [{
+                    "title": "Diagnostic Program",
+                    "description": "ChannelWatch diagnostic sample.",
+                    "icon_url": "",
+                    "start_time": now - 60,
+                    "stop_time": now + 3600,
+                }]
+                test_alert.program_provider.cache_timestamp = time.time()
 
-        # Channel metadata providers use bounded synchronous HTTP clients.
-        # Keep their cache warm-up off the ASGI event loop just like provider
-        # delivery, so an offline DVR cannot pause unrelated UI requests.
         await asyncio.to_thread(_prepare_fixture_metadata)
 
         notification_manager = alert_manager.notification_manager

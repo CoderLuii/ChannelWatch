@@ -532,7 +532,6 @@ settings = SimpleNamespace(
         "enabled": True,
     }],
     log_retention_days=3,
-    get_dvr_connections=lambda: [],
 )
 with (
     patch.object(m, "CORE_APP_AVAILABLE", True),

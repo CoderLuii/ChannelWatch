@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from .logging import log
+from .diagnostic_context import diagnostic_execution, is_diagnostic_execution
 from .dvr_connection import build_dvr_base_url
 from .dvr_target import build_safe_dvr_request
 from ..engine.event_monitor import EventMonitor
@@ -86,6 +87,7 @@ def initialize_notifications(
     plugin_dir: Optional[Path] = None,
     installation_rate_limit: Optional[int] = None,
     installation_rate_window: Optional[int] = None,
+    diagnostic_mode: bool = False,
 ) -> Optional[NotificationManager]:
     """Configure and activate notification providers based on user settings."""
     authoritative_limit = (
@@ -101,10 +103,10 @@ def initialize_notifications(
     notification_manager = NotificationManager(
         rate_limit=authoritative_limit,
         rate_window=authoritative_window,
-        rate_limiter=_get_shared_rate_limiter(
+        rate_limiter=None if diagnostic_mode else _get_shared_rate_limiter(
             authoritative_limit, authoritative_window
         ),
-        diagnostic_mode=test_mode,
+        diagnostic_mode=diagnostic_mode or test_mode,
     )
     configured_providers = []
 
@@ -165,8 +167,14 @@ def initialize_notifications(
 
 # ALERTS
 def initialize_alerts(
-    notification_manager, settings: CoreSettings, test_mode=False, dvr=None
+    notification_manager, settings: CoreSettings, test_mode=False, dvr=None,
+    diagnostic_mode=False,
 ):
+    if diagnostic_mode and not is_diagnostic_execution():
+        with diagnostic_execution():
+            return initialize_alerts(
+                notification_manager, settings, test_mode=test_mode, dvr=dvr
+            )
     if dvr is None:
         raise ValueError(
             "initialize_alerts requires an explicit dvr; no default fallback allowed"

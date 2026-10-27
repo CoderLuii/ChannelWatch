@@ -3,6 +3,7 @@
 import asyncio
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
+from ..helpers.diagnostic_context import is_diagnostic_execution
 
 
 # BASE ALERT
@@ -65,6 +66,9 @@ class BaseAlert(ABC):
         return notification_kwargs
 
     def send_alert(self, title, message, image_url=None, **kwargs):
+        if is_diagnostic_execution():
+            title = title if title.startswith("[TEST]") else f"[TEST] {title}"
+            message = message if message.startswith("[TEST]") else f"[TEST] {message}"
         notification_kwargs = self._build_notification_kwargs(
             image_url=image_url, **kwargs
         )
@@ -86,6 +90,9 @@ class BaseAlert(ABC):
         return result
 
     async def send_alert_async(self, title, message, image_url=None, **kwargs):
+        if is_diagnostic_execution():
+            title = title if title.startswith("[TEST]") else f"[TEST] {title}"
+            message = message if message.startswith("[TEST]") else f"[TEST] {message}"
         notification_kwargs = self._build_notification_kwargs(
             image_url=image_url, **kwargs
         )

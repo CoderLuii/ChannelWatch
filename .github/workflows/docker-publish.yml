@@ -186,7 +186,7 @@ jobs:
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          version: v0.75.0
+          version: v0.76.1
           cache: false
 
       - name: Scan filesystem, including the rendered Helm chart
@@ -692,7 +692,7 @@ jobs:
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Install the existing headless Chromium harness
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'
@@ -703,7 +703,7 @@ jobs:
           PLAYWRIGHT_HTML_OPEN: never
         run: |
           corepack enable
-          test "$(pnpm --version)" = "11.28.5"
+          test "$(pnpm --version)" = "11.28.9"
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
       - name: Open signed assets before native qualification starts
@@ -750,7 +750,7 @@ jobs:
             '865a6054f0fbddd213fe5f2e2578de5da8bc4453f322a991003516cc1bd9cadc' "${source_dir}/channelwatch-runtime-v1.6.0-amd64.zip" \
             '60f0a7a97433778ac89e17bab90ef6e83566159649697f90e2f5918afd17c2ec' "${source_dir}/channelwatch-runtime-v1.6.0-arm64.zip" \
             | sha256sum --check --strict
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.1"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.1"
@@ -766,6 +766,24 @@ jobs:
               'fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34' "${source_dir}/channelwatch-update-catalog-v3.json" \
               '2da567d8b3554b156b5f8a8916f539fddce94bec27cf75c6c3460342f76c5b7a' "${source_dir}/channelwatch-runtime-v1.6.1-amd64.zip" \
               'a027707047a04dc5f0e52d1c50e3595f136a96b56e7efcfdce731802b8e925cd' "${source_dir}/channelwatch-runtime-v1.6.1-arm64.zip" \
+              | sha256sum --check --strict
+          fi
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ]; then
+            source_dir="${RUNNER_TEMP}/runtime-source-v1.6.2"
+            mkdir -p "${source_dir}"
+            base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.2"
+            curl --fail --silent --show-error --location \
+              --output "${source_dir}/channelwatch-update-catalog-v3.json" \
+              "${base_url}/channelwatch-update-catalog-v3.json"
+            for architecture in amd64 arm64; do
+              curl --fail --silent --show-error --location \
+                --output "${source_dir}/channelwatch-runtime-v1.6.2-${architecture}.zip" \
+                "${base_url}/channelwatch-runtime-v1.6.2-${architecture}.zip"
+            done
+            printf '%s  %s\n' \
+              '37e91da9638adea1b9a758642c1f97e83888c4da64b1877cbc7dbd494376c4c9' "${source_dir}/channelwatch-update-catalog-v3.json" \
+              '857089fe638de2b1379a23cba79f24786611f083ef93f1b2de4dda2b919b3637' "${source_dir}/channelwatch-runtime-v1.6.2-amd64.zip" \
+              'cbd8f030d03fb2c5432abf1f8fa25cfa332d795e8ec746020fe034850cb8f4bb' "${source_dir}/channelwatch-runtime-v1.6.2-arm64.zip" \
               | sha256sum --check --strict
           fi
       - name: Run the native protocol-4 lifecycle verifier
@@ -809,7 +827,7 @@ jobs:
             --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
             --architecture "${NATIVE_ARCHITECTURE}" \
             --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json"
-          if [ "${version}" = "1.6.2" ]; then
+          if [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.1 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.1/channelwatch-update-catalog-v3.json" \
@@ -823,6 +841,21 @@ jobs:
               --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
               --architecture "${NATIVE_ARCHITECTURE}" \
               --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.1.json"
+          fi
+          if [ "${version}" = "1.6.3" ]; then
+            python scripts/release/verify-runtime-source-upgrade.py \
+              --source-version 1.6.2 \
+              --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.2/channelwatch-update-catalog-v3.json" \
+              --source-amd64-bundle "${RUNNER_TEMP}/runtime-source-v1.6.2/channelwatch-runtime-v1.6.2-amd64.zip" \
+              --source-arm64-bundle "${RUNNER_TEMP}/runtime-source-v1.6.2/channelwatch-runtime-v1.6.2-arm64.zip" \
+              --target-catalog "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-update-catalog-v3.json" \
+              --target-amd64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-amd64.zip" \
+              --target-arm64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-arm64.zip" \
+              --target-version "${version}" \
+              --target-commit "${GITHUB_SHA}" \
+              --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
+              --architecture "${NATIVE_ARCHITECTURE}" \
+              --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.2.json"
           fi
       - name: Validate the complete native receipt before retention
         if: needs.candidate-source-gates.outputs.runtime_generation_required == 'true'
@@ -873,7 +906,7 @@ jobs:
       - name: Set up Node for isolated headless browser checks
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Install the existing headless Chromium harness
         working-directory: app/ui
@@ -883,7 +916,7 @@ jobs:
           PLAYWRIGHT_HTML_OPEN: never
         run: |
           corepack enable
-          test "$(pnpm --version)" = "11.28.5"
+          test "$(pnpm --version)" = "11.28.9"
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
       - name: Download sealed signed app assets
@@ -949,6 +982,9 @@ jobs:
           legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0"]'
           if [ "${version}" = "1.6.2" ]; then
             legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0","1.6.1"]'
+          fi
+          if [ "${version}" = "1.6.3" ]; then
+            legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0","1.6.1","1.6.2"]'
           fi
           test "$(jq -c '.legacy_app_update_sources' scripts/release/release-config.json)" = "${legacy_sources}"
           tag="v${version}"
@@ -1388,14 +1424,14 @@ jobs:
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          version: v0.75.0
+          version: v0.76.1
           cache: false
 
       - name: Install pinned Syft for runtime artifact qualification
         id: runtime_syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          syft-version: v1.54.1
+          syft-version: v1.55.0
 
       - name: Scan exact nonpublishing candidate image
         shell: bash
@@ -1746,10 +1782,16 @@ jobs:
               --source-commit "${GITHUB_SHA}" \
               --output "${capability_evidence}"
             source_receipt_args=()
-            if [ "${version}" = "1.6.2" ]; then
+            if [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ]; then
               source_receipt_args=(
                 --receipt "1.6.1=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.1.json"
                 --receipt "1.6.1=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.1.json"
+              )
+            fi
+            if [ "${version}" = "1.6.3" ]; then
+              source_receipt_args+=(
+                --receipt "1.6.2=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.2.json"
+                --receipt "1.6.2=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.2.json"
               )
             fi
             python scripts/release/aggregate-runtime-source-upgrades.py \
@@ -1791,8 +1833,8 @@ jobs:
               echo "::error::Runtime scanners must resolve to absolute pinned executable paths."
               exit 1
             fi
-            echo "dbf75864e7a7ff9e1fbf00552c31483f693188632a9f68f343cd7653dac513d6  ${syft_path}" | sha256sum --check --strict
-            echo "93f9da8e4ba5e0c1c76d8234ed2494cf9afb0a96fd21953e424bb795f3299b8e  ${trivy_path}" | sha256sum --check --strict
+            echo "64c9631c3560336c55c549df0de08cd577d02399c9de807ac390960a4ed5c351  ${syft_path}" | sha256sum --check --strict
+            echo "d1dfca6ae10a1ad4540bb94e64f0510077c47008920a9b554986b39dca573d83  ${trivy_path}" | sha256sum --check --strict
             python scripts/release/scan-runtime-artifacts.py \
               --catalog "dist/candidate-one/channelwatch-update-catalog-v3.json" \
               --runtime-bundle "amd64=dist/candidate-one/channelwatch-runtime-${tag}-amd64.zip" \
@@ -3052,7 +3094,7 @@ jobs:
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          version: v0.75.0
+          version: v0.76.1
           cache: true
 
       - name: Scan exact release candidate images
@@ -3117,7 +3159,7 @@ jobs:
         id: syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          syft-version: v1.54.1
+          syft-version: v1.55.0
 
       - name: Download and verify existing draft release assets
         env:

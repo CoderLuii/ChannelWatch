@@ -1702,6 +1702,7 @@ async def main() -> None:
             test_mode=test_mode,
             installation_rate_limit=settings.global_rate_limit,
             installation_rate_window=settings.global_rate_window,
+            diagnostic_mode=True,
         )
         if not _test_nm:
             from .notifications.notification import NotificationManager
@@ -1709,14 +1710,11 @@ async def main() -> None:
             _test_nm = NotificationManager(
                 rate_limit=settings.global_rate_limit,
                 rate_window=settings.global_rate_window,
-                rate_limiter=_get_shared_rate_limiter(
-                    settings.global_rate_limit,
-                    settings.global_rate_window,
-                ),
                 diagnostic_mode=True,
             )
         alert_manager = initialize_alerts(
-            _test_nm, _test_settings, test_mode=test_mode, dvr=first_dvr
+            _test_nm, _test_settings, test_mode=test_mode, dvr=first_dvr,
+            diagnostic_mode=True,
         )
         sys.exit(
             0

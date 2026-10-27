@@ -1,13 +1,16 @@
 """Runs the VOD-Watching diagnostic with simulated video-on-demand viewing events."""
 
 import asyncio
+import time
 
 from ...helpers.logging import log
+from ...helpers.diagnostic_context import diagnostic_sample
 from ..output import print_test_header, print_result
 
 # ALERT TESTING
 
 
+@diagnostic_sample
 async def test_vod_watching_alert(host: str, port: int, alert_manager) -> bool:
     """Tests the VOD-Watching alert by simulating a video-on-demand viewing session."""
     print_test_header("VOD-Watching Test")
@@ -20,46 +23,29 @@ async def test_vod_watching_alert(host: str, port: int, alert_manager) -> bool:
         log(f"Target: {host}:{port}")
         log("Setting up mock event data...")
 
-        device_name = "Living Room"
-        device_ip = "192.168.1.100"
+        device_name = "Test Device"
+        device_ip = "192.0.2.100"
 
         mock_event_data = {
             "Type": "activities.set",
-            "Name": "6-file-12345-192.168.1.100",
+            "Name": "6-file-999999999-192.0.2.100",
             "Value": f"Watching file from {device_name} ({device_ip}) at 1h15m42s",
         }
 
         test_alert = alert_manager.alert_instances["VOD-Watching"]
 
-        real_movie_data = {
-            "id": "12345",
-            "title": "Crank: High Voltage (2009)",
-            "summary": "Chev Chelios (Jason Statham) seeks revenge after someone steals his nearly indestructible heart.",
-            "full_summary": "After surviving an incredible plunge to near-certain death, Chev Chelios (Jason Statham) is abducted by Chinese mobsters.",
-            "content_rating": "R",
-            "image_url": "https://tmsimg.fancybits.co/assets/p190667_v_v8_aq.jpg?w=480&h=720",
+        sample_metadata = {
+            "id": "999999999",
+            "title": "Diagnostic Video",
+            "summary": "ChannelWatch diagnostic sample.",
+            "image_url": "",
             "duration": 6131,
-            "release_year": 2009,
-            "genres": ["Action", "Thriller"],
-            "cast": ["Jason Statham", "Amy Smart", "Dwight Yoakam"],
         }
 
         def _prepare_fixture_metadata() -> None:
-            if hasattr(test_alert, "_cache_vod_metadata"):
-                test_alert._cache_vod_metadata()
+            test_alert.vod_provider.metadata_cache["999999999"] = sample_metadata
+            test_alert.vod_provider.last_fetch = time.time()
 
-            metadata = test_alert.vod_provider.get_metadata("12345")
-            if not metadata:
-                test_alert.vod_provider.metadata_cache["12345"] = real_movie_data
-                return
-            if not metadata.get("image_url"):
-                metadata["image_url"] = real_movie_data["image_url"]
-            for key in ["title", "summary", "content_rating", "genres", "cast"]:
-                if not metadata.get(key):
-                    metadata[key] = real_movie_data[key]
-
-        # The VOD cache may perform bounded synchronous DVR requests. Isolate
-        # the entire lookup/fallback sequence from the ASGI event loop.
         await asyncio.to_thread(_prepare_fixture_metadata)
 
         notification_manager = alert_manager.notification_manager

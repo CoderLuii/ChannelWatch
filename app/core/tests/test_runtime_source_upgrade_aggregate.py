@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 
+SOURCE_CATALOG_162 = "37e91da9638adea1b9a758642c1f97e83888c4da64b1877cbc7dbd494376c4c9"
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts/release/aggregate-runtime-source-upgrades.py"
 CONFIG = ROOT / "scripts/release/release-config.json"
@@ -55,11 +57,13 @@ def chained_receipt(tmp_path: Path, architecture: str, *, source_version="1.6.0"
         "source_application_version": source_version,
         "source_commit": (
             "b48057184752c912e4ae9b3a474374704d896073" if source_version == "1.6.0"
-            else "f2e2943097451480bb11ec926bafb1be5ca5fbdc"
+            else "f2e2943097451480bb11ec926bafb1be5ca5fbdc" if source_version == "1.6.1"
+            else "453deb679c6dfd67ff98437d3f96b76183cff3cb"
         ),
         "source_catalog_sha256": (
             "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bcba53e1b39" if source_version == "1.6.0"
-            else "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34"
+            else "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34" if source_version == "1.6.1"
+            else SOURCE_CATALOG_162
         ),
         "target_application_version": target_version,
         "target_commit": "f" * 40,
@@ -88,7 +92,7 @@ def chained_receipt(tmp_path: Path, architecture: str, *, source_version="1.6.0"
     return path, value
 
 
-@pytest.mark.parametrize("target_version", ["1.6.1", "1.6.2"])
+@pytest.mark.parametrize("target_version", ["1.6.1", "1.6.2", "1.6.3"])
 @pytest.mark.parametrize("mutation", [None, "missing", "duplicate", "extra", "config"])
 def test_exact_source_receipt_matrix_passes(tmp_path, monkeypatch, target_version, mutation):
     module = load_module()
@@ -100,7 +104,7 @@ def test_exact_source_receipt_matrix_passes(tmp_path, monkeypatch, target_versio
         direct = tmp_path / f"runtime-capability-{architecture}-1.5.3.json"
         direct.write_text(f"{architecture} direct\n", encoding="utf-8")
         receipts.append(f"1.5.3={architecture}={direct}")
-        sources = ["1.6.0"] if target_version == "1.6.1" else ["1.6.0", "1.6.1"]
+        sources = {"1.6.1": ["1.6.0"], "1.6.2": ["1.6.0", "1.6.1"], "1.6.3": ["1.6.0", "1.6.1", "1.6.2"]}[target_version]
         for source in sources:
             chained, value = chained_receipt(tmp_path, architecture, source_version=source, target_version=target_version)
             value["target_catalog_sha256"] = catalog_sha
@@ -193,7 +197,7 @@ def test_source_verifier_is_bounded_to_immutable_v160_assets():
     assert 'SOURCE_VERSION = "1.6.0"' in text
     assert 'SOURCE_COMMIT = "b48057184752c912e4ae9b3a474374704d896073"' in text
     assert "rollback to v{source_version}" in text
-    assert 'args.target_version not in {"1.6.1", "1.6.2"}' in text
+    assert 'TARGET_SOURCES = {' in text
 
 
 @pytest.mark.parametrize("field", ["source_commit", "source_catalog_sha256", "source_application_version"])
@@ -230,7 +234,11 @@ def test_v162_chain_requires_rollback_to_its_v161_source(tmp_path):
     ("1.6.2", "1.6.0", True),
     ("1.6.1", "1.6.0", True),
     ("1.6.1", "1.6.1", False),
-    ("1.6.3", "1.6.1", False),
+    ("1.6.3", "1.6.0", True),
+    ("1.6.3", "1.6.1", True),
+    ("1.6.3", "1.6.2", True),
+    ("1.6.2", "1.6.2", False),
+    ("1.6.4", "1.6.2", False),
 ])
 def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monkeypatch, target_version, source_version, accepted):
     spec = importlib.util.spec_from_file_location("runtime_source_verifier", ROOT / "scripts/release/verify-runtime-source-upgrade.py")

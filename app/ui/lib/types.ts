@@ -183,6 +183,9 @@ export interface TestResult {
   test_name: string
   success: boolean
   message: string
+  status?: "passed" | "failed" | "skipped"
+  reason?: string | null
+  target_dvr?: { id: string; name: string } | null
 }
 
 export interface DVRStatusInfo {

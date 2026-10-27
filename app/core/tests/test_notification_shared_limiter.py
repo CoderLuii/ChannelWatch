@@ -26,7 +26,7 @@ def _settings(limit: int = 2, window: int = 300):
     )
 
 
-def _build_manager(settings, *, installation_limit=None, installation_window=None):
+def _build_manager(settings, *, installation_limit=None, installation_window=None, diagnostic_mode=False):
     provider = MagicMock()
     provider.PROVIDER_TYPE = "Apprise"
     provider.initialize.return_value = True
@@ -45,6 +45,7 @@ def _build_manager(settings, *, installation_limit=None, installation_window=Non
             test_mode=True,
             installation_rate_limit=installation_limit,
             installation_rate_window=installation_window,
+            diagnostic_mode=diagnostic_mode,
         )
 
 
@@ -60,6 +61,18 @@ def test_per_dvr_managers_share_limiter_for_same_effective_settings():
     assert first.rate_limiter.allow()
     assert second.rate_limiter.allow()
     assert not first.rate_limiter.allow()
+
+
+def test_explicit_diagnostic_manager_does_not_reconfigure_live_limiter():
+    initialize._shared_rate_limiter = None
+    live = _build_manager(_settings(limit=2, window=300))
+    assert live.rate_limiter.allow()
+    diagnostic = _build_manager(_settings(limit=99, window=999), diagnostic_mode=True)
+    assert diagnostic.rate_limiter is not live.rate_limiter
+    assert live.rate_limiter.max_notifications == 2
+    assert live.rate_limiter.window_seconds == 300
+    assert live.rate_limiter.allow()
+    assert not live.rate_limiter.allow()
 
 
 def test_shared_limiter_factory_is_thread_safe():

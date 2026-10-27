@@ -11,7 +11,7 @@ from ui.backend.main import run_test_background
 
 
 def make_settings(*, ds_test_route_override=""):
-    dvr = SimpleNamespace(id="dvr_test", name="Test DVR", overrides={})
+    dvr = SimpleNamespace(id="dvr_test", name="Test DVR", host="127.0.0.1", port=8089, overrides={})
     settings = SimpleNamespace(
         dvr_servers=[
             {

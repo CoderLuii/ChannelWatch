@@ -1,8 +1,8 @@
 {
   "schema": 2,
   "repository": "coderluii/channelwatch",
-  "target_version": "1.6.2",
-  "legacy_sources": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1"],
+  "target_version": "1.6.3",
+  "legacy_sources": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"],
   "qualification_modes": ["direct", "chained"],
   "bridge_release": {
     "version": "1.6.0",

@@ -5,12 +5,14 @@ import hmac
 import json
 import threading
 import time
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 from core.notifications.webhook import WebhookManager
+from core.helpers.diagnostic_context import diagnostic_execution, is_diagnostic_execution
 
 
 PUBLIC_ADDRINFO = [
@@ -530,3 +532,60 @@ def test_diagnostic_deadline_stops_webhook_before_retry_delay():
     assert result is False
     assert mock_post.call_count == 1
     sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("diagnostic", [True, False])
+@pytest.mark.parametrize("failure", ["http_error", "timeout", "safety"])
+def test_concurrent_webhook_failure_logs_keep_diagnostic_context(
+    diagnostic, failure, capsys
+):
+    manager = _make_manager()
+    manager.webhooks.append({
+        "url": "https://second.example.test/webhook",
+        "secret": "second-fixture-secret",
+        "enabled": True,
+    })
+    workers_ready = threading.Barrier(2)
+    observed_contexts = []
+
+    def validate_destination(_url):
+        observed_contexts.append(is_diagnostic_execution())
+        workers_ready.wait(timeout=2)
+        return failure != "safety"
+
+    def failed_post(*_args, **kwargs):
+        assert 0 < kwargs["timeout_seconds"] <= manager.REQUEST_TIMEOUT_SECONDS
+        if failure == "timeout":
+            raise httpx.ReadTimeout("mocked webhook timeout")
+        return MagicMock(status_code=503)
+
+    try:
+        with (
+            patch("core.notifications.webhook.is_safe_url", side_effect=validate_destination),
+            patch("core.helpers.url_validator.socket.getaddrinfo", return_value=PUBLIC_ADDRINFO),
+            patch.object(manager, "_post", side_effect=failed_post) as post,
+            patch("core.notifications.webhook.time.sleep"),
+            patch("core.helpers.logging.log_level", 2),
+            patch("core.helpers.logging.log_handler", None),
+            patch("core.helpers.logging._log_format", "text"),
+            diagnostic_execution() if diagnostic else nullcontext(),
+        ):
+            assert not manager.send_notification(
+                "[TEST] Sample" if diagnostic else "Live notification",
+                "Fixture message",
+                _diagnostic_deadline_monotonic=time.monotonic() + 30,
+            )
+        assert observed_contexts == [diagnostic, diagnostic]
+        assert post.call_count == (0 if failure == "safety" else 6)
+        output = capsys.readouterr().out
+        lines = [line for line in output.splitlines() if "Webhook" in line or "Retrying webhook" in line]
+        assert lines
+        assert all(("[CORE] [TEST] " in line) is diagnostic for line in lines)
+        assert "delivery worker failed" not in output
+        if failure == "safety":
+            assert "failed safety check" in output
+        else:
+            assert "Retrying webhook" in output
+            assert ("timed out" if failure == "timeout" else "HTTP 503") in output
+    finally:
+        manager._client.close()

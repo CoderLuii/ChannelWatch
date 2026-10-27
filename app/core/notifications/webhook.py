@@ -14,6 +14,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -82,6 +83,7 @@ class WebhookManager:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(
+                    copy_context().run,
                     self._deliver_webhook,
                     webhook,
                     payload,

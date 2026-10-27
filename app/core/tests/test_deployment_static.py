@@ -39,7 +39,7 @@ def test_dockerfile_pins_pnpm_and_uses_frozen_lockfile():
     )
 
     assert "corepack enable" in dockerfile
-    assert '"packageManager": "pnpm@11.28.5+' in package_json
+    assert '"packageManager": "pnpm@11.28.9+' in package_json
     assert "pnpm install --frozen-lockfile" in dockerfile
     assert "/venv/bin/python -m pip uninstall --yes pip setuptools" in dockerfile
 

@@ -971,18 +971,18 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_current_release_delivery_matches_changes_since_published_161(monkeypatch):
+def test_current_release_delivery_matches_changes_since_published_162(monkeypatch):
     monkeypatch.chdir(ROOT)
     module = _load_script(
         "classify_current_release_delivery",
         "scripts/release/classify-release-impact.py",
     )
-    base_ref = "v1.6.1"
+    base_ref = "v1.6.2"
     baseline = subprocess.run(
         ["git", "rev-parse", base_ref],
         check=True, capture_output=True, text=True, cwd=ROOT,
     ).stdout.strip()
-    assert baseline == "f2e2943097451480bb11ec926bafb1be5ca5fbdc"
+    assert baseline == "453deb679c6dfd67ff98437d3f96b76183cff3cb"
     paths = subprocess.run(
         ["git", "diff", "--name-only", base_ref],
         check=True, capture_output=True, text=True, cwd=ROOT,
@@ -1019,7 +1019,7 @@ def test_current_release_delivery_matches_changes_since_published_161(monkeypatc
     )
 
 
-def test_release_config_declares_162_in_app_update_on_published_153_image():
+def test_release_config_declares_163_in_app_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -1028,17 +1028,17 @@ def test_release_config_declares_162_in_app_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.2"
+    assert config["version"] == "1.6.3"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.2"
+    assert config["recommended_image_version"] == "1.6.3"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2"]
     assert config["compatible_launcher_protocols"] == [4]
     assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
@@ -1059,9 +1059,7 @@ def test_release_config_declares_162_in_app_update_on_published_153_image():
         "v1.5.2",
         "v1.5.4",
     ]
-    assert config["release_heading"] == datetime.fromisoformat(
-        config["publication_time"].replace("Z", "+00:00")
-    ).strftime("## %m/%d/%Y")
+    assert config["release_heading"] == "# ChannelWatch v1.6.3 - Diagnostic alerts and activity"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1135,17 +1133,17 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
 
     output = capsys.readouterr().out
     assert output.splitlines()[0] == config["release_heading"]
-    assert re.fullmatch(r"## \d{2}/\d{2}/\d{4}", output.splitlines()[0])
-    assert re.findall(r"^## .+$", output, re.MULTILINE) == [
+    assert re.fullmatch(r"# ChannelWatch v1\.6\.3 - .+", output.splitlines()[0])
+    assert re.findall(r"^# .+$", output, re.MULTILINE) == [
         config["release_heading"]
     ]
     for heading in ("Fixed", "Docs", "Images", "License and verification"):
-        assert f"\n### {heading}\n" in output
+        assert f"\n## {heading}\n" in output
     assert "[#28](https://github.com/CoderLuii/ChannelWatch/issues/28)" in output
     assert "[#29](https://github.com/CoderLuii/ChannelWatch/issues/29)" in output
-    assert "channelwatch-v1.6.2-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.2`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.2`" in output
+    assert "channelwatch-v1.6.3-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.3`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.3`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1255,7 +1253,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_161_release():
+def test_release_version_surfaces_use_163_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1266,11 +1264,11 @@ def test_release_version_surfaces_use_161_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.2"
-    assert metadata["versionTag"] == "v1.6.2"
-    assert metadata["dockerTag"] == "1.6.2"
-    assert metadata["helmChartVersion"] == "1.6.2"
-    assert metadata["helmAppVersion"] == "1.6.2"
+    assert metadata["version"] == "1.6.3"
+    assert metadata["versionTag"] == "v1.6.3"
+    assert metadata["dockerTag"] == "1.6.3"
+    assert metadata["helmChartVersion"] == "1.6.3"
+    assert metadata["helmAppVersion"] == "1.6.3"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -1477,6 +1475,24 @@ def test_release_impact_classifier_keeps_app_only_changes_bundle_compatible():
     )
 
     assert result.image_required is False
+    assert result.triggering_paths == ()
+
+
+def test_release_impact_classifier_keeps_build_package_manager_pin_app_deliverable():
+    module = _load_script(
+        "classify_release_impact_package_manager", "scripts/release/classify-release-impact.py"
+    )
+    before = {"app/ui/package.json": json.dumps({
+        "version": "1.6.2", "packageManager": "pnpm@11.28.5+sha512.old",
+        "dependencies": {"next": "16.4.2"},
+    })}
+    after = {"app/ui/package.json": json.dumps({
+        "version": "1.6.3", "packageManager": "pnpm@11.28.9+sha512.new",
+        "dependencies": {"next": "16.4.2"},
+    })}
+    result = module.classify_changes(before, after)
+    assert result.delivery_mode == "app_update"
+    assert result.refresh_paths == ()
     assert result.triggering_paths == ()
 
 
@@ -3262,7 +3278,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
     assert workflow.count(
         '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
-        ) == 5
+        ) == 6
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     candidate_canary = workflow.split(
@@ -3551,7 +3567,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
         "anchore/sbom-action/download-syft@"
         "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c"
     ) in image_job
-    assert "syft-version: v1.54.1" in image_job
+    assert "syft-version: v1.55.0" in image_job
     assert '"oci-dir:${OCI_LAYOUT}"' in image_job
     assert '"spdx-json=${spdx}"' in image_job
     assert '"cyclonedx-json=${cyclonedx}"' in image_job
@@ -4146,7 +4162,7 @@ def test_production_signing_key_isolated_to_first_shell_step_on_fresh_runners():
             assert earlier_runs[0]["name"] == "Install the existing headless Chromium harness"
             assert earlier_runs[0]["run"] == (
                 "corepack enable\n"
-                'test "$(pnpm --version)" = "11.28.5"\n'
+                'test "$(pnpm --version)" = "11.28.9"\n'
                 "pnpm install --frozen-lockfile\n"
                 "pnpm exec playwright install --with-deps chromium\n"
             )
@@ -4504,7 +4520,7 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json" in capability
     assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.1.json" in capability
     assert "--source-version 1.6.1" in capability
-    assert 'if [ "${version}" = "1.6.2" ]; then' in capability
+    assert 'if [ "${version}" = "1.6.3" ]; then' in capability
     for digest in (
         "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34",
         "2da567d8b3554b156b5f8a8916f539fddce94bec27cf75c6c3460342f76c5b7a",
@@ -4537,8 +4553,8 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert all(step["if"] == (
         "needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'"
     ) for step in browser_steps)
-    assert browser_steps[0]["with"]["node-version"] == "24.21.0"
-    assert 'test "$(pnpm --version)" = "11.28.5"' in browser_steps[1]["run"]
+    assert browser_steps[0]["with"]["node-version"] == "24.22.1"
+    assert 'test "$(pnpm --version)" = "11.28.9"' in browser_steps[1]["run"]
     assert "pnpm install --frozen-lockfile" in browser_steps[1]["run"]
     assert "pnpm exec playwright install --with-deps chromium" in browser_steps[1]["run"]
     native_step = next(step for step in capability_job["steps"] if step["name"] == "Run the native protocol-4 lifecycle verifier")
@@ -4557,19 +4573,19 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "aggregate-runtime-source-upgrades.py" in candidate
     for binding in (
         "1.5.3=amd64", "1.5.3=arm64", "1.6.0=amd64", "1.6.0=arm64",
-        "1.6.1=amd64", "1.6.1=arm64",
+        "1.6.1=amd64", "1.6.1=arm64", "1.6.2=amd64", "1.6.2=arm64",
     ):
         assert f'--receipt "{binding}=' in candidate
     assert "channelwatch-runtime-source-upgrades-${tag}.json" in candidate
     assert "scan-runtime-artifacts.py" in candidate
-    assert "syft-version: v1.54.1" in candidate
-    assert "version: v0.75.0" in candidate
+    assert "syft-version: v1.55.0" in candidate
+    assert "version: v0.76.1" in candidate
     assert 'install -d -m 0700 "${trivy_cache_dir}"' in candidate
     assert '--trivy-cache-dir "${trivy_cache_dir}"' in candidate
     assert '--syft "${syft_path}"' in candidate
     assert '--trivy "${trivy_path}"' in candidate
-    assert "dbf75864e7a7ff9e1fbf00552c31483f693188632a9f68f343cd7653dac513d6" in candidate
-    assert "93f9da8e4ba5e0c1c76d8234ed2494cf9afb0a96fd21953e424bb795f3299b8e" in candidate
+    assert "64c9631c3560336c55c549df0de08cd577d02399c9de807ac390960a4ed5c351" in candidate
+    assert "d1dfca6ae10a1ad4540bb94e64f0510077c47008920a9b554986b39dca573d83" in candidate
     assert "channelwatch-runtime-scan-${tag}.tar" in candidate
     assert "Rebuild and compare the complete application payload" in candidate
     assert "--signing-key-env CHANNELWATCH_COMPARISON_SIGNING_KEY" in candidate

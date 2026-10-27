@@ -400,6 +400,7 @@ export function DiagnosticsPanel() {
     total: number;
   } | null>(null);
   const [runAllElapsed, setRunAllElapsed] = useState<number | null>(null);
+  const [testTarget, setTestTarget] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<
     Record<string, { status: string; message?: string; elapsed?: number }>
   >({});
@@ -412,11 +413,16 @@ export function DiagnosticsPanel() {
     try {
       const result = await runTest(test.id);
       const elapsed = (Date.now() - start) / 1000;
+      setTestTarget(result.target_dvr?.name ?? null);
       setTestStatus((prev) => ({
         ...prev,
         [testName]: {
-          status: result.success ? "pass" : "fail",
-          message: result.message,
+          status: result.status === "skipped"
+            ? "skipped"
+            : result.status === "passed" || (!result.status && result.success)
+              ? "pass"
+              : "fail",
+          message: result.reason || result.message,
           elapsed,
         },
       }));
@@ -442,6 +448,7 @@ export function DiagnosticsPanel() {
     setRunAllProgress({ current: 0, total });
     setTestStatus({});
     setRunAllElapsed(null);
+    setTestTarget(null);
 
     for (let i = 0; i < tests.length; i++) {
       setRunAllProgress({ current: i, total });
@@ -561,12 +568,13 @@ export function DiagnosticsPanel() {
             onClick={() => {
               const providers = getActiveProviders();
               const healthIssues = getHealthIssues();
-              const testResults = Object.entries(testStatus)
-                .map(
+              const testResults = [
+                ...(testTarget ? [`  ${t("diagnostics.tests.targetDvr", { name: testTarget })}`] : []),
+                ...Object.entries(testStatus).map(
                   ([name, s]) =>
-                    `  ${s.status === "pass" ? "PASS" : s.status === "fail" ? "FAIL" : "..."} ${name}${s.elapsed != null ? ` (${s.elapsed.toFixed(1)}s)` : ""}${s.status === "fail" && s.message ? ` - ${s.message}` : ""}`,
-                )
-                .join("\n");
+                    `  ${s.status === "pass" ? "PASS" : s.status === "fail" ? "FAIL" : s.status === "skipped" ? "SKIP" : "..."} ${name}${s.elapsed != null ? ` (${s.elapsed.toFixed(1)}s)` : ""}${["fail", "skipped"].includes(s.status) && s.message ? ` - ${s.message}` : ""}`,
+                ),
+              ].join("\n");
 
               const dvrLines =
                 dvrSections.length > 0
@@ -1330,7 +1338,7 @@ export function DiagnosticsPanel() {
             />
           )}
           {Object.keys(testStatus).length > 0 && runAllProgress === null && (
-            <div className="mb-4 p-3 rounded-lg border flex items-center gap-3">
+            <div className="mb-4 p-3 rounded-lg border flex flex-wrap items-center gap-x-3 gap-y-1" role="status">
               <span className="text-sm font-medium">
                 {t("diagnostics.tests.resultsLabel")}
               </span>
@@ -1348,6 +1356,18 @@ export function DiagnosticsPanel() {
                   ).length,
                 })}
               </span>
+              <span className="text-sm text-muted-foreground">
+                {t("diagnostics.tests.skipped", {
+                  n: Object.values(testStatus).filter(
+                    (s) => s.status === "skipped",
+                  ).length,
+                })}
+              </span>
+              {testTarget && (
+                <span className="min-w-0 break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                  {t("diagnostics.tests.targetDvr", { name: testTarget })}
+                </span>
+              )}
               {runAllElapsed != null && (
                 <span className="text-sm text-muted-foreground">
                   {t("diagnostics.tests.inTime", {
@@ -1384,9 +1404,9 @@ export function DiagnosticsPanel() {
                             {test.description}
                           </p>
                         ) : null}
-                        {testStatus[test.name]?.status === "fail" &&
+                        {(testStatus[test.name]?.status === "fail" || testStatus[test.name]?.status === "skipped") &&
                           testStatus[test.name]?.message && (
-                            <p className="mt-0.5 break-words text-[13px] leading-5 text-red-700 [overflow-wrap:anywhere] dark:text-red-400">
+                            <p className={`mt-0.5 break-words text-[13px] leading-5 [overflow-wrap:anywhere] ${testStatus[test.name]?.status === "fail" ? "text-red-700 dark:text-red-400" : "text-muted-foreground"}`}>
                               {testStatus[test.name].message}
                             </p>
                           )}
@@ -1414,6 +1434,8 @@ export function DiagnosticsPanel() {
                             <span className="text-green-500">✅</span>
                           ) : testStatus[test.name]?.status === "fail" ? (
                             <span className="text-red-500">❌</span>
+                          ) : testStatus[test.name]?.status === "skipped" ? (
+                            t("diagnostics.tests.skippedLabel")
                           ) : (
                             t("diagnostics.tests.runBtn")
                           )}

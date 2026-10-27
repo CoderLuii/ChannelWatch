@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-10-27
+
+### Fixed
+
+- Keep diagnostic samples out of Recent Activity, Watch History, timelines and saved monitoring state. Mark sample notifications and logs with `[TEST]`, including custom templates, and keep sample channel details and artwork consistent ([#28](https://github.com/CoderLuii/ChannelWatch/issues/28)).
+- Show disabled notification diagnostics as **Skipped**, with a reason and a separate count. Apply the tested DVR's alert settings before creating samples or attempting delivery, while keeping genuine connection and delivery errors visible as failures ([#29](https://github.com/CoderLuii/ChannelWatch/issues/29)).
+- Show which DVR was tested. Diagnostic checks use the first enabled DVR.
+
+### Security
+
+- Update the pnpm package manager and release validation tools to supported security releases without changing notification providers or the minimum image foundation.
+
 ## [1.6.2] - 2026-10-26
 
 ### Fixed
@@ -1025,7 +1037,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.5.3...v1.6.0

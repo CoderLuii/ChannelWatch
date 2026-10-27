@@ -1,32 +1,34 @@
 {
-  "version": "1.6.2",
+  "version": "1.6.3",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.5.3",
   "updater_protocol": 4,
   "minimum_launcher_protocol": 4,
-  "recommended_image_version": "1.6.2",
-  "publication_time": "2026-10-26T10:21:46Z",
-  "automatic_install_after": "2026-11-02T10:21:46Z",
+  "recommended_image_version": "1.6.3",
+  "publication_time": "2026-10-27T13:03:12Z",
+  "automatic_install_after": "2026-11-03T13:03:12Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.5.3",
     "1.6.0",
-    "1.6.1"
+    "1.6.1",
+    "1.6.2"
   ],
   "legacy_app_update_sources": [
     "1.4.0",
     "1.4.1",
     "1.4.5",
     "1.6.0",
-    "1.6.1"
+    "1.6.1",
+    "1.6.2"
   ],
   "compatible_launcher_protocols": [
     4
   ],
   "runtime_generation_required": true,
   "runtime_compatibility_evidence": {},
-  "release_heading": "## 10/26/2026",
+  "release_heading": "# ChannelWatch v1.6.3 - Diagnostic alerts and activity",
   "verification_assets": true,
   "unpublished_predecessor_tags": [],
   "unpublished_release_tags": [

@@ -22,6 +22,7 @@ from core.helpers.atomic_io import (
     atomic_write_private_json,
     read_regular_file_bytes,
 )
+from core.helpers.diagnostic_context import is_diagnostic_execution
 
 STATE_SCHEMA = 1
 MISSED_GRACE_SECONDS = 180
@@ -174,6 +175,8 @@ class RecordingOutcomeTracker:
         return {"schema": STATE_SCHEMA, "dvr_id": self.dvr_id, "jobs": {}}
 
     def _load(self) -> dict[str, Any]:
+        if is_diagnostic_execution():
+            return self._empty()
         try:
             raw = read_regular_file_bytes(self.path, max_bytes=MAX_STATE_BYTES)
             payload = json.loads(raw.decode("utf-8"))
@@ -196,6 +199,8 @@ class RecordingOutcomeTracker:
         return payload
 
     def _save(self) -> None:
+        if is_diagnostic_execution():
+            return
         if self._load_blocked:
             raise RuntimeError(
                 "Existing recording outcome state needs recovery before it can be replaced."

@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from typing import Optional, Dict, Any
+from .diagnostic_context import is_diagnostic_execution
 
 # LOG LEVELS
 LOG_STANDARD = 1
@@ -92,6 +93,9 @@ def log(
     """Output message to console and log file with timestamp and appropriate verbosity filtering."""
     if level > log_level:
         return
+
+    if is_diagnostic_execution() and not message.startswith("[TEST]"):
+        message = f"[TEST] {message}"
 
     if _log_format == "json":
         logging.getLogger("channelwatch").info(message, extra=extra or {})

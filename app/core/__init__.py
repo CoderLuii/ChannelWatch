@@ -16,7 +16,7 @@ del _sys
 import os
 from pathlib import Path
 
-__version__ = "1.6.2"
+__version__ = "1.6.3"
 __app_name__ = "ChannelWatch"
 
 

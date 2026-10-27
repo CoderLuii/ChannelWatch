@@ -250,7 +250,11 @@ The page shows:
 * Connectivity and notification test actions using `POST /api/run_test/{test_name_url}`.
 * Health warnings for offline DVRs, degraded monitoring, missing DVR configuration, no notification providers, and no enabled alert types.
 
-**DVR Connection** checks whether the DVR is reachable. **DVR API** checks the Channels DVR API endpoints. Notification tests send sample alerts through your configured destinations, and **Run All Tests** includes those notification tests. A failed result shows the reported error; a destination that is not configured or cannot be reached will fail even when monitoring is running.
+**DVR Connection** checks whether the DVR is reachable. **DVR API** checks the Channels DVR API endpoints. Tests use the first enabled DVR and show its name with the results.
+
+Notification tests respect that DVR's effective alert settings, including per-DVR overrides. Disabled alerts show **Skipped** with a reason and are counted separately from passed and failed tests. They do not initialize notification providers or create sample events. For example, **Balanced** skips Channel Watching, VOD Watching and Recording Scheduled; **Everything** enables those tests.
+
+Enabled notification tests send clearly labelled `[TEST]` samples through configured destinations. Samples stay out of Recent Activity, Watch History, timelines and saved monitoring state. Existing history is preserved. **Run All Tests** includes these notification checks; it does not change your alert settings. A destination that is not configured or cannot be reached remains a failed result even when monitoring is running.
 
 ## Report a Problem flow
 

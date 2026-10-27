@@ -20,6 +20,7 @@ from .alerts.recording_events import (
     test_recording_cancelled_alert,
 )
 from ..helpers.logging import log
+from ..helpers.diagnostic_context import diagnostic_execution, _isolated_manager
 
 # ---------------- EXPORTED FUNCTIONS ----------------
 
@@ -68,11 +69,13 @@ async def run_test(
             log(f"[FAIL]  alert_manager required for {test_name} test")
             return False
         diagnostic = ALERT_TESTS[test_name]
-        if inspect.iscoroutinefunction(diagnostic):
-            return bool(await diagnostic(host, port, alert_manager))
-        return bool(
-            await asyncio.to_thread(diagnostic, host, port, alert_manager)
-        )
+        with diagnostic_execution():
+            alert_manager = _isolated_manager(alert_manager)
+            if inspect.iscoroutinefunction(diagnostic):
+                return bool(await diagnostic(host, port, alert_manager))
+            return bool(
+                await asyncio.to_thread(diagnostic, host, port, alert_manager)
+            )
     else:
         log(f"[FAIL]  Unknown test: {test_name}")
         return False

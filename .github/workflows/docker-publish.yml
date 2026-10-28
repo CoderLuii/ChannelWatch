@@ -6,7 +6,7 @@ run-name: "${{ github.event_name == 'push' && github.ref_name || format('PR #{0}
 # - DOCKERHUB_USERNAME: Docker Hub account name for image and description publishing.
 # - DOCKERHUB_TOKEN: Docker Hub token with push and repository-description access.
 # - GHCR_TOKEN: GitHub token with package write access for GHCR publishing.
-# - SITE_SYNC_TOKEN: GitHub token limited to repository dispatches for ChannelWatch-site.
+# - SITE_SYNC_TOKEN: Required only for hosted site sync; limited to ChannelWatch-site dispatches.
 
 on:
   push:
@@ -4253,7 +4253,7 @@ jobs:
           done
 
   sync-site:
-    name: Sync website release metadata
+    name: Prepare website release handoff
     runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
     needs:
       - build-update-bundle-and-release
@@ -4301,8 +4301,9 @@ jobs:
             --catalog "${catalog_path}" \
             --version "${VERSION}"
 
-      - name: Dispatch website sync
+      - name: Prepare website release handoff
         env:
+          CHANNELWATCH_SITE_SYNC_MODE: ${{ vars.CHANNELWATCH_SITE_SYNC_MODE || 'local' }}
           GH_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ env.RELEASE_TAG }}
@@ -4315,8 +4316,31 @@ jobs:
           UPDATE_BUNDLE_SHA256: ${{ needs.build-update-bundle-and-release.outputs.bundle_sha256 }}
         shell: bash
         run: |
-          if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::SITE_SYNC_TOKEN is required to dispatch the website sync workflow."
+          set -euo pipefail
+          site_sync_mode="${CHANNELWATCH_SITE_SYNC_MODE:-local}"
+          case "${site_sync_mode}" in
+            local|hosted) ;;
+            *)
+              echo "::error::CHANNELWATCH_SITE_SYNC_MODE must be local or hosted."
+              exit 1
+              ;;
+          esac
+
+          if [ "${SOURCE_REPO}" != "CoderLuii/ChannelWatch" ] \
+            || [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || [ "${TAG}" != "v${VERSION}" ] \
+            || [[ ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+            || [[ ! "${UPDATE_BUNDLE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Website handoff requires the exact release source, version and bundle digest."
+            exit 1
+          fi
+
+          download_root="https://github.com/CoderLuii/ChannelWatch/releases/download/${TAG}"
+          if [ "${UPDATE_BUNDLE_URL}" != "${download_root}/channelwatch-app-${TAG}.zip" ] \
+            || [ "${UPDATE_CATALOG_URL}" != "${download_root}/channelwatch-catalog-${TAG}.json" ] \
+            || { [ -n "${RUNTIME_UPDATE_CATALOG_URL}" ] \
+              && [ "${RUNTIME_UPDATE_CATALOG_URL}" != "${download_root}/channelwatch-update-catalog-v3.json" ]; }; then
+            echo "::error::Website handoff URLs must reference the verified release assets."
             exit 1
           fi
 
@@ -4325,6 +4349,10 @@ jobs:
           # manifest for the site to copy over the bridge.
           stable_manifest_url=""
           if [ "${VERSION}" = "0.9.18" ]; then
+            if [ "${UPDATE_MANIFEST_URL}" != "${download_root}/channelwatch-update-${TAG}.json" ]; then
+              echo "::error::The permanent bridge must reference its verified release manifest."
+              exit 1
+            fi
             stable_manifest_url="${UPDATE_MANIFEST_URL}"
           fi
 
@@ -4355,10 +4383,42 @@ jobs:
               }
             }' > site-sync-dispatch.json
 
+          {
+            echo "## Website release handoff"
+            printf 'Version: %s\n\n' "${VERSION}"
+            printf 'App commit: %s\n\n' "${SOURCE_SHA}"
+            printf 'Delivery mode: %s\n\n' "${site_sync_mode}"
+            printf 'Release: https://github.com/CoderLuii/ChannelWatch/releases/tag/%s\n\n' "${TAG}"
+            echo "The retained payload identifies the verified signed release assets."
+            echo "Site synchronization and deployment are checked by the live-feed verification jobs."
+          } > site-release-handoff.md
+          cat site-release-handoff.md >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${site_sync_mode}" = "local" ]; then
+            echo "Website release handoff prepared for local synchronization."
+            exit 0
+          fi
+
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::SITE_SYNC_TOKEN is required for hosted website synchronization."
+            exit 1
+          fi
+
           gh api \
             --method POST \
             repos/CoderLuii/ChannelWatch-site/dispatches \
             --input site-sync-dispatch.json
+
+      - name: Retain website release handoff
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-release-handoff-${{ env.RELEASE_TAG }}-${{ env.RELEASE_SHA }}-${{ github.run_attempt }}
+          path: |
+            site-sync-dispatch.json
+            site-release-handoff.md
+          retention-days: 30
+          if-no-files-found: error
 
   verify-live-update-manifest:
     name: Verify live stable update manifest

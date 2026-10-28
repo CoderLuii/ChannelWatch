@@ -3764,6 +3764,151 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
     assert "pnpm exec playwright test" in candidate
 
 
+@pytest.mark.skipif(
+    shutil.which("bash") is None or shutil.which("jq") is None,
+    reason="The site handoff shell regression requires bash and jq.",
+)
+@pytest.mark.parametrize(
+    ("mode", "token", "gh_exit", "overrides", "succeeds", "dispatches"),
+    [
+        pytest.param(None, "test-site-token", 0, {}, True, 0, id="unset-local"),
+        pytest.param(None, "", 0, {}, True, 0, id="unset-without-token"),
+        pytest.param("local", "", 0, {}, True, 0, id="local-without-token"),
+        pytest.param("local", "test-site-token", 0, {}, True, 0, id="local-with-token"),
+        pytest.param("hosted", "test-site-token", 0, {}, True, 1, id="hosted"),
+        pytest.param("other", "test-site-token", 0, {}, False, 0, id="unknown-mode"),
+        pytest.param("hosted", "", 0, {}, False, 0, id="hosted-without-token"),
+        pytest.param("hosted", "test-site-token", 17, {}, False, 1, id="hosted-http-error"),
+        pytest.param("local", "", 0, {"SOURCE_SHA": "not-a-commit"}, False, 0, id="bad-source"),
+        pytest.param("local", "", 0, {"SOURCE_REPO": "other/repo"}, False, 0, id="wrong-source-repo"),
+        pytest.param("local", "", 0, {"TAG": "v1.6.2"}, False, 0, id="wrong-tag"),
+        pytest.param("local", "", 0, {"UPDATE_BUNDLE_SHA256": "bad"}, False, 0, id="bad-bundle-digest"),
+        pytest.param("local", "", 0, {"UPDATE_BUNDLE_URL": "https://example.com/app.zip"}, False, 0, id="bad-bundle-url"),
+        pytest.param("local", "", 0, {"UPDATE_CATALOG_URL": "https://example.com/catalog.json"}, False, 0, id="bad-catalog-url"),
+        pytest.param("local", "", 0, {"RUNTIME_UPDATE_CATALOG_URL": "https://example.com/runtime.json"}, False, 0, id="bad-runtime-catalog-url"),
+        pytest.param(
+            "local", "", 0,
+            {
+                "VERSION": "0.9.18", "TAG": "v0.9.18",
+                "UPDATE_BUNDLE_URL": "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.18/channelwatch-app-v0.9.18.zip",
+                "UPDATE_MANIFEST_URL": "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.18/channelwatch-update-v0.9.18.json",
+                "UPDATE_CATALOG_URL": "https://github.com/CoderLuii/ChannelWatch/releases/download/v0.9.18/channelwatch-catalog-v0.9.18.json",
+                "RUNTIME_UPDATE_CATALOG_URL": "",
+            },
+            True, 0, id="permanent-bridge",
+        ),
+    ],
+)
+def test_site_release_handoff_workflow_shell(
+    tmp_path: Path, mode, token, gh_exit, overrides, succeeds, dispatches
+):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        step
+        for step in workflow["jobs"]["sync-site"]["steps"]
+        if "repos/CoderLuii/ChannelWatch-site/dispatches" in step.get("run", "")
+    )
+    download_root = "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.3"
+    environment = {
+        **os.environ,
+        "VERSION": "1.6.3",
+        "TAG": "v1.6.3",
+        "SOURCE_SHA": TEST_RELEASE_GIT_SHA,
+        "SOURCE_REPO": "CoderLuii/ChannelWatch",
+        "UPDATE_BUNDLE_URL": f"{download_root}/channelwatch-app-v1.6.3.zip",
+        "UPDATE_MANIFEST_URL": f"{download_root}/channelwatch-update-v1.6.3.json",
+        "UPDATE_CATALOG_URL": f"{download_root}/channelwatch-catalog-v1.6.3.json",
+        "RUNTIME_UPDATE_CATALOG_URL": f"{download_root}/channelwatch-update-catalog-v3.json",
+        "UPDATE_BUNDLE_SHA256": "a" * 64,
+        "GH_TOKEN": token,
+        "GH_STUB_EXIT": str(gh_exit),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
+        **overrides,
+    }
+    environment.pop("CHANNELWATCH_SITE_SYNC_MODE", None)
+    if mode is not None:
+        environment["CHANNELWATCH_SITE_SYNC_MODE"] = mode
+    stub = """\
+gh() {
+  printf '%s\\n' "$@" >> gh-arguments.txt
+  cp site-sync-dispatch.json dispatched-payload.json
+  return "${GH_STUB_EXIT}"
+}
+"""
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", stub + step["run"]],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
+    arguments = tmp_path / "gh-arguments.txt"
+    assert arguments.exists() is bool(dispatches)
+    if dispatches:
+        assert arguments.read_text(encoding="utf-8").splitlines() == [
+            "api", "--method", "POST",
+            "repos/CoderLuii/ChannelWatch-site/dispatches",
+            "--input", "site-sync-dispatch.json",
+        ]
+    if succeeds or mode == "hosted":
+        payload_path = tmp_path / "site-sync-dispatch.json"
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        assert payload == {
+            "event_type": "channelwatch-release",
+            "client_payload": {
+                "version": environment["VERSION"], "tag": environment["TAG"],
+                "sha": TEST_RELEASE_GIT_SHA,
+                "release_url": f"https://github.com/CoderLuii/ChannelWatch/releases/tag/{environment['TAG']}",
+                "source_repo": "CoderLuii/ChannelWatch",
+                "update_bundle_url": environment["UPDATE_BUNDLE_URL"],
+                "update_manifest_url": (
+                    environment["UPDATE_MANIFEST_URL"]
+                    if environment["VERSION"] == "0.9.18" else ""
+                ),
+                "update_catalog_url": environment["UPDATE_CATALOG_URL"],
+                "runtime_update_catalog_url": environment["RUNTIME_UPDATE_CATALOG_URL"],
+                "update_bundle_sha256": "a" * 64,
+            },
+        }
+        summary = (tmp_path / "site-release-handoff.md").read_text(encoding="utf-8")
+        assert summary in (tmp_path / "summary.md").read_text(encoding="utf-8")
+        assert environment["VERSION"] in summary and TEST_RELEASE_GIT_SHA in summary
+        assert "test-site-token" not in payload_path.read_text(encoding="utf-8") + summary
+        if dispatches:
+            assert json.loads((tmp_path / "dispatched-payload.json").read_text(encoding="utf-8")) == payload
+
+
+def test_site_release_handoff_preserves_publication_and_live_feed_gates():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["sync-site"]
+    assert job["if"] == "startsWith(github.ref, 'refs/tags/v')"
+    assert "verify-public-release-assets" in job["needs"]
+    prepare = next(
+        step for step in job["steps"]
+        if "repos/CoderLuii/ChannelWatch-site/dispatches" in step.get("run", "")
+    )
+    assert prepare["env"]["CHANNELWATCH_SITE_SYNC_MODE"] == "${{ vars.CHANNELWATCH_SITE_SYNC_MODE || 'local' }}"
+    retained = next(step for step in job["steps"] if step.get("name") == "Retain website release handoff")
+    assert retained["if"] == "always()"
+    assert retained["uses"] == "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+    assert retained["with"]["if-no-files-found"] == "error"
+    assert retained["with"]["name"] == "site-release-handoff-${{ env.RELEASE_TAG }}-${{ env.RELEASE_SHA }}-${{ github.run_attempt }}"
+    assert retained["with"]["path"].splitlines() == [
+        "site-sync-dispatch.json", "site-release-handoff.md"
+    ]
+    assert workflow["jobs"]["verify-live-update-manifest"]["needs"] == [
+        "build-update-bundle-and-release", "sync-site"
+    ]
+    assert "verify-live-update-manifest" in workflow["jobs"]["advance-compatible-aliases"]["needs"]
+
+
 def test_publication_window_gate_runs_at_every_public_boundary():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
@@ -3797,7 +3942,7 @@ def test_publication_window_gate_runs_at_every_public_boundary():
         "verify-publication-window.py"
     ) < publish_job.index("--method PATCH")
     assert sync_job.index("Verify publication window before stable-feed dispatch") < sync_job.index(
-        "Dispatch website sync"
+        "      - name: Prepare website release handoff"
     )
     assert sync_job.index("verify-publication-window.py") < sync_job.index(
         "repos/CoderLuii/ChannelWatch-site/dispatches"

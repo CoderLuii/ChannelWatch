@@ -11,6 +11,8 @@ from collections.abc import Iterable
 
 
 SEMVER_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+V164_PREVIOUS_COMMIT = "5318c64df0bf059a107c98ee127145b2b1007cb1"
+V164_APPROVED_BASE = "722b17271429b8e7f2fb130fe6a8e985c251111d"
 
 
 def _version(tag: str) -> tuple[int, int, int]:
@@ -81,6 +83,24 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+def _release_count_base(candidate_tag: str, previous_tag: str, candidate_commit: str) -> str:
+    if candidate_tag != "v1.6.4":
+        return previous_tag
+    if (
+        previous_tag != "v1.6.3"
+        or _git("cat-file", "-t", previous_tag) != "commit"
+        or _git("rev-parse", "--verify", previous_tag) != V164_PREVIOUS_COMMIT
+        or _git("rev-list", "--parents", "-n", "1", V164_APPROVED_BASE).split()
+        != [V164_APPROVED_BASE, V164_PREVIOUS_COMMIT]
+        or _git("rev-list", "--parents", "-n", "1", candidate_commit).split()
+        != [candidate_commit, V164_APPROVED_BASE]
+    ):
+        raise ValueError(
+            "Release v1.6.4 requires the exact approved v1.6.3, CI-base and release chain."
+        )
+    return V164_APPROVED_BASE
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
@@ -118,11 +138,12 @@ def main() -> int:
                 f"Release {args.tag} requires a previous semantic-version tag."
             )
         previous_tag = max(previous_tags, key=_version)
+        count_base = _release_count_base(args.tag, previous_tag, candidate_commit)
         validate_single_commit_release(
             args.tag,
             previous_tag,
             commit_count=int(
-                _git("rev-list", "--count", f"{previous_tag}..{candidate_commit}")
+                _git("rev-list", "--count", f"{count_base}..{candidate_commit}")
             ),
             commit_message=_git("log", "-1", "--format=%B", candidate_commit),
             tag_object_type=_git("cat-file", "-t", args.tag),

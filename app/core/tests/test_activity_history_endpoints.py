@@ -635,3 +635,166 @@ class TestItemFieldFidelity:
         resp = client.get("/api/recent-activity")
         assert resp.status_code == 200
         assert resp.json()[0]["is_test"] is True
+
+
+@pytest.fixture()
+def mixed_watch_history(mem_engine):
+    from ui.backend.main import AlertHistoryItem
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        ("live", "watching_channel", "Live match", "Living Room"),
+        ("vod", "watching_vod", "Movie match", "Living Room"),
+        ("recording", "recording_event", "Recording match", "Recorder"),
+        ("down", "dvr_unreachable", "DVR is unreachable", "Server"),
+        ("up", "dvr_recovered", "Recovery match", "Living Room"),
+        ("disk", "disk_alert", "Disk alert", "Storage"),
+        ("plugin", "plugin_event", "Plugin event", "Plugin"),
+        ("other", "watching_vod", "Other DVR movie", "Other Room"),
+        ("duplicate", "dvr_recovered", "Authoritative recovery", "Server"),
+    ]
+    events = []
+    for index, (identifier, kind, title, device) in enumerate(rows, start=1):
+        event = _make_event(
+            event_type=kind,
+            dvr_id="other-dvr" if identifier == "other" else "dvr_test",
+            title=title,
+            device_name=device,
+            timestamp=now - timedelta(minutes=index),
+        )
+        event.id = identifier
+        events.append(event)
+    old = _make_event(
+        dvr_id="dvr_test", device_name="Old player",
+        title="Older playback", timestamp=now - timedelta(days=2),
+    )
+    old.id = "old-watch"
+    events.append(old)
+    database_ids = {event.id for event in events}
+    _seed(mem_engine, events)
+
+    journal = [
+        AlertHistoryItem(
+            id="journal-watch", type="vod_playback", title="Journal movie match",
+            message="Playback", device_name="Living Room", dvr_id="dvr_test",
+            timestamp=(now - timedelta(minutes=10)).isoformat(),
+        ),
+        AlertHistoryItem(
+            id="journal-health", type="dvr_unreachable", title="Journal outage",
+            message="Operational event", device_name="Journal server", dvr_id="dvr_test",
+            timestamp=(now - timedelta(minutes=11)).isoformat(),
+        ),
+        AlertHistoryItem(
+            id="duplicate", type="watching_channel", title="Stale journal playback",
+            message="SQLite supersedes this row", device_name="Stale player", dvr_id="dvr_test",
+            timestamp=(now - timedelta(minutes=12)).isoformat(),
+        ),
+    ]
+    with patch("ui.backend.main.ACTIVITY_HISTORY", journal):
+        yield {
+            "watch_ids": {"live", "vod", "recording", "other", "journal-watch", "old-watch"},
+            "all_ids": database_ids | {item.id for item in journal},
+            "database_ids": database_ids,
+            "journal": journal,
+        }
+
+
+class TestWatchHistoryScope:
+    @pytest.mark.parametrize(
+        "path,total",
+        [("/api/activity-history", 6), ("/api/v1/dvrs/dvr_test/activity-history", 5)],
+    )
+    def test_scope_counts_only_watch_events_before_pagination(
+        self, client, mixed_watch_history, path, total
+    ):
+        response = client.get(path, params={"scope": "watch", "offset": 1, "limit": 2})
+        assert response.status_code == 200
+        assert response.json()["total"] == total
+        assert [item["id"] for item in response.json()["items"]] == ["vod", "recording"]
+
+    def test_scope_merges_journal_with_authoritative_database_rows(
+        self, client, mixed_watch_history
+    ):
+        response = client.get("/api/activity-history?scope=watch")
+        assert response.status_code == 200
+        assert {item["id"] for item in response.json()["items"]} == mixed_watch_history["watch_ids"]
+
+    @pytest.mark.parametrize("dvr_id", [None, "dvr_test"])
+    def test_all_time_watch_facets_include_old_playback_and_exclude_operational_clients(
+        self, client, mixed_watch_history, dvr_id
+    ):
+        params = {"scope": "watch", "hours": 0}
+        if dvr_id:
+            params["dvr_id"] = dvr_id
+        response = client.get("/api/v1/activity-history/filters", params=params)
+        assert response.status_code == 200
+        expected = {"Living Room": 3, "Old player": 1, "Recorder": 1}
+        if dvr_id is None:
+            expected["Other Room"] = 1
+        assert {item["label"]: item["count"] for item in response.json()["clients"]} == expected
+
+    def test_scope_csv_matches_filtered_history_and_sort(
+        self, client, mixed_watch_history
+    ):
+        params = {"scope": "watch", "dvr_id": "dvr_test", "client": "LIVING ROOM", "search": "match", "hours": 24, "sort": "asc"}
+        history = client.get("/api/activity-history", params=params)
+        export = client.get("/api/v1/history/export", params=params)
+        assert history.status_code == export.status_code == 200
+        expected = ["journal-watch", "vod", "live"]
+        assert [item["id"] for item in history.json()["items"]] == expected
+        assert [row["id"] for row in csv.DictReader(StringIO(export.text))] == expected
+
+    @pytest.mark.parametrize("event_type", ["disk", "dvr_unreachable", "plugin_event"])
+    def test_explicit_operational_type_does_not_bypass_watch_scope(
+        self, client, mixed_watch_history, event_type
+    ):
+        history = client.get("/api/activity-history", params={"scope": "watch", "type": event_type})
+        export = client.get("/api/v1/history/export", params={"scope": "watch", "type": event_type})
+        facets = client.get("/api/v1/activity-history/filters", params={"scope": "watch", "event_type": event_type, "hours": 0})
+        assert history.status_code == export.status_code == facets.status_code == 200
+        assert history.json()["items"] == [] and history.json()["total"] == 0
+        assert list(csv.DictReader(StringIO(export.text))) == []
+        assert facets.json()["clients"] == []
+
+    def test_unscoped_activity_and_recent_activity_keep_operational_history(
+        self, client, mem_engine, mixed_watch_history
+    ):
+        history = client.get("/api/activity-history")
+        recent = client.get("/api/recent-activity?hours=0")
+        export = client.get("/api/v1/history/export")
+        assert history.status_code == recent.status_code == export.status_code == 200
+        expected = mixed_watch_history["all_ids"]
+        assert {item["id"] for item in history.json()["items"]} == expected
+        assert {item["id"] for item in recent.json()} == expected
+        assert {row["id"] for row in csv.DictReader(StringIO(export.text))} == expected
+        assert history.json()["total"] == len(expected)
+        with get_session(mem_engine) as session:
+            assert {row.id for row in session.exec(select(ActivityEvent)).all()} == mixed_watch_history["database_ids"]
+
+    def test_shared_facets_keep_default_time_range_and_unscoped_clients(
+        self, client, mixed_watch_history
+    ):
+        facets = client.get("/api/v1/activity-history/filters").json()["clients"]
+        labels = {item["label"] for item in facets}
+        assert "Old player" not in labels
+        assert {"Server", "Storage", "Plugin", "Journal server"}.issubset(labels)
+        watch = client.get("/api/v1/activity-history/filters?scope=watch").json()["clients"]
+        assert {item["label"] for item in watch} == {"Living Room", "Other Room", "Recorder"}
+
+    def test_watch_scope_works_without_database(self, fallback_client, mixed_watch_history):
+        history = fallback_client.get("/api/activity-history?scope=watch")
+        export = fallback_client.get("/api/v1/history/export?scope=watch")
+        assert history.status_code == export.status_code == 200
+        assert {item["id"] for item in history.json()["items"]} == {"journal-watch", "duplicate"}
+        assert {row["id"] for row in csv.DictReader(StringIO(export.text))} == {"journal-watch", "duplicate"}
+
+    def test_scope_preserves_all_existing_playback_and_recording_aliases(self, client, mem_engine):
+        kinds = {"watching_channel", "stream_started", "watching_vod", "vod_playback", "recording_event", "recording_started", "recording_completed", "recording_scheduled", "recording_stopped", "recording_cancelled"}
+        _seed(mem_engine, [_make_event(event_type=kind) for kind in kinds])
+        response = client.get("/api/activity-history?scope=watch")
+        assert response.status_code == 200
+        assert {item["type"] for item in response.json()["items"]} == kinds
+
+    @pytest.mark.parametrize("path", ["/api/activity-history", "/api/v1/dvrs/dvr_test/activity-history", "/api/v1/activity-history/filters", "/api/v1/history/export"])
+    def test_invalid_scope_is_rejected(self, client, path):
+        assert client.get(path, params={"scope": "unknown"}).status_code == 422

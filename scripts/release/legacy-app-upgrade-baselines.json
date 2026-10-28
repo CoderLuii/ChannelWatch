@@ -1,9 +1,20 @@
 {
   "schema": 2,
   "repository": "coderluii/channelwatch",
-  "target_version": "1.6.3",
-  "legacy_sources": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"],
-  "qualification_modes": ["direct", "chained"],
+  "target_version": "1.6.4",
+  "legacy_sources": [
+    "1.4.0",
+    "1.4.1",
+    "1.4.5",
+    "1.6.0",
+    "1.6.1",
+    "1.6.2",
+    "1.6.3"
+  ],
+  "qualification_modes": [
+    "direct",
+    "chained"
+  ],
   "bridge_release": {
     "version": "1.6.0",
     "source_commit": "b48057184752c912e4ae9b3a474374704d896073",
@@ -57,11 +68,41 @@
     }
   },
   "scenarios": [
-    {"id": "stock-1.4.0", "image_version": "1.4.0", "source_application_version": "1.4.0", "overlay_version": null},
-    {"id": "overlay-1.4.0-to-1.4.1", "image_version": "1.4.0", "source_application_version": "1.4.1", "overlay_version": "1.4.1"},
-    {"id": "overlay-1.4.0-to-1.4.5", "image_version": "1.4.0", "source_application_version": "1.4.5", "overlay_version": "1.4.5"},
-    {"id": "stock-1.4.1", "image_version": "1.4.1", "source_application_version": "1.4.1", "overlay_version": null},
-    {"id": "overlay-1.4.1-to-1.4.5", "image_version": "1.4.1", "source_application_version": "1.4.5", "overlay_version": "1.4.5"},
-    {"id": "stock-1.4.5", "image_version": "1.4.5", "source_application_version": "1.4.5", "overlay_version": null}
+    {
+      "id": "stock-1.4.0",
+      "image_version": "1.4.0",
+      "source_application_version": "1.4.0",
+      "overlay_version": null
+    },
+    {
+      "id": "overlay-1.4.0-to-1.4.1",
+      "image_version": "1.4.0",
+      "source_application_version": "1.4.1",
+      "overlay_version": "1.4.1"
+    },
+    {
+      "id": "overlay-1.4.0-to-1.4.5",
+      "image_version": "1.4.0",
+      "source_application_version": "1.4.5",
+      "overlay_version": "1.4.5"
+    },
+    {
+      "id": "stock-1.4.1",
+      "image_version": "1.4.1",
+      "source_application_version": "1.4.1",
+      "overlay_version": null
+    },
+    {
+      "id": "overlay-1.4.1-to-1.4.5",
+      "image_version": "1.4.1",
+      "source_application_version": "1.4.5",
+      "overlay_version": "1.4.5"
+    },
+    {
+      "id": "stock-1.4.5",
+      "image_version": "1.4.5",
+      "source_application_version": "1.4.5",
+      "overlay_version": null
+    }
   ]
 }

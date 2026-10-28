@@ -19,7 +19,7 @@ def load_module():
     return module
 
 
-@pytest.fixture(params=["1.6.1", "1.6.2", "1.6.3"])
+@pytest.fixture(params=["1.6.1", "1.6.2", "1.6.3", "1.6.4"])
 def matrix(tmp_path, request):
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
@@ -27,10 +27,12 @@ def matrix(tmp_path, request):
     target_version = request.param
     fixture["target_version"] = target_version
     fixture["legacy_sources"] = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
-    if target_version in {"1.6.2", "1.6.3"}:
+    if target_version in {"1.6.2", "1.6.3", "1.6.4"}:
         fixture["legacy_sources"].append("1.6.1")
-    if target_version == "1.6.3":
+    if target_version in {"1.6.3", "1.6.4"}:
         fixture["legacy_sources"].append("1.6.2")
+    if target_version == "1.6.4":
+        fixture["legacy_sources"].append("1.6.3")
     receipts = {}
     config_sha256 = hashlib.sha256(CONFIG.read_bytes()).hexdigest()
     for architecture in ("amd64", "arm64"):

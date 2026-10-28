@@ -3199,6 +3199,12 @@ ACTIVITY_TYPE_FILTERS = {
     "disk": {"disk_alert"},
 }
 
+WATCH_ACTIVITY_TYPES = frozenset(
+    ACTIVITY_TYPE_FILTERS["channel"]
+    | ACTIVITY_TYPE_FILTERS["vod"]
+    | ACTIVITY_TYPE_FILTERS["recording"]
+)
+
 
 def _history_sort_key(item: AlertHistoryItem) -> datetime:
     try:
@@ -3222,6 +3228,10 @@ def _activity_matches_type(
         return item.type in grouped_types
 
     return item.type.lower() == normalized_type
+
+
+def _activity_matches_scope(item: AlertHistoryItem, scope: Optional[str]) -> bool:
+    return scope != "watch" or item.type in WATCH_ACTIVITY_TYPES
 
 
 def _activity_matches_search(
@@ -5653,6 +5663,7 @@ async def get_activity_history(
     dvr_id: Optional[str] = Query(default=None),
     hours: Optional[int] = Query(default=None, ge=0, le=24 * 365),
     sort_order: str = Query(default="desc", alias="sort"),
+    scope: Optional[Literal["watch"]] = Query(default=None),
 ):
     response.headers["X-Deprecated-API"] = "Use /api/v1/"
     try:
@@ -5665,7 +5676,8 @@ async def get_activity_history(
         filtered_history = [
             item
             for item in history_snapshot
-            if _activity_matches_type(item, activity_type)
+            if _activity_matches_scope(item, scope)
+            and _activity_matches_type(item, activity_type)
             and _activity_matches_search(item, search)
             and _activity_matches_client(item, client)
             and _activity_matches_hours(item, hours)
@@ -5695,6 +5707,7 @@ async def get_activity_history_filters(
     dvr_id: Optional[str] = Query(default=None),
     hours: int = Query(default=24, ge=0, le=24 * 365),
     event_type: Optional[str] = Query(default=None),
+    scope: Optional[Literal["watch"]] = Query(default=None),
 ):
     """Return exact client facets from the same merged view as activity queries."""
 
@@ -5702,6 +5715,8 @@ async def get_activity_history_filters(
         history_snapshot = await _load_merged_activity_items()
         grouped: dict[str, dict[str, Any]] = {}
         for item in history_snapshot:
+            if not _activity_matches_scope(item, scope):
+                continue
             if dvr_id and item.dvr_id != dvr_id:
                 continue
             if not _activity_matches_hours(item, hours):
@@ -5799,6 +5814,7 @@ def _iter_csv(
     client: Optional[str] = None,
     hours: Optional[int] = None,
     sort_order: str = "asc",
+    scope: Optional[str] = None,
 ):
     yield ",".join(_CSV_COLUMNS) + "\r\n"
     items = _load_merged_activity_items_sync()
@@ -5807,6 +5823,8 @@ def _iter_csv(
         reverse=sort_order == "desc",
     )
     for item in items:
+        if not _activity_matches_scope(item, scope):
+            continue
         if dvr_id and item.dvr_id != dvr_id:
             continue
         if not _activity_matches_type(item, activity_type):
@@ -5846,6 +5864,7 @@ async def export_history_csv(
     client: Optional[str] = Query(default=None),
     hours: Optional[int] = Query(default=None, ge=0, le=24 * 365),
     sort_order: str = Query(default="asc", alias="sort"),
+    scope: Optional[Literal["watch"]] = Query(default=None),
 ):
     if format.lower() != "csv":
         raise structured_error(ErrorCode.ACTIVITY_FORMAT_UNSUPPORTED)
@@ -5865,6 +5884,7 @@ async def export_history_csv(
             client=client,
             hours=hours,
             sort_order=normalized_sort,
+            scope=scope,
         )
 
     return StreamingResponse(
@@ -7359,6 +7379,7 @@ async def get_dvr_activity_history_v1(
     client: Optional[str] = Query(default=None),
     hours: Optional[int] = Query(default=None, ge=0, le=24 * 365),
     sort_order: str = Query(default="desc", alias="sort"),
+    scope: Optional[Literal["watch"]] = Query(default=None),
 ):
     server = await _get_dvr_server_by_id_async(dvr_id)
     if server is None:
@@ -7376,6 +7397,7 @@ async def get_dvr_activity_history_v1(
             item
             for item in history_snapshot
             if item.dvr_id == dvr_id
+            and _activity_matches_scope(item, scope)
             and _activity_matches_type(item, activity_type)
             and _activity_matches_search(item, search)
             and _activity_matches_client(item, client)

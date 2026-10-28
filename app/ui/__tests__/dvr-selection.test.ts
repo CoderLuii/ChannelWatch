@@ -143,7 +143,7 @@ describe("WatchHistory DVR request routing", () => {
       sort: "desc",
     })
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/activity-history?offset=0&limit=25&sort=desc", { headers: {} })
+    expect(fetchMock).toHaveBeenCalledWith("/api/activity-history?offset=0&limit=25&sort=desc&scope=watch", { headers: {} })
   })
 
   it("uses the filtered v1 DVR activity endpoint when a DVR is selected", async () => {
@@ -158,7 +158,7 @@ describe("WatchHistory DVR request routing", () => {
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/dvrs/dvr_abc123/activity-history?offset=25&limit=25&type=channel&search=living+room&sort=asc",
+      "/api/v1/dvrs/dvr_abc123/activity-history?offset=25&limit=25&type=channel&search=living+room&sort=asc&scope=watch",
       { headers: {} },
     )
   })

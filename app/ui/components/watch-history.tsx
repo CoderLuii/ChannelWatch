@@ -39,7 +39,7 @@ type ActivitySortOrder = "desc" | "asc"
 type WatchHistoryRequestOptions = Omit<FetchActivityHistoryOptions, "dvr_id">
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100]
-const ACTIVITY_TYPES = new Set(["all", "channel", "vod", "recording", "disk"])
+const ACTIVITY_TYPES = new Set(["all", "channel", "vod", "recording"])
 
 function readUrlFilterState() {
   const params = new URLSearchParams(window.location.search)
@@ -60,10 +60,10 @@ export async function fetchWatchHistoryForDvrSelection(
   options: WatchHistoryRequestOptions,
 ): Promise<ActivityHistoryResponse> {
   if (selectedDvr !== "all") {
-    return fetchDvrActivityHistory(selectedDvr, options)
+    return fetchDvrActivityHistory(selectedDvr, { ...options, scope: "watch" })
   }
 
-  return fetchActivityHistory(options)
+  return fetchActivityHistory({ ...options, scope: "watch" })
 }
 
 function formatFullTimestamp(timestamp: string): string {
@@ -220,6 +220,8 @@ export function WatchHistory() {
       {
         dvr_id: selectedDvr === "all" ? undefined : selectedDvr,
         event_type: typeFilter,
+        hours: 0,
+        scope: "watch",
       },
       controller.signal,
     )
@@ -300,6 +302,7 @@ export function WatchHistory() {
     setExportError(null)
     try {
       const blob = await downloadActivityHistoryCsv({
+        scope: "watch",
         type: typeFilter,
         search: searchQuery,
         sort: sortOrder,
@@ -390,7 +393,6 @@ export function WatchHistory() {
                   <SelectItem value="channel">{t("type.liveTV")}</SelectItem>
                   <SelectItem value="vod">{t("type.vod")}</SelectItem>
                   <SelectItem value="recording">{t("type.recordings")}</SelectItem>
-                  <SelectItem value="disk">{t("type.diskAlerts")}</SelectItem>
                 </SelectContent>
               </Select>
 

@@ -58,12 +58,14 @@ def chained_receipt(tmp_path: Path, architecture: str, *, source_version="1.6.0"
         "source_commit": (
             "b48057184752c912e4ae9b3a474374704d896073" if source_version == "1.6.0"
             else "f2e2943097451480bb11ec926bafb1be5ca5fbdc" if source_version == "1.6.1"
-            else "453deb679c6dfd67ff98437d3f96b76183cff3cb"
+            else "453deb679c6dfd67ff98437d3f96b76183cff3cb" if source_version == "1.6.2"
+            else "5318c64df0bf059a107c98ee127145b2b1007cb1"
         ),
         "source_catalog_sha256": (
             "f20578206578901c9a28486c28e2a6f8c2e7974bad4ec314d55a3bcba53e1b39" if source_version == "1.6.0"
             else "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34" if source_version == "1.6.1"
-            else SOURCE_CATALOG_162
+            else SOURCE_CATALOG_162 if source_version == "1.6.2"
+            else "ced805957f5414f73678643c0458aae4f2c1a0c6ecaf2c6c52a7e1ef922f3454"
         ),
         "target_application_version": target_version,
         "target_commit": "f" * 40,
@@ -92,7 +94,7 @@ def chained_receipt(tmp_path: Path, architecture: str, *, source_version="1.6.0"
     return path, value
 
 
-@pytest.mark.parametrize("target_version", ["1.6.1", "1.6.2", "1.6.3"])
+@pytest.mark.parametrize("target_version", ["1.6.1", "1.6.2", "1.6.3", "1.6.4"])
 @pytest.mark.parametrize("mutation", [None, "missing", "duplicate", "extra", "config"])
 def test_exact_source_receipt_matrix_passes(tmp_path, monkeypatch, target_version, mutation):
     module = load_module()
@@ -104,7 +106,7 @@ def test_exact_source_receipt_matrix_passes(tmp_path, monkeypatch, target_versio
         direct = tmp_path / f"runtime-capability-{architecture}-1.5.3.json"
         direct.write_text(f"{architecture} direct\n", encoding="utf-8")
         receipts.append(f"1.5.3={architecture}={direct}")
-        sources = {"1.6.1": ["1.6.0"], "1.6.2": ["1.6.0", "1.6.1"], "1.6.3": ["1.6.0", "1.6.1", "1.6.2"]}[target_version]
+        sources = {"1.6.1": ["1.6.0"], "1.6.2": ["1.6.0", "1.6.1"], "1.6.3": ["1.6.0", "1.6.1", "1.6.2"], "1.6.4": ["1.6.0", "1.6.1", "1.6.2", "1.6.3"]}[target_version]
         for source in sources:
             chained, value = chained_receipt(tmp_path, architecture, source_version=source, target_version=target_version)
             value["target_catalog_sha256"] = catalog_sha
@@ -119,7 +121,7 @@ def test_exact_source_receipt_matrix_passes(tmp_path, monkeypatch, target_versio
     elif mutation == "duplicate":
         receipts.append(receipts[-1])
     elif mutation == "extra":
-        receipts.append("1.6.3=amd64=unapproved.json")
+        receipts.append("1.7.0=amd64=unapproved.json")
     elif mutation == "config":
         configured["compatible_source_application_versions"].pop()
     config.write_text(json.dumps(configured), encoding="utf-8")
@@ -238,9 +240,14 @@ def test_v162_chain_requires_rollback_to_its_v161_source(tmp_path):
     ("1.6.3", "1.6.1", True),
     ("1.6.3", "1.6.2", True),
     ("1.6.2", "1.6.2", False),
-    ("1.6.4", "1.6.2", False),
+    ("1.6.4", "1.6.0", True),
+    ("1.6.4", "1.6.1", True),
+    ("1.6.4", "1.6.2", True),
+    ("1.6.4", "1.6.3", True),
+    ("1.6.4", "1.6.4", False),
+    ("1.6.5", "1.6.3", False),
 ])
-def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monkeypatch, target_version, source_version, accepted):
+def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monkeypatch, capsys, target_version, source_version, accepted):
     spec = importlib.util.spec_from_file_location("runtime_source_verifier", ROOT / "scripts/release/verify-runtime-source-upgrade.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -261,7 +268,13 @@ def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monk
         assert called == [(target_version, source_version)]
         assert output.is_file()
     else:
-        with pytest.raises(SystemExit, match="bounded|requires"):
+        with pytest.raises(SystemExit) as rejected:
             module.main()
+        if rejected.value.code == 2:
+            assert "invalid choice" in capsys.readouterr().err
+        else:
+            assert any(message in str(rejected.value) for message in ("bounded", "requires"))
+        assert called == []
+        assert not output.exists()
         assert called == []
         assert not output.exists()

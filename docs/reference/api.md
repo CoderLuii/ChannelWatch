@@ -831,6 +831,8 @@ The optional `client` parameter is an exact, case-insensitive match after Unicod
 
 ### `GET /api/activity-history`
 
+Add `scope=watch` to return only live TV, VOD and recording events. The same option is supported by per-DVR history, client facets and CSV export. It combines with the other filters before counting and pagination. Omit it to retain the full activity view, including DVR connection and disk events.
+
 | Field | Value |
 | --- | --- |
 | Function | `get_activity_history` |
@@ -865,7 +867,7 @@ Example response:
 | Status codes | 200, 401, 429, 500 |
 | Rate limit applies | yes |
 
-Optional query parameters are `dvr_id`, `hours`, and `event_type`. The endpoint reads the same merged, deduplicated activity view as the history endpoints. Case variants group into one client with the most recently observed spelling, empty values are omitted, and IP addresses are not substituted for missing names.
+Optional query parameters are `dvr_id`, `hours`, `event_type`, and `scope=watch`. The default time window is 24 hours; `hours=0` includes all retained activity. Watch History uses `scope=watch&hours=0` so older playback devices remain available. The endpoint reads the same merged, deduplicated activity view as the history endpoints. Case variants group into one client with the most recently observed spelling, empty values are omitted, and IP addresses are not substituted for missing names.
 
 Example response:
 
@@ -922,6 +924,8 @@ Example response:
 ```
 
 ### `GET /api/v1/history/export`
+
+With `scope=watch`, the export contains playback and recording rows only, matching Watch History. Without it, operational activity remains included. Exports apply the requested filters and sort order across all matching rows, not just the visible page.
 
 | Field | Value |
 | --- | --- |

@@ -23,19 +23,33 @@ def test_tag_candidate_requires_existing_deployment_docs_and_security_gates():
     assert jobs["build-and-push"]["needs"] == "build-update-bundle-and-release"
     assert "if" not in jobs["build-and-push"]
 
-def test_both_browser_paths_retain_first_attempt_diagnostics_before_signing():
+def test_browser_diagnostics_and_local_release_evidence_precede_signing():
     workflow = yaml.load((ROOT / '.github/workflows/docker-publish.yml').read_text(), Loader=yaml.BaseLoader)
     jobs = workflow['jobs']
-    for name in ('browser', 'candidate-source-gates'):
-        steps = jobs[name]['steps']
-        uploads = [step for step in steps if 'browser diagnostics' in step.get('name', '')]
-        assert len(uploads) == 1
-        upload = uploads[0]
-        assert upload['if'] == 'always()'
-        assert upload['with']['retention-days'] == '7'
-        assert upload['with']['path'].splitlines() == ['app/ui/playwright-report/', 'app/ui/test-results/']
-        browser = next(i for i, step in enumerate(steps) if 'pnpm exec playwright test' in step.get('run', ''))
-        assert steps.index(upload) > browser
+    steps = jobs['browser']['steps']
+    uploads = [step for step in steps if 'browser diagnostics' in step.get('name', '')]
+    assert len(uploads) == 1
+    upload = uploads[0]
+    assert upload['if'] == 'always()'
+    assert upload['with']['retention-days'] == '7'
+    assert upload['with']['path'].splitlines() == ['app/ui/playwright-report/', 'app/ui/test-results/']
+    browser = next(i for i, step in enumerate(steps) if 'pnpm exec playwright test' in step.get('run', ''))
+    assert steps.index(upload) > browser
+
+    preflight = jobs['release-preflight']['steps']
+    verification = next(i for i, step in enumerate(preflight)
+                        if 'verify-local-qualification.py' in step.get('run', ''))
+    retained = next(i for i, step in enumerate(preflight)
+                    if step.get('name') == 'Retain accepted local qualification')
+    assert retained > verification
+    assert preflight[retained]['with']['path'].splitlines() == [
+        '${{ runner.temp }}/local-qualification.json',
+        '${{ runner.temp }}/local-qualification.json.sha256',
+    ]
+    assert jobs['runtime-dependencies']['needs'] == 'release-preflight'
+    assert jobs['candidate-source-gates']['needs'] == 'runtime-dependencies'
+    assert not any('pnpm exec playwright test' in step.get('run', '')
+                   for step in jobs['candidate-source-gates']['steps'])
 
     assert 'candidate-source-gates' in jobs['candidate-signing']['needs']
     assert 'candidate-source-gates' in jobs['candidate-qualification']['needs']

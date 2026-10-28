@@ -971,18 +971,18 @@ def test_corresponding_source_map_pins_exact_release_sources():
         assert required in source_map
 
 
-def test_current_release_delivery_matches_changes_since_published_162(monkeypatch):
+def test_current_release_delivery_matches_changes_since_published_163(monkeypatch):
     monkeypatch.chdir(ROOT)
     module = _load_script(
         "classify_current_release_delivery",
         "scripts/release/classify-release-impact.py",
     )
-    base_ref = "v1.6.2"
+    base_ref = "v1.6.3"
     baseline = subprocess.run(
         ["git", "rev-parse", base_ref],
         check=True, capture_output=True, text=True, cwd=ROOT,
     ).stdout.strip()
-    assert baseline == "453deb679c6dfd67ff98437d3f96b76183cff3cb"
+    assert baseline == "5318c64df0bf059a107c98ee127145b2b1007cb1"
     paths = subprocess.run(
         ["git", "diff", "--name-only", base_ref],
         check=True, capture_output=True, text=True, cwd=ROOT,
@@ -1019,7 +1019,7 @@ def test_current_release_delivery_matches_changes_since_published_162(monkeypatc
     )
 
 
-def test_release_config_declares_163_in_app_update_on_published_153_image():
+def test_release_config_declares_164_in_app_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -1028,17 +1028,17 @@ def test_release_config_declares_163_in_app_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.3"
+    assert config["version"] == "1.6.4"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.3"
+    assert config["recommended_image_version"] == "1.6.4"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3"]
     assert config["compatible_launcher_protocols"] == [4]
     assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
@@ -1059,7 +1059,7 @@ def test_release_config_declares_163_in_app_update_on_published_153_image():
         "v1.5.2",
         "v1.5.4",
     ]
-    assert config["release_heading"] == "# ChannelWatch v1.6.3 - Diagnostic alerts and activity"
+    assert config["release_heading"] == "# ChannelWatch v1.6.4 - Watch History activity"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1133,17 +1133,16 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
 
     output = capsys.readouterr().out
     assert output.splitlines()[0] == config["release_heading"]
-    assert re.fullmatch(r"# ChannelWatch v1\.6\.3 - .+", output.splitlines()[0])
+    assert re.fullmatch(r"# ChannelWatch v1\.6\.4 - .+", output.splitlines()[0])
     assert re.findall(r"^# .+$", output, re.MULTILINE) == [
         config["release_heading"]
     ]
     for heading in ("Fixed", "Docs", "Images", "License and verification"):
         assert f"\n## {heading}\n" in output
-    assert "[#28](https://github.com/CoderLuii/ChannelWatch/issues/28)" in output
-    assert "[#29](https://github.com/CoderLuii/ChannelWatch/issues/29)" in output
-    assert "channelwatch-v1.6.3-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.3`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.3`" in output
+    assert "[#30](https://github.com/CoderLuii/ChannelWatch/issues/30)" in output
+    assert "channelwatch-v1.6.4-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.4`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.4`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1253,7 +1252,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_163_release():
+def test_release_version_surfaces_use_164_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1264,11 +1263,11 @@ def test_release_version_surfaces_use_163_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.3"
-    assert metadata["versionTag"] == "v1.6.3"
-    assert metadata["dockerTag"] == "1.6.3"
-    assert metadata["helmChartVersion"] == "1.6.3"
-    assert metadata["helmAppVersion"] == "1.6.3"
+    assert metadata["version"] == "1.6.4"
+    assert metadata["versionTag"] == "v1.6.4"
+    assert metadata["dockerTag"] == "1.6.4"
+    assert metadata["helmChartVersion"] == "1.6.4"
+    assert metadata["helmAppVersion"] == "1.6.4"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3278,7 +3277,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
     assert workflow.count(
         '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
-        ) == 6
+        ) == 7
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     candidate_canary = workflow.split(
@@ -3397,23 +3396,21 @@ def test_release_workflow_has_one_candidate_publication_run_per_release():
     assert 'run-name: "${{ github.event_name == \'push\' && github.ref_name' in workflow
 
 
-def test_release_runs_the_complete_backend_suite_without_retry():
+def test_pull_requests_run_the_complete_backend_suite_without_retry():
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
     )
     jobs = workflow["jobs"]
-    source = jobs["candidate-source-gates"]
-    gate_step = next(step for step in source["steps"] if step.get("name") == "Run source gates")
-    assert source["permissions"] == {"contents": "read"}
+    source = jobs["python"]
+    gate_step = next(step for step in source["steps"] if step.get("name") == "Run backend suite")
+    assert source["if"] == "github.event_name == 'pull_request'"
     assert source.get("continue-on-error", False) is False
     assert "if" not in gate_step
     assert gate_step.get("continue-on-error", False) is False
-    assert "candidate-source-gates" in jobs["candidate-qualification"]["needs"]
-    assert "candidate-qualification" in jobs["signed-candidate"]["needs"]
-    assert "signed-candidate" in jobs["build-update-bundle-and-release"]["needs"]
     gate = gate_step["run"]
 
-    assert "PYTHONPATH=app python -m pytest app/core/tests" in gate
+    assert gate_step["env"]["PYTHONPATH"] == "app"
+    assert gate == "python -m pytest app/core/tests"
     assert "--deselect" not in gate
     assert "retry" not in gate.lower()
     assert "||" not in gate
@@ -4069,29 +4066,88 @@ def test_ci_trivy_scan_renders_helm_and_fails_if_chart_targets_are_skipped():
 
 
 @pytest.mark.parametrize(
-    "command",
+    "command, release_producers, pull_request_producers",
     [
-        r"(?:PYTHONPATH=app )?python -m pytest app/core/tests",
-        r"python -m compileall app/core app/ui/backend",
-        r"python scripts/release/release_version_policy\.py",
-        r"pnpm typecheck",
-        r"pnpm lint",
-        r"pnpm test",
-        r"pnpm exec playwright test",
+        (r"(?:PYTHONPATH=app )?python -m pytest app/core/tests", [], ["python"]),
+        (r"python -m compileall app/core app/ui/backend", ["candidate-source-gates"], ["python"]),
+        (r"python scripts/release/release_version_policy\.py", ["candidate-source-gates"], []),
+        (r"pnpm typecheck", [], ["frontend"]),
+        (r"pnpm lint", [], ["frontend"]),
+        (r"pnpm test", [], ["frontend"]),
+        (r"pnpm exec playwright test", [], ["browser"]),
     ],
 )
-def test_tag_release_runs_each_source_suite_once(command):
+def test_tag_release_reuses_general_suites_and_keeps_preparation_checks(
+    command, release_producers, pull_request_producers,
+):
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
     )
-    producers = [
-        name
-        for name, job in workflow["jobs"].items()
-        if job.get("if") != "github.event_name == 'pull_request'"
-        for step in job["steps"]
-        for _ in re.finditer(rf"(?m)^\s*{command}\s*$", step.get("run", ""))
-    ]
-    assert producers == ["candidate-source-gates"]
+    for pull_request, expected in (
+        (False, release_producers), (True, pull_request_producers),
+    ):
+        producers = [
+            name
+            for name, job in workflow["jobs"].items()
+            if (job.get("if") == "github.event_name == 'pull_request'") == pull_request
+            for step in job["steps"]
+            for _ in re.finditer(rf"(?m)^\s*{command}\s*$", step.get("run", ""))
+        ]
+        assert producers == expected
+
+
+def test_release_requires_local_qualification_before_native_preparation():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    preflight = jobs["release-preflight"]
+    assert preflight["if"] == "startsWith(github.ref, 'refs/tags/v')"
+    assert preflight["permissions"] == {"contents": "read"}
+    assert preflight.get("continue-on-error", False) is False
+    assert "${{ secrets." not in json.dumps(preflight)
+    checkout = next(
+        step for step in preflight["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"] == {
+        "ref": "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": False,
+    }
+    gate = next(
+        step for step in preflight["steps"]
+        if step.get("name") == "Verify release identity and local qualification"
+    )
+    assert gate["env"]["CHANNELWATCH_LOCAL_QUALIFICATION"] == (
+        "${{ vars.CHANNELWATCH_LOCAL_QUALIFICATION }}"
+    )
+    assert "if" not in gate
+    assert gate.get("continue-on-error", False) is False
+    for script in (
+        "verify-release-candidate.py", "verify-release-timing.py",
+        "verify-local-qualification.py",
+    ):
+        assert f"python3 scripts/release/{script}" in gate["run"]
+    assert "||" not in gate["run"]
+    retained = next(
+        step for step in preflight["steps"]
+        if step.get("name") == "Retain accepted local qualification"
+    )
+    assert "if" not in retained
+    assert retained["with"]["if-no-files-found"] == "error"
+    assert retained["with"]["name"] == "local-qualification-${{ github.sha }}"
+
+    def ancestors(name):
+        needs = jobs[name].get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        return set(needs).union(*(ancestors(parent) for parent in needs))
+
+    for name in (
+        "runtime-dependencies", "candidate-source-gates", "candidate-signing",
+        "runtime-capability", "legacy-app-upgrade", "candidate-qualification",
+        "signed-candidate", "native-image-qualification",
+        "build-update-bundle-and-release", "build-and-push", "publish-github-release",
+    ):
+        assert "release-preflight" in ancestors(name), name
 
 
 def test_release_source_result_is_required_before_candidate_promotion():
@@ -4200,6 +4256,7 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
 
     assert workflow["jobs"]
     protected_jobs = {
+        "release-preflight",
         "candidate-source-gates",
         "candidate-signing",
         "runtime-capability",
@@ -4770,6 +4827,21 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "--runtime-catalog" in live_job
 
 
+def test_v164_workflow_qualifies_the_immutable_v163_predecessor():
+    workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    capability = workflow.split("  runtime-capability:", 1)[1].split("\n  candidate-qualification:", 1)[0]
+    assert 'runtime-source-v1.6.3' in capability
+    for architecture, digest in {
+        "amd64": "b6f44cc9b1a3f8277382c9d18fae29b3dea401da3e5bc41ae448ff9b90fa7e6c",
+        "arm64": "8107bd8615c5ff72248adfe719049b5d8c65587e858dc89781038950bb3e2772",
+    }.items():
+        assert f"channelwatch-runtime-v1.6.3-{architecture}.zip" in capability
+        assert digest in capability
+        assert f'--receipt "1.6.3={architecture}=${{RUNNER_TEMP}}/runtime-capability/runtime-capability-{architecture}-1.6.3.json"' in workflow
+    assert "ced805957f5414f73678643c0458aae4f2c1a0c6ecaf2c6c52a7e1ef922f3454" in capability
+    assert "--source-version 1.6.3" in capability
+
+
 def test_trivy_root_entrypoint_exception_is_narrow_and_expires():
     ignore = yaml.safe_load((ROOT / ".trivyignore.yaml").read_text(encoding="utf-8"))
 
@@ -4862,6 +4934,272 @@ def test_release_candidate_requires_one_exact_subject_commit_and_lightweight_tag
                 "v0.9.17",
                 **{**defaults, **changes},
             )
+
+
+def _release_candidate_repository(tmp_path, mutation, *, files=None):
+    previous = "5318c64df0bf059a107c98ee127145b2b1007cb1"
+    base = "722b17271429b8e7f2fb130fe6a8e985c251111d"
+    repository = tmp_path / "release.git"
+    environment = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Release Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Release Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        "GIT_AUTHOR_DATE": "2026-10-28T00:00:00+00:00",
+        "GIT_COMMITTER_DATE": "2026-10-28T00:00:00+00:00",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    subprocess.run(
+        ["git", "clone", "--shared", "--bare", "--no-tags", str(ROOT), str(repository)],
+        check=True, capture_output=True, text=True, env=environment, timeout=30,
+    )
+    def git(*arguments, message=None):
+        return subprocess.run(
+            ["git", *arguments], cwd=repository, env=environment, input=message,
+            check=True, capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+    assert git("rev-list", "--parents", "-n", "1", base).split() == [base, previous]
+    tree = git("rev-parse", f"{base}^{{tree}}")
+    if files:
+        git("read-tree", tree)
+        for name, contents in files.items():
+            blob = git("hash-object", "-w", "--stdin", message=contents)
+            git("update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+        tree = git("write-tree")
+    tag = "v1.6.5" if mutation == "future" else "v1.6.4"
+    parent = base
+    if mutation == "wrong-parent":
+        parent = previous
+    elif mutation in {"unknown-ci", "extra-commit"}:
+        parent = git("commit-tree", tree, "-p", previous if mutation == "unknown-ci" else base,
+                     message="ci: another change\n")
+    parents = ["-p", parent]
+    if mutation == "merge":
+        side = git("commit-tree", tree, "-p", previous, message="side change\n")
+        parents.extend(["-p", side])
+    message = tag + ("\n\nextra body\n" if mutation == "body" else "\n")
+    candidate = git("commit-tree", tree, *parents, message=message)
+    git("update-ref", "refs/tags/v1.6.3", previous)
+    git("update-ref", f"refs/tags/{tag}", candidate)
+    git("update-ref", "refs/remotes/origin/main", base if mutation == "main" else candidate)
+    if mutation == "wrong-predecessor":
+        git("update-ref", "refs/tags/v1.6.3", "453deb679c6dfd67ff98437d3f96b76183cff3cb")
+    elif mutation == "previous-annotated":
+        git("tag", "-f", "-a", "v1.6.3", previous, "-m", "annotated predecessor")
+    elif mutation == "annotated":
+        git("tag", "-f", "-a", tag, candidate, "-m", tag)
+    elif mutation == "newer":
+        git("update-ref", "refs/tags/v1.6.5", candidate)
+    elif mutation == "base-parent":
+        git("replace", "--graft", base, "453deb679c6dfd67ff98437d3f96b76183cff3cb")
+    return repository, environment, git, tag, candidate, base
+
+
+@pytest.mark.parametrize("mutation", [
+    None, "wrong-predecessor", "previous-annotated", "wrong-parent", "unknown-ci",
+    "extra-commit", "merge", "base-parent", "future", "annotated", "newer",
+    "main", "event", "body",
+])
+def test_release_candidate_cli_bounds_the_approved_164_chain(tmp_path, mutation):
+    repository, environment, git, tag, candidate, base = _release_candidate_repository(
+        tmp_path, mutation,
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", str(ROOT / "scripts/release/verify-release-candidate.py"),
+         "--tag", tag, "--sha", base if mutation == "event" else candidate,
+         "--main-ref", "origin/main"],
+        cwd=repository, env=environment, capture_output=True, text=True, timeout=30,
+    )
+    if mutation is None:
+        assert git("rev-list", "--count", f"v1.6.3..{candidate}") == "2"
+        assert git("rev-list", "--count", f"{base}..{candidate}") == "1"
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1, result.stdout
+        expected = {
+            "newer": "newer release tag", "main": "is not current main",
+            "event": "does not identify tag", "body": "must be exactly",
+            "annotated": "must be lightweight", "future": "exactly one commit",
+        }.get(mutation, "approved")
+        assert expected in result.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None or shutil.which("jq") is None,
+    reason="The candidate identity workflow regression requires bash and jq.",
+)
+@pytest.mark.parametrize("mutation, error", [
+    (None, None),
+    ("ref", "workflow must be triggered by the exact"),
+    ("expected-tag", "workflow must be triggered by the exact"),
+    ("event", "workflow must run from the exact tagged release commit"),
+    ("sha", "Checked-out SHA does not match"),
+    ("config", "workflow must be triggered by the exact"),
+    ("main", "current main must identify the same commit"),
+    ("extra-commit", "exact approved"),
+    ("annotated", "must be a lightweight tag"),
+    ("newer", "newer release tag"),
+    ("body", "with an empty body"),
+])
+def test_candidate_identity_workflow_shell_checks_the_actual_release_chain(
+    tmp_path, mutation, error,
+):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        step for step in workflow["jobs"]["candidate-qualification"]["steps"]
+        if step.get("name") == "Verify exact candidate identity"
+    )
+    config = json.loads((ROOT / "scripts/release/release-config.json").read_text())
+    config["version"] = "1.6.3" if mutation == "config" else "1.6.4"
+    fixture_mutation = mutation if mutation in {
+        "main", "extra-commit", "annotated", "newer", "body",
+    } else None
+    repository, environment, git, tag, candidate, base = _release_candidate_repository(
+        tmp_path, fixture_mutation, files={
+            "scripts/release/release-config.json": json.dumps(config),
+            "scripts/release/verify-release-candidate.py": (
+                ROOT / "scripts/release/verify-release-candidate.py"
+            ).read_text(encoding="utf-8"),
+        },
+    )
+    git("update-ref", "refs/heads/main", base if mutation == "main" else candidate)
+    git("symbolic-ref", "HEAD", "refs/heads/main")
+    checkout = tmp_path / "checkout"
+    subprocess.run(
+        ["git", "clone", "--shared", "--no-tags", "--no-checkout",
+         str(repository), str(checkout)],
+        check=True, capture_output=True, text=True, env=environment, timeout=30,
+    )
+    subprocess.run(
+        ["git", "checkout", "--detach", candidate], cwd=checkout,
+        check=True, capture_output=True, text=True, env=environment, timeout=30,
+    )
+    result = subprocess.run(
+        ["bash", "-c", step["run"]], cwd=checkout, capture_output=True, text=True,
+        env={
+            **environment,
+            "PATH": f"{Path(sys.executable).parent}{os.pathsep}{environment.get('PATH', '')}",
+            "EXPECTED_TAG": "v1.6.5" if mutation == "expected-tag" else tag,
+            "EXPECTED_SHA": base if mutation == "sha" else candidate,
+            "GITHUB_REF": "refs/heads/main" if mutation == "ref" else f"refs/tags/{tag}",
+            "GITHUB_SHA": base if mutation == "event" else candidate,
+        },
+        timeout=30,
+    )
+    if error is None:
+        assert git("rev-list", "--count", f"v1.6.3..{candidate}") == "2"
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert error in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None or shutil.which("jq") is None,
+    reason="The release preflight workflow regression requires bash and jq.",
+)
+@pytest.mark.parametrize("mutation", [
+    None, "missing-record", "failed-check", "source-record", "actor",
+    "repository", "ref", "event", "main",
+])
+def test_release_preflight_workflow_shell_requires_real_local_qualification(
+    tmp_path, mutation,
+):
+    paths = (
+        ".github/workflows/docker-publish.yml",
+        "scripts/release/verify-release-candidate.py",
+        "scripts/release/verify-release-timing.py",
+        "scripts/release/verify-local-qualification.py",
+        "scripts/release/release-config.json",
+        "deploy/security/channelwatch-v1.6.4.openvex.json",
+        "docs/releases/CHANGELOG.md", "app/ui/package.json", "app/ui/pnpm-lock.yaml",
+    )
+    files = {name: (ROOT / name).read_text(encoding="utf-8") for name in paths}
+    workflow = yaml.safe_load(files[".github/workflows/docker-publish.yml"])
+    step = next(
+        step for step in workflow["jobs"]["release-preflight"]["steps"]
+        if step.get("name") == "Verify release identity and local qualification"
+    )
+    repository, environment, git, tag, candidate, base = _release_candidate_repository(
+        tmp_path, "main" if mutation == "main" else None, files=files,
+    )
+    git("update-ref", "refs/heads/main", base if mutation == "main" else candidate)
+    git("symbolic-ref", "HEAD", "refs/heads/main")
+    checkout = tmp_path / "checkout"
+    subprocess.run(
+        ["git", "clone", "--shared", "--no-checkout",
+         str(repository), str(checkout)],
+        check=True, capture_output=True, text=True, env=environment, timeout=30,
+    )
+    subprocess.run(
+        ["git", "checkout", "--detach", candidate], cwd=checkout,
+        check=True, capture_output=True, text=True, env=environment, timeout=30,
+    )
+    lock = yaml.safe_load(files["app/ui/pnpm-lock.yaml"])
+    playwright = lock["importers"]["."]["devDependencies"]["@playwright/test"]["version"]
+    package_manager = json.loads(files["app/ui/package.json"])["packageManager"]
+    commands = {
+        "backend": "linux-backend-full", "frontend": "frontend-typecheck-lint-unit-build",
+        "browser": "linux-headless-browser-full", "workflow": "release-workflow-contracts",
+        "docs": "docs-compose-helm", "security": "source-and-image-security",
+        "image": "canonical-amd64-image-smoke",
+    }
+    record = {
+        "schema": 1, "type": "maintainer_local", "repository": "CoderLuii/ChannelWatch",
+        "actor": "CoderLuii", "tag": tag, "version": "1.6.4",
+        "source_commit": candidate, "source_tree": git("rev-parse", f"{candidate}^{{tree}}"),
+        "workflow_sha256": hashlib.sha256(files[paths[0]].encode()).hexdigest(),
+        "release_config_sha256": hashlib.sha256(
+            files["scripts/release/release-config.json"].encode()
+        ).hexdigest(),
+        "qualified_at": datetime.now(timezone.utc).isoformat(),
+        "tools": {
+            "python": "3.14.8", "node": "24.22.1",
+            "pnpm": package_manager.removeprefix("pnpm@").split("+", 1)[0],
+            "playwright": playwright, "git": "2.52.0", "docker": "29.9.2",
+            "trivy": "0.76.1", "helm": "4.3.1", "actionlint": "1.7.12",
+        },
+        "checks": {
+            name: {"command_id": command, "exit_code": 0, "count": 1,
+                   "report_sha256": hashlib.sha256(f"fixture-{name}".encode()).hexdigest()}
+            for name, command in commands.items()
+        },
+    }
+    if mutation == "failed-check":
+        record["checks"]["browser"]["exit_code"] = 1
+    elif mutation == "source-record":
+        record["source_commit"] = base
+    output = tmp_path / "runner-temp"
+    output.mkdir()
+    environment.update({
+        "PATH": f"{Path(sys.executable).parent}{os.pathsep}{environment.get('PATH', '')}",
+        "RELEASE_TAG": tag, "RELEASE_SHA": candidate,
+        "GITHUB_EVENT_NAME": "push",
+        "GITHUB_ACTOR": "Other" if mutation == "actor" else "CoderLuii",
+        "GITHUB_REPOSITORY": "Other/ChannelWatch" if mutation == "repository" else "CoderLuii/ChannelWatch",
+        "GITHUB_REF": "refs/heads/main" if mutation == "ref" else f"refs/tags/{tag}",
+        "GITHUB_SHA": base if mutation == "event" else candidate,
+        "RUNNER_TEMP": str(output), "CHANNELWATCH_LOCAL_QUALIFICATION": json.dumps(record),
+    })
+    if Path("/usr/bin/python3").is_file():
+        environment["PATH"] = f"/usr/bin:/bin:{environment['PATH']}"
+    if mutation == "missing-record":
+        environment.pop("CHANNELWATCH_LOCAL_QUALIFICATION")
+    result = subprocess.run(
+        ["bash", "-c", step["run"]], cwd=checkout, env=environment,
+        capture_output=True, text=True, timeout=30,
+    )
+    accepted_path = output / "local-qualification.json"
+    if mutation is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        accepted = json.loads(accepted_path.read_text(encoding="utf-8"))
+        assert accepted["record"] == record
+        assert accepted["operator_attestation"] is True
+        assert accepted["independently_executed"] is False
+    else:
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert not accepted_path.exists()
 
 
 def _signed_update_assets(

@@ -28,8 +28,17 @@ TARGET_SOURCES = {
     "1.6.1": ("1.6.0",),
     "1.6.2": ("1.6.0", "1.6.1"),
     "1.6.3": ("1.6.0", "1.6.1", "1.6.2"),
+    "1.6.4": ("1.6.0", "1.6.1", "1.6.2", "1.6.3"),
 }
 SOURCE_RELEASES = {
+    "1.6.3": {
+        "source_commit": "5318c64df0bf059a107c98ee127145b2b1007cb1",
+        "catalog_sha256": "ced805957f5414f73678643c0458aae4f2c1a0c6ecaf2c6c52a7e1ef922f3454",
+        "bundles": {
+            "amd64": "b6f44cc9b1a3f8277382c9d18fae29b3dea401da3e5bc41ae448ff9b90fa7e6c",
+            "arm64": "8107bd8615c5ff72248adfe719049b5d8c65587e858dc89781038950bb3e2772",
+        },
+    },
     "1.6.2": {
         "source_commit": "453deb679c6dfd67ff98437d3f96b76183cff3cb",
         "catalog_sha256": "37e91da9638adea1b9a758642c1f97e83888c4da64b1877cbc7dbd494376c4c9",
@@ -405,7 +414,7 @@ def main() -> int:
     args = parser.parse_args()
     args.target_version = args.target_version.strip().lstrip("v")
     if args.target_version not in TARGET_SOURCES or SHA40.fullmatch(args.target_commit) is None:
-        raise SystemExit("This verifier is bounded to exact v1.6.1, v1.6.2 and v1.6.3 candidates.")
+        raise SystemExit("This verifier is bounded to exact v1.6.1, v1.6.2, v1.6.3 and v1.6.4 candidates.")
     if args.source_version not in TARGET_SOURCES[args.target_version]:
         raise SystemExit("This candidate requires an exact immutable predecessor source.")
     args.evidence_json.parent.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-28
+
+### Fixed
+
+- Keep Watch History focused on playback and recording activity. DVR health and disk events remain in Recent Activity, while search, pagination, client filters and CSV exports use the same history scope. Existing activity is preserved, and no new setting is required ([#30](https://github.com/CoderLuii/ChannelWatch/issues/30)).
+
 ## [1.6.3] - 2026-10-27
 
 ### Fixed
@@ -1037,7 +1043,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.3...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.4...HEAD
+[1.6.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.0...v1.6.1

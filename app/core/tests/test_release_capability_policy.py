@@ -806,9 +806,9 @@ def test_current_release_config_retains_the_published_dependency_image_floor():
 
     policy = module.validate_release_config(config)
 
-    assert config["version"] == "1.6.3"
+    assert config["version"] == "1.6.4"
     assert config["minimum_image_version"] == "1.5.3"
-    assert config["recommended_image_version"] == "1.6.3"
+    assert config["recommended_image_version"] == "1.6.4"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     publication_time = datetime_module.datetime.fromisoformat(
@@ -823,7 +823,7 @@ def test_current_release_config_retains_the_published_dependency_image_floor():
         days=7
     )
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3"]
     assert config["runtime_generation_required"] is True
     assert config["runtime_compatibility_evidence"] == {}
     assert "recovers_unpublished_image_milestone" not in config

@@ -67,6 +67,8 @@ The current implementation does not instantiate `prometheus_client.Counter`, `Ga
 
 Activity history is the user visible timeline used by Recent Activity and Watch History.
 
+Watch History shows retained live TV, VOD and recording events. Recent Activity also includes operational events such as DVR connection changes and disk alerts. These events remain stored; excluding them from Watch History does not delete them or change notifications. Watch History's filters, totals and CSV export use the same playback and recording scope.
+
 | Storage | Path | Used when | Retention |
 | --- | --- | --- | --- |
 | SQLite database | `/config/channelwatch.db`, table `activity_event` | Preferred read path when the database exists and storage modules import successfully. | `history_retention_days` from settings, default `90`, enforced by the nightly storage maintenance thread. |

@@ -216,11 +216,11 @@ The Helm chart is single-replica by design because ChannelWatch uses writable ap
 
 ## Updating ChannelWatch
 
-Use `coderluii/channelwatch:1.6.3` for a new installation, or `latest` for the newest stable image. Existing v1.5.3, v1.6.0, v1.6.1 and v1.6.2 containers can install v1.6.3 from **Settings > Updates** without recreation. Preserve `/config` and any external storage key configuration whenever you update an image.
+Use `coderluii/channelwatch:1.6.4` for a new installation, or `latest` for the newest stable image. Existing v1.5.3, v1.6.0, v1.6.1, v1.6.2 and v1.6.3 containers can install v1.6.4 from **Settings > Updates** without recreation. Preserve `/config` and any external storage key configuration whenever you update an image.
 
-On v1.4.0, v1.4.1 or v1.4.5, install v1.6.3 directly from **Settings > Updates**. This signed app-only update retains your container's existing Python packages. No intermediate release or container recreation is needed.
+On v1.4.0, v1.4.1 or v1.4.5, install v1.6.4 directly from **Settings > Updates**. This signed app-only update retains your container's existing Python packages. No intermediate release or container recreation is needed.
 
-After v1.5.3 is running, **Settings > Updates** can install v1.6.3 and its official Python packages as one complete signed runtime generation in the same container. v1.6.0, v1.6.1 and v1.6.2 can update directly to v1.6.3 through the same route. Install this release manually; automatic installation is disabled. ChannelWatch prepares the generation away from the active runtime, restarts, verifies the matching core and UI, and rolls the application and packages back together if initial activation fails. v1.5.3 remains the minimum image foundation. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
+After v1.5.3 is running, **Settings > Updates** can install v1.6.4 and its official Python packages as one complete signed runtime generation in the same container. v1.6.0, v1.6.1, v1.6.2 and v1.6.3 can update directly to v1.6.4 through the same route. Install this release manually; automatic installation is disabled. ChannelWatch prepares the generation away from the active runtime, restarts, verifies the matching core and UI, and rolls the application and packages back together if initial activation fails. v1.5.3 remains the minimum image foundation. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
 
 Open **Settings > Updates** to review the automatic update policy, check the official signed stable channel, apply an update immediately, postpone it, retry a failed attempt, or roll back a compatible app bundle. Automatic compatible updates default to the local 03:00–05:00 maintenance window; notify-only mode is available.
 

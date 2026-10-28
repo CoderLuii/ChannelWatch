@@ -945,6 +945,7 @@ export interface FetchActivityHistoryOptions {
   dvr_id?: string
   client?: string
   hours?: number
+  scope?: "watch"
   signal?: AbortSignal
 }
 
@@ -959,6 +960,7 @@ export async function fetchActivityHistory(options: FetchActivityHistoryOptions 
   if (options.dvr_id) params.set("dvr_id", options.dvr_id)
   if (options.client) params.set("client", options.client)
   if (options.hours != null) params.set("hours", String(options.hours))
+  if (options.scope) params.set("scope", options.scope)
 
   const queryString = params.toString()
   const response = await fetch(`${API_BASE}/activity-history${queryString ? `?${queryString}` : ""}`, {
@@ -1009,6 +1011,7 @@ export async function downloadActivityHistoryCsv(
   if (options.dvr_id) params.set("dvr_id", options.dvr_id)
   if (options.client) params.set("client", options.client)
   if (options.hours != null) params.set("hours", String(options.hours))
+  if (options.scope) params.set("scope", options.scope)
 
   const response = await fetch(`${API_BASE}/v1/history/export?${params.toString()}`, {
     headers: authHeaders(),
@@ -1030,11 +1033,13 @@ export async function fetchActivityClientFilters(options: {
   dvr_id?: string
   hours?: number
   event_type?: string
+  scope?: "watch"
 } = {}, signal?: AbortSignal): Promise<{ clients: ActivityClientFacet[] }> {
   const params = new URLSearchParams()
   if (options.dvr_id && options.dvr_id !== "all") params.set("dvr_id", options.dvr_id)
   if (options.hours != null) params.set("hours", String(options.hours))
   if (options.event_type && options.event_type !== "all") params.set("event_type", options.event_type)
+  if (options.scope) params.set("scope", options.scope)
   const query = params.toString()
   const response = await fetch(`${API_BASE}/v1/activity-history/filters${query ? `?${query}` : ""}`, {
     headers: authHeaders(),
@@ -1181,6 +1186,7 @@ export async function fetchDvrActivityHistory(
   if (options.sort) params.set("sort", options.sort)
   if (options.client) params.set("client", options.client)
   if (options.hours != null) params.set("hours", String(options.hours))
+  if (options.scope) params.set("scope", options.scope)
 
   const queryString = params.toString()
   const response = await fetch(

@@ -14,7 +14,7 @@ The Dashboard also suggests maintenance windows from known recording jobs, with 
 Recommended tags:
 
 - `latest` for the newest stable image
-- `1.6.3` for the current release
+- `1.6.4` for the current release
 
 ## Quick Start
 
@@ -38,11 +38,11 @@ Open `http://localhost:8501` after the container starts.
 
 ## Updating
 
-Use v1.6.3 for a new installation, or `latest` for the newest stable image. Existing v1.5.3, v1.6.0, v1.6.1 and v1.6.2 containers can install v1.6.3 from **Settings > Updates** without recreation. Preserve `/config` and any external storage key configuration whenever you update an image.
+Use v1.6.4 for a new installation, or `latest` for the newest stable image. Existing v1.5.3, v1.6.0, v1.6.1, v1.6.2 and v1.6.3 containers can install v1.6.4 from **Settings > Updates** without recreation. Preserve `/config` and any external storage key configuration whenever you update an image.
 
-On v1.4.0, v1.4.1 or v1.4.5, install v1.6.3 directly from **Settings > Updates**. This signed app-only update retains your container's existing Python packages. No intermediate release or container recreation is needed.
+On v1.4.0, v1.4.1 or v1.4.5, install v1.6.4 directly from **Settings > Updates**. This signed app-only update retains your container's existing Python packages. No intermediate release or container recreation is needed.
 
-After v1.5.3 is running, **Settings > Updates** can install v1.6.3 and its official Python packages as one complete signed runtime generation in the same container. Install this release manually; automatic installation remains disabled. The application and packages roll back together if initial activation fails. v1.5.3 supplies the minimum image foundation; it does not publish a runtime-generation payload. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
+After v1.5.3 is running, **Settings > Updates** can install v1.6.4 and its official Python packages as one complete signed runtime generation in the same container. Install this release manually; automatic installation remains disabled. The application and packages roll back together if initial activation fails. v1.5.3 supplies the minimum image foundation; it does not publish a runtime-generation payload. Python interpreter, OS, glibc, Supervisor, and image-owned verifier updates still require a new container image.
 
 Published v1.0.0 through v1.4.x use `X.Y.0` as a container-image milestone. v1.5.0 failed in source testing, v1.5.1 failed during candidate signing because its publication time preceded the candidate commit, and v1.5.2 failed during native migration qualification because the release verifier environment lacked `httpx`. None produced a GitHub release, release assets, or container image; all three original tags remain unchanged. v1.5.3 delivers that image foundation instead. A future `.0` release can keep the proven v1.5.3 image floor only after its complete signed runtime generation passes compatibility, restart, and rollback checks on both native AMD64 and native ARM64. Compatible releases install through **Settings > Updates**, and the next release after `X.Y.9` is `X.(Y+1).0`.
 

@@ -1,7 +1,9 @@
-// Error catalog — TypeScript mirror of app/ui/backend/error_catalog.py
+// Error catalog: TypeScript mirror of app/ui/backend/error_catalog.py
 // Payload shape returned by migrated endpoints:
 //   { code, message, remediation?, docs_url? }
 // Unmigrated endpoints return plain string detail; parseApiError handles both.
+
+import { noteRateLimited } from "@/lib/rate-limit";
 
 export const ErrorCode = {
   AUTH_INVALID_KEY: "ERR_AUTH_INVALID_KEY",
@@ -86,13 +88,13 @@ const CATALOG: Record<string, CatalogEntry> = {
     code: ErrorCode.AUTH_INVALID_KEY,
     message: "Invalid or missing API key.",
     remediation:
-      "Log in normally if this install uses secure auth. If this is an older install still using the legacy shared API key, verify that key in Settings \u2192 Security.",
+      "Sign in, or on an older install check the shared API key in Settings > Security.",
   },
   [ErrorCode.AUTH_RBAC_NOT_ENABLED]: {
     code: ErrorCode.AUTH_RBAC_NOT_ENABLED,
-    message: "Role-based access control (RBAC) is not enabled.",
+    message: "Sign-in is turned off.",
     remediation:
-      "Enable RBAC in Settings \u2192 Security, then restart the container.",
+      "Choose password sign-in in Settings, Security.",
   },
   [ErrorCode.AUTH_DB_UNAVAILABLE]: {
     code: ErrorCode.AUTH_DB_UNAVAILABLE,
@@ -104,7 +106,7 @@ const CATALOG: Record<string, CatalogEntry> = {
     code: ErrorCode.AUTH_UNAUTHENTICATED,
     message: "Not authenticated.",
     remediation:
-      "Log in with your ChannelWatch account. Older installs may still allow legacy API-key access until they are migrated.",
+      "Sign in with your ChannelWatch account.",
   },
   [ErrorCode.AUTH_CREDENTIALS_INVALID]: {
     code: ErrorCode.AUTH_CREDENTIALS_INVALID,
@@ -114,12 +116,11 @@ const CATALOG: Record<string, CatalogEntry> = {
   [ErrorCode.AUTH_ADMIN_EXISTS]: {
     code: ErrorCode.AUTH_ADMIN_EXISTS,
     message: "An admin user already exists.",
-    remediation: "Manage existing users instead of creating a new admin.",
+    remediation: "Sign in with the existing admin account.",
   },
   [ErrorCode.AUTH_CREDENTIALS_REQUIRED]: {
     code: ErrorCode.AUTH_CREDENTIALS_REQUIRED,
     message: "Username and password are required.",
-    remediation: "Provide both a username and a password.",
   },
   [ErrorCode.AUTH_CSRF_INVALID]: {
     code: ErrorCode.AUTH_CSRF_INVALID,
@@ -129,7 +130,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   [ErrorCode.AUTH_FORBIDDEN]: {
     code: ErrorCode.AUTH_FORBIDDEN,
     message: "Insufficient permissions.",
-    remediation: "Log in with an account that has sufficient permissions.",
+    remediation: "Sign in with an account that has access.",
   },
   [ErrorCode.AUTH_CROSS_SITE_REJECTED]: {
     code: ErrorCode.AUTH_CROSS_SITE_REJECTED,
@@ -204,7 +205,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   [ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION]: {
     code: ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION,
     message: "Protected-credential reset confirmation did not match.",
-    remediation: "Type the exact confirmation shown in the recovery screen before resetting credentials.",
+    remediation: "Type the exact confirmation shown on screen.",
   },
   [ErrorCode.BACKUP_CREATE_FAILED]: {
     code: ErrorCode.BACKUP_CREATE_FAILED,
@@ -222,7 +223,7 @@ const CATALOG: Record<string, CatalogEntry> = {
     code: ErrorCode.RESTORE_SCHEMA_AHEAD,
     message: "Backup was created by a newer version of ChannelWatch.",
     remediation:
-      "Upgrade ChannelWatch to the version that created this backup before restoring.",
+      "Update ChannelWatch, then restore.",
   },
   [ErrorCode.RESTORE_FAILED]: {
     code: ErrorCode.RESTORE_FAILED,
@@ -245,13 +246,13 @@ const CATALOG: Record<string, CatalogEntry> = {
     code: ErrorCode.UPDATE_APPLY_FAILED,
     message: "Failed to apply the update.",
     remediation:
-      "Use Settings -> Updates to review the failure, then retry or roll back if available.",
+      "Check Settings > Updates, then retry or roll back if available.",
   },
   [ErrorCode.UPDATE_LOCKED]: {
     code: ErrorCode.UPDATE_LOCKED,
     message: "Another update operation is already running.",
     remediation:
-      "Wait for the current update operation to finish, then refresh the Update Center.",
+      "Wait for it to finish, then refresh Update Center.",
   },
   [ErrorCode.UPDATE_IMAGE_REQUIRED]: {
     code: ErrorCode.UPDATE_IMAGE_REQUIRED,
@@ -267,7 +268,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   [ErrorCode.UPDATE_JOB_NOT_FOUND]: {
     code: ErrorCode.UPDATE_JOB_NOT_FOUND,
     message: "Update job not found.",
-    remediation: "Run the update operation again to create a new job.",
+    remediation: "Try again.",
   },
   [ErrorCode.UPDATE_RECOVERY_INACTIVE]: {
     code: ErrorCode.UPDATE_RECOVERY_INACTIVE,
@@ -293,7 +294,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   [ErrorCode.SUPPORT_REPORT_FORM_INVALID]: {
     code: ErrorCode.SUPPORT_REPORT_FORM_INVALID,
     message: "Support report upload form is invalid.",
-    remediation: "Reload ChannelWatch and try submitting the report again.",
+    remediation: "Reload ChannelWatch and try again.",
   },
   [ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE]: {
     code: ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE,
@@ -350,8 +351,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   },
   [ErrorCode.RATE_LIMIT_EXCEEDED]: {
     code: ErrorCode.RATE_LIMIT_EXCEEDED,
-    message: "Rate limit exceeded. Please slow down.",
-    remediation: "Wait a moment and retry the request.",
+    message: "ChannelWatch is busy. Wait a moment, then try again.",
   },
   [ErrorCode.RESTART_FAILED]: {
     code: ErrorCode.RESTART_FAILED,
@@ -401,7 +401,7 @@ const CATALOG: Record<string, CatalogEntry> = {
   },
   [ErrorCode.NETWORK]: {
     code: ErrorCode.NETWORK,
-    message: "Network error \u2014 the server could not be reached.",
+    message: "Can't reach the server.",
     remediation: "Check your network connection and try again.",
   },
 };
@@ -422,16 +422,12 @@ export function isErrorPayload(value: unknown): value is ErrorPayload {
 }
 
 export async function parseApiError(response: Response): Promise<ErrorPayload> {
+  noteRateLimited(response);
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    const text = await response.text().catch(() => "");
-    return {
-      code: ErrorCode.UNKNOWN,
-      message: text || `HTTP ${response.status}`,
-      remediation: null,
-    };
+    return statusFallback(response.status);
   }
 
   if (body !== null && typeof body === "object") {
@@ -439,7 +435,7 @@ export async function parseApiError(response: Response): Promise<ErrorPayload> {
     const detail = b["detail"];
 
     if (isErrorPayload(detail)) {
-      return detail;
+      return detail.code === ErrorCode.RATE_LIMIT_EXCEEDED ? statusFallback(429) : detail;
     }
 
     if (Array.isArray(detail)) {
@@ -459,22 +455,88 @@ export async function parseApiError(response: Response): Promise<ErrorPayload> {
       return { code: ErrorCode.UNKNOWN, message: parts, remediation: null };
     }
 
-    if (typeof detail === "string") {
+    if (typeof detail === "string" && !/^internal server error$/i.test(detail.trim())) {
       return { code: ErrorCode.UNKNOWN, message: detail, remediation: null };
     }
   }
 
-  return {
-    code: ErrorCode.UNKNOWN,
-    message: `HTTP ${response.status}`,
-    remediation: null,
-  };
+  return statusFallback(response.status);
+}
+
+/** What to say when the response carries nothing usable. Never a bare status code. */
+function statusFallback(status: number): ErrorPayload {
+  if (status === 429) {
+    const { code, message, remediation } = catalogEntry(ErrorCode.RATE_LIMIT_EXCEEDED);
+    return { code, message, remediation };
+  }
+  const message = status >= 502 && status <= 504
+    ? "ChannelWatch is not responding. It may be restarting. Try again in a moment."
+    : status >= 500
+      ? "ChannelWatch ran into a problem. Try again in a moment."
+      : "ChannelWatch could not complete that request.";
+  return { code: ErrorCode.UNKNOWN, message, remediation: null };
+}
+
+export type FailureKind = "rate_limited" | "server_error" | "unreachable";
+
+/** fetch() rejects with these when the request never got an answer. Safari and Firefox word it differently. */
+export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return /failed to fetch|networkerror|load failed|network request failed/i.test(error.message);
+  return error instanceof Error && error.name === "TimeoutError";
 }
 
 export function networkError(message?: string): ErrorPayload {
   return {
     code: ErrorCode.NETWORK,
-    message: message ?? "Network error \u2014 the server could not be reached.",
+    message: message ?? "Can't reach the server.",
     remediation: "Check your network connection and try again.",
   };
+}
+
+export interface DescribedError {
+  code: string;
+  message: string;
+  remediation: string | null;
+}
+
+/**
+ * Turn any thrown value into the message and next step the UI should show.
+ * Structured API errors keep their own remediation; when the server sent a
+ * known code without one, the catalog supplies it.
+ */
+export function describeError(error: unknown, fallbackMessage: string): DescribedError {
+  const payload =
+    typeof error === "object" && error !== null && "payload" in error && isErrorPayload((error as { payload: unknown }).payload)
+      ? (error as { payload: ErrorPayload }).payload
+      : null;
+  if (payload) {
+    const known = payload.code in CATALOG && payload.code !== ErrorCode.UNKNOWN;
+    const remediation = payload.remediation || (known ? catalogEntry(payload.code).remediation ?? null : null);
+    return { code: payload.code, message: payload.message || fallbackMessage, remediation: remediation || null };
+  }
+  if (isNetworkFailure(error)) {
+    const { code, message, remediation } = networkError();
+    return { code, message, remediation: remediation ?? null };
+  }
+  const message = error instanceof Error && error.message ? error.message : fallbackMessage;
+  return { code: ErrorCode.UNKNOWN, message, remediation: null };
+}
+
+/** One line for toasts and inline alerts: the message, then the fix. */
+export function formatErrorWithRemediation(error: unknown, fallbackMessage: string): string {
+  const { message, remediation } = describeError(error, fallbackMessage);
+  return remediation && remediation !== message ? `${message} ${remediation}` : message;
+}
+
+/** Notification services fail in a handful of ways. Say which, and keep the raw text one tap away. */
+export function describeDeliveryError(raw: string): string {
+  const text = raw.toLowerCase()
+  if (/circuit open/.test(text)) return "ChannelWatch paused this service for 5 minutes after repeated failures."
+  if (/timed? ?out|timeout/.test(text)) return "The notification service did not answer in time."
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid token|bad credentials/.test(text)) return "The notification service rejected the credentials. Check the token in Settings, Notifications."
+  if (/\b404\b|not found/.test(text)) return "The notification service could not find that address. Check the URL in Settings, Notifications."
+  if (/\b429\b|rate limit|too many/.test(text)) return "The notification service is limiting requests. It should clear on its own."
+  if (/refused|unreachable|name resolution|getaddrinfo|dns|no route|connection/.test(text)) return "ChannelWatch could not reach the notification service. Check its address and your network."
+  if (/\b5\d\d\b/.test(text)) return "The notification service had a problem on its side."
+  return "The notification service reported a problem."
 }

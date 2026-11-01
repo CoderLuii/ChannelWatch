@@ -42,7 +42,7 @@ test("live auth bootstrap covers fresh secure setup", async ({ page, baseURL }) 
   await page.getByLabel("Admin password").fill(secureSetupPassword)
   await page.getByRole("button", { name: "Finish setup" }).click()
 
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   await openSecuritySettings(page, secureBaseURL)
   await expect(page.getByTestId("security-auth-mode-select")).toBeVisible()
   await expect(page.getByTestId("security-runtime-override-banner")).toHaveCount(0)
@@ -63,11 +63,11 @@ test("live auth bootstrap covers setup, no-auth reversal, logout, and login", as
   await page.goto("/#overview")
 
   await expect(page.getByTestId("auth-bootstrap-shell")).toBeVisible()
-  await page.getByTestId("auth-bootstrap-shell").getByRole("button", { name: "No authentication" }).click()
+  await page.getByTestId("auth-bootstrap-shell").getByRole("button", { name: "No sign-in" }).click()
   await page.getByRole("button", { name: "Finish setup" }).click()
 
   await expect(page.getByTestId("auth-noauth-shell")).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
 
   await openSecuritySettings(page)
   await expect(page.getByTestId("security-auth-mode-select")).toBeVisible()
@@ -83,7 +83,7 @@ test("live auth bootstrap covers setup, no-auth reversal, logout, and login", as
 
   await page.getByTestId("security-bootstrap-username").fill(bootstrapUsername)
   await page.getByTestId("security-bootstrap-password").fill(bootstrapPassword)
-  await page.getByRole("button", { name: "Create admin and enable secure login" }).click()
+  await page.getByRole("button", { name: "Create admin and turn on sign-in" }).click()
 
   await expect(page.getByText("Admin user created")).toBeVisible()
   await expect(page.getByTestId("security-noauth-warning")).toHaveCount(0)

@@ -9,9 +9,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/base/card";
-import { Badge } from "@/components/base/badge";
+import { StatusText } from "@/components/base/badge";
+import { StatusBadge } from "@/components/base/status-badge";
+import { diskSeverityColors, resolveDiskSeverity } from "@/components/dashboard/disk-space-card";
 import { Progress } from "@/components/base/progress";
 import { Input } from "@/components/base/input";
+import { pageTitleClassName } from "@/components/base/page-header"
 import {
   Select,
   SelectContent,
@@ -35,6 +38,7 @@ import {
   Search,
   RefreshCw,
   Bug,
+  FileArchive,
 } from "lucide-react";
 import {
   authHeaders,
@@ -44,18 +48,20 @@ import {
   downloadDebugBundle,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { formatDiskSizeFromGB } from "@/lib/utils";
+import { coreStatusLabel } from "@/lib/health-verdict";
+import { downloadBlob, formatDiskSizeFromGB, formatUptimeTile } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import type { SystemInfo, AppSettings, DVRStatusInfo } from "@/lib/types";
 import { ReportProblemDialog } from "@/components/report-problem-dialog";
+import { isRateLimited, noteRateLimited } from "@/lib/rate-limit";
 
 function getDvrDotClass(dvr: DVRStatusInfo): string {
-  if (!dvr.connected) return "bg-red-500";
+  if (!dvr.connected) return "bg-danger";
   if (dvr.monitoring_ready === false) {
-    return dvr.monitoring_status === "dead" ? "bg-red-500" : "bg-amber-500";
+    return dvr.monitoring_status === "dead" ? "bg-danger" : "bg-warning";
   }
-  return "bg-green-500";
+  return "bg-success";
 }
 
 function formatDvrVersion(version: string | null): string | null {
@@ -82,6 +88,7 @@ export function DiagnosticsPanel() {
 
   const isMultiDvr = dvrSections.length > 1;
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [logsFailed, setLogsFailed] = useState(false);
   const [logLineCount, setLogLineCount] = useState(100);
   const [logPaused, setLogPaused] = useState(false);
   const [logFilter, setLogFilter] = useState("");
@@ -98,14 +105,7 @@ export function DiagnosticsPanel() {
     try {
       const blob = await downloadDebugBundle();
       const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `channelwatch_debug_${ts}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `channelwatch_debug_${ts}.zip`);
       setDebugBundleState("done");
       setTimeout(() => setDebugBundleState("idle"), 3000);
     } catch {
@@ -114,13 +114,16 @@ export function DiagnosticsPanel() {
     }
   };
 
-  // Poll logs every 2 seconds (unless paused)
+  // Poll logs every 5 seconds (unless paused). Skip ticks while the tab is
+  // hidden or the API has asked the client to back off with a 429.
   useEffect(() => {
     if (logPaused) return;
     let cancelled = false;
     const controller = new AbortController();
     const fetchLogs = async () => {
       if (logFetchInFlightRef.current) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (isRateLimited()) return;
       const requestId = logFetchOwnerRef.current + 1;
       logFetchOwnerRef.current = requestId;
       logFetchInFlightRef.current = true;
@@ -130,11 +133,17 @@ export function DiagnosticsPanel() {
           credentials: "same-origin",
           signal: controller.signal,
         });
+        if (noteRateLimited(resp)) {
+          if (!cancelled) setLogsFailed(true);
+          return;
+        }
+        if (!cancelled) setLogsFailed(!resp.ok);
         if (resp.ok && !cancelled) {
           const data = await resp.json();
           if (!cancelled) setLogLines(data.lines || []);
         }
       } catch {
+        if (!cancelled && !controller.signal.aborted) setLogsFailed(true);
       } finally {
         if (logFetchOwnerRef.current === requestId) {
           logFetchInFlightRef.current = false;
@@ -142,7 +151,7 @@ export function DiagnosticsPanel() {
       }
     };
     if (!logPaused) fetchLogs();
-    const interval = setInterval(fetchLogs, 2000);
+    const interval = setInterval(fetchLogs, 5000);
     return () => {
       cancelled = true;
       controller.abort();
@@ -198,12 +207,7 @@ export function DiagnosticsPanel() {
         return;
       }
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "channelwatch.log";
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, "channelwatch.log");
     } catch {
       toast({
         variant: "destructive",
@@ -326,70 +330,60 @@ export function DiagnosticsPanel() {
     {
       id: "Test Connectivity",
       name: t("diagnostics.test.connectivity.name"),
-      description: t("diagnostics.test.connectivity.desc"),
       icon: Wifi,
       category: "connectivity",
     },
     {
       id: "Test API Endpoints",
       name: t("diagnostics.test.apiEndpoints.name"),
-      description: t("diagnostics.test.apiEndpoints.desc"),
       icon: Server,
       category: "connectivity",
     },
     {
       id: "Test Channel Watching Alert",
       name: t("diagnostics.test.cwAlert.name"),
-      description: t("diagnostics.test.cwAlert.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
       id: "Test VOD Watching Alert",
       name: t("diagnostics.test.vodAlert.name"),
-      description: t("diagnostics.test.vodAlert.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
       id: "Test Disk Space Alert",
       name: t("diagnostics.test.diskAlert.name"),
-      description: t("diagnostics.test.diskAlert.desc"),
       icon: Gauge,
       category: "notifications",
     },
     {
       id: "Test Recording Scheduled Alert",
       name: t("diagnostics.test.recScheduled.name"),
-      description: t("diagnostics.test.recScheduled.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
       id: "Test Recording Started Alert",
       name: t("diagnostics.test.recStarted.name"),
-      description: t("diagnostics.test.recStarted.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
       id: "Test Recording Completed Alert",
       name: t("diagnostics.test.recCompleted.name"),
-      description: t("diagnostics.test.recCompleted.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
       id: "Test Recording Stopped Alert",
       name: t("diagnostics.test.recStopped.name"),
-      description: t("diagnostics.test.recStopped.desc"),
       icon: Activity,
       category: "notifications",
     },
     {
       id: "Test Recording Cancelled Alert",
       name: t("diagnostics.test.recCancelled.name"),
-      description: t("diagnostics.test.recCancelled.desc"),
       icon: Activity,
       category: "notifications",
     },
@@ -464,7 +458,7 @@ export function DiagnosticsPanel() {
       return t("diagnostics.system.na");
     }
 
-    return formatDiskSizeFromGB(sizeInGB, { gbDecimals: 0 });
+    return formatDiskSizeFromGB(sizeInGB);
   };
 
   const calculateDiskUsage = () => {
@@ -496,11 +490,15 @@ export function DiagnosticsPanel() {
     };
   };
 
-  const getDiskStatusColor = (usedPercent: number): string => {
-    if (usedPercent > 90) return "bg-red-500";
-    if (usedPercent > 75) return "bg-amber-500";
-    return "bg-green-500";
-  };
+  const diskBarColor = (usedPercent: number): string =>
+    diskSeverityColors[
+      resolveDiskSeverity({
+        usedPercent,
+        serverSeverity: systemInfo?.disk_severity,
+        warningThresholdPercent: appSettings?.ds_warning_threshold_percent,
+        criticalThresholdPercent: appSettings?.ds_critical_threshold_percent,
+      })
+    ].bar;
 
   const diskInfo = calculateDiskUsage();
   const debugBundleButtonLabel =
@@ -514,14 +512,11 @@ export function DiagnosticsPanel() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
         <div className="min-w-0 flex flex-col gap-2">
-          <h1 className="text-[28px] font-semibold tracking-tight md:text-[32px]">
+          <h1 className={pageTitleClassName}>
             {t("diagnostics.title")}
           </h1>
-          <p className="text-muted-foreground">
-            {t("diagnostics.description")}
-          </p>
         </div>
         <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
           <ReportProblemDialog
@@ -531,7 +526,7 @@ export function DiagnosticsPanel() {
               <Button
                 variant="outline"
                 size="sm"
-                className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
+                className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-xs sm:w-auto sm:flex-shrink-0"
                 data-testid="report-problem-open"
                 aria-label={`${t("diagnostics.reportProblem.btn")}. ${t("diagnostics.reportProblem.aria")}`}
               >
@@ -543,7 +538,7 @@ export function DiagnosticsPanel() {
           <Button
             variant="outline"
             size="sm"
-            className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
+            className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-xs sm:w-auto sm:flex-shrink-0"
             disabled={debugBundleState === "loading"}
             onClick={handleDownloadDebugBundle}
             aria-label={`${debugBundleButtonLabel}. ${t("diagnostics.debugBundle.aria")}`}
@@ -552,18 +547,18 @@ export function DiagnosticsPanel() {
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
             {debugBundleState === "done" && (
-              <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+              <CheckCircle className="h-3.5 w-3.5 text-success" />
             )}
             {debugBundleState === "error" && (
-              <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+              <AlertCircle className="h-3.5 w-3.5 text-danger" />
             )}
-            {debugBundleState === "idle" && <Bug className="h-3.5 w-3.5" />}
+            {debugBundleState === "idle" && <FileArchive className="h-3.5 w-3.5" />}
             {debugBundleButtonLabel}
           </Button>
           <Button
             variant="outline"
             size="sm"
-            className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-[13px] sm:w-auto sm:flex-shrink-0"
+            className="min-h-11 w-full min-w-0 gap-1.5 whitespace-normal text-xs sm:w-auto sm:flex-shrink-0"
             aria-label={t("diagnostics.aria.export")}
             onClick={() => {
               const providers = getActiveProviders();
@@ -602,7 +597,7 @@ export function DiagnosticsPanel() {
                             : null,
                           dvr.monitoring_ready === false
                             ? t("diagnostics.export.dvrMonitoring", {
-                                status: `${dvr.monitoring_status || t("diagnostics.system.degraded")}${dvr.monitoring_reason ? ` \u2014 ${dvr.monitoring_reason}` : ""}`,
+                                status: `${dvr.monitoring_status || t("diagnostics.system.degraded")}${dvr.monitoring_reason ? ` \u00b7 ${dvr.monitoring_reason}` : ""}`,
                               })
                             : null,
                         ].filter(Boolean) as string[],
@@ -641,13 +636,13 @@ export function DiagnosticsPanel() {
                   value: systemInfo?.timezone || t("common.unknown"),
                 }),
                 t("diagnostics.export.rowCoreStatus", {
-                  value: systemInfo?.core_status || t("common.unknown"),
+                  value: coreStatusLabel(systemInfo?.core_status || "") || t("common.unknown"),
                 }),
                 t("diagnostics.export.rowUptime", {
                   value:
                     systemInfo?.uptime_data &&
                     Object.keys(systemInfo.uptime_data).length > 0
-                      ? `${systemInfo.uptime_data.days}d ${systemInfo.uptime_data.hours}h ${systemInfo.uptime_data.minutes}m`
+                      ? formatUptimeTile(systemInfo.uptime_data)
                       : t("diagnostics.system.na"),
                 }),
                 t("diagnostics.export.rowLogRetention", {
@@ -695,12 +690,7 @@ export function DiagnosticsPanel() {
               ];
 
               const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = `channelwatch-diagnostics-${new Date().toISOString().slice(0, 10)}.txt`;
-              a.click();
-              URL.revokeObjectURL(url);
+              downloadBlob(blob, `channelwatch-diagnostics-${new Date().toISOString().slice(0, 10)}.txt`);
             }}
           >
             <Download className="h-3.5 w-3.5" />
@@ -710,27 +700,21 @@ export function DiagnosticsPanel() {
       </div>
 
       {/* Live Log Terminal */}
-      <Card className="border-border/70 shadow-sm">
+      <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle>
                 <h2 className="flex items-center gap-2">
-                <Terminal className="h-5 w-5 text-primary" />
+                <Terminal className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 {t("diagnostics.logs.title")}
                 {logPaused && (
-                  <Badge
-                    variant="outline"
-                    className="ml-2 text-yellow-500 border-yellow-500"
-                  >
+                  <StatusBadge variant="warning" className="ml-2">
                     {t("diagnostics.logs.paused")}
-                  </Badge>
+                  </StatusBadge>
                 )}
                 </h2>
               </CardTitle>
-              <CardDescription className="mt-1">
-                {t("diagnostics.logs.description")}
-              </CardDescription>
             </div>
             <div className="flex items-center gap-2">
               <Select
@@ -738,7 +722,7 @@ export function DiagnosticsPanel() {
                 onValueChange={(v) => setLogLineCount(Number(v))}
               >
                 <SelectTrigger
-                  className="h-11 w-full text-[13px] sm:h-9 sm:w-32"
+                  className="h-11 w-full text-xs sm:h-9 sm:w-32"
                   aria-label={t("diagnostics.logs.aria.lineCount")}
                 >
                   <SelectValue />
@@ -773,16 +757,15 @@ export function DiagnosticsPanel() {
                 aria-label={t("diagnostics.logs.aria.filter")}
                 value={logFilter}
                 onChange={(e) => setLogFilter(e.target.value)}
-                className="h-11 pl-8 text-[13px] sm:h-9"
+                className="h-11 pl-8 text-xs sm:h-9"
               />
             </div>
             <div className="flex flex-1 items-center gap-1 sm:flex-none">
               <Button
-                variant={
-                  logLevelFilters.includes("error") ? "default" : "outline"
-                }
+                variant="outline"
                 size="sm"
-                className={`min-h-11 flex-1 px-2 text-[13px] sm:min-h-9 ${logLevelFilters.includes("error") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+                aria-pressed={logLevelFilters.includes("error")}
+                className={`min-h-11 flex-1 px-2 text-xs sm:min-h-9 ${logLevelFilters.includes("error") ? "bg-selected text-foreground hover:bg-selected" : "text-muted-foreground"}`}
                 onClick={() =>
                   setLogLevelFilters((prev) =>
                     prev.includes("error")
@@ -791,14 +774,14 @@ export function DiagnosticsPanel() {
                   )
                 }
               >
+                <span aria-hidden="true" className="size-2 rounded-full bg-danger" />
                 ERR<span className="sr-only"> {t("diagnostics.logs.aria.filterErrors")}</span>
               </Button>
               <Button
-                variant={
-                  logLevelFilters.includes("warn") ? "default" : "outline"
-                }
+                variant="outline"
                 size="sm"
-                className={`min-h-11 flex-1 px-2 text-[13px] sm:min-h-9 ${logLevelFilters.includes("warn") ? "bg-yellow-600 hover:bg-yellow-700 text-white" : ""}`}
+                aria-pressed={logLevelFilters.includes("warn")}
+                className={`min-h-11 flex-1 px-2 text-xs sm:min-h-9 ${logLevelFilters.includes("warn") ? "bg-selected text-foreground hover:bg-selected" : "text-muted-foreground"}`}
                 onClick={() =>
                   setLogLevelFilters((prev) =>
                     prev.includes("warn")
@@ -807,14 +790,14 @@ export function DiagnosticsPanel() {
                   )
                 }
               >
+                <span aria-hidden="true" className="size-2 rounded-full bg-warning" />
                 WARN<span className="sr-only"> {t("diagnostics.logs.aria.filterWarnings")}</span>
               </Button>
               <Button
-                variant={
-                  logLevelFilters.includes("info") ? "default" : "outline"
-                }
+                variant="outline"
                 size="sm"
-                className={`min-h-11 flex-1 px-2 text-[13px] sm:min-h-9 ${logLevelFilters.includes("info") ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
+                aria-pressed={logLevelFilters.includes("info")}
+                className={`min-h-11 flex-1 px-2 text-xs sm:min-h-9 ${logLevelFilters.includes("info") ? "bg-selected text-foreground hover:bg-selected" : "text-muted-foreground"}`}
                 onClick={() =>
                   setLogLevelFilters((prev) =>
                     prev.includes("info")
@@ -823,82 +806,87 @@ export function DiagnosticsPanel() {
                   )
                 }
               >
+                <span aria-hidden="true" className="size-2 rounded-full bg-info" />
                 INFO<span className="sr-only"> {t("diagnostics.logs.aria.filterInfo")}</span>
               </Button>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
-              onClick={() => setLogPaused(!logPaused)}
-              aria-label={
-                logPaused
-                  ? t("diagnostics.logs.aria.resume")
-                  : t("diagnostics.logs.aria.pause")
-              }
-              title={
-                logPaused
-                  ? t("diagnostics.logs.aria.resume")
-                  : t("diagnostics.logs.aria.pause")
-              }
-            >
-              {logPaused ? (
-                <Play className="h-3.5 w-3.5" />
-              ) : (
-                <Pause className="h-3.5 w-3.5" />
-              )}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
-              onClick={handleCopyLogs}
-              aria-label={t("diagnostics.logs.aria.copy")}
-              title={t("diagnostics.logs.aria.copy")}
-            >
-              {copied ? (
-                <CheckCircle className="h-3.5 w-3.5 text-green-500" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" />
-              )}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
-              onClick={handleDownloadLogs}
-              aria-label={t("diagnostics.logs.aria.download")}
-              title={t("diagnostics.logs.aria.download")}
-            >
-              <Download className="h-3.5 w-3.5" />
-            </Button>
+            <div className="flex items-center gap-2 max-sm:ml-auto">
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
+                onClick={() => setLogPaused(!logPaused)}
+                aria-label={
+                  logPaused
+                    ? t("diagnostics.logs.aria.resume")
+                    : t("diagnostics.logs.aria.pause")
+                }
+                title={
+                  logPaused
+                    ? t("diagnostics.logs.aria.resume")
+                    : t("diagnostics.logs.aria.pause")
+                }
+              >
+                {logPaused ? (
+                  <Play className="h-3.5 w-3.5" />
+                ) : (
+                  <Pause className="h-3.5 w-3.5" />
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
+                onClick={handleCopyLogs}
+                aria-label={t("diagnostics.logs.aria.copy")}
+                title={t("diagnostics.logs.aria.copy")}
+              >
+                {copied ? (
+                  <CheckCircle className="h-3.5 w-3.5 text-success" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 min-w-11 px-2 sm:min-h-9 sm:min-w-9"
+                onClick={handleDownloadLogs}
+                aria-label={t("diagnostics.logs.aria.download")}
+                title={t("diagnostics.logs.aria.download")}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
           <div
             ref={logContainerRef}
-            className="h-56 select-text overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-[13px] leading-5 sm:h-72 lg:h-80"
+            className="h-56 select-text overflow-auto rounded-control border border-hairline bg-well p-3 font-mono text-xs leading-5 sm:h-72 lg:h-80"
           >
             {filteredLogLines.length === 0 ? (
-              <span className="text-zinc-500">
+              <span className="text-muted-foreground">
                 {logFilter
                   ? t("diagnostics.logs.emptyFiltered")
-                  : t("diagnostics.logs.empty")}
+                  : logsFailed
+                    ? t("diagnostics.logs.failed")
+                    : t("diagnostics.logs.empty")}
               </span>
             ) : (
               filteredLogLines.map((line, i) => (
                 <div
                   key={i}
-                  className={
+                  className={`whitespace-pre text-xs ${
                     line.includes("[FAIL]") || line.includes("ERROR")
-                      ? "text-red-400"
+                      ? "text-danger-fg"
                       : line.includes("[PASS]") ||
                           line.includes("Notification sent")
-                        ? "text-green-400"
+                        ? "text-success-fg"
                         : line.includes("WARNING") || line.includes("WARN")
-                          ? "text-yellow-400"
+                          ? "text-warning-fg"
                           : line.includes("🔧")
-                            ? "text-blue-400 font-semibold"
-                            : "text-zinc-300"
-                  }
+                            ? "font-semibold text-foreground"
+                            : "text-muted-foreground"
+                  }`}
                 >
                   {line}
                 </div>
@@ -909,19 +897,16 @@ export function DiagnosticsPanel() {
       </Card>
 
       {/* System Information - moved above tests */}
-      <Card className="border-border/70 shadow-sm">
+      <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-[min(100%,14rem)] flex-1">
               <CardTitle>
                 <h2 className="flex items-center gap-2">
-                  <Server className="h-5 w-5 text-primary" />
+                  <Server className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
                   {t("diagnostics.system.title")}
                 </h2>
               </CardTitle>
-              <CardDescription className="mt-1">
-                {t("diagnostics.system.description")}
-              </CardDescription>
             </div>
             <Button
               variant="outline"
@@ -957,7 +942,7 @@ export function DiagnosticsPanel() {
             <div
               className={`grid gap-4 ${isMultiDvr ? "md:grid-cols-2" : "md:grid-cols-2 lg:grid-cols-3"}`}
             >
-              <div className="rounded-lg p-3 space-y-2 border">
+              <div className="rounded-control bg-fill p-3 space-y-2">
                 <h3 className="text-sm font-medium mb-2">
                   {t("diagnostics.system.env")}
                 </h3>
@@ -965,7 +950,7 @@ export function DiagnosticsPanel() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.versionKey")}
                       </span>
@@ -974,45 +959,49 @@ export function DiagnosticsPanel() {
                           t("common.unknown")}
                       </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.timezoneKey")}
                       </span>
-                      <span>{systemInfo?.timezone || t("common.unknown")}</span>
+                      <span>
+                        {(systemInfo?.timezone || t("common.unknown")).split("/").map((part, index) => (
+                          <React.Fragment key={part}>
+                            {index > 0 ? <>/<wbr /></> : null}
+                            {part}
+                          </React.Fragment>
+                        ))}
+                      </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.coreStatusKey")}
                       </span>
                       <span
                         className={
-                          systemInfo?.core_status === "Running"
-                            ? "text-green-700 dark:text-green-500 flex items-center"
-                            : "text-muted-foreground flex items-center"
+                          "text-muted-foreground flex items-center"
                         }
                       >
                         {systemInfo?.core_status === "Running" ? (
                           <>
-                            <CheckCircle className="h-3 w-3 mr-1" />
-                            {t("diagnostics.system.connected")}
+                            <StatusText>{t("diagnostics.system.running")}</StatusText>
                           </>
                         ) : (
-                          systemInfo?.core_status || t("common.unknown")
+                          coreStatusLabel(systemInfo?.core_status || "") || t("common.unknown")
                         )}
                       </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.uptimeKey")}
                       </span>
                       <span>
                         {systemInfo?.uptime_data &&
                         Object.keys(systemInfo.uptime_data).length > 0
-                          ? `${systemInfo.uptime_data.days}d ${systemInfo.uptime_data.hours}h ${systemInfo.uptime_data.minutes}m`
+                          ? formatUptimeTile(systemInfo.uptime_data)
                           : t("diagnostics.system.na")}
                       </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.retentionKey")}
                       </span>
@@ -1024,7 +1013,7 @@ export function DiagnosticsPanel() {
                           : t("diagnostics.system.na")}
                       </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.providersKey")}
                       </span>
@@ -1032,7 +1021,7 @@ export function DiagnosticsPanel() {
                         {getActiveProviders().length > 0 ? (
                           getActiveProviders().join(", ")
                         ) : (
-                          <span className="text-red-700 dark:text-red-500">
+                          <span className="text-muted-foreground">
                             {t("diagnostics.system.noneConfigured")}
                           </span>
                         )}
@@ -1043,7 +1032,7 @@ export function DiagnosticsPanel() {
               </div>
 
               {!isMultiDvr && (
-                <div className="rounded-lg p-3 space-y-2 border">
+                <div className="rounded-control bg-fill p-3 space-y-2">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-medium">
                       {dvrSections[0]
@@ -1066,28 +1055,28 @@ export function DiagnosticsPanel() {
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : dvrSections[0] ? (
                     <>
-                      <div className="flex justify-between text-sm">
+                      <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                         <span className="text-muted-foreground">
                           {t("diagnostics.system.hostKey")}
                         </span>
                         <span>
-                          {dvrSections[0].host}:{dvrSections[0].port}
+                          {`${dvrSections[0].host}:${dvrSections[0].port}`}
                         </span>
                       </div>
-                      <div className="flex justify-between text-sm">
+                      <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                         <span className="text-muted-foreground">
                           {t("diagnostics.system.statusKey")}
                         </span>
                         <span
                           className={
                             dvrSections[0].connected
-                              ? "text-green-700 dark:text-green-500 flex items-center"
-                              : "text-red-700 dark:text-red-500 flex items-center"
+                              ? "text-muted-foreground flex items-center"
+                              : "text-danger-fg flex items-center"
                           }
                         >
                           {dvrSections[0].connected ? (
                             <>
-                              <CheckCircle className="h-3 w-3 mr-1" />
+                              <span aria-hidden="true" className="mr-1.5 size-2 rounded-full bg-success" />
                               {t("diagnostics.system.connected")}
                             </>
                           ) : (
@@ -1099,7 +1088,7 @@ export function DiagnosticsPanel() {
                         </span>
                       </div>
                       {dvrSections[0].version && (
-                        <div className="flex justify-between text-sm">
+                        <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                           <span className="text-muted-foreground">
                             {t("diagnostics.system.dvrVersionKey")}
                           </span>
@@ -1109,11 +1098,11 @@ export function DiagnosticsPanel() {
                         </div>
                       )}
                       {dvrSections[0].monitoring_ready === false && (
-                        <div className="flex justify-between text-sm">
+                        <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                           <span className="text-muted-foreground">
                             {t("diagnostics.system.monitoringKey")}
                           </span>
-                          <span className="text-amber-600 dark:text-amber-400 capitalize">
+                          <span className="text-warning-fg capitalize">
                             {dvrSections[0].monitoring_status ||
                               t("diagnostics.system.degraded")}
                           </span>
@@ -1122,7 +1111,7 @@ export function DiagnosticsPanel() {
                     </>
                   ) : (
                     <>
-                      <div className="flex justify-between text-sm">
+                      <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                         <span className="text-muted-foreground">
                           {t("diagnostics.system.dvrHostKey")}
                         </span>
@@ -1131,26 +1120,26 @@ export function DiagnosticsPanel() {
                             t("common.notConfigured")}
                         </span>
                       </div>
-                      <div className="flex justify-between text-sm">
+                      <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                         <span className="text-muted-foreground">
                           {t("diagnostics.system.dvrPortKey")}
                         </span>
                         <span>{systemInfo?.channels_dvr_port || "8089"}</span>
                       </div>
-                      <div className="flex justify-between text-sm">
+                      <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                         <span className="text-muted-foreground">
                           {t("diagnostics.system.statusKey")}
                         </span>
                         <span
                           className={
                             systemInfo?.channels_dvr_server_version
-                              ? "text-green-700 dark:text-green-500 flex items-center"
-                              : "text-red-700 dark:text-red-500 flex items-center"
+                              ? "text-muted-foreground flex items-center"
+                              : "text-danger-fg flex items-center"
                           }
                         >
                           {systemInfo?.channels_dvr_server_version ? (
                             <>
-                              <CheckCircle className="h-3 w-3 mr-1" />
+                              <span aria-hidden="true" className="mr-1.5 size-2 rounded-full bg-success" />
                               {t("diagnostics.system.connected")}
                             </>
                           ) : (
@@ -1166,7 +1155,7 @@ export function DiagnosticsPanel() {
                 </div>
               )}
 
-              <div className="rounded-lg p-3 space-y-2 border">
+              <div className="rounded-control bg-fill p-3 space-y-2">
                 <h3 className="text-sm font-medium mb-2">
                   {t("diagnostics.system.storage")}
                 </h3>
@@ -1174,7 +1163,7 @@ export function DiagnosticsPanel() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : systemInfo && diskInfo.totalGB ? (
                   <>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.usedKey")}
                       </span>
@@ -1184,7 +1173,7 @@ export function DiagnosticsPanel() {
                           : t("diagnostics.system.na")}
                       </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.freeKey")}
                       </span>
@@ -1194,7 +1183,7 @@ export function DiagnosticsPanel() {
                           : t("diagnostics.system.na")}
                       </span>
                     </div>
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                       <span className="text-muted-foreground">
                         {t("diagnostics.system.totalKey")}
                       </span>
@@ -1203,10 +1192,8 @@ export function DiagnosticsPanel() {
                     {systemInfo.disk_usage_percent != null && (
                       <Progress
                         value={systemInfo.disk_usage_percent}
-                        className="h-2 mt-1"
-                        indicatorClassName={getDiskStatusColor(
-                          systemInfo.disk_usage_percent,
-                        )}
+                        className="h-1.5 mt-1"
+                        indicatorClassName={diskBarColor(systemInfo.disk_usage_percent)}
                         aria-label={t("diagnostics.system.storage")}
                       />
                     )}
@@ -1220,13 +1207,13 @@ export function DiagnosticsPanel() {
             </div>
 
             {isMultiDvr && (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 [&>*]:min-w-0">
                 {dvrSections.map((dvr) => {
                   const versionDisplay = formatDvrVersion(dvr.version);
                   return (
                     <div
                       key={dvr.id}
-                      className="rounded-lg p-3 space-y-2 border"
+                      className="rounded-control bg-fill p-3 space-y-2"
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2 min-w-0">
@@ -1242,29 +1229,26 @@ export function DiagnosticsPanel() {
                             {dvr.name || dvr.host}
                           </h3>
                         </div>
-                        <Badge
-                          variant={dvr.connected ? "default" : "secondary"}
-                          className={`h-5 flex-shrink-0 px-2 py-0 text-[13px] font-normal leading-none ${dvr.connected ? "bg-green-600 text-green-50" : "bg-red-700 text-white dark:bg-red-600"}`}
-                        >
-                          {dvr.connected
-                            ? t("diagnostics.system.connected")
-                            : t("diagnostics.system.offline")}
-                        </Badge>
+                        {dvr.connected ? (
+                          <StatusText className="flex-shrink-0">{t("diagnostics.system.connected")}</StatusText>
+                        ) : (
+                          <StatusBadge variant="danger" className="flex-shrink-0">{t("diagnostics.system.offline")}</StatusBadge>
+                        )}
                       </div>
                       {loading ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
                         <>
-                          <div className="flex justify-between text-sm">
+                          <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                             <span className="text-muted-foreground">
                               {t("diagnostics.system.hostKey")}
                             </span>
                             <span className="text-right truncate ml-2">
-                              {dvr.host}:{dvr.port}
+                              {`${dvr.host}:${dvr.port}`}
                             </span>
                           </div>
                           {versionDisplay && (
-                            <div className="flex justify-between text-sm">
+                            <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                               <span className="text-muted-foreground">
                                 {t("diagnostics.system.versionLabel")}
                               </span>
@@ -1272,18 +1256,18 @@ export function DiagnosticsPanel() {
                             </div>
                           )}
                           {dvr.monitoring_ready === false && (
-                            <div className="flex justify-between text-sm">
+                            <div className="flex flex-wrap justify-between gap-x-2 text-sm [overflow-wrap:anywhere]">
                               <span className="text-muted-foreground">
                                 {t("diagnostics.system.monitoringKey")}
                               </span>
-                              <span className="text-amber-600 dark:text-amber-400 capitalize">
+                              <span className="text-warning-fg capitalize">
                                 {dvr.monitoring_status ||
                                   t("diagnostics.system.degraded")}
                               </span>
                             </div>
                           )}
                           {dvr.monitoring_reason && (
-                            <p className="text-[13px] leading-5 text-muted-foreground/70">
+                            <p className="text-xs leading-5 text-muted-foreground/70">
                               {dvr.monitoring_reason}
                             </p>
                           )}
@@ -1298,11 +1282,11 @@ export function DiagnosticsPanel() {
         </CardContent>
       </Card>
 
-      <Card className="border-border/70 shadow-sm">
+      <Card>
         <CardHeader>
           <CardTitle>
             <h2 className="flex items-center gap-2">
-              <Activity className="h-5 w-5 text-primary" />
+              <Activity className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
               {t("diagnostics.tests.title")}
             </h2>
           </CardTitle>
@@ -1338,18 +1322,18 @@ export function DiagnosticsPanel() {
             />
           )}
           {Object.keys(testStatus).length > 0 && runAllProgress === null && (
-            <div className="mb-4 p-3 rounded-lg border flex flex-wrap items-center gap-x-3 gap-y-1" role="status">
+            <div className="mb-4 p-3 rounded-control bg-fill flex flex-wrap items-center gap-x-3 gap-y-1" role="status">
               <span className="text-sm font-medium">
                 {t("diagnostics.tests.resultsLabel")}
               </span>
-              <span className="text-sm text-green-700 dark:text-green-500">
+              <span className="text-sm text-success-fg">
                 {t("diagnostics.tests.passed", {
                   n: Object.values(testStatus).filter(
                     (s) => s.status === "pass",
                   ).length,
                 })}
               </span>
-              <span className="text-sm text-red-700 dark:text-red-500">
+              <span className="text-sm text-danger-fg">
                 {t("diagnostics.tests.failed", {
                   n: Object.values(testStatus).filter(
                     (s) => s.status === "fail",
@@ -1384,37 +1368,33 @@ export function DiagnosticsPanel() {
                 ? t("diagnostics.tests.connectivity")
                 : t("diagnostics.tests.notifications");
             return (
-              <div key={category} className="mb-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+              <div key={category} className="mb-4 last:-mb-4 last:[&>div:last-child]:border-b-0">
+                <h3 className="mb-2 text-xs font-medium text-muted-foreground">
                   {categoryLabel}
                 </h3>
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="-mx-4 divide-y divide-hairline border-y border-hairline">
                   {categoryTests.map((test) => (
                     <div
                       key={test.name}
-                      className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border p-3 sm:gap-3"
+                      data-testid="diagnostic-test-row"
+                      className="flex min-h-[52px] min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5"
                     >
-                      <div className="rounded-full bg-primary/10 p-2 flex-shrink-0">
-                        <test.icon className="h-4 w-4 text-primary" />
+                      <div className="flex min-w-[min(100%,11rem)] flex-1 items-center gap-3">
+                        <test.icon className="size-4 flex-shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <div className="min-w-0 flex-1">
+                          <h4 className="break-words text-sm font-medium">{test.name}</h4>
+                          {(testStatus[test.name]?.status === "fail" || testStatus[test.name]?.status === "skipped") &&
+                            testStatus[test.name]?.message && (
+                              <p className={`mt-0.5 break-words text-xs leading-5 ${testStatus[test.name]?.status === "fail" ? "text-danger-fg" : "text-muted-foreground"}`}>
+                                {testStatus[test.name].message}
+                              </p>
+                            )}
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="break-words text-sm font-medium [overflow-wrap:anywhere]">{test.name}</h4>
-                        {test.description ? (
-                          <p className="break-words text-[13px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">
-                            {test.description}
-                          </p>
-                        ) : null}
-                        {(testStatus[test.name]?.status === "fail" || testStatus[test.name]?.status === "skipped") &&
-                          testStatus[test.name]?.message && (
-                            <p className={`mt-0.5 break-words text-[13px] leading-5 [overflow-wrap:anywhere] ${testStatus[test.name]?.status === "fail" ? "text-red-700 dark:text-red-400" : "text-muted-foreground"}`}>
-                              {testStatus[test.name].message}
-                            </p>
-                          )}
-                      </div>
-                      <div className="flex flex-col items-end justify-center gap-1.5 sm:flex-row sm:items-center sm:flex-shrink-0">
+                      <div className="ml-auto flex flex-col items-end justify-center gap-1.5 sm:flex-row sm:items-center sm:flex-shrink-0">
                         {testStatus[test.name]?.elapsed != null &&
                           testStatus[test.name]?.status !== "running" && (
-                            <span className="text-[13px] text-muted-foreground">
+                            <span className="text-xs text-muted-foreground">
                               {testStatus[test.name].elapsed!.toFixed(1)}s
                             </span>
                           )}
@@ -1425,15 +1405,15 @@ export function DiagnosticsPanel() {
                             runAllProgress !== null
                           }
                           size="sm"
-                          variant="outline"
-                          className="h-auto min-h-11 min-w-[44px] whitespace-normal px-2 py-2 text-center sm:min-w-[60px]"
+                          variant="ghost"
+                          className="-my-1.5 h-auto min-h-11 min-w-11 whitespace-normal px-2 py-2 text-center"
                         >
                           {testStatus[test.name]?.status === "running" ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span className="inline-flex items-center gap-1.5 text-xs"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />{t("diagnostics.tests.stateRunning")}</span>
                           ) : testStatus[test.name]?.status === "pass" ? (
-                            <span className="text-green-500">✅</span>
+                            <span className="inline-flex items-center gap-1.5 text-xs"><span aria-hidden="true" className="size-2 rounded-full bg-success" />{t("diagnostics.tests.statePassed")}</span>
                           ) : testStatus[test.name]?.status === "fail" ? (
-                            <span className="text-red-500">❌</span>
+                            <span className="inline-flex items-center gap-1.5 text-xs text-danger-fg"><span aria-hidden="true" className="size-2 rounded-full bg-danger" />{t("diagnostics.tests.stateFailed")}</span>
                           ) : testStatus[test.name]?.status === "skipped" ? (
                             t("diagnostics.tests.skippedLabel")
                           ) : (

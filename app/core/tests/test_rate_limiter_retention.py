@@ -43,3 +43,14 @@ def test_recent_activity_moves_client_after_older_clients(monkeypatch):
     assert "expires" not in limiter._requests
     assert limiter.allow_request("renewed", 2)
     assert not limiter.allow_request("renewed", 2)
+
+
+
+def test_retry_after_reports_seconds_until_window_frees():
+    from ui.backend.main import InMemoryRateLimiter
+
+    limiter = InMemoryRateLimiter(window_seconds=60)
+    assert limiter.allow_request("client:read", 1) is True
+    assert limiter.allow_request("client:read", 1) is False
+    assert 1 <= limiter.retry_after_seconds("client:read") <= 60
+    assert limiter.retry_after_seconds("unknown:read") == 1

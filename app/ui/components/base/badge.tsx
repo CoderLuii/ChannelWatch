@@ -1,37 +1,36 @@
 import * as React from "react"
-import { cva, type VariantProps } from "class-variance-authority"
 
+import { statusDotClass, type StatusTone } from "@/components/base/status-badge"
 import { cn } from "@/lib/utils"
 
-const badgeVariants = cva(
-  "inline-flex min-h-6 items-center rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-none transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-  {
-    variants: {
-      variant: {
-        default:
-          "border-transparent bg-primary text-primary-foreground hover:bg-primary/80",
-        secondary:
-          "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        destructive:
-          "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
-        outline: "text-foreground",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-)
+/**
+ * The chip family. Four shapes, one job each:
+ * - StatusText: a healthy or plain fact, a dot and a muted word.
+ * - Tag: a neutral label.
+ * - Count: a neutral number.
+ * - StatusBadge (status-badge.tsx): a tinted word for warning and danger.
+ */
+export interface StatusTextProps extends React.HTMLAttributes<HTMLSpanElement> {
+  tone?: StatusTone
+  /** Rows that already lead with their own dot show the word alone. */
+  dot?: boolean
+}
 
-export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
-
-function Badge({ className, variant, ...props }: BadgeProps) {
+export function StatusText({ tone = "success", dot = true, className, children, ...props }: StatusTextProps) {
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <span data-status={tone} className={cn("inline-flex items-center gap-1.5 text-xs text-muted-foreground", className)} {...props}>
+      {dot ? <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", statusDotClass[tone])} /> : null}
+      {children}
+    </span>
   )
 }
 
-export { Badge, badgeVariants }
+export const tagClassName = "inline-flex h-5 items-center rounded-thumb bg-fill px-1.5 text-2xs text-muted-foreground"
 
+export function Tag({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn(tagClassName, className)} {...props} />
+}
+
+export function Count({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn(tagClassName, "rounded-full tabular-nums", className)} {...props} />
+}

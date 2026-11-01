@@ -8,7 +8,7 @@ import type {
 } from "@/components/base/toast"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+const TOAST_REMOVE_DELAY = 1000
 
 type ToasterToast = ToastProps & {
   id: string
@@ -151,10 +151,15 @@ function toast({ ...props }: Toast) {
     })
   const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
 
+  // Failures stay on screen until the user dismisses them, so the reason
+  // and the next step are never lost to an auto-dismiss timer.
+  const duration = props.duration ?? (props.variant === "destructive" ? Infinity : undefined)
+
   dispatch({
     type: "ADD_TOAST",
     toast: {
       ...props,
+      ...(duration !== undefined ? { duration } : {}),
       id,
       open: true,
       onOpenChange: (open) => {

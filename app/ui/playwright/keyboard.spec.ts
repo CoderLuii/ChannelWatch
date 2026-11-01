@@ -22,7 +22,7 @@ test("keyboard: shell tab order exposes skip link and primary navigation", async
   await page.goto("/#overview")
 
   await tabTo(page, page.getByRole("link", { name: "Skip to main content" }), 2)
-  await tabTo(page, page.getByRole("button", { name: "Dashboard", exact: true }), 4)
+  await tabTo(page, page.getByRole("button", { name: "Home", exact: true }), 4)
   await tabTo(page, page.getByRole("button", { name: "Watch History", exact: true }), 2)
   await tabTo(page, page.getByRole("button", { name: "Settings", exact: true }), 2)
 })
@@ -30,7 +30,7 @@ test("keyboard: shell tab order exposes skip link and primary navigation", async
 test("keyboard: watch history dialog opens and closes without trapping focus", async ({ page }) => {
   await page.goto("/#watch-history")
 
-  const firstActivity = page.getByRole("button", { name: /Watching HBO/i })
+  const firstActivity = page.getByRole("button", { name: /Morning Show/i })
   await expect(firstActivity).toBeVisible()
   await firstActivity.focus()
   await page.keyboard.press("Enter")
@@ -45,7 +45,7 @@ test("keyboard: watch history dialog opens and closes without trapping focus", a
 test("keyboard: recent activity details returns focus to its trigger", async ({ page }) => {
   await page.goto("/#overview")
 
-  const activity = page.getByRole("button", { name: /Watching HBO/i }).first()
+  const activity = page.getByRole("button", { name: /Morning Show/i }).first()
   await expect(activity).toBeVisible()
   await activity.focus()
   await page.keyboard.press("Enter")
@@ -78,8 +78,8 @@ test("keyboard: major view controls are reachable in a sensible order", async ({
   await expect(page.getByRole("tab", { name: "Alerts" })).toBeFocused()
 
   await page.goto("/#notification-log")
-  await expect(page.getByRole("combobox", { name: "Filter notification log by channel" })).toBeVisible()
-  await page.getByRole("combobox", { name: "Filter notification log by channel" }).focus()
+  await expect(page.getByRole("combobox", { name: "Filter notification log by destination" })).toBeVisible()
+  await page.getByRole("combobox", { name: "Filter notification log by destination" }).focus()
   await tabTo(page, page.getByRole("combobox", { name: "Filter notification log by status" }), 2)
   await tabTo(page, page.getByLabel("Filter notification log from date"), 2)
 

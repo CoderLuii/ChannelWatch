@@ -157,11 +157,37 @@ describe("parseApiError", () => {
     expect(typeof result.message).toBe("string")
   })
 
-  it("falls back to HTTP status when body is empty", async () => {
-    const resp = new Response("", { status: 503 })
-    const result = await parseApiError(resp)
+  it.each([
+    [502, "It may be restarting"],
+    [503, "It may be restarting"],
+    [500, "ran into a problem"],
+    [404, "could not complete"],
+  ])("says what an empty HTTP %i means without the number", async (status, phrase) => {
+    const result = await parseApiError(new Response("", { status }))
     expect(result.code).toBe(ErrorCode.UNKNOWN)
-    expect(result.message).toContain("503")
+    expect(result.message).toContain(phrase)
+    expect(result.message).not.toMatch(/HTTP|\d{3}/)
+  })
+
+  it("does not pass the server's stock 500 text through", async () => {
+    const result = await parseApiError(makeResponse({ detail: "Internal Server Error" }, 500))
+    expect(result.message).toContain("ran into a problem")
+  })
+
+  it("gives the app's rate limit its own short message, with or without a body", async () => {
+    const structured = makeResponse({ detail: { code: ErrorCode.RATE_LIMIT_EXCEEDED, message: "Rate limit exceeded. Please slow down.", remediation: "Wait a moment and retry the request." } }, 429)
+    for (const response of [structured, new Response("", { status: 429 })]) {
+      const result = await parseApiError(response)
+      expect(result.code).toBe(ErrorCode.RATE_LIMIT_EXCEEDED)
+      expect(result.message).toBe("ChannelWatch is busy. Wait a moment, then try again.")
+      expect(result.remediation ?? null).toBeNull()
+    }
+  })
+
+  it("keeps a more specific 429 from the server", async () => {
+    const result = await parseApiError(makeResponse({ detail: { code: ErrorCode.RUNTIME_KEY_RECOVERY_RATE_LIMITED, message: "Too many recovery attempts.", remediation: "Wait." } }, 429))
+    expect(result.code).toBe(ErrorCode.RUNTIME_KEY_RECOVERY_RATE_LIMITED)
+    expect(result.message).toBe("Too many recovery attempts.")
   })
 })
 

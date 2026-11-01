@@ -47,6 +47,7 @@ def get_icon_for_activity_type(activity_type: str) -> str:
         "test_event": "bell",
         "dvr_unreachable": "heart-pulse",
         "dvr_recovered": "heart-pulse",
+        "disk_recovered": "hard-drive",
     }
     return icon_map.get(activity_type, "bell")
 
@@ -325,6 +326,7 @@ def record_recording_event(
     dvr_name: Optional[str] = None,
     notification_history: Optional[Dict[str, float]] = None,
     activity_event_id: Optional[str] = None,
+    job_id: Optional[str] = None,
 ) -> bool:
     """Specialized function to record recording events."""
     try:
@@ -346,6 +348,12 @@ def record_recording_event(
         tracking_key = (
             f"{dvr_key}-recording_event-{event_type}-{program_name}-{channel_name}"
         )
+        # Distinct DVR jobs for the same program and channel (for example a
+        # season pass scheduling several airings) must each be recorded.
+        if job_id:
+            tracking_key = f"{tracking_key}-job-{job_id}"
+        elif scheduled_datetime is not None:
+            tracking_key = f"{tracking_key}-at-{scheduled_datetime.isoformat()}"
 
         activity_id = activity_event_id or str(uuid.uuid4())
 
@@ -397,7 +405,7 @@ def record_disk_status(
             notification_history if notification_history is not None else {}
         )
 
-        activity_title = title or "Low Disk Space Warning"
+        activity_title = title or "Disk space low"
         activity_message = (
             message
             or f"Low Disk Warning - {free_space} of {total_space} ({free_percentage:.1f}% free)"

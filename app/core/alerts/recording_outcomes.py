@@ -130,7 +130,7 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
     channels = raw_channels if isinstance(raw_channels, list) else []
     raw_item = _value(job, "item", "Item")
     item = raw_item if isinstance(raw_item, dict) else {}
-    return {
+    snapshot = {
         "name": str(_value(job, "name", "Name") or "Unknown recording")[:500],
         "start_time": _number(_value(job, "start_time", "StartTime")),
         "end_time": _number(_value(job, "end_time", "EndTime")),
@@ -138,6 +138,11 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
         "channel": str(channels[0])[:100] if channels else "",
         "image_url": str(_value(item, "image_url", "ImageURL") or "")[:2000],
     }
+    # Keep the DVR's own failure reason so the outcome can explain itself.
+    error = str(_value(job, "error", "Error") or "").strip()
+    if error:
+        snapshot["error"] = error[:500]
+    return snapshot
 
 
 @dataclass(frozen=True)

@@ -393,6 +393,13 @@ class TestAuthenticatedAccess:
         )
         assert resp.status_code == 401
 
+    def test_non_ascii_key_is_rejected_not_500(self, client):
+        resp = client.get(
+            "/api/about",
+            headers={"X-API-Key": "clé-key".encode("latin-1")},
+        )
+        assert resp.status_code == 401
+
     def test_about_with_valid_key(self, client):
         resp = client.get(
             "/api/about",

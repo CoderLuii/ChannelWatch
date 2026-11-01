@@ -82,8 +82,8 @@ for (const rule of ["button-name", "color-contrast"]) {
 test("Restart is a named modal with contained focus", async ({ page }) => {
   await page.route("**/api/**restart**", route => route.fulfill({ json: { message: "Restarting" } }))
   await page.goto("/#overview")
-  page.once("dialog", dialog => dialog.accept())
   await page.getByRole("button", { name: "Restart", exact: true }).click()
+  await page.getByTestId("restart-confirm").getByRole("button", { name: "Restart", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: /Restart/i })
   await expect(dialog).toBeVisible()
   await expect(dialog).toHaveAttribute("aria-modal", "true")
@@ -100,13 +100,15 @@ test("Restart is a named modal with contained focus", async ({ page }) => {
 for (const endpoint of ["system-info", "recordings/upcoming", "activity-history"]) {
   test(`Dashboard marks ${endpoint} failure stale and clears it on recovery`, async ({ page }) => {
     await page.goto("/#overview")
-    await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
-    await expect(page.getByLabel("Refresh", { exact: true })).toBeEnabled()
+    await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
+    const refresh = page.getByRole("button", { name: "Refresh", exact: true })
+    await expect(refresh).toBeEnabled()
+    await expect(page.getByTestId("home-freshness")).toContainText("Updated")
     await page.route(`**/api/${endpoint}**`, route => route.fulfill({ status: 503, json: { detail: "Temporarily unavailable" } }))
-    await page.getByLabel("Refresh", { exact: true }).click()
-    await expect(page.getByText(/some data may be stale/)).toBeVisible()
+    await refresh.click()
+    await expect(page.getByTestId("home-freshness")).toContainText("Last good data")
     await page.unroute(`**/api/${endpoint}**`)
-    await page.getByLabel("Refresh", { exact: true }).click()
-    await expect(page.getByText(/some data may be stale/)).toHaveCount(0)
+    await refresh.click()
+    await expect(page.getByTestId("home-freshness")).toContainText("Updated")
   })
 }

@@ -333,7 +333,15 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             program_name=title,
             channel_name=channel_name,
             image_url=str(snapshot.get("image_url") or ""),
-            extra={"recording_type": label, "outcome": outcome.outcome},
+            extra={
+                "recording_type": label,
+                "outcome": outcome.outcome,
+                **(
+                    {"reason": str(snapshot["error"])}
+                    if snapshot.get("error")
+                    else {}
+                ),
+            },
             dvr_id=dvr_id,
             dvr_name=dvr_name,
             notification_history=self._notification_history,
@@ -358,6 +366,8 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             return True
 
         plain_message = f"{label}: {title} on {channel_name}"
+        if snapshot.get("error"):
+            plain_message = f"{plain_message}\nReason: {snapshot['error']}"
         formatted = self._format_recording_alert(
             default_message=plain_message,
             image_url=str(snapshot.get("image_url") or ""),
@@ -649,9 +659,11 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
         if not getattr(self.settings, "rd_image", True):
             image_url = None
             context = {**context, "image_url": ""}
+        status = str(context.get("recording_status_friendly") or "").strip()
+        program = str(context.get("title") or "").strip()
         return self.alert_formatter.format_templated_alert(
             alert_type="recording_events",
-            default_title=self.ALERT_TITLE,
+            default_title=f"{status}: {program}" if status and program else self.ALERT_TITLE,
             default_message=default_message,
             context=context,
             template_settings=self.template_settings,
@@ -1135,6 +1147,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             dvr_id=self.activity_dvr_id,
             dvr_name=self.activity_dvr_name,
             notification_history=self._notification_history,
+            job_id=str(job_id),
         )
 
         notification_sent = False
@@ -1151,7 +1164,6 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                 if self.settings.rd_program_name and recording_title:
                     message_parts["details"] = f"Program: {recording_title}"
                 table_parts = []
-                table_parts.append("-----------------------")
                 table_parts.append(f"Scheduled: {start_time_str}")
                 if self.settings.rd_duration and duration_str:
                     table_parts.append(f"Duration:  {duration_str}")
@@ -1284,12 +1296,11 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
 
         recording_type = "(Scheduled)" if was_scheduled else "(Manual)"
         message_parts: Dict[str, Union[str, Dict[str, str]]] = {
-            "status": f"{self.STATUS_EMOJI['started']} Recording {recording_type}",
+            "status": f"{self.STATUS_EMOJI['started']} {'Recording now' if was_scheduled else 'Recording now (manual)'}",
             "details": f"Program: {recording_title}",
         }
 
         table_parts = []
-        table_parts.append("-----------------------")
         table_parts.append(
             f"Recording: {self._format_time_only(int(recording_start_time))}"
         )
@@ -1378,6 +1389,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             dvr_id=self.activity_dvr_id,
             dvr_name=self.activity_dvr_name,
             notification_history=self._notification_history,
+            job_id=str(job_id),
         )
 
         alert_sent = False
@@ -1599,7 +1611,7 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
                         if self.settings.rd_program_name and recording_title
                         else None,
                         "time_table": (
-                            f"-----------------------\nScheduled: {start_time_str}\n"
+                            f"Scheduled: {start_time_str}\n"
                             + (
                                 f"Duration:  {duration_str}\n"
                                 if self.settings.rd_duration and duration_str
@@ -1772,12 +1784,12 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
             )
             if should_send:
                 message_parts = {
-                    "status": f"{self.STATUS_EMOJI['cancelled']} Cancelled (Active)",
+                    "status": f"{self.STATUS_EMOJI['cancelled']} Cancelled while recording",
                     "details": f"Program: {recording_title}"
                     if self.settings.rd_program_name and recording_title
                     else None,
                     "time_table": (
-                        f"-----------------------\nOriginal Start: {start_time_str}\n"
+                        f"Original Start: {start_time_str}\n"
                         + (
                             f"Total Streams: {await self.stream_tracker.get_stream_count()}\n"
                             if self.stream_count_enabled
@@ -1956,7 +1968,6 @@ class RecordingEventsAlert(BaseAlert, CleanupMixin):
         duration_str = self._format_duration(actual_duration)
 
         table_parts = []
-        table_parts.append("-----------------------")
         table_parts.append(f"Duration:  {duration_str}")
 
         if self.stream_count_enabled:

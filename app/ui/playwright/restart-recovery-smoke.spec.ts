@@ -5,11 +5,11 @@ test("restart timeout keeps keyboard focus inside recovery controls", async ({ p
   await installApiMocks(page)
   await page.clock.install()
   await page.goto("/#overview")
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   await page.route("**/healthz/**", route => route.fulfill({ status: 503, json: { detail: "fixture unavailable" } }))
   await page.route("**/api/**restart**", route => route.fulfill({ json: { message: "Restarting" } }))
-  page.once("dialog", dialog => dialog.accept())
   await page.getByRole("button", { name: "Restart", exact: true }).click()
+  await page.getByTestId("restart-confirm").getByRole("button", { name: "Restart", exact: true }).click()
 
   const modal = page.getByRole("dialog", { name: "Restart", exact: true })
   await expect(modal).toBeVisible()

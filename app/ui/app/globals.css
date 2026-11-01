@@ -1,11 +1,16 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @config "../tailwind.config.ts";
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
-    --background: 220 17% 96%;
+    --motion-fast: 150ms;
+    --motion-base: 220ms;
+    --motion-slow: 320ms;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    --background: 220 17% 94.5%;
     --foreground: 220 20% 10%;
     --card: 0 0% 100%;
     --card-foreground: 220 20% 10%;
@@ -24,48 +29,200 @@
     --border: 220 13% 86%;
     --input: 220 13% 82%;
     --ring: 211 100% 48%;
-    --radius: 1.25rem;
+    --radius: 0.75rem;
+    /* A group's outer edge, stronger than the dividers inside it. */
+    --edge: 0.13;
+    /* Fields and code wells: a touch off the page, so they still read on a fill. */
+    --well: 220 17% 96%;
+    /* The selected segment of a segmented control. */
+    --thumb: 0 0% 100%;
     --green-light: 142.1 76.2% 36.3%;
     --red-light: 346.8 77.2% 49.8%;
     --amber-light: 32.1 94.6% 43.7%;
-    --chart-streams: #8884d8;
-    --chart-recordings: #82ca9d;
-    --chart-vod: #ffc658;
-    --chart-now-fill: #ff6b6b;
-    --chart-now-stroke: #ffffff;
+
+    /* Surface levels: canvas (page) -> surface (cards) -> raised (menus, dialogs) */
+    --canvas: var(--background);
+    --surface: var(--card);
+    --raised: var(--popover);
+
+    /* Status: solid accent, readable text, tinted background, border */
+    --success: 142 71% 33%;
+    --success-fg: 142 72% 24%;
+    --success-bg: 141 79% 94%;
+    --success-border: 141 55% 76%;
+    --warning: 32 95% 42%;
+    --warning-fg: 26 90% 28%;
+    --warning-bg: 48 96% 91%;
+    --warning-border: 43 85% 68%;
+    --danger: 0 72% 48%;
+    --danger-fg: 0 74% 36%;
+    --danger-bg: 0 86% 96%;
+    --danger-border: 0 80% 84%;
+    --info: 211 100% 42%;
+    --info-fg: 211 100% 30%;
+    --info-bg: 211 100% 95%;
+    --info-border: 211 75% 82%;
+    --neutral: 220 9% 44%;
+    --neutral-fg: 220 12% 30%;
+    --neutral-bg: 220 14% 93%;
+    --neutral-border: 220 13% 82%;
+
+    /* Charts: one neutral mark. Lanes say what is what, so color can keep meaning status. */
+    --chart-mark: hsl(var(--foreground) / 0.72);
+
+    /* Scrim behind sheets and dialogs. Groups carry no shadow; 2 and 3 lift overlays only.
+       Never use "none" here: it invalidates the shadow list and removes focus rings. */
+    --scrim: 0 0% 0% / 0.35;
+
+    --elevation-1: 0 0 #0000;
+    --elevation-2: 0 1px 2px hsl(220 40% 20% / 0.04), 0 8px 24px -16px hsl(220 40% 20% / 0.28);
+    --elevation-3: 0 2px 6px hsl(220 40% 10% / 0.08), 0 24px 64px -24px hsl(220 40% 10% / 0.4);
   }
 
   .dark {
-    --background: 220 11% 7%;
+    --background: 220 16% 7%;
     --foreground: 220 14% 94%;
-    --card: 220 10% 11%;
+    --card: 220 13% 12%;
     --card-foreground: 220 14% 94%;
-    --popover: 220 10% 13%;
+    --popover: 220 12% 19%;
     --popover-foreground: 220 14% 94%;
     --primary: 211 100% 58%;
     --primary-foreground: 220 20% 7%;
-    --secondary: 220 9% 16%;
+    --secondary: 220 10% 15%;
     --secondary-foreground: 220 14% 94%;
-    --muted: 220 9% 16%;
-    --muted-foreground: 220 8% 66%;
+    --muted: 220 10% 15%;
+    --muted-foreground: 220 8% 68%;
     --accent: 211 60% 20%;
     --accent-foreground: 211 100% 76%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 84% 62%;
+    --destructive-foreground: 0 0% 7%;
     --border: 220 8% 21%;
     --input: 220 8% 26%;
     --ring: 211 100% 58%;
-    --chart-streams: #a5a0f0;
-    --chart-recordings: #98e0b0;
-    --chart-vod: #ffd480;
-    --chart-now-fill: #ff6b6b;
-    --chart-now-stroke: #1a1a2e;
+    --edge: 0.09;
+    --well: 220 16% 7%;
+    --thumb: 220 10% 24%;
+
+    --success: 142 62% 46%;
+    --success-fg: 142 66% 66%;
+    --success-bg: 142 45% 12%;
+    --success-border: 142 40% 26%;
+    --warning: 38 92% 52%;
+    --warning-fg: 43 96% 64%;
+    --warning-bg: 32 55% 12%;
+    --warning-border: 32 50% 28%;
+    --danger: 0 84% 62%;
+    --danger-fg: 0 90% 76%;
+    --danger-bg: 0 50% 14%;
+    --danger-border: 0 45% 32%;
+    --info: 211 100% 60%;
+    --info-fg: 211 100% 76%;
+    --info-bg: 211 55% 14%;
+    --info-border: 211 45% 32%;
+    --neutral: 220 8% 58%;
+    --neutral-fg: 220 12% 80%;
+    --neutral-bg: 220 9% 17%;
+    --neutral-border: 220 8% 27%;
+
+    --scrim: 0 0% 0% / 0.5;
+
+    --elevation-1: 0 0 #0000;
+    --elevation-2: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -16px rgb(0 0 0 / 0.6);
+    --elevation-3: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 64px -24px rgb(0 0 0 / 0.75);
   }
+}
+
+@theme inline {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-canvas: hsl(var(--canvas));
+  --color-surface: hsl(var(--surface));
+  --color-raised: hsl(var(--raised));
+  --color-success: hsl(var(--success));
+  --color-success-fg: hsl(var(--success-fg));
+  --color-success-bg: hsl(var(--success-bg));
+  --color-success-border: hsl(var(--success-border));
+  --color-warning: hsl(var(--warning));
+  --color-warning-fg: hsl(var(--warning-fg));
+  --color-warning-bg: hsl(var(--warning-bg));
+  --color-warning-border: hsl(var(--warning-border));
+  --color-danger: hsl(var(--danger));
+  --color-danger-fg: hsl(var(--danger-fg));
+  --color-danger-bg: hsl(var(--danger-bg));
+  --color-danger-border: hsl(var(--danger-border));
+  --color-info: hsl(var(--info));
+  --color-info-fg: hsl(var(--info-fg));
+  --color-info-bg: hsl(var(--info-bg));
+  --color-info-border: hsl(var(--info-border));
+  --color-neutral: hsl(var(--neutral));
+  --color-neutral-fg: hsl(var(--neutral-fg));
+  --color-neutral-bg: hsl(var(--neutral-bg));
+  --color-neutral-border: hsl(var(--neutral-border));
+  /* Fills, lines and scrim, drawn from the foreground so they hold on every surface level */
+  --color-fill: hsl(var(--foreground) / 0.07);
+  --color-selected: hsl(var(--foreground) / 0.10);
+  --color-hairline: hsl(var(--foreground) / 0.08);
+  --color-hairline-strong: hsl(var(--foreground) / 0.12);
+  --color-edge: hsl(var(--foreground) / var(--edge));
+  --color-thumb: hsl(var(--thumb));
+  --color-well: hsl(var(--well));
+  --color-scrim: hsl(var(--scrim));
+  /* Bare transition-* utilities take the shared motion tokens */
+  --default-transition-duration: var(--motion-fast);
+  --default-transition-timing-function: var(--ease-out);
+  --shadow-1: var(--elevation-1);
+  --shadow-2: var(--elevation-2);
+  --shadow-3: var(--elevation-3);
+  /* Radius: group 12, control 8, thumb 4, sheet 20. 12, 8, 4 nest at the 4px inset the app uses.
+     The default scale is cleared so an unmigrated rounded-lg cannot silently change shape. */
+  --radius-*: initial;
+  --radius-group: var(--radius);
+  --radius-control: calc(var(--radius) - 4px);
+  --radius-thumb: calc(var(--radius) - 8px);
+  --radius-sheet: 1.25rem;
+  /* Type scale: 12 / 13 / 14 / 16 / 20 / 28 / 32 */
+  --text-2xs: 0.75rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.125rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.75rem;
+  --text-title: 1.75rem;
+  --text-title--line-height: 1.15;
+  --text-display: 2rem;
+  --text-display--line-height: 1.12;
 }
 
 @layer base {
   * {
-    @apply border-border;
+    @apply border-hairline;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+    /* The document is the scroll container. Keep focused and scrolled-to
+       elements clear of the fixed header, mobile tab bar and settings save bar. */
+    scroll-padding-top: calc(var(--app-header-height, 4rem) + 1rem);
+    scroll-padding-bottom: calc(var(--mobile-navigation-height, 0px) + var(--settings-save-bar-height, 0px) + 1rem);
   }
   body {
     @apply bg-background text-foreground;
@@ -75,7 +232,7 @@
     line-height: 1.5;
     letter-spacing: -0.006em;
     text-rendering: optimizeLegibility;
-    font-feature-settings: "tnum" 1, "kern" 1;
+    font-feature-settings: "kern" 1;
   }
 
   button,
@@ -87,6 +244,278 @@
 
   ::selection {
     background: hsl(var(--primary) / 0.2);
+  }
+
+  /* Taps fire at once, and a held control never starts selecting its own label. */
+  button,
+  a[href],
+  [role="button"],
+  [role="tab"],
+  [role="switch"],
+  summary {
+    touch-action: manipulation;
+  }
+
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="switch"],
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+/* iOS zooms the page into any field under 16px and leaves it there. Unlayered, so no utility wins. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select,
+  [cmdk-input] {
+    font-size: max(16px, 1rem);
+  }
+
+  /* Compact desktop controls stay finger-sized on touch screens wide enough to get them:
+     tablets and phones on their side. */
+  .sm\:min-h-8,
+  .sm\:min-h-9,
+  .md\:min-h-9 {
+    min-height: 2.75rem;
+  }
+
+  .sm\:min-w-9 {
+    min-width: 2.75rem;
+  }
+
+  .sm\:h-9,
+  .md\:h-9 {
+    height: 2.75rem;
+  }
+}
+
+/* Everything clickable shows a hand. Tailwind leaves buttons with the arrow. */
+@layer base {
+  button:not(:disabled),
+  select:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+}
+
+/* Press feedback: on the moment the finger lands, gone gently when it lifts. Unlayered, so it
+   replaces a row's own transition-colors and wins over hover while pressed. */
+.press-row {
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .press-row:hover {
+    background-color: hsl(var(--foreground) / 0.07);
+  }
+}
+
+.press-row:active {
+  background-color: hsl(var(--foreground) / 0.1);
+  transition-duration: 0ms;
+}
+
+/* Home: one grid, named areas per width. reading-flow keeps focus with the eye, since the tiles sit above the DOM order. */
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  grid-template-areas:
+    "verdict"
+    "fresh"
+    "tiles"
+    "heart"
+    "activity"
+    "timeline"
+    "status"
+    "maintenance";
+  reading-flow: grid-rows;
+}
+
+.home-area-verdict { grid-area: verdict; }
+.home-area-fresh { grid-area: fresh; }
+.home-area-heart {
+  grid-area: heart;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* With nothing on, the Active Streams tile already says so. */
+.home-area-now:has([data-empty]) {
+  display: none;
+}
+
+.home-area-now { grid-area: now; }
+.home-area-upcoming { grid-area: upcoming; }
+.home-area-tiles { grid-area: tiles; }
+.home-area-activity { grid-area: activity; }
+.home-area-timeline { grid-area: timeline; }
+.home-area-status { grid-area: status; }
+.home-area-maintenance { grid-area: maintenance; }
+
+@media (min-width: 48rem) {
+  .home-grid {
+    gap: 1.25rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "verdict verdict"
+      "fresh fresh"
+      "tiles tiles"
+      "heart activity"
+      "timeline timeline"
+      "status status"
+      "maintenance maintenance";
+  }
+
+  .home-area-heart,
+  .home-area-activity {
+    align-self: start;
+  }
+}
+
+@media (min-width: 80rem) {
+  .home-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-areas:
+      "verdict verdict verdict verdict verdict verdict"
+      "fresh fresh fresh fresh fresh fresh"
+      "tiles tiles tiles tiles tiles tiles"
+      "now now now now now now"
+      "timeline timeline timeline timeline status status"
+      "activity activity activity upcoming upcoming upcoming"
+      "maintenance maintenance maintenance maintenance maintenance maintenance";
+  }
+
+  /* Focus follows the eye: Recent Activity, then Upcoming, then Maintenance. Now has no stops. */
+  .home-area-heart {
+    display: contents;
+    reading-order: 2;
+  }
+
+  .home-area-maintenance {
+    reading-order: 3;
+  }
+
+  .home-area-activity {
+    reading-order: 1;
+    align-self: start;
+  }
+
+  /* No empty row between sections when nothing is on. */
+  .home-grid:has(.home-area-now [data-empty]) {
+    grid-template-areas:
+      "verdict verdict verdict verdict verdict verdict"
+      "fresh fresh fresh fresh fresh fresh"
+      "tiles tiles tiles tiles tiles tiles"
+      "timeline timeline timeline timeline status status"
+      "activity activity activity upcoming upcoming upcoming"
+      "maintenance maintenance maintenance maintenance maintenance maintenance";
+  }
+}
+
+/* A phone on its side: status and refresh share one short row, tiles run four across without
+   icons or art, and the sidebar is the only thing that scrolls beside the page. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .home-grid {
+    gap: 0.75rem;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    reading-flow: grid-rows;
+    grid-template-areas:
+      "verdict verdict verdict verdict fresh fresh"
+      "tiles tiles tiles tiles tiles tiles"
+      "heart heart heart activity activity activity"
+      "timeline timeline timeline timeline timeline timeline"
+      "status status status status status status"
+      "maintenance maintenance maintenance maintenance maintenance maintenance";
+  }
+
+  .home-area-fresh {
+    flex-wrap: nowrap;
+  }
+
+  .home-area-fresh > div {
+    flex-basis: 0;
+  }
+
+  .home-area-heart {
+    display: flex;
+  }
+
+  .home-area-verdict {
+    min-height: 0;
+    align-self: center;
+    padding-block: 0.25rem;
+  }
+
+  .home-area-fresh h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .home-area-tiles {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
+
+  .home-area-tiles > [data-tile],
+  .home-area-tiles [data-tile-button] {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .home-area-tiles svg:not(.lucide-chevron-right),
+  .home-area-tiles img {
+    display: none;
+  }
+
+  .home-area-tiles p,
+  .home-area-tiles [data-tile-summary] {
+    display: -webkit-box;
+    min-height: 0;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+
+  .app-header-row {
+    min-height: 52px;
+    padding-block: 0.25rem;
+  }
+
+  #main-content {
+    padding-top: calc(var(--app-header-height, 3.25rem) + 0.75rem);
+  }
+
+  .app-sidebar {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .app-sidebar .sidebar-brand,
+  .app-sidebar .sidebar-collapse {
+    display: none;
+  }
+
+  .app-sidebar nav {
+    flex: none;
+    overflow: visible;
+    padding-block: 0.25rem;
+  }
+
+  .app-sidebar nav > div > * + * {
+    margin-top: 0.25rem;
   }
 }
 
@@ -110,50 +539,9 @@
   background: hsl(var(--muted-foreground) / 0.5);
 }
 
-/* Smooth transitions */
-.transition-all {
-  transition-property: all;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
-}
-
-/* Card hover effects */
-.card-hover {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.card-hover:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 38px -28px hsl(220 40% 20% / 0.32);
-}
-
 @layer components {
   .container {
-    @apply mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-8;
-  }
-}
-
-#main-content h1 {
-  font-size: 2rem;
-  line-height: 1.12;
-  letter-spacing: -0.035em;
-}
-
-#main-content h2,
-#main-content [data-card-title] {
-  font-size: 1.0625rem;
-  line-height: 1.3;
-  letter-spacing: -0.012em;
-}
-
-.text-xs {
-  font-size: 0.8125rem;
-  line-height: 1.125rem;
-}
-
-@media (max-width: 767px) {
-  #main-content h1 {
-    font-size: 1.75rem;
+    @apply mx-auto w-full max-w-[1440px] px-[min(1rem,16px)] sm:px-6 lg:px-8;
   }
 }
 
@@ -166,133 +554,255 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-}
 
-@media (prefers-reduced-transparency: reduce) {
-  .ios-navigation-material {
-    background: hsl(var(--background)) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+  /* No transition means @starting-style never shows, so these are in place on their first frame. */
+  .save-bar,
+  .mobile-sheet,
+  .dialog-sheet,
+  .mobile-sheet-overlay,
+  .disclosure-enter,
+  [data-new] {
+    transition: none !important;
+  }
+
+  /* The outline is the only answer See disk gives on a wide screen, so it holds instead of vanishing. */
+  .attention-outline {
+    animation-duration: 1600ms !important;
+    animation-timing-function: step-end !important;
   }
 }
 
 @layer utilities {
-  /* Animation for success message sliding down */
-  @keyframes slide-down {
-    0% {
-      opacity: 0;
-      transform: translateY(-100%);
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0);
-    }
+  /* A card the page just pointed at. Same color as focus, since focus moves there too. */
+  @keyframes attention-outline {
+    0%, 55% { outline-color: hsl(var(--ring)); }
+    100% { outline-color: transparent; }
   }
 
-  .animate-slide-down {
-    animation: slide-down 0.3s ease-out forwards;
+  .attention-outline {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    animation: attention-outline 1600ms var(--ease-out);
   }
 
-  /* Animation for success message sliding from top banner */
-  @keyframes slide-from-top {
-    0% {
-      opacity: 0;
-      transform: translateY(-100%);
-    }
-    10% {
-      opacity: 0.6;
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .animate-slide-from-top {
-    animation: slide-from-top 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-
-  /* Animation for success message sliding back up */
-  @keyframes slide-to-top {
-    0% {
-      opacity: 1;
-      transform: translateY(0);
-    }
-    100% {
-      opacity: 0;
-      transform: translateY(-100%);
-    }
-  }
-
-  .animate-slide-to-top {
-    animation: slide-to-top 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
-  }
-
-  /* Restart overlay animations */
+  /* Restart overlay */
   @keyframes overlay-fade-in {
-    0% { opacity: 0; }
-    100% { opacity: 1; }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   @keyframes overlay-fade-out {
-    0% { opacity: 1; }
-    100% { opacity: 0; }
+    from { opacity: 1; }
+    to { opacity: 0; }
   }
 
   @keyframes overlay-card-enter {
-    0% {
+    from {
       opacity: 0;
       transform: scale(0.95);
     }
-    100% {
+    to {
       opacity: 1;
       transform: scale(1);
     }
   }
 
   @keyframes overlay-card-exit {
-    0% {
+    from {
       opacity: 1;
       transform: scale(1);
     }
-    100% {
+    to {
       opacity: 0;
       transform: scale(0.95);
     }
   }
 
   @keyframes icon-bounce-in {
-    0% {
+    from {
       opacity: 0;
-      transform: scale(0);
+      transform: scale(0.9);
     }
-    50% {
-      transform: scale(1.15);
-    }
-    100% {
+    to {
       opacity: 1;
       transform: scale(1);
     }
   }
 
   .animate-overlay-in {
-    animation: overlay-fade-in 0.3s ease-out forwards;
+    animation: overlay-fade-in var(--motion-base) var(--ease-out) forwards;
   }
 
   .animate-overlay-out {
-    animation: overlay-fade-out 0.4s ease-in forwards;
+    animation: overlay-fade-out var(--motion-base) var(--ease-out) forwards;
   }
 
   .animate-overlay-card-in {
-    animation: overlay-card-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: overlay-card-enter var(--motion-base) var(--ease-out) forwards;
   }
 
   .animate-overlay-card-out {
-    animation: overlay-card-exit 0.4s ease-in forwards;
+    animation: overlay-card-exit var(--motion-base) var(--ease-out) forwards;
   }
 
   .animate-icon-bounce {
-    animation: icon-bounce-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: icon-bounce-in var(--motion-slow) var(--ease-out) forwards;
   }
 }
 
+/* One phone sheet, shared by the More sheet and every dialog below 640px.
+   A transition, not keyframes, so closing mid-open turns around from where it is.
+   The no-op sheet-hold keeps Radix Presence mounted until the sheet has left. */
+@layer utilities {
+  @keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  @keyframes sheet-hold {
+    from, to { visibility: visible; }
+  }
+
+  .mobile-sheet {
+    transition: transform var(--motion-slow) var(--ease-drawer);
+    @starting-style {
+      transform: translateY(100%);
+    }
+  }
+
+  .mobile-sheet[data-state="closed"] {
+    transform: translateY(100%);
+    transition-duration: var(--motion-base);
+    animation: sheet-hold var(--motion-base) linear;
+  }
+
+  @media (width < 40rem) {
+    .dialog-sheet {
+      transition: transform var(--motion-slow) var(--ease-drawer);
+      @starting-style {
+        transform: translateY(100%);
+      }
+    }
+
+    .dialog-sheet[data-state="closed"] {
+      transform: translateY(100%);
+      transition-duration: var(--motion-base);
+      animation: sheet-hold var(--motion-base) linear;
+    }
+  }
+
+  /* Scrim behind every sheet and dialog */
+  .mobile-sheet-overlay {
+    transition: opacity var(--motion-base) var(--ease-out);
+    @starting-style {
+      opacity: 0;
+    }
+  }
+
+  .mobile-sheet-overlay[data-state="closed"] {
+    opacity: 0;
+    animation: sheet-hold var(--motion-base) linear;
+  }
+
+  /* Browsers without @starting-style keep the slide on open */
+  @supports not (transition-behavior: allow-discrete) {
+    .mobile-sheet[data-state="open"] {
+      animation: sheet-up var(--motion-slow) var(--ease-drawer);
+    }
+
+    .mobile-sheet-overlay[data-state="open"] {
+      animation: overlay-fade-in var(--motion-base) var(--ease-out);
+    }
+
+    .save-bar:not([data-leaving]) {
+      animation: sheet-up var(--motion-base) var(--ease-drawer);
+    }
+
+    @media (width < 40rem) {
+      .dialog-sheet[data-state="open"] {
+        animation: sheet-up var(--motion-slow) var(--ease-drawer);
+      }
+    }
+  }
+
+  /* Settings sections fade in. Height is instant, so nothing below them slides. */
+  .disclosure-enter {
+    transition: opacity var(--motion-fast) var(--ease-out);
+    @starting-style {
+      opacity: 0;
+    }
+  }
+}
+
+/* Native date inputs: full-width value aligned left, one calendar icon at the right edge.
+   The transparent picker indicator covers the field so a tap anywhere opens the picker. */
+.date-input {
+  position: relative;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.date-input::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+/* The clock sits at the field's right edge, where every dropdown keeps its chevron. */
+.time-input::-webkit-calendar-picker-indicator {
+  margin-left: auto;
+}
+
+.date-input::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* A transition like the sheets, so an edit while it leaves turns it around from where it is.
+   The no-op sheet-hold is what tells the form the bar has gone. */
+.save-bar {
+  transition: transform var(--motion-base) var(--ease-drawer);
+  @starting-style {
+    transform: translateY(100%);
+  }
+}
+
+.save-bar[data-leaving] {
+  transform: translateY(100%);
+  animation: sheet-hold var(--motion-base) linear;
+}
+
+/* Toasts ride above the save bar, and move with it instead of jumping when its height changes. */
+.toast-viewport {
+  transition: translate var(--motion-base) var(--ease-drawer);
+}
+
+html:has([data-testid="settings-save-bar"]:not([data-leaving])) .toast-viewport {
+  translate: 0 calc(-1 * var(--settings-save-bar-height, 0px));
+}
+
+/* Quick loads never show their loading state. The fill holds it hidden through the delay. */
+.loading-delayed {
+  animation: overlay-fade-in var(--motion-fast) var(--ease-out) var(--motion-fast) backwards;
+}
+
+/* Coming back to Home flips display, which would otherwise replay every @starting-style inside it. */
+[data-returning] * {
+  transition: none !important;
+}
+
+/* A row that arrived since the last refresh settles into place. Unlayered so it
+   replaces the row's own transition-colors, which is why background-color is listed. */
+[data-new] {
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    translate var(--motion-base) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+}

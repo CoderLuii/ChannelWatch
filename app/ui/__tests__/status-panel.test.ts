@@ -31,38 +31,15 @@ const baseSettings = {
 const baseProps = {
   activeNotificationServices: 1,
   activeProviderNames: ["Discord"],
-  activeAlertTypes: ["Channel Watching"],
+  activeAlertTypes: ["Live TV"],
   coreProcessStatus: "Running",
   channelwatchVersion: "0.9.3",
   currentSettings: baseSettings,
   onNavigate: vi.fn(),
 }
 
-describe("StatusPanel monitoring banner", () => {
-  it("renders startup copy instead of degraded copy before freshness is published", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(StatusPanel, {
-        ...baseProps,
-        dvrStatusList: [
-          {
-            ...baseDvr,
-            monitoring_status: "starting",
-            monitoring_ready: false,
-            monitoring_reason: "No freshness state published yet",
-            freshness_status: "starting",
-          },
-        ],
-      }),
-    )
-
-    expect(html).toContain("Monitoring starting")
-    expect(html).toContain("Monitoring starting on Living Room")
-    expect(html).toContain("after the first monitoring pass")
-    expect(html).not.toContain("Monitoring degraded")
-    expect(html).not.toContain("No freshness state published yet")
-  })
-
-  it("renders a diagnose banner when DVR monitoring is stale", () => {
+describe("StatusPanel monitoring", () => {
+  it("leaves monitoring problems to the verdict line, so they are said once", () => {
     const html = renderToStaticMarkup(
       React.createElement(StatusPanel, {
         ...baseProps,
@@ -78,9 +55,9 @@ describe("StatusPanel monitoring banner", () => {
       }),
     )
 
-    expect(html).toContain("Monitoring degraded")
-    expect(html).toContain("Stale monitoring on Living Room")
-    expect(html).toContain("Diagnose")
+    expect(html).not.toContain("Stale monitoring on Living Room")
+    expect(html).not.toContain("Diagnose")
+    expect(html).toMatch(/\bbg-warning(?![\w/-])/)
   })
 })
 
@@ -92,7 +69,7 @@ describe("StatusPanel DVR health dots", () => {
         dvrStatusList: [{ ...baseDvr, monitoring_ready: true }],
       }),
     )
-    expect(html).toContain("bg-green-500")
+    expect(html).toMatch(/\bbg-success(?![\w/-])/)
   })
 
   it("renders amber health dot when monitoring is stale", () => {
@@ -104,7 +81,7 @@ describe("StatusPanel DVR health dots", () => {
         ],
       }),
     )
-    expect(html).toContain("bg-amber-500")
+    expect(html).toMatch(/\bbg-warning(?![\w/-])/)
   })
 
   it("renders red health dot when monitoring is dead", () => {
@@ -116,7 +93,7 @@ describe("StatusPanel DVR health dots", () => {
         ],
       }),
     )
-    expect(html).toContain("bg-red-500")
+    expect(html).toMatch(/\bbg-danger(?![\w/-])/)
   })
 
   it("renders red health dot when DVR is not connected", () => {
@@ -126,7 +103,7 @@ describe("StatusPanel DVR health dots", () => {
         dvrStatusList: [{ ...baseDvr, connected: false }],
       }),
     )
-    expect(html).toContain("bg-red-500")
+    expect(html).toMatch(/\bbg-danger(?![\w/-])/)
   })
 
   it("renders gray health dot when no DVR status is available", () => {
@@ -136,7 +113,35 @@ describe("StatusPanel DVR health dots", () => {
         dvrStatusList: [],
       }),
     )
-    expect(html).toContain("bg-gray-400")
+    expect(html).toMatch(/\bbg-neutral(?![\w/-])/)
+  })
+})
+
+describe("StatusPanel core status badge", () => {
+  it.each(["Unknown", "Loading", "SomethingElse"])("renders %s as a tonal neutral badge with readable text", (coreProcessStatus) => {
+    const html = renderToStaticMarkup(
+      React.createElement(StatusPanel, { ...baseProps, coreProcessStatus, dvrStatusList: [baseDvr] }),
+    )
+    expect(html).toContain("bg-neutral-bg")
+    expect(html).toContain("text-neutral-fg")
+    expect(html).not.toMatch(/\bbg-neutral(?:\/\d+)? [^"]*text-white/)
+  })
+})
+
+describe("StatusPanel unknown DVR", () => {
+  it("says Loading during the first read and Unknown after, never Not connected", () => {
+    const loading = renderToStaticMarkup(React.createElement(StatusPanel, { ...baseProps, dvrStatusList: [], dataLoaded: false }))
+    expect(loading).toContain("Loading")
+    expect(loading).not.toContain("Not connected")
+    const unknown = renderToStaticMarkup(React.createElement(StatusPanel, { ...baseProps, dvrStatusList: [] }))
+    expect(unknown).toContain("Unknown")
+    expect(unknown).not.toContain("bg-danger")
+  })
+
+  it("only a DVR reported disconnected reads as danger", () => {
+    const html = renderToStaticMarkup(React.createElement(StatusPanel, { ...baseProps, dvrStatusList: [{ ...baseDvr, connected: false }] }))
+    expect(html).toContain("Not connected")
+    expect(html).toContain("bg-danger")
   })
 })
 

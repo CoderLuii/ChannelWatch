@@ -1006,7 +1006,7 @@ describe("applyUpdateAndReconnect", () => {
       reload,
     })).rejects.toMatchObject({
       name: "UpdateTransactionUnconfirmedError",
-      message: expect.stringContaining("could not confirm which update transaction started"),
+      message: expect.stringContaining("before ChannelWatch could confirm the update"),
     })
 
     expect(fetchStatus).not.toHaveBeenCalled()

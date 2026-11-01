@@ -11,18 +11,12 @@ from ui.backend import main as backend_main
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CONTRACT_PATH = REPO_ROOT / "app" / "ui" / "api-contracts.json"
 EXPECTED_LEGACY_BROWSER_ROUTES = {
-    ("GET", "/api/about"),
     ("GET", "/api/system-info"),
     ("POST", "/api/run_test/{test_name_url}"),
     ("GET", "/api/discover-servers"),
     ("GET", "/api/recordings/upcoming"),
-    ("GET", "/api/recordings/active"),
-    ("GET", "/api/streams/active"),
     ("GET", "/api/streams/details"),
-    ("GET", "/api/recent-activity"),
     ("GET", "/api/activity-history"),
-    ("POST", "/api/clear-activity-history"),
-    ("POST", "/api/regenerate-api-key"),
 }
 EXPLICIT_SESSION_CSRF_ROUTES = {
     ("POST", "/api/v1/auth/change-credentials"),

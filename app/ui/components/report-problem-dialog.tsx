@@ -23,7 +23,8 @@ import {
 import { z } from "zod"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
-import { Badge } from "@/components/base/badge"
+import { downloadBlob } from "@/lib/utils"
+import { Tag } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
 import {
   Dialog,
@@ -57,6 +58,7 @@ import {
   type ReportProblemPayload,
   type UpdatePolicy,
 } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
 import { t } from "@/lib/i18n"
 import {
   escapeMarkdownTableCell,
@@ -159,6 +161,7 @@ interface ReportProblemDialogProps {
   systemInfo: SystemInfo | null
   appSettings: AppSettings | null
   trigger?: React.ReactNode
+  suspended?: boolean
 }
 
 function modeLabel(mode: ReportMode): string {
@@ -259,17 +262,6 @@ function renderIssueTitle(payload: ReportProblemPayload): string {
 
 function isPrivateAttachmentNameExposed(issueBody: string, filename: string): boolean {
   return !publicReportAssetFilenames.has(filename) && issueBody.includes(filename)
-}
-
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement("a")
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  URL.revokeObjectURL(url)
 }
 
 function getChannelsProfileUrl(username: string): string {
@@ -608,25 +600,25 @@ function ReportPreviewCard({
   ].filter((item): item is { label: string; value: string; href: string } => Boolean(item))
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-muted/25">
-      <div className="border-b border-border bg-background/60 px-3 py-2">
+    <div className="overflow-hidden rounded-control border border-hairline bg-fill">
+      <div className="border-b border-hairline bg-fill px-3 py-2">
         <p className="text-sm font-semibold">{title}</p>
       </div>
       <div className="space-y-3 p-3 text-sm">
         <section className="border-l-2 border-primary/60 pl-3">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Summary
           </h4>
           <p className="mt-1 break-words">{redactPublicText(payload.summary)}</p>
         </section>
         <section className="border-l-2 border-primary/60 pl-3">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Expected behavior
           </h4>
           <p className="mt-1 break-words">{redactPublicText(payload.expected || "Not provided.")}</p>
         </section>
         <section className="border-l-2 border-primary/60 pl-3">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Reporter
           </h4>
           {contacts.length > 0 ? (
@@ -635,7 +627,7 @@ function ReportPreviewCard({
                 <li key={contact.label}>
                   <span className="text-muted-foreground">{contact.label}: </span>
                   <a
-                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                    className="inline-flex items-center gap-1 text-accent-foreground hover:underline"
                     href={contact.href}
                     target="_blank"
                     rel="noreferrer"
@@ -651,16 +643,16 @@ function ReportPreviewCard({
           )}
         </section>
         <section className="border-l-2 border-primary/60 pl-3">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Diagnostics
           </h4>
-          <dl className="mt-2 overflow-hidden rounded-md border border-border">
+          <dl className="mt-2 overflow-hidden rounded-control border border-hairline">
             {diagnosticsRows(payload.diagnostics ?? emptyReportDiagnostics).map(([label, value]) => (
               <div
                 key={label}
-                className="grid gap-1 border-b border-border px-3 py-2 last:border-b-0"
+                className="grid gap-1 border-b border-hairline px-3 py-2 last:border-b-0"
               >
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <dt className="text-xs font-medium text-muted-foreground">
                   {label}
                 </dt>
                 <dd className="break-words">
@@ -675,7 +667,7 @@ function ReportPreviewCard({
   )
 }
 
-export function ReportProblemDialog({ systemInfo, appSettings, trigger }: ReportProblemDialogProps) {
+export function ReportProblemDialog({ systemInfo, appSettings, trigger, suspended = false }: ReportProblemDialogProps) {
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
   const debugBundleInputRef = useRef<HTMLInputElement | null>(null)
   const scrollBodyRef = useRef<HTMLDivElement | null>(null)
@@ -741,7 +733,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
       })
       .catch((error) => {
         if (!cancelled) {
-          setConfigError(error instanceof Error ? error.message : t("supportReport.configError"))
+          setConfigError(describeError(error, t("supportReport.configError")).message)
         }
       })
       .finally(() => {
@@ -914,7 +906,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
       }
       setDebugBundle(file)
     } catch (error) {
-      setAttachmentError(error instanceof Error ? error.message : t("supportReport.error.debugBundleCreate"))
+      setAttachmentError(describeError(error, t("supportReport.error.debugBundleCreate")).message)
     } finally {
       setDebugBundleLoading(false)
     }
@@ -934,7 +926,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
         : field
           ? document.getElementById(fieldIds[field])
           : null
-      target?.scrollIntoView({ behavior: "smooth", block: "center" })
+      target?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" })
       target?.focus({ preventScroll: true })
     }, 0)
   }
@@ -977,7 +969,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
       setStep("review")
     } catch (error) {
       setAttachmentError(
-        error instanceof Error ? error.message : t("supportReport.error.submit"),
+        describeError(error, t("supportReport.error.submit")).message,
       )
       focusReviewBlocker(undefined, true)
     }
@@ -1051,7 +1043,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
       )
       setServerPreview(response)
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : t("supportReport.error.submit"))
+      setSubmitError(describeError(error, t("supportReport.error.submit")).message)
     } finally {
       if (submissionAbortRef.current === abortController) {
         submissionAbortRef.current = null
@@ -1071,7 +1063,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
         reportDraft.supportCode,
       ))
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : t("supportReport.error.statusCheck"))
+      setSubmitError(describeError(error, t("supportReport.error.statusCheck")).message)
     } finally {
       setCheckingStatus(false)
     }
@@ -1124,15 +1116,15 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
   const providerConfirmationPending = Boolean(serverPreview && isProviderConfirmationPending(serverPreview))
   const manualUploadPanel = draftPayload ? (
     <section
-      className="rounded-lg border border-primary/35 bg-primary/5 p-4 text-sm"
+      className="rounded-control bg-fill p-4 text-sm"
       data-testid="manual-upload-panel"
     >
       <div className="flex items-start gap-3">
-        <ExternalLink className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+        <ExternalLink className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold text-foreground">{t("supportReport.manual.title")}</h3>
           <p className="mt-1 text-muted-foreground">{t("supportReport.manual.description")}</p>
-          <Label htmlFor="report-support-code" className="mt-3 block text-xs font-medium uppercase text-muted-foreground">
+          <Label htmlFor="report-support-code" className="mt-3 block text-xs font-medium text-muted-foreground">
             {t("supportReport.manual.codeLabel")}
           </Label>
           <Textarea
@@ -1144,11 +1136,11 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
             className="mt-1 resize-y font-mono text-xs"
             data-testid="report-support-code"
           />
-          <div className="mt-3 rounded-md border border-border bg-background/70 px-3 py-2">
-            <div className="text-xs font-medium uppercase text-muted-foreground">
+          <div className="mt-3 rounded-control border border-hairline bg-fill px-3 py-2">
+            <div className="text-xs font-medium text-muted-foreground">
               {t("supportReport.manual.uploadSite")}
             </div>
-            <div className="mt-1 break-all text-xs text-foreground">{supportPortalUrl}</div>
+            <div className="mt-1 text-xs text-foreground [overflow-wrap:anywhere]">{supportPortalUrl}</div>
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Button
@@ -1192,7 +1184,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
               href={supportPortalUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background md:justify-start"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-control border border-hairline px-3 text-sm font-medium text-foreground transition-colors hover:bg-fill focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background md:justify-start"
             >
               <ExternalLink className="h-4 w-4" />
               {t("supportReport.manual.openPortal")}
@@ -1208,7 +1200,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
             )}
             {offlinePackageStatus === "downloaded" && t("supportReport.manual.packageDownloaded")}
             {offlinePackageStatus === "error" && (
-              <span className="text-destructive">{t("supportReport.manual.packageDownloadFailed")}</span>
+              <span className="text-danger-fg">{t("supportReport.manual.packageDownloadFailed")}</span>
             )}
           </div>
         </div>
@@ -1217,7 +1209,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
   ) : null
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open && !suspended} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
           <Button
@@ -1232,46 +1224,44 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-3xl overflow-hidden p-0">
+      <DialogContent data-testid="report-problem-dialog" dismissGuard={() => hasDirtyDraft} className="flex w-[calc(100vw-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 max-sm:pb-0 max-sm:pt-5">
         <div
           ref={scrollBodyRef}
-          className="max-h-[88vh] overflow-x-hidden overflow-y-auto"
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
           data-testid="report-problem-scroll-body"
         >
-          <div className="border-b border-border/80 bg-card/60 px-5 py-4 sm:px-6">
+          <div className="border-b border-hairline px-[min(1.25rem,20px)] py-4 sm:px-6">
             <DialogHeader className="text-left">
-              <div className="flex items-start gap-3 pr-8">
+              <div className="flex items-center gap-3 pr-10">
                 <Image
                   src="/images/channelwatch-logo.png"
                   alt=""
                   width={40}
                   height={40}
-                  className="mt-0.5 h-10 w-10 rounded-md"
+                  className="h-8 w-8 shrink-0 rounded-control sm:h-10 sm:w-10"
                 />
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <DialogTitle>{t("supportReport.title")}</DialogTitle>
-                    <Badge variant="outline" className="h-6">
-                      {modeLabel(config?.mode || "dry-run")}
-                    </Badge>
-                  </div>
-                  <DialogDescription>{t("supportReport.description")}</DialogDescription>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <DialogTitle className="break-words">{t("supportReport.title")}</DialogTitle>
+                  {config && config.mode !== "live" ? (
+                    <Tag className="whitespace-nowrap">{modeLabel(config.mode)}</Tag>
+                  ) : null}
                 </div>
               </div>
+              <DialogDescription className="mt-1 sm:pl-[52px]">{t(config?.mode === "live" ? "supportReport.descriptionLive" : "supportReport.description")}</DialogDescription>
             </DialogHeader>
           </div>
 
-          <div className="space-y-4 px-5 py-5 sm:px-6">
+          <div className="space-y-4 px-[min(1.25rem,20px)] py-5 sm:px-6">
             {hasDirtyDraft && scheduledRestartSeconds !== null ? (
-              <Alert className="border-amber-500/40 bg-amber-500/10" data-testid="report-scheduled-restart-warning">
-                <AlertCircle className="h-4 w-4 text-amber-500" />
+              <Alert className="border-warning-border bg-warning-bg" data-testid="report-scheduled-restart-warning">
+                <AlertCircle className="h-4 w-4 text-warning-fg" />
                 <AlertTitle>{t("supportReport.updateRestart.title")}</AlertTitle>
                 <AlertDescription className="space-y-3">
                   <p aria-live="polite">
                     {t("supportReport.updateRestart.countdown", { countdown: formatRestartCountdown(scheduledRestartSeconds) })}
                   </p>
                   <p>{t("supportReport.updateRestart.draftSafe")}</p>
-                  {postponeError ? <p role="alert" className="text-destructive">{postponeError}</p> : null}
+                  {postponeError ? <p role="alert" className="text-danger-fg">{postponeError}</p> : null}
                   {updatePolicy?.postpone_available !== false ? (
                     <Button
                       type="button"
@@ -1284,7 +1274,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                         try {
                           setUpdatePolicy(await postponeUpdate(24, "dirty_report_draft"))
                         } catch (nextError) {
-                          setPostponeError(nextError instanceof Error ? nextError.message : t("supportReport.updateRestart.postponeError"))
+                          setPostponeError(describeError(nextError, t("supportReport.updateRestart.postponeError")).message)
                         } finally {
                           setPostponingRestart(false)
                         }
@@ -1301,7 +1291,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
             ) : null}
 
             {loadingConfig && (
-              <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 rounded-control border border-hairline bg-fill px-3 py-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t("supportReport.loadingConfig")}
               </div>
@@ -1330,7 +1320,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                     maxLength={500}
                   />
                   {fieldError(errors, "summary") && (
-                    <p id="report-summary-error" className="text-sm text-destructive" role="alert">
+                    <p id="report-summary-error" className="text-sm text-danger-fg" role="alert">
                       {fieldError(errors, "summary")}
                     </p>
                   )}
@@ -1345,13 +1335,12 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                     id="report-expected"
                     value={form.expected}
                     onChange={(event) => updateField("expected", event.target.value)}
-                    placeholder={t("supportReport.form.expectedPlaceholder")}
                     aria-invalid={Boolean(fieldError(errors, "expected"))}
                     aria-describedby={fieldError(errors, "expected") ? "report-expected-error" : undefined}
                     maxLength={2000}
                   />
                   {fieldError(errors, "expected") && (
-                    <p id="report-expected-error" className="text-sm text-destructive" role="alert">
+                    <p id="report-expected-error" className="text-sm text-danger-fg" role="alert">
                       {fieldError(errors, "expected")}
                     </p>
                   )}
@@ -1379,7 +1368,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                       }
                     />
                     {fieldError(errors, "getchannels_username") && (
-                      <p id="report-getchannels-error" className="text-sm text-destructive" role="alert">
+                      <p id="report-getchannels-error" className="text-sm text-danger-fg" role="alert">
                         {fieldError(errors, "getchannels_username")}
                       </p>
                     )}
@@ -1401,7 +1390,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                       aria-describedby={fieldError(errors, "github_username") ? "report-github-error" : undefined}
                     />
                     {fieldError(errors, "github_username") && (
-                      <p id="report-github-error" className="text-sm text-destructive" role="alert">
+                      <p id="report-github-error" className="text-sm text-danger-fg" role="alert">
                         {fieldError(errors, "github_username")}
                       </p>
                     )}
@@ -1426,7 +1415,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                       }
                     />
                     {fieldError(errors, "email") ? (
-                      <p id="report-email-error" className="text-sm text-destructive" role="alert">
+                      <p id="report-email-error" className="text-sm text-danger-fg" role="alert">
                         {fieldError(errors, "email")}
                       </p>
                     ) : (
@@ -1438,7 +1427,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                 </div>
 
                 {noContact && (
-                  <div className="rounded-md border border-amber-500/60 bg-background px-3 py-3 text-sm">
+                  <div className="rounded-control border border-warning-border px-3 py-3 text-sm">
                     <div className="font-medium text-foreground">
                       {t("supportReport.form.contactWarningTitle")}
                     </div>
@@ -1451,15 +1440,12 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                 <section
                   ref={attachmentSectionRef}
                   tabIndex={-1}
-                  className="space-y-3 rounded-md border border-border bg-background p-3 focus:outline-none focus:ring-2 focus:ring-destructive/60"
+                  className="space-y-3 rounded-control border border-hairline p-3 focus:outline-none focus:ring-2 focus:ring-destructive/60"
                 >
                   <div className="flex items-start gap-2">
-                    <Paperclip className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+                    <Paperclip className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
                     <div>
                       <h3 className="text-sm font-semibold">{t("supportReport.form.attachmentsTitle")}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {t("supportReport.form.attachmentsDesc")}
-                      </p>
                     </div>
                   </div>
 
@@ -1467,10 +1453,10 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                     <div
                       data-testid="report-screenshot-dropzone"
                       tabIndex={0}
-                      className={`space-y-3 rounded-md border p-3 transition-colors ${
+                      className={`space-y-3 rounded-control border p-3 transition-colors ${
                         screenshotDropActive
-                          ? "border-primary bg-primary/10"
-                          : "border-border bg-muted/20 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40"
+                          ? "border-input bg-selected"
+                          : "border-hairline bg-fill focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40"
                       }`}
                       onPaste={handleScreenshotPaste}
                       onDragOver={(event) => {
@@ -1481,7 +1467,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                       onDrop={handleScreenshotDrop}
                     >
                       <div className="flex items-start gap-2">
-                        <Camera className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+                        <Camera className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
                         <div>
                           <Label htmlFor="report-screenshots">
                             {t("supportReport.form.screenshotsLabel")}
@@ -1494,13 +1480,10 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                           </p>
                         </div>
                       </div>
-                      <div className="rounded-md border border-dashed border-border bg-background/70 px-3 py-4 text-center">
+                      <div className="rounded-control border border-dashed border-hairline-strong px-3 py-4 text-center">
                         <div className="text-sm font-medium text-foreground">
                           {t("supportReport.form.screenshotsDropTitle")}
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("supportReport.form.screenshotsDropDesc")}
-                        </p>
                         <Button
                           type="button"
                           variant="outline"
@@ -1527,9 +1510,9 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                       </p>
                     </div>
 
-                    <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                    <div className="space-y-3 rounded-control border border-hairline bg-fill p-3">
                       <div className="flex items-center gap-2">
-                        <Archive className="h-4 w-4 text-primary" />
+                        <Archive className="h-4 w-4 text-muted-foreground" />
                         <Label htmlFor="report-debug-bundle">{t("supportReport.form.debugBundleLabel")}</Label>
                       </div>
                       <div className="grid gap-2 sm:grid-cols-2">
@@ -1575,14 +1558,14 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                   </div>
 
                   {hasAttachments && (
-                    <div className="rounded-md border border-border bg-muted/30">
-                      <div className="border-b border-border px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
+                    <div className="rounded-control border border-hairline bg-fill">
+                      <div className="border-b border-hairline px-3 py-2 text-xs font-medium text-muted-foreground">
                         {t("supportReport.form.attachedFiles")}
                       </div>
-                      <ul className="divide-y divide-border text-sm">
+                      <ul className="divide-y divide-hairline text-sm">
                         {attachmentRows.map((file, index) => (
                           <li key={`${file.kind}-${file.filename}-${index}`} className="flex items-center gap-3 px-3 py-2">
-                            <FileText className="h-4 w-4 flex-shrink-0 text-primary" />
+                            <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-medium">{file.filename}</div>
                               <div className="text-xs text-muted-foreground">
@@ -1624,13 +1607,13 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                   )}
 
                   {attachmentError && (
-                    <p className="text-sm text-destructive" role="alert">
+                    <p className="text-sm text-danger-fg" role="alert">
                       {attachmentError}
                     </p>
                   )}
 
-                  <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                    <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+                  <div className="flex items-start gap-2 rounded-control border border-hairline bg-fill px-3 py-3 text-sm text-muted-foreground">
+                    <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
                     <p>{t("supportReport.form.attachmentsPrivate")}</p>
                   </div>
                 </section>
@@ -1640,9 +1623,9 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
             {step === "review" && draftPayload && (
               <div className="space-y-4" data-testid="report-problem-review">
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-                  <section className="rounded-lg border border-border bg-background">
-                    <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                      <FileText className="h-4 w-4 text-primary" />
+                  <section className="rounded-control border border-hairline">
+                    <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
                       <h3 className="text-sm font-semibold">{t("supportReport.review.publicPreview")}</h3>
                     </div>
                     <div className="space-y-3 p-3">
@@ -1651,11 +1634,11 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                   </section>
 
                   <aside className="space-y-3">
-                    <section className="rounded-lg border border-border bg-background">
-                      <div className="border-b border-border px-3 py-2">
+                    <section className="rounded-control border border-hairline">
+                      <div className="border-b border-hairline px-3 py-2">
                         <h3 className="text-sm font-semibold">{t("supportReport.review.diagnostics")}</h3>
                       </div>
-                      <dl className="divide-y divide-border text-sm">
+                      <dl className="divide-y divide-hairline text-sm">
                         {diagnosticsRows(draftPayload.diagnostics ?? emptyReportDiagnostics).map(([label, value]) => (
                           <div key={label} className="px-3 py-2">
                             <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -1666,20 +1649,20 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                         ))}
                       </dl>
                     </section>
-                    <section className="rounded-lg border border-border bg-background p-3 text-sm text-muted-foreground">
+                    <section className="rounded-control border border-hairline p-3 text-sm text-muted-foreground">
                       <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
-                        <Mail className="h-4 w-4 text-primary" />
+                        <Mail className="h-4 w-4 text-muted-foreground" />
                         {t("supportReport.review.emailPrivate")}
                       </div>
                       <p>{t("supportReport.review.privateBoundary")}</p>
                     </section>
-                    <section className="rounded-lg border border-border bg-background">
-                      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                        <Paperclip className="h-4 w-4 text-primary" />
+                    <section className="rounded-control border border-hairline">
+                      <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
+                        <Paperclip className="h-4 w-4 text-muted-foreground" />
                         <h3 className="text-sm font-semibold">{t("supportReport.review.privateAttachments")}</h3>
                       </div>
                       {hasAttachments ? (
-                        <ul className="divide-y divide-border text-sm">
+                        <ul className="divide-y divide-hairline text-sm">
                           {attachmentRows.map((file, index) => (
                             <li key={`${file.kind}-${file.filename}-${index}`} className="px-3 py-2">
                               <div className="break-words font-medium">{file.filename}</div>
@@ -1720,8 +1703,8 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                 <div
                   className={
                     privateDeliveryFailed || providerConfirmationPending
-                      ? "rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-4"
-                      : "rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-4"
+                      ? "rounded-control border border-warning-border bg-warning-bg px-4 py-4"
+                      : "rounded-control border border-success-border bg-success-bg px-4 py-4"
                   }
                   data-testid={
                     privateDeliveryFailed
@@ -1733,12 +1716,12 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                 >
                   <div className="flex items-start gap-3">
                     {privateDeliveryFailed || providerConfirmationPending ? (
-                      <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
+                      <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning-fg" />
                     ) : (
-                      <CheckCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
+                      <CheckCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-success-fg" />
                     )}
                     <div>
-                      <h3 className={privateDeliveryFailed || providerConfirmationPending ? "font-semibold text-amber-500" : "font-semibold text-emerald-500"}>
+                      <h3 className={privateDeliveryFailed || providerConfirmationPending ? "font-semibold text-warning-fg" : "font-semibold text-success-fg"}>
                         {privateDeliveryFailed
                           ? t("supportReport.success.privateDeliveryFailedTitle")
                           : successTitle(serverPreview)}
@@ -1763,7 +1746,7 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                           href={serverPreview.issue_url}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-primary underline underline-offset-4"
+                          className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent-foreground underline underline-offset-4"
                         >
                           {t("supportReport.success.openIssue")}
                           <ExternalLink className="h-3.5 w-3.5" />
@@ -1780,13 +1763,13 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                   </Alert>
                 )}
                 {!providerConfirmationPending && <>
-                <section className="rounded-lg border border-border bg-background">
-                  <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                    <Paperclip className="h-4 w-4 text-primary" />
+                <section className="rounded-control border border-hairline">
+                  <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
+                    <Paperclip className="h-4 w-4 text-muted-foreground" />
                     <h3 className="text-sm font-semibold">{t("supportReport.review.privateAttachments")}</h3>
                   </div>
                   {hasAttachments ? (
-                    <ul className="divide-y divide-border text-sm">
+                    <ul className="divide-y divide-hairline text-sm">
                       {attachmentRows.map((file, index) => (
                         <li key={`${file.kind}-${file.filename}-${index}`} className="px-3 py-2">
                           <div className="break-words font-medium">{file.filename}</div>
@@ -1806,8 +1789,8 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
                     </p>
                   )}
                 </section>
-                <section className="rounded-lg border border-border bg-background">
-                  <div className="border-b border-border px-3 py-2">
+                <section className="rounded-control border border-hairline">
+                  <div className="border-b border-hairline px-3 py-2">
                     <h3 className="text-sm font-semibold">{t("supportReport.review.publicPreview")}</h3>
                   </div>
                   <div className="space-y-3 p-3">
@@ -1818,8 +1801,9 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
               </div>
             )}
           </div>
+        </div>
 
-          <DialogFooter className="gap-3 border-t border-border bg-card/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0 sm:px-6">
+          <DialogFooter data-testid="report-problem-footer" className="shrink-0 gap-3 border-t border-hairline bg-raised px-[min(1.25rem,20px)] pb-[max(16px,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:items-center sm:justify-between sm:space-x-0 sm:px-6 sm:py-4">
             {step === "form" && (
               <>
                 <div className="flex gap-2">
@@ -1902,7 +1886,6 @@ export function ReportProblemDialog({ systemInfo, appSettings, trigger }: Report
               </div>
             )}
           </DialogFooter>
-        </div>
       </DialogContent>
     </Dialog>
   )

@@ -6,6 +6,101 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-11-01
+
+### Changed
+
+- Improve dashboard layout, mobile navigation, status colors, Update Center summaries and interface wording across the app. This update installs from **Settings > Updates** without recreating the container.
+- Start the dashboard with a one-line health summary, such as "Monitoring healthy · 1 DVR connected", or the most serious problem when something needs attention. On phones the four summary tiles sit in a 2x2 grid.
+- Put what is on first. Home now opens on phones with the four summary tiles, then a **Now** list of live streams and active recordings when something is on, then upcoming recordings.
+- Make the health summary say the worst thing that is true, with how many other problems sit behind it and one button to the next step. It now covers stopped or stale monitoring, and no longer names the version.
+- Point to **Set up notifications** in the health summary when no notification service is set up.
+- Show disk space as what is left, such as "116 GB left · warns at 186 GB", with marks on the bar where alerts start. Show uptime as days and hours or hours and minutes, without seconds.
+- Replace "Last updated" with how old the data is, such as "Updated 2 min ago" or "Last good data 12 min ago". The 30-second refresh no longer makes the page or the **Refresh** button flicker.
+- Keep Home open behind other tabs, so coming back keeps your place. Each tab starts at its top, and tapping the tab you are on scrolls back up. Home reads nothing while it is out of view.
+- Show activity and recording rows as the show, then the device or result and the time. Show artwork only when there is artwork, and show bad or missing dates as a dash or "Time unknown".
+- Show five rows of Recent Activity and Upcoming Recordings on phones and tablets instead of a small scrolling box, with **Open Watch History** below the first and **Show all** below the second.
+- Show the 24-hour timeline as one sentence and three simple lanes for Live TV, VOD and Recordings. The chart's show and hide toggles are gone, because every lane now shows at once.
+- Keep Home in place while it loads, with placeholders the same size as the content. A new activity row settles in once when a refresh brings it.
+- Open disk and uptime details in a sheet on phones and tablets, so the tile stays put and the page does not shift.
+- Open Diagnostics, Help & Feedback and About from a bottom sheet under the **More** tab on phones.
+- Close sheets by swiping down, with a flick or a long drag. A sheet holding an unsent report or request springs back and keeps your draft.
+- Slide sheets up from the bottom and back down the same way, with their content still showing as they leave. A sheet closed while it is opening turns around from where it is.
+- Open dialogs from the center without drifting, and open menus from the button you tapped. Healthy status no longer pulses.
+- Put filters on phones behind short pills that open one sheet. Notification Log hides its filters until there is something to filter, and Watch History hides paging when there is one page.
+- Show long show, channel and program names on two lines with the full name in the detail view.
+- Show notification routing as stacked cards with full-width switches on phones, and line up the Notification Log date filters.
+- Highlight rows and tabs the moment you press them, keep buttons from selecting their own text, and keep the page from zooming when you tap a field on an iPhone.
+- Arrange Home for tablets and for phones on their side, and make the sign-in form work with password managers and the keyboard's Go key.
+- Give every screen three clear surface levels in light and dark, one set of corner sizes and one thin line for borders and dividers. The header, tab bar and save bar are now solid, so page text no longer shows through them. Cards have a clear edge in light, selected tabs sit above their track in both themes, and the save bar reads as its own layer.
+- Use color for status only. Green, amber and red mean the same thing on every screen, while routine activity, summary tile icons and notification provider rows stay neutral. A disk warning now looks the same on Home and in Diagnostics.
+- Keep healthy states quiet. A healthy summary is a dot and one line of text, and Status shows **Running** and **Connected** as plain words.
+- Flatten Settings into plain cards. Notification providers and alerts each sit in one list, and field labels are no longer in capitals.
+- Say "No sign-in set" in Status at every screen size, and in the header on wide screens, instead of a red badge.
+- Call the first page **Home** in the page title and the side rail, to match the phone tab, and use the same order in the side rail as the tabs. Call the core process **Monitoring engine** and the UI process **Web app**.
+- Show the Save and Discard bar only when settings have unsaved changes. After a save it says the settings were saved and applied, then slides away.
+- Show **Unsaved changes**, then "General settings saved and applied", and keep "Last saved" under the title. **Discard** now offers **Undo**, and a failed save stays on the page until it is fixed.
+- Confirm **Restart** in a sheet instead of a browser popup. Messages appear above the tab bar on phones, and you can swipe them down.
+- Make **Retry** stand out after a failed restart, and give the restart recovery buttons a full-size touch target.
+- Fade Settings sections in when opened and keep the page where it was.
+- Tell one story in Update Center: one headline, one next action, and a failure together with its reason and **Retry**. Install progress and check errors now sit beside the buttons that started them, and **Roll back** asks first.
+- Use one name for each thing across the app: **Delivery** for the notification log tab, **Destination** for its filter, **Password sign-in** and **No sign-in**, **update window**, **Live TV** and **Recordings**.
+- Rename **Notify me only** to **Install manually**, because that setting has never sent a notification.
+- Say plainly what becomes public when you send a report, and that anyone with a backup file can read saved credentials. Pushover, Discord and other provider credentials are stored unencrypted. Only DVR API keys and webhooks are encrypted.
+- Name the status and program in default recording notification titles, such as "Failed: The Bear". Custom templates are unchanged.
+- Name the DVR in default disk alerts and shorten their titles to "Disk space low" and "Disk space critically low". Custom templates are unchanged.
+- Show 25 rows per page in Notification Log, with a shorter row on phones.
+- Explain failed notifications in a plain sentence with the original error one tap away, and say what to do next when History or the log cannot load.
+- Say why a DVR is disconnected in Status: it timed out, the connection was refused or the host is unreachable, or the DVR answered with an HTTP error.
+- Archive a saved DVR for 30 days when you remove it, with **Undo** right there. Saving applies the removal.
+- Ask you to confirm before a backup file replaces your settings. A safety copy of the current files goes to /config/backups/ first.
+
+### Fixed
+
+- Record a low or critical disk warning in Recent Activity once per level instead of every few minutes while free space stays low. A new entry appears only when the level changes, disk space recovers, or your existing disk alert cooldown allows a re-alert. Repeated entries already in history are shown once.
+- Fill in duration, episode title, summary and season and episode numbers for VOD playback in Watch History. The DVR sends these fields in lowercase and ChannelWatch only read the capitalized names. Progress now shows as a percentage and duration reads like "32m 19s".
+- Keep two different recordings of the same program and channel as two entries in Recent Activity instead of one.
+- Restore the default when you clear a disk threshold instead of saving 0. On a DVR's own tab, clearing a number returns that DVR to the global value. Critical must stay lower than warning, including what a DVR inherits from the global settings, and the error names the DVR.
+- Keep the level of new disk alerts in Recent Activity, so a critical alert stays red. Alerts saved before this update show as warnings.
+- Show a dash and a reason when a number could not be read, instead of 0 or a red label. After a failed refresh, the last good value stays with the time it was read.
+- Show the reason and the next step when a sign-in, DVR test or restart fails, instead of a status code or a general failure message. A wrong password still says "Invalid username or password." Error messages stay until you close them.
+- Keep unsaved settings when you move to another tab or the app restarts, and warn before you reload the page.
+- Stop **Discard** from clearing a saved notification credential the next time you save.
+- Refresh Settings after a restore, so the next save cannot overwrite what you restored.
+- Ask you to sign in again above the page when your session ends, so what you were editing is still there afterwards.
+- Stop asking a signed-in person to sign in when ChannelWatch is restarting or busy. The page says it cannot reach the server and keeps trying.
+- Keep an unsent report or request when you go back and return.
+- Save the update window when you press Enter in its fields, instead of reporting a save that changed nothing.
+- Give each DVR you add its own ID, and stop a save that lists the same address twice or leaves a host blank.
+- Keep routing you set on a new DVR before its first save.
+- Stop saving a notification provider that is switched on with no details, instead of switching it off without a word.
+- Hide archived DVRs from the header selector.
+- Say "ChannelWatch is busy" when it is rate limiting, and stop blaming the container for errors that are not about it.
+- Close an open sheet or menu when you go back to another tab, so it never sits on top of the wrong page.
+- Move the side rail and the page together when the rail opens or closes, and hold a dragged sheet to your finger from the first movement.
+- Stop messages from jumping when the save bar leaves, and stop Home replaying its entry fades when you come back to it.
+- Keep the phone loading placeholder the same size as Home, so the page does not jump when it loads.
+- Load the logo and About page images faster, and add proper icons for installing ChannelWatch on a phone home screen.
+- Show messages above the save bar on wider screens, so an error no longer covers **Save** and **Discard**.
+- Keep the **Report a problem** buttons visible at the bottom of the form on phones.
+- Keep the mobile tab bar, DVR selector and page titles readable with large system text. Labels no longer break mid-word, and cards use less side padding.
+- Keep words whole with large system text in activity and recording details, Diagnostics tests and DVR uptime rows. A word only breaks when it is wider than the screen.
+- Keep compact controls finger-sized on tablets and on phones held sideways.
+- Keep keyboard focus visible above the header, mobile tab bar and settings save bar on short screens.
+- Stop sheets and section fades from moving on their own when your device is set to reduce motion, while a sheet still follows your finger, and skip the smooth scroll to the first problem in **Report a problem**.
+- Stop the open sidebar from covering the DVR selector, remember whether it is open after a reload, and keep it as a rail on screens narrower than 1024 pixels.
+- Make **See disk** answer on wide screens, where it now outlines the disk card and moves focus to it.
+- Open the preset list from **Review presets** on the Alerts banner, instead of moving focus with nothing to see.
+- Hide **Retry** in Update Center when there is nothing to retry, and stop saving the update mode again when you pick the one already in use.
+- Close a filter sheet when the screen gets wider, so turning a phone no longer leaves a dim page that ignores taps.
+- Hold the Update Center layout while its status loads, so **Update policy** does not jump down under the pointer.
+- Show a hand and a hover state on buttons, tabs, dropdowns and clickable tiles, and add a tooltip and the current choice to the theme control.
+- Start every page title at the same left edge, and give About a visible title with its name below the banner in both themes.
+- Line up Settings controls: **Apply preset** with its dropdown, the Update Center notice icon with its text, field insets and widths, and the clock in the update window field.
+- Use the same dropdowns in Maintenance Windows as everywhere else, give one DVR the full row, and bring an opened section into view instead of opening it below the fold.
+- Make the Timezone label open its control, and say sign-in stays off until you finish setting it up, instead of repeating the no sign-in warning under the password choice.
+- Stop printing raw text keys in the Diagnostics export.
+
 ## [1.6.4] - 2026-10-28
 
 ### Fixed
@@ -1043,7 +1138,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.4...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.5...HEAD
+[1.6.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.4...v1.6.5
 [1.6.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.1...v1.6.2

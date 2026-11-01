@@ -33,6 +33,7 @@ import {
   type ReportConfig,
   type ReportProblemPayload,
 } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
 import { t } from "@/lib/i18n"
 
 const screenshotTypes = new Set(["image/png", "image/jpeg", "image/webp"])
@@ -96,7 +97,7 @@ function validateScreenshot(file: File, config: ReportConfig | null): string | n
   return null
 }
 
-export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
+export function FeatureRequestDialog({ trigger, suspended = false }: FeatureRequestDialogProps & { suspended?: boolean }) {
   const screenshotInputRef = useRef<HTMLInputElement | null>(null)
   const discardConfirmationRef = useRef<HTMLDivElement | null>(null)
   const submissionAbortRef = useRef<AbortController | null>(null)
@@ -143,7 +144,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
     try {
       setConfig(await fetchReportConfig())
     } catch (error) {
-      setConfigError(error instanceof Error ? error.message : t("feedback.feature.configErrorDescription"))
+      setConfigError(describeError(error, t("feedback.feature.configErrorDescription")).message)
     } finally {
       setConfigLoading(false)
     }
@@ -257,7 +258,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
       setSubmitted(true)
     } catch (error) {
       if (abortController.signal.aborted) return
-      setSubmitError(error instanceof Error ? error.message : "The request could not be submitted. Your draft is still here.")
+      setSubmitError(describeError(error, "Couldn't send the request.").message)
     } finally {
       if (submissionAbortRef.current === abortController) submissionAbortRef.current = null
       setSubmitting(false)
@@ -266,7 +267,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open && !suspended} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         {trigger ?? (
           <Button type="button" variant="outline">
@@ -280,6 +281,10 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
         onInteractOutside={(event) => {
           if (hasDraft || submitting) event.preventDefault()
         }}
+        dismissGuard={() => hasDraft || submitting}
+        onDismissBlocked={() => {
+          if (hasDraft) setConfirmDiscard(true)
+        }}
       >
         <DialogHeader>
           <DialogTitle>{t("feedback.feature.title")}</DialogTitle>
@@ -289,7 +294,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
         {submitted ? (
           <div className="space-y-5 py-2" data-testid="feature-request-success">
             <Alert>
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+              <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
               <AlertTitle>{t("feedback.feature.successTitle")}</AlertTitle>
               <AlertDescription>{t("feedback.feature.successDescription")}</AlertDescription>
             </Alert>
@@ -332,7 +337,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                 aria-invalid={Boolean(errors.summary)}
                 aria-describedby={errors.summary ? "feature-summary-error" : undefined}
               />
-              {errors.summary ? <p id="feature-summary-error" role="alert" className="text-sm text-destructive">{errors.summary}</p> : null}
+              {errors.summary ? <p id="feature-summary-error" role="alert" className="text-sm text-danger-fg">{errors.summary}</p> : null}
             </div>
 
             <div className="space-y-2">
@@ -346,7 +351,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                 aria-invalid={Boolean(errors.expected)}
                 aria-describedby={errors.expected ? "feature-expected-error" : undefined}
               />
-              {errors.expected ? <p id="feature-expected-error" role="alert" className="text-sm text-destructive">{errors.expected}</p> : null}
+              {errors.expected ? <p id="feature-expected-error" role="alert" className="text-sm text-danger-fg">{errors.expected}</p> : null}
             </div>
 
             <div className="space-y-2">
@@ -360,7 +365,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                 aria-invalid={Boolean(errors.use_case)}
                 aria-describedby={errors.use_case ? "feature-use-case-error" : undefined}
               />
-              {errors.use_case ? <p id="feature-use-case-error" role="alert" className="text-sm text-destructive">{errors.use_case}</p> : null}
+              {errors.use_case ? <p id="feature-use-case-error" role="alert" className="text-sm text-danger-fg">{errors.use_case}</p> : null}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -386,14 +391,14 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                   aria-describedby={errors.email ? "feature-email-error" : "feature-email-help"}
                 />
                 {errors.email ? (
-                  <p id="feature-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
+                  <p id="feature-email-error" role="alert" className="text-sm text-danger-fg">{errors.email}</p>
                 ) : (
                   <p id="feature-email-help" className="text-sm text-muted-foreground">{t("feedback.feature.contactHelp")}</p>
                 )}
               </div>
             </div>
 
-            <div className="space-y-3 rounded-lg border border-border p-4">
+            <div className="space-y-3 rounded-control border border-hairline p-4">
               <div>
                 <p className="text-sm font-medium">{t("feedback.feature.screenshotLabel")}</p>
                 <p className="mt-1 text-sm text-muted-foreground">{t("feedback.feature.screenshotHelp")}</p>
@@ -407,7 +412,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                 onChange={handleScreenshot}
               />
               {screenshot ? (
-                <div className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2">
+                <div className="flex min-w-0 items-center justify-between gap-3 rounded-control bg-fill px-3 py-2">
                   <span className="truncate text-sm" title={screenshot.name}>{screenshot.name}</span>
                   <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => setScreenshot(null)}>
                     <X className="h-4 w-4" aria-hidden="true" />
@@ -420,7 +425,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
                   {t("feedback.feature.addScreenshot")}
                 </Button>
               )}
-              {attachmentError ? <p role="alert" className="text-sm text-destructive">{attachmentError}</p> : null}
+              {attachmentError ? <p role="alert" className="text-sm text-danger-fg">{attachmentError}</p> : null}
             </div>
 
             <Alert>
@@ -436,7 +441,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
             ) : null}
 
             {confirmDiscard ? (
-              <div ref={discardConfirmationRef} className="flex flex-col gap-3 rounded-lg border border-destructive/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div ref={discardConfirmationRef} className="flex flex-col gap-3 rounded-control border border-destructive/40 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm">{t("feedback.feature.discardConfirm")}</p>
                 <div className="flex gap-2">
                   <Button type="button" variant="outline" className="min-h-11" onClick={() => setConfirmDiscard(false)}>{t("common.cancel")}</Button>
@@ -451,7 +456,7 @@ export function FeatureRequestDialog({ trigger }: FeatureRequestDialogProps) {
             </div>
 
             <DialogFooter className="flex-wrap gap-2 border-t pt-4 sm:space-x-0 [&>button]:h-auto [&>button]:max-w-full [&>button]:whitespace-normal [&>button]:py-2 [&>button]:text-center">
-              {hasDraft ? (
+              {hasDraft && !confirmDiscard ? (
                 <Button type="button" variant="ghost" className="min-h-11" onClick={() => setConfirmDiscard(true)} disabled={submitting}>
                   {t("feedback.feature.discard")}
                 </Button>

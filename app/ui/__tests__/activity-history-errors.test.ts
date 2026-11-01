@@ -13,8 +13,8 @@ describe.each([
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail, debug: "private-debug-data" }), { status: 503 })))
     await expect(request()).rejects.toMatchObject({ message: detail.message, payload: detail })
   })
-  it("uses a generic HTTP error for an unrecognized response", async () => {
+  it("says something readable for an unrecognized response, never a status code", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ stack: "private-stack-data" }), { status: 503 })))
-    await expect(request()).rejects.toMatchObject({ message: "HTTP 503", payload: { remediation: null } })
+    await expect(request()).rejects.toMatchObject({ message: "ChannelWatch is not responding. It may be restarting. Try again in a moment.", payload: { remediation: null } })
   })
 })

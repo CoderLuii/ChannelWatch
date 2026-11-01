@@ -59,7 +59,7 @@ for (const viewport of [
       "Test Channel Watching Alert", "Test VOD Watching Alert", "Test Recording Scheduled Alert",
     ])
     await page.goto("/#diagnostics")
-    await page.getByRole("button", { name: "Run All Tests", exact: true }).click()
+    await page.getByRole("button", { name: "Run all tests", exact: true }).click()
     await expect(page.getByText("7 passed", { exact: true })).toBeVisible()
     await expect(page.getByText("0 failed", { exact: true })).toBeVisible()
     await expect(page.getByText("3 skipped", { exact: true })).toBeVisible()
@@ -82,7 +82,7 @@ for (const viewport of [
     const commands = await installDiagnosticRunner(page)
     await page.goto("/#diagnostics")
     await expect(page.getByRole("heading", { name: "Diagnostic Tests", exact: true })).toBeVisible()
-    await page.getByRole("button", { name: "Run All Tests", exact: true }).click()
+    await page.getByRole("button", { name: "Run all tests", exact: true }).click()
     await expect(page.getByText("Results:", { exact: true })).toBeVisible()
     await page.evaluate(() => window.scrollTo(0, 0))
     await page.screenshot({ path: testInfo.outputPath(`diagnostics-${viewport.name}.png`), fullPage: true })
@@ -98,8 +98,8 @@ for (const viewport of [
 test("an individual diagnostic uses its command and shows a real failure", async ({ page }, testInfo) => {
   const commands = await installDiagnosticRunner(page, "Test Disk Space Alert")
   await page.goto("/#diagnostics")
-  const diagnostic = page.locator("div.grid").filter({
-    has: page.getByRole("heading", { name: "Disk Space Alert", exact: true }),
+  const diagnostic = page.getByTestId("diagnostic-test-row").filter({
+    has: page.getByRole("heading", { name: "Disk space alert", exact: true }),
   }).last()
   await diagnostic.getByRole("button", { name: "Run", exact: true }).click()
   await expect(page.getByText("Results:", { exact: true })).toBeVisible()
@@ -109,7 +109,7 @@ test("an individual diagnostic uses its command and shows a real failure", async
   await expect(page.getByText("1 failed", { exact: true })).toBeVisible()
   expect(commands).toEqual(["Test Disk Space Alert"])
 
-  await page.getByRole("button", { name: "Run All Tests", exact: true }).click()
+  await page.getByRole("button", { name: "Run all tests", exact: true }).click()
   await expect(page.getByText("9 passed", { exact: true })).toBeVisible()
   await expect(page.getByText("1 failed", { exact: true })).toBeVisible()
   expect(commands).toEqual(["Test Disk Space Alert", ...diagnosticCommands])
@@ -120,14 +120,14 @@ test("an individual diagnostic uses its command and shows a real failure", async
 test("diagnostic export distinguishes skipped alerts from unfinished tests", async ({ page }) => {
   await installDiagnosticRunner(page, undefined, ["Test Channel Watching Alert"])
   await page.goto("/#diagnostics")
-  await page.getByRole("button", { name: "Run All Tests", exact: true }).click()
+  await page.getByRole("button", { name: "Run all tests", exact: true }).click()
   await expect(page.getByText("1 skipped", { exact: true })).toBeVisible()
   const downloadPromise = page.waitForEvent("download")
   await page.getByRole("button", { name: "Export diagnostics", exact: true }).click()
   const download = await downloadPromise
   const contents = await readFile((await download.path())!, "utf8")
-  expect(contents).toContain("SKIP Channel Watching Alert")
+  expect(contents).toContain("SKIP Live TV alert")
   expect(contents).toContain("This alert is disabled in Alerts settings.")
   expect(contents).toContain("Tested DVR: First DVR")
-  expect(contents).not.toContain("... Channel Watching Alert")
+  expect(contents).not.toContain("... Live TV alert")
 })

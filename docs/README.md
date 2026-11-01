@@ -4,7 +4,7 @@ This docs tree is the home for ChannelWatch user, operator, reference, and archi
 
 ## Tutorials
 
-- [getting-started.md](tutorials/getting-started.md) - Set up ChannelWatch and trigger a first Channel Watching alert.
+- [getting-started.md](tutorials/getting-started.md) - Set up ChannelWatch and trigger a first Live TV alert.
 - [first-alert.md](tutorials/first-alert.md) - Configure one provider and send a safe test notification.
 
 ## How-To

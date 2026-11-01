@@ -11,7 +11,7 @@ from .common.alert_formatter import AlertFormatter
 from .common.cleanup_mixin import CleanupMixin
 from ..helpers.logging import log, LOG_STANDARD, LOG_VERBOSE
 from ..helpers.parsing import is_valid_ip_address, extract_ip_address
-from ..helpers.vod_info import VODInfoProvider, _metadata_id
+from ..helpers.vod_info import VODInfoProvider, _metadata_id, _metadata_value
 from ..helpers.type_utils import ensure_str
 from ..helpers.activity_recorder import record_vod_watching
 
@@ -384,29 +384,14 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
             )
             current_time = time.time()
 
-            if not is_new_session and (
-                current_time - last_notification_time < self.alert_cooldown
-            ):
-                last_timestamp = self.active_sessions[session_key].get(
-                    "timestamp", "0s"
-                )
-                log(
-                    f"Cooldown active for session {session_key}. Updating timestamp: {last_timestamp} -> {current_timestamp}",
-                    level=LOG_VERBOSE,
-                )
-                self.active_sessions[session_key].update(
-                    {"timestamp": current_timestamp, "last_update": current_time}
-                )
-                return False
-
             bypass_cooldown = False
-            if not is_new_session and (
-                current_time - last_notification_time >= self.alert_cooldown
-            ):
-                pass
-            elif not is_new_session and self.significant_threshold > 0:
-                last_timestamp_str = self.active_sessions[session_key].get(
-                    "timestamp", "0s"
+            cooldown_active = not is_new_session and (
+                current_time - last_notification_time < self.alert_cooldown
+            )
+            if cooldown_active and self.significant_threshold > 0:
+                session_state = self.active_sessions[session_key]
+                last_timestamp_str = session_state.get(
+                    "notified_timestamp", session_state.get("timestamp", "0s")
                 )
                 try:
                     last_seconds = self._parse_timestamp_to_seconds(last_timestamp_str)
@@ -428,6 +413,19 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
                         level=LOG_VERBOSE,
                     )
 
+            if cooldown_active and not bypass_cooldown:
+                last_timestamp = self.active_sessions[session_key].get(
+                    "timestamp", "0s"
+                )
+                log(
+                    f"Cooldown active for session {session_key}. Updating timestamp: {last_timestamp} -> {current_timestamp}",
+                    level=LOG_VERBOSE,
+                )
+                self.active_sessions[session_key].update(
+                    {"timestamp": current_timestamp, "last_update": current_time}
+                )
+                return False
+
             should_process_alert = (
                 is_new_session
                 or (current_time - last_notification_time >= self.alert_cooldown)
@@ -446,6 +444,7 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
                 if success:
                     self.active_sessions[session_key] = {
                         "timestamp": current_timestamp,
+                        "notified_timestamp": current_timestamp,
                         "last_update": current_time,
                         "last_notification": current_time,
                         "device": device_name_candidate or "Unknown",
@@ -574,14 +573,40 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
                     formatted_metadata["progress"]
                 )
 
+            # The DVR API returns snake_case keys; older payloads used
+            # Capitalized keys, so read both.
+            release_date = _metadata_value(
+                metadata, "release_date", "ReleaseDate", "original_air_date"
+            )
+            release_year = _metadata_value(metadata, "release_year", "Year")
+            if not release_year and release_date:
+                release_year = str(release_date)[:4]
+            season_number = _metadata_value(metadata, "season_number", "SeasonNumber")
+            episode_number = _metadata_value(
+                metadata, "episode_number", "EpisodeNumber"
+            )
+            duration_secs = _metadata_value(metadata, "duration", "Duration")
+            progress_percent = _metadata_value(
+                metadata, "progress_percent", "ProgressPercent"
+            )
+            if progress_percent in ("", None) and duration_secs:
+                try:
+                    position = self._parse_timestamp_to_seconds(current_time_str)
+                    total = float(duration_secs)
+                    if total > 0:
+                        progress_percent = min(100, round(position * 100 / total))
+                except (TypeError, ValueError):
+                    progress_percent = ""
+            raw_title = _metadata_value(metadata, "title", "Title")
+
             message_parts = []
             progress_str = ""
 
             title_parts = []
             if formatted_metadata.get("title"):
                 title_parts.append(formatted_metadata["title"])
-                if metadata.get("Year"):
-                    title_parts.append(f"({metadata['Year']})")
+                if release_year:
+                    title_parts.append(f"({release_year})")
                 if formatted_metadata.get("episode_title"):
                     title_parts.append(f"- {formatted_metadata['episode_title']}")
             if title_parts:
@@ -641,17 +666,21 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
 
             await asyncio.to_thread(
                 record_vod_watching,
-                content_name=formatted_metadata.get("title", "Unknown VOD"),
-                device_name=final_device_name,
-                device_ip=final_device_ip,
-                image_url=metadata.get("Image", "") or metadata.get("image_url", ""),
+                content_name=raw_title or "Unknown VOD",
+                device_name=device_name_from_val or "Unknown Device",
+                device_ip=preferred_ip or "Unknown IP",
+                image_url=_metadata_value(metadata, "image_url", "Image", "image"),
                 extra={
                     k: v
                     for k, v in {
-                        "duration": metadata.get("Duration", ""),
-                        "episode_title": metadata.get("EpisodeTitle", ""),
-                        "summary": metadata.get("Summary", ""),
-                        "year": metadata.get("Year", ""),
+                        "duration": self.vod_provider._format_duration(duration_secs)
+                        if duration_secs
+                        else "",
+                        "episode_title": _metadata_value(
+                            metadata, "episode_title", "EpisodeTitle"
+                        ),
+                        "summary": _metadata_value(metadata, "summary", "Summary"),
+                        "year": release_year,
                     }.items()
                     if v
                 }
@@ -681,43 +710,52 @@ class VODWatchingAlert(BaseAlert, CleanupMixin):
                             "episode_title": formatted_metadata.get(
                                 "episode_title", ""
                             ),
-                            "season_number": metadata.get("SeasonNumber", ""),
-                            "season_number00": str(
-                                metadata.get("SeasonNumber", "")
-                            ).zfill(2)
-                            if metadata.get("SeasonNumber") not in (None, "")
+                            "season_number": season_number,
+                            "season_number00": str(season_number).zfill(2)
+                            if season_number not in (None, "")
                             else "",
-                            "episode_number": metadata.get("EpisodeNumber", ""),
-                            "episode_number00": str(
-                                metadata.get("EpisodeNumber", "")
-                            ).zfill(2)
-                            if metadata.get("EpisodeNumber") not in (None, "")
+                            "episode_number": episode_number,
+                            "episode_number00": str(episode_number).zfill(2)
+                            if episode_number not in (None, "")
                             else "",
                             "client_name": final_device_name,
                             "device_name": final_device_name,
                             "client_ip": final_device_ip,
                             "summary": formatted_metadata.get("summary", ""),
-                            "full_summary": metadata.get("Summary", ""),
+                            "full_summary": _metadata_value(
+                                metadata, "full_summary", "summary", "Summary"
+                            ),
                             "image_url": formatted_metadata.get("image_url", ""),
                             "thumbnail_url": formatted_metadata.get(
                                 "thumbnail_url", ""
                             ),
                             "duration": formatted_metadata.get("duration", ""),
-                            "duration_secs": metadata.get("Duration", ""),
+                            "duration_secs": duration_secs,
                             "playback_time": formatted_metadata.get("progress", ""),
-                            "progress_percent": metadata.get("ProgressPercent", ""),
+                            "progress_percent": progress_percent,
                             "content_rating": formatted_metadata.get("rating", ""),
-                            "release_year": metadata.get("Year", ""),
-                            "release_date": metadata.get("ReleaseDate", ""),
+                            "release_year": release_year,
+                            "release_date": release_date,
                             "genres": formatted_metadata.get("genres", []),
                             "cast": formatted_metadata.get("cast", []),
                             "directors": formatted_metadata.get("directors", []),
                             "tags": formatted_metadata.get("tags", []),
                             "categories": formatted_metadata.get("categories", []),
-                            "watched": metadata.get("Watched", False),
-                            "favorited": metadata.get("Favorite", False),
-                            "library_path": metadata.get("Path", ""),
-                            "channel": metadata.get("Channel", ""),
+                            "watched": bool(
+                                _metadata_value(
+                                    metadata, "watched", "Watched", default=False
+                                )
+                            ),
+                            "favorited": bool(
+                                _metadata_value(
+                                    metadata,
+                                    "favorited",
+                                    "Favorite",
+                                    default=False,
+                                )
+                            ),
+                            "library_path": _metadata_value(metadata, "path", "Path"),
+                            "channel": _metadata_value(metadata, "channel", "Channel"),
                             "media_title": message_parts[0] if message_parts else "",
                             "progress_line": progress_str
                             if formatted_metadata.get("duration")

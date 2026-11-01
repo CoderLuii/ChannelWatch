@@ -4,13 +4,13 @@ import { expect, test } from "@playwright/test"
 import { installApiMocks } from "./support/mock-api"
 
 const views = [
-  { hash: "#overview", readyName: "Dashboard Overview", kind: "heading" as const },
+  { hash: "#overview", readyName: "Home", kind: "heading" as const },
   { hash: "#settings", readyName: "Settings", kind: "heading" as const },
-  { hash: "#settings:alerts", readyName: "Alert policy", kind: "text" as const },
+  { hash: "#settings:alerts", readyName: "Alert Policy", kind: "text" as const },
   { hash: "#settings:updates", readyName: "Update policy", kind: "text" as const },
   { hash: "#diagnostics", readyName: "Diagnostics", kind: "heading" as const },
   { hash: "#watch-history", readyName: "Watch History", kind: "title" as const },
-  { hash: "#notification-log", readyName: "Notification Delivery Log", kind: "text" as const },
+  { hash: "#notification-log", readyName: "Notification Log", kind: "heading" as const },
   { hash: "#help-feedback", readyName: "Help & Feedback", kind: "heading" as const },
   { hash: "#about", readyName: "Project", kind: "tab" as const },
 ]
@@ -33,6 +33,21 @@ for (const view of views) {
       await expect(page.getByText(view.readyName)).toBeVisible()
     }
 
+    // Contrast is a resting-state rule; a card caught mid fade-in reads lighter than it is.
+    // Cards can mount after the first wait, when their data arrives, so wait for a quiet spell.
+    await page.evaluate(async () => {
+      let quietSince = performance.now()
+      while (performance.now() - quietSince < 400) {
+        const running = document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        if (running.length) {
+          await Promise.all(running.map((a) => a.finished.catch(() => undefined)))
+          quietSince = performance.now()
+        } else {
+          await new Promise((resolve) => requestAnimationFrame(resolve))
+        }
+      }
+    })
+
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
       .analyze()
@@ -45,7 +60,7 @@ test("axe: report problem dialog has no accessibility violations", async ({ page
   await page.goto("/#diagnostics")
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
-  const dialog = page.getByRole("dialog", { name: "Report a Problem" })
+  const dialog = page.getByRole("dialog", { name: "Report a problem" })
   await expect(dialog).toBeVisible()
   await page.evaluate(async () => {
     await Promise.all(document.getAnimations()

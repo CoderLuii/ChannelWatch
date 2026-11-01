@@ -4,15 +4,17 @@ import { useState, useEffect, useLayoutEffect, useRef, useContext, createContext
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/base/button"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/base/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
 import { ApiError, RESTART_RECOVERED_EVENT, signalContainerRestart, fetchMonitoringReadiness, fetchSettings, pollForRecovery, fetchSecurityStatus, fetchWhoAmI, logoutSession } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
 import { t } from "@/lib/i18n"
 import { useToast } from "@/hooks/use-toast"
-import { SecurityModeBadge } from "@/components/settings/security-section"
+import { StatusText } from "@/components/base/badge"
+import { SecurityModeBadge, getEnforcedSecurityMode } from "@/components/settings/security-section"
 import { useDvrSelection } from "@/lib/dvr-selection-context"
 import type { SecurityStatus, WhoAmIResponse } from "@/lib/types"
 import {
-  Menu,
   Power,
   Loader2,
   CheckCircle,
@@ -42,11 +44,15 @@ type OverlayState = "idle" | "restarting" | "success" | "degraded" | "failed" | 
 export function Header() {
   const [isRestarting, setIsRestarting] = useState(false)
   const [overlayState, setOverlayState] = useState<OverlayState>("idle")
+  // The card keeps what it was saying while it fades away.
+  const shownOverlayState = useRef<OverlayState>("idle")
+  if (overlayState !== "dismissing") shownOverlayState.current = overlayState
   const [elapsed, setElapsed] = useState(0)
   const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null)
   const [whoAmI, setWhoAmI] = useState<WhoAmIResponse | null>(null)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [restartDialog, setRestartDialog] = useState<HTMLDivElement | null>(null)
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false)
   const overlayOpen = overlayState !== "idle"
   const restartFocusRef = useRef<HTMLElement | null>(null)
   const cancelPollRef = useRef<(() => void) | null>(null)
@@ -144,19 +150,19 @@ export function Header() {
       toast({
         variant: "destructive",
         title: t("header.signOutFailed"),
-        description: error instanceof Error ? error.message : t("errors.tryAgain"),
+        description: describeError(error, t("errors.tryAgain")).message,
       })
     }
   }
 
-  const handleRestart = async (event: MouseEvent<HTMLButtonElement>) => {
-    const trigger = event.currentTarget
-    try {
-      if (!confirm(t("header.restartConfirm"))) {
-        return
-      }
+  const handleRestart = (event: MouseEvent<HTMLButtonElement>) => {
+    restartFocusRef.current = event.currentTarget
+    setRestartConfirmOpen(true)
+  }
 
-      restartFocusRef.current = trigger
+  const confirmRestart = async () => {
+    setRestartConfirmOpen(false)
+    try {
       setIsRestarting(true)
       setOverlayState("restarting")
       setElapsed(0)
@@ -254,29 +260,22 @@ export function Header() {
 
   return (
     <>
-      <header ref={headerRef} className="ios-navigation-material fixed inset-x-0 top-0 z-40 w-full border-b border-border/70 bg-background/88 shadow-[0_10px_30px_-30px_hsl(220_40%_10%/0.5)] backdrop-blur-xl">
-        <div className="flex min-h-16 w-full items-center justify-between gap-2 px-2 py-2 sm:px-4 md:px-6 md:pl-[84px]">
+      <header ref={headerRef} className="right-scroll-bar-position fixed inset-x-0 top-0 z-40 border-b border-hairline-strong bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+        <div className="app-header-row flex min-h-[64px] w-full items-center justify-between gap-2 px-3 py-[10px] sm:px-4 md:min-h-16 md:px-6 md:py-2 md:pl-[calc(var(--app-sidebar-width,68px)+1rem-env(safe-area-inset-left))]">
           <div data-testid="header-primary-controls" className="flex min-w-0 items-center gap-1 sm:gap-2 md:gap-4">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="min-h-11 min-w-11 shrink-0 md:hidden"
-              onClick={(event) => window.dispatchEvent(new CustomEvent("toggle-mobile-sidebar", { detail: event.currentTarget }))}
-              aria-label={t("header.toggleMenu")}
-            >
-              <Menu className="h-5 w-5" aria-hidden="true" />
-            </Button>
-
             {availableDvrs.length > 0 && (
               <Select value={selectedDvr} onValueChange={setSelectedDvr}>
                 <SelectTrigger
-                  className="h-auto min-h-11 w-[104px] min-w-0 max-w-[104px] whitespace-normal border-border/60 px-2.5 py-2 text-[13px] min-[360px]:w-[132px] min-[360px]:max-w-[132px] sm:w-[140px] sm:min-w-[140px] sm:max-w-[200px] [&>span]:break-words [&>span]:whitespace-normal [&>span]:[overflow-wrap:anywhere]"
+                  data-testid="header-dvr-select"
+                  className="h-[44px] min-h-[44px] w-auto min-w-0 max-w-[min(52vw,220px)] gap-1.5 whitespace-nowrap px-3 py-0 text-sm sm:min-w-[140px] [&>svg]:h-[16px] [&>svg]:w-[16px] [&>svg]:shrink-0"
                   aria-label={t("header.selectDvr")}
                   title={selectedDvr === "all" ? t("header.allDvrs") : availableDvrs.find((dvr) => dvr.id === selectedDvr)?.name || availableDvrs.find((dvr) => dvr.id === selectedDvr)?.host}
                 >
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5 [&>span]:min-w-0 [&>span]:flex-1 [&>span]:break-words [&>span]:[overflow-wrap:anywhere]">
-                    <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground hidden min-[360px]:block" />
-                    <SelectValue className="min-w-0 break-words text-left [overflow-wrap:anywhere]" placeholder={t("header.allDvrs")} />
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <Server className="h-[16px] w-[16px] shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-left">
+                      <SelectValue placeholder={t("header.allDvrs")} />
+                    </span>
                   </div>
                 </SelectTrigger>
                 <SelectContent>
@@ -291,23 +290,27 @@ export function Header() {
             )}
           </div>
 
-          <div data-testid="header-utility-controls" className="flex shrink-0 items-center gap-1 sm:gap-2">
+          <div data-testid="header-utility-controls" className="flex shrink-0 items-center gap-1 sm:gap-2 max-md:[&_button]:h-[44px] max-md:[&_button]:min-h-[44px] max-md:[&_button]:w-[44px] max-md:[&_button]:min-w-[44px]">
             <Button
               variant="ghost"
               size="sm"
-              className="hidden h-auto min-h-11 whitespace-normal px-3 py-2 text-center text-[13px] xl:inline-flex"
+              className="hidden h-auto min-h-11 whitespace-normal px-3 py-2 text-center text-xs lg:inline-flex"
               onClick={() => setActiveView("settings:security")}
             >
-              {securityStatus ? <SecurityModeBadge status={securityStatus} compact /> : t("header.security")}
+              {securityStatus
+                ? getEnforcedSecurityMode(securityStatus) === "NO_AUTH"
+                  ? <StatusText tone="warning" className="font-normal">{t("security.noSignInSet")}</StatusText>
+                  : <SecurityModeBadge status={securityStatus} compact />
+                : t("header.security")}
             </Button>
 
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    className="hidden min-h-11 min-w-11 items-center gap-1.5 px-0 md:flex xl:h-auto xl:min-w-0 xl:whitespace-normal xl:px-3 xl:py-2"
+                    className="hidden min-h-11 min-w-11 items-center gap-1.5 px-0 text-muted-foreground md:flex xl:h-auto xl:min-w-0 xl:whitespace-normal xl:px-3 xl:py-2"
                     aria-label={t("header.restart")}
                     data-restart-trigger
                     onClick={handleRestart}
@@ -324,26 +327,17 @@ export function Header() {
             </TooltipProvider>
 
             {/* Mobile restart button */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex min-h-11 min-w-11 items-center gap-1 px-0 md:hidden"
-                    data-restart-trigger
-                    onClick={handleRestart}
-                    disabled={isRestarting}
-                    aria-label={t("header.restart")}
-                  >
-                    <Power className={`h-4 w-4 ${isRestarting ? "animate-spin" : ""}`} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>{t("header.restart")}</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="flex min-h-11 min-w-11 items-center gap-1 px-0 text-muted-foreground md:hidden"
+              data-restart-trigger
+              onClick={handleRestart}
+              disabled={isRestarting}
+              aria-label={t("header.restart")}
+            >
+              <Power className={`h-4 w-4 ${isRestarting ? "animate-spin" : ""}`} />
+            </Button>
 
             {whoAmI?.authenticated && (
               <TooltipProvider>
@@ -380,6 +374,29 @@ export function Header() {
         </div>
       </header>
 
+      <Dialog open={restartConfirmOpen} onOpenChange={setRestartConfirmOpen}>
+        <DialogContent
+          data-testid="restart-confirm"
+          className="max-w-sm"
+          onCloseAutoFocus={(event) => {
+            const trigger = restartFocusRef.current
+            if (trigger?.isConnected && trigger.getClientRects().length > 0) {
+              event.preventDefault()
+              trigger.focus()
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle className="pr-10">{t("header.restartConfirmTitle")}</DialogTitle>
+            <DialogDescription className="text-sm">{t("header.restartConfirm")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setRestartConfirmOpen(false)}>{t("common.cancel")}</Button>
+            <Button type="button" variant="destructive" onClick={confirmRestart}>{t("header.restart")}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Restart Overlay */}
       {overlayState !== "idle" && (
         <DialogPrimitive.Root open onOpenChange={(open) => {
@@ -397,7 +414,7 @@ export function Header() {
           }}
         >
           {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="absolute inset-0 bg-scrim" />
 
           {/* Card */}
           <DialogPrimitive.Content
@@ -412,94 +429,87 @@ export function Header() {
               event.preventDefault()
               requestAnimationFrame(() => restartFocusRef.current?.focus())
             }}
-            className={`relative z-10 w-full max-w-sm rounded-[20px] border border-zinc-700/80 bg-zinc-900 p-7 text-center shadow-[0_30px_90px_-20px_rgb(0_0_0/0.7)] ${
+            className={`relative z-10 w-full max-w-sm rounded-group border border-hairline-strong bg-raised p-7 text-center shadow-3 ${
               overlayState === "dismissing" ? "animate-overlay-card-out" : "animate-overlay-card-in"
             }`}
           >
             <DialogPrimitive.Title className="sr-only">{t("header.restart")}</DialogPrimitive.Title>
             <div role="status" aria-live="polite" aria-atomic="true">
             {/* Restarting State */}
-            {overlayState === "restarting" && (
+            {shownOverlayState.current === "restarting" && (
               <>
                 <div className="flex justify-center mb-4">
-                  <div className="rounded-full bg-blue-500/20 p-4">
-                    <Loader2 className="h-8 w-8 text-blue-400 animate-spin" />
+                  <div className="rounded-full bg-fill p-4">
+                    <Loader2 className="h-8 w-8 text-muted-foreground animate-spin" />
                   </div>
                 </div>
-                <h2 className="text-lg font-semibold text-zinc-100 mb-1">
+                <h2 className="text-lg font-semibold text-foreground mb-1">
                   {t("header.overlay.restarting")}
                 </h2>
-                <p className="text-sm text-zinc-400 mb-4">
+                <p className="text-sm text-muted-foreground mb-4">
                   {t("header.overlay.waiting", { elapsed })}
                 </p>
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-muted-foreground">
                   {t("header.overlay.reconnectNote")}
                 </p>
               </>
             )}
 
             {/* Success State */}
-            {overlayState === "success" && (
+            {shownOverlayState.current === "success" && (
               <>
                 <div className="flex justify-center mb-4">
-                  <div className="rounded-full bg-green-500/20 p-4 animate-icon-bounce">
-                    <CheckCircle className="h-8 w-8 text-green-400" />
+                  <div className="rounded-full bg-success-bg p-4 animate-icon-bounce">
+                    <CheckCircle className="h-8 w-8 text-success" />
                   </div>
                 </div>
-                <h2 className="text-lg font-semibold text-zinc-100 mb-1">
+                <h2 className="text-lg font-semibold text-foreground mb-1">
                   {t("header.overlay.success")}
                 </h2>
-                <p className="text-sm text-zinc-400">
+                <p className="text-sm text-muted-foreground">
                   {t("header.overlay.reconnected", { elapsed })}
                 </p>
               </>
             )}
 
-            {overlayState === "degraded" && (
+            {shownOverlayState.current === "degraded" && (
               <>
                 <div className="flex justify-center mb-4">
-                  <div className="rounded-full bg-amber-500/20 p-4 animate-icon-bounce">
-                    <Server className="h-8 w-8 text-amber-400" />
+                  <div className="rounded-full bg-warning-bg p-4">
+                    <Server className="h-8 w-8 text-warning" />
                   </div>
                 </div>
-                <h2 className="text-lg font-semibold text-zinc-100 mb-1">
+                <h2 className="text-lg font-semibold text-foreground mb-1">
                   {t("header.overlay.degraded")}
                 </h2>
-                <p className="text-sm text-zinc-400">
+                <p className="text-sm text-muted-foreground">
                   {t("header.overlay.degradedHint")}
                 </p>
               </>
             )}
 
             {/* Failed State */}
-            {overlayState === "failed" && (
+            {shownOverlayState.current === "failed" && (
               <>
                 <div className="flex justify-center mb-4">
-                  <div className="rounded-full bg-red-500/20 p-4 animate-icon-bounce">
-                    <XCircle className="h-8 w-8 text-red-400" />
+                  <div className="rounded-full bg-danger-bg p-4">
+                    <XCircle className="h-8 w-8 text-danger" />
                   </div>
                 </div>
-                <h2 className="text-lg font-semibold text-zinc-100 mb-1">
+                <h2 className="text-lg font-semibold text-foreground mb-1">
                   {t("header.overlay.failed")}
                 </h2>
-                <p className="text-sm text-zinc-400 mb-6">
+                <p className="text-sm text-muted-foreground mb-6">
                   {t("header.overlay.failedHint")}
                 </p>
                 <div className="flex gap-3 justify-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRetry}
-                    className="border-zinc-600 text-zinc-300 hover:bg-zinc-800"
-                  >
-                    <RefreshCw className="h-4 w-4 mr-1" />
+                  <Button onClick={handleRetry}>
+                    <RefreshCw className="h-4 w-4" />
                     {t("header.overlay.retry")}
                   </Button>
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={() => window.location.reload()}
-                    className="border-zinc-600 text-zinc-300 hover:bg-zinc-800"
                   >
                     {t("header.overlay.reloadPage")}
                   </Button>

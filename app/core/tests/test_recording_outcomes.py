@@ -272,3 +272,11 @@ def test_state_is_scoped_by_dvr_identity(tmp_path: Path):
 
     assert [item.outcome for item in result] == ["skipped"]
     assert first.path != second.path
+
+
+def test_job_snapshot_keeps_dvr_failure_reason():
+    from core.alerts.recording_outcomes import _job_snapshot
+
+    snapshot = _job_snapshot({"Name": "News", "Error": "tuner unavailable", "Channels": ["4"]})
+    assert snapshot["error"] == "tuner unavailable"
+    assert "error" not in _job_snapshot({"Name": "News", "Error": ""})

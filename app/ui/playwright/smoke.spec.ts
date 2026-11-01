@@ -21,7 +21,7 @@ test("legacy key recovery keeps the authenticated dashboard reachable", async ({
 
   await page.goto("/")
 
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   const warning = page.getByTestId("runtime-recovery-warning")
   await expect(warning).toBeVisible()
   await expect(warning).toContainText("Protected credentials need administrator attention")
@@ -231,7 +231,7 @@ test("setup shell can apply only a confirmed official signed recovery update", a
   const actions = page.getByTestId("official-recovery-update-actions")
   await expect(actions).toBeVisible()
   await actions.getByRole("button", { name: "Check official channel" }).click()
-  await expect(actions).toContainText("Signed app update v0.9.18 can be installed here. Container image v1.0.0 remains the separate latest recommendation.")
+  await expect(actions).toContainText("Signed app update v0.9.18 can be installed here. Container image v1.0.0 is also available.")
   const confirmation = page.getByLabel(/INSTALL OFFICIAL UPDATE/)
   await confirmation.fill("INSTALL OFFICIAL UPDATE")
   await actions.getByRole("button", { name: "Apply signed v0.9.18 update" }).click()
@@ -257,13 +257,13 @@ test("Update Center defaults to automatic signed updates in the 03:00–05:00 wi
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible()
   await expect(page.getByText("Application version")).toBeVisible()
   await expect(page.getByText("Container image version")).toBeVisible()
-  await expect(page.getByText("Launcher protocol 1")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Automatic during maintenance window" })).toHaveAttribute("aria-pressed", "true")
-  await expect(page.getByText("Maintenance window: 03:00–05:00 local time")).toBeVisible()
-  await expect(page.getByText("A compatible base-image refresh is recommended later.")).toBeVisible()
+  await expect(page.getByText("Updater version 1")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Automatic during update window" })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByText("Update window: 03:00–05:00 local time")).toBeVisible()
+  await expect(page.getByText("Works as is. Pull the latest image at your next restart.")).toBeVisible()
 })
 
-test("Update Center validates and saves an editable local maintenance window", async ({ page }) => {
+test("Update Center validates and saves an editable local update window", async ({ page }) => {
   let savedPolicy: Record<string, unknown> | null = null
   await page.route("**/api/v1/update/policy", async (route) => {
     const defaultPolicy = {
@@ -282,24 +282,24 @@ test("Update Center validates and saves an editable local maintenance window", a
   })
 
   await page.goto("/#settings:updates")
-  await page.getByLabel("Maintenance window start (local time)").fill("04:30")
-  await page.getByLabel("Window duration in minutes").fill("90")
+  await page.getByLabel("Update window start (local time)").fill("04:30")
+  await page.getByLabel("Duration (minutes)").fill("90")
   const policySaved = page.waitForResponse((response) => (
     response.url().endsWith("/api/v1/update/policy")
     && response.request().method() === "PUT"
   ))
-  await page.getByRole("button", { name: "Save maintenance window" }).click()
+  await page.getByRole("button", { name: "Save update window" }).click()
   await policySaved
   await expect.poll(() => savedPolicy).toEqual({
     mode: "automatic",
     maintenance_window_start: "04:30",
     maintenance_window_minutes: 90,
   })
-  await expect(page.getByText("Maintenance window: 04:30–06:00 local time")).toBeVisible()
+  await expect(page.getByText("Update window: 04:30–06:00 local time")).toBeVisible()
 
-  await page.getByLabel("Window duration in minutes").fill("10")
-  await expect(page.getByRole("alert").filter({ hasText: "Choose a valid local start time" })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Save maintenance window" })).toBeDisabled()
+  await page.getByLabel("Duration (minutes)").fill("10")
+  await expect(page.getByRole("alert").filter({ hasText: "Enter a start time" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Save update window" })).toBeDisabled()
 })
 
 test("terminal retry and rollback failures restore Update Center controls", async ({ page }) => {
@@ -381,16 +381,17 @@ test("terminal retry and rollback failures restore Update Center controls", asyn
   }))
 
   await page.goto("/#settings:updates")
-  const retry = page.getByRole("button", { name: "Retry now" })
+  const retry = page.getByRole("button", { name: "Retry" })
   const rollback = page.getByRole("button", { name: "Roll back" })
 
   await retry.click()
-  await expect(page.getByRole("paragraph").filter({ hasText: "Retry restart was rejected." })).toBeVisible()
+  await expect(page.getByTestId("update-failure")).toContainText("Retry restart was rejected.")
   await expect(retry).toBeEnabled()
   await expect(rollback).toBeEnabled()
 
   await rollback.click()
-  await expect(page.getByRole("paragraph").filter({ hasText: "Rollback restart was rejected." })).toBeVisible()
+  await page.getByRole("dialog").getByRole("button", { name: "Roll back" }).click()
+  await expect(page.getByTestId("update-failure")).toContainText("Rollback restart was rejected.")
   await expect(retry).toBeEnabled()
   await expect(rollback).toBeEnabled()
 })
@@ -447,9 +448,9 @@ test("dirty report draft shows a scheduled restart countdown and one postponemen
 
   const warning = page.getByTestId("report-scheduled-restart-warning")
   await expect(warning).toBeVisible()
-  await expect(warning).toContainText(/ChannelWatch is scheduled to restart in \d+m \d{2}s/)
-  await warning.getByRole("button", { name: "Postpone once for 24 hours" }).click()
-  await expect(warning).toContainText("The one-time draft postponement has already been used.")
+  await expect(warning).toContainText(/Restarting in \d+m \d{2}s/)
+  await warning.getByRole("button", { name: "Postpone 24 hours" }).click()
+  await expect(warning).toContainText("One-time postponement already used.")
   await expect(page.getByLabel("Problem summary")).toHaveValue("Keep this private draft during the update")
 })
 
@@ -508,10 +509,10 @@ const expectNoDialogHorizontalShift = async (reportDialog: Locator) => {
 test("release-day smoke: configured bootstrap, core navigation, and diagnostics admin flow", async ({ page }) => {
   await page.goto("/#overview")
 
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   await expect(page.getByText("1 live stream, 1 recording in progress")).toBeVisible()
-  await expect(page.locator("#mobile-disk-details").getByText("10.94 TB Free", { exact: true })).toBeVisible()
-  await expect(page.getByText("10.94 TB GB Free")).toHaveCount(0)
+  await expect(page.locator("#mobile-disk-details")).toContainText("10.94 TB")
+  await expect(page.locator("#mobile-disk-details")).not.toContainText("TB GB")
 
   await page.getByRole("button", { name: "Watch History", exact: true }).click()
   await expect(page).toHaveURL(/#watch-history$/)
@@ -520,8 +521,8 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
 
   await page.getByRole("button", { name: "Notification Log", exact: true }).click()
   await expect(page).toHaveURL(/#notification-log$/)
-  await expect(page.getByText("Notification Delivery Log")).toBeVisible()
-  await expect(page.getByRole("combobox", { name: "Filter notification log by channel" })).toBeVisible()
+  await expect(page.getByText("Notification Log")).toBeVisible()
+  await expect(page.getByRole("combobox", { name: "Filter notification log by destination" })).toBeVisible()
 
   await page.getByRole("button", { name: "Settings", exact: true }).click()
   await expect(page).toHaveURL(/#settings$/)
@@ -531,11 +532,11 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
   await page.getByRole("button", { name: "Diagnostics", exact: true }).click()
   await expect(page).toHaveURL(/#diagnostics$/)
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible()
-  await expect(page.getByText("10.94 TB").first()).toBeVisible()
+  await expect(page.getByRole("main").getByText("10.94 TB").locator("visible=true").first()).toBeVisible()
   await expect(page.getByText("ChannelWatch started successfully")).toBeVisible()
 
   await page.getByRole("button", { name: "Report a ChannelWatch problem" }).click()
-  const reportDialog = page.getByRole("dialog", { name: "Report a Problem" })
+  const reportDialog = page.getByRole("dialog", { name: "Report a problem" })
   await expect(reportDialog).toBeVisible()
   await expect(page.getByText("No contact method provided")).toBeVisible()
   await page.getByLabel("Problem summary").fill("Active Streams shows a stream but no activity appears")
@@ -557,11 +558,11 @@ test("release-day smoke: configured bootstrap, core navigation, and diagnostics 
   })
   await expect(page.getByText("Attach a ChannelWatch-generated debug bundle ZIP.")).toBeVisible()
   await expect(page.getByText("TC-Helicon_GoXLR_Driver.zip")).toHaveCount(0)
-  await page.getByRole("button", { name: "Create fresh debug bundle" }).click()
+  await page.getByRole("button", { name: "Create bundle" }).click()
   await expect(page.getByText(/channelwatch_debug_.*\.zip/)).toBeVisible()
   await page.getByRole("button", { name: "Review report" }).click()
   await expect(page.getByTestId("report-problem-review")).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Report preview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Public GitHub issue preview" })).toBeVisible()
   await expect(page.getByText("Private attachments")).toBeVisible()
   await expect(page.getByText("Email and attached files are shared only with CoderLuii for follow-up and troubleshooting.")).toBeVisible()
   await expect(page.getByText("viewer@example.com")).toHaveCount(0)
@@ -597,7 +598,7 @@ test("report problem shows dry-run API failures", async ({ page }) => {
 
   await expect(page.getByText("Could not submit report.")).toBeVisible()
   await expect(page.getByText("Report renderer unavailable")).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Manual upload fallback" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Manual upload" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Copy support code" })).toBeVisible()
 })
 
@@ -844,7 +845,7 @@ test("slow secure preparation can be cancelled and keeps manual fallbacks", asyn
   await page.getByRole("button", { name: "Submit report" }).click()
   await expect(page.getByRole("button", { name: "Preparing secure submission..." })).toBeVisible()
   await page.getByRole("button", { name: "Cancel", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Manual upload fallback" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Manual upload" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Download support code" })).toBeVisible()
   expect(reportRequests).toBe(0)
 })
@@ -854,13 +855,13 @@ test("report problem attachments stay aligned on mobile", async ({ page }) => {
   await page.goto("/#diagnostics")
   await page.locator('[data-testid="report-problem-open"]').dispatchEvent("click")
 
-  const reportDialog = page.getByRole("dialog", { name: "Report a Problem" })
+  const reportDialog = page.getByRole("dialog", { name: "Report a problem" })
   await expect(reportDialog).toBeVisible()
   await page.getByLabel("Problem summary").fill("Mobile attachment layout test")
   await page.getByLabel("Screenshots").setInputFiles("public/images/channelwatch-logo.png")
-  await page.getByRole("button", { name: "Create fresh debug bundle" }).click()
+  await page.getByRole("button", { name: "Create bundle" }).click()
   await expect(page.getByText(/channelwatch_debug_.*\.zip/)).toBeVisible()
 
   await expectNoDialogHorizontalShift(reportDialog)
-  await expect(page.getByRole("button", { name: "Attach previous debug bundle" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Attach previous" })).toBeVisible()
 })

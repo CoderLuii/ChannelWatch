@@ -2,49 +2,56 @@
 
 import React from "react"
 import { t } from "@/lib/i18n"
+import { coreStatusLabel } from "@/lib/health-verdict"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
-import { Badge } from "@/components/base/badge"
-import { AlertTriangle, Settings, Shield, Stethoscope } from "lucide-react"
+import { StatusText } from "@/components/base/badge"
+import { StatusBadge, statusDotClass, type StatusTone } from "@/components/base/status-badge"
+import { ChevronRight, Settings, Shield } from "lucide-react"
 import type { AppSettings, DVRStatusInfo } from "@/lib/types"
 
 function getDvrHealthConfig(status: DVRStatusInfo | undefined, isDisabled: boolean): {
   dotClass: string
-  ping: boolean
   title: string
 } {
-  if (isDisabled) return { dotClass: "bg-gray-400", ping: false, title: t("status.dvr.disabled") }
-  if (!status) return { dotClass: "bg-gray-400", ping: false, title: t("status.dvr.unknown") }
-  if (!status.connected) return { dotClass: "bg-red-500", ping: false, title: t("status.dvr.notConnected") }
+  if (isDisabled) return { dotClass: "bg-neutral", title: t("status.dvr.disabled") }
+  if (!status) return { dotClass: "bg-neutral", title: t("status.dvr.unknown") }
+  if (!status.connected) return { dotClass: "bg-danger", title: t("status.dvr.notConnected") }
   if (status.monitoring_ready === false) {
-    if (status.monitoring_status === "dead") return { dotClass: "bg-red-500", ping: false, title: t("status.dvr.monitoringStopped") }
-    if (status.monitoring_status === "starting") return { dotClass: "bg-amber-500", ping: false, title: t("status.dvr.monitoringStarting") }
-    return { dotClass: "bg-amber-500", ping: false, title: t("status.dvr.monitoringStale") }
+    if (status.monitoring_status === "dead") return { dotClass: "bg-danger", title: t("status.dvr.monitoringStopped") }
+    if (status.monitoring_status === "starting") return { dotClass: "bg-warning", title: t("status.dvr.monitoringStarting") }
+    return { dotClass: "bg-warning", title: t("status.dvr.monitoringStale") }
   }
-  return { dotClass: "bg-green-500", ping: true, title: t("status.dvr.healthy") }
+  return { dotClass: "bg-success", title: t("status.dvr.healthy") }
 }
 
-const coreStatusConfig: Record<string, { color: string; bgClass: string; dotClass: string }> = {
-  Running: { color: "text-white", bgClass: "bg-green-800 hover:bg-green-900", dotClass: "bg-green-600" },
-  Stopped: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
-  Starting: { color: "text-amber-50", bgClass: "bg-amber-600 hover:bg-amber-700", dotClass: "bg-amber-500" },
-  Backoff: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
-  Stopping: { color: "text-amber-50", bgClass: "bg-amber-600 hover:bg-amber-700", dotClass: "bg-amber-500" },
-  Exited: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
-  Fatal: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
-  Error: { color: "text-white", bgClass: "bg-red-700 dark:bg-red-600", dotClass: "bg-red-500" },
-  Unknown: { color: "text-gray-50", bgClass: "bg-gray-500 hover:bg-gray-600", dotClass: "bg-gray-400" },
-  Loading: { color: "text-gray-50", bgClass: "bg-gray-400 hover:bg-gray-500", dotClass: "bg-gray-400" },
+const coreStatusTone: Record<string, StatusTone> = {
+  Running: "success",
+  Stopped: "danger",
+  Starting: "warning",
+  Backoff: "danger",
+  Stopping: "warning",
+  Exited: "danger",
+  Fatal: "danger",
+  Error: "neutral",
+  Unknown: "neutral",
+  Loading: "neutral",
 }
 
-const providerColors: Record<string, string> = {
-  Discord: "border-indigo-400 text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/30",
-  Pushover: "border-blue-400 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30",
-  Email: "border-gray-400 text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-950/30",
-  Telegram: "border-sky-400 text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/30",
-  Slack: "border-purple-400 text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/30",
-  Gotify: "border-teal-400 text-teal-600 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/30",
-  Matrix: "border-emerald-400 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30",
-  Custom: "border-orange-400 text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/30",
+/** Healthy reads as a quiet word beside the row's own dot. Everything else gets a chip. */
+function StatusWord({ tone, children }: { tone: StatusTone; children: React.ReactNode }) {
+  if (tone === "success") return <StatusText tone={tone} dot={false}>{children}</StatusText>
+  return <StatusBadge variant={tone}>{children}</StatusBadge>
+}
+
+// At very large text the trailing word moves under the name, so the name column never shrinks to one letter wide.
+const rowClassName = "grid w-full min-w-0 grid-cols-[1rem_minmax(0,1fr)_auto] gap-x-2 px-4 py-3 text-left @max-[15rem]:grid-cols-[1rem_minmax(0,1fr)]"
+const trailingClassName = "flex shrink-0 items-center gap-1 @max-[15rem]:col-start-2 @max-[15rem]:justify-self-start"
+const interactiveRowClassName = `${rowClassName} press-row transition-colors hover:bg-fill`
+
+/** Brackets a bare IPv6 host. The port is only worth showing when the host stands in for a name. */
+export function formatDvrAddress(host: string, port: number | undefined, named: boolean): string {
+  const shown = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host
+  return named ? shown : `${shown}:${port || 8089}`
 }
 
 function getMonitoringTypes() {
@@ -75,44 +82,15 @@ interface StatusPanelProps {
   currentSettings: AppSettings | null
   onNavigate: ((view: string) => void) | undefined
   selectedDvr?: string
+  noSignIn?: boolean
+  /** False while the first read is in flight, so a row with no status says Loading, not Not Connected. */
+  dataLoaded?: boolean
 }
 
 function formatDvrVersion(version: string | null): string | null {
   if (!version) return null
   const parts = version.split(".")
   return parts.length >= 3 ? `v${parts.slice(0, 3).join(".")}` : version
-}
-
-export function buildMonitoringBanner(dvrStatusList: DVRStatusInfo[]) {
-  const degraded = dvrStatusList.filter(
-    (dvr) => dvr.enabled !== false
-      && dvr.monitoring_status !== "disabled"
-      && dvr.monitoring_ready === false,
-  )
-  if (!degraded.length) return null
-
-  const stale = degraded.filter((dvr) => dvr.monitoring_status === "stale")
-  const dead = degraded.filter((dvr) => dvr.monitoring_status === "dead")
-  const starting = degraded.filter((dvr) => dvr.monitoring_status === "starting")
-  const lead = stale[0] ?? dead[0] ?? degraded[0]
-  const isStartingOnly = starting.length > 0 && stale.length === 0 && dead.length === 0
-  const label = isStartingOnly
-    ? t("status.banner.starting", { name: starting[0].name })
-    : stale.length
-      ? t("status.banner.stale", { name: lead.name })
-      : dead.length
-        ? t("status.banner.stopped", { name: lead.name })
-        : t("status.banner.degraded", { name: lead.name })
-  const suffix = degraded.length > 1 ? t("status.banner.more", { count: degraded.length - 1 }) : ""
-
-  return {
-    tone: isStartingOnly ? "starting" : "degraded",
-    label,
-    detail: isStartingOnly
-      ? t("status.banner.startingDetail")
-      : lead.monitoring_reason || t("status.banner.defaultDetail"),
-    suffix,
-  }
 }
 
 export function StatusPanel({
@@ -125,32 +103,13 @@ export function StatusPanel({
   currentSettings,
   onNavigate,
   selectedDvr,
+  noSignIn = false,
+  dataLoaded = true,
 }: StatusPanelProps) {
-  const statusStyle = coreStatusConfig[coreProcessStatus] || coreStatusConfig.Unknown
-  const isRunning = coreProcessStatus === "Running"
+  const coreTone = coreStatusTone[coreProcessStatus] ?? "neutral"
 
   const alertTypeLabels = getAlertTypeLabels()
   const triggerLabels = activeAlertTypes.map(type => alertTypeLabels[type] || type)
-  const monitoringBanner = buildMonitoringBanner(dvrStatusList)
-  const bannerStyle = monitoringBanner?.tone === "starting"
-    ? {
-        wrapper: "border-amber-500/40 bg-amber-950/80 text-amber-50 shadow-[0_12px_30px_rgba(146,64,14,0.18)]",
-        icon: "text-amber-200",
-        eyebrow: "text-amber-200/90",
-        suffix: "text-amber-200/80",
-        detail: "text-amber-100/85",
-        button: "border-amber-300/30 bg-amber-400/10 text-amber-50 hover:bg-amber-400/20",
-        title: t("status.monitoringStarting"),
-      }
-    : {
-        wrapper: "border-red-500/40 bg-red-950/90 text-red-50 shadow-[0_12px_30px_rgba(127,29,29,0.22)]",
-        icon: "text-red-200",
-        eyebrow: "text-red-200/90",
-        suffix: "text-red-200/80",
-        detail: "text-red-100/85",
-        button: "border-red-300/30 bg-red-400/10 text-red-50 hover:bg-red-400/20",
-        title: t("status.monitoringDegraded"),
-      }
 
   const allServers: AppSettings["dvr_servers"] = currentSettings?.dvr_servers ?? []
   const displayedServers = (selectedDvr && selectedDvr !== "all")
@@ -158,65 +117,32 @@ export function StatusPanel({
     : allServers
 
   return (
-    <Card className="flex h-full min-w-0 flex-col overflow-hidden">
-      <CardHeader className="pb-1 pt-3 flex-shrink-0">
-        <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <Shield className="h-4 w-4 text-primary" />
+    <Card className="@container flex h-full min-w-0 flex-col overflow-hidden">
+      <CardHeader className="flex-shrink-0 px-4 pb-0 pt-3">
+        <CardTitle className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2">
+          <Shield className="size-4 text-muted-foreground" aria-hidden="true" />
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             {t("status.title")}
             {channelwatchVersion && (
-              <span className="text-[13px] text-muted-foreground font-normal">v{channelwatchVersion}</span>
+              <span className="font-mono text-xs font-normal text-muted-foreground">v{channelwatchVersion}</span>
             )}
           </div>
           <button
             onClick={() => onNavigate?.('settings')}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+            className="press-row -my-2 -mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-muted-foreground hover:text-foreground"
             aria-label={t("status.goToSettings")}
           >
-            <Settings className="h-3.5 w-3.5" />
+            <Settings className="size-4" />
           </button>
         </CardTitle>
       </CardHeader>
-      <CardContent className="p-0 flex-grow">
-        {monitoringBanner && (
-          <div className={`mx-3 mb-3 rounded-xl border px-3 py-2.5 ${bannerStyle.wrapper}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 gap-2.5">
-                <AlertTriangle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${bannerStyle.icon}`} />
-                <div className="min-w-0">
-                  <div className={`text-xs font-semibold uppercase tracking-[0.18em] ${bannerStyle.eyebrow}`}>{bannerStyle.title}</div>
-                  <div className="mt-0.5 text-sm font-medium leading-tight">
-                    {monitoringBanner.label}
-                    {monitoringBanner.suffix && <span className={bannerStyle.suffix}>{monitoringBanner.suffix}</span>}
-                  </div>
-                  <p className={`mt-1 text-xs leading-relaxed ${bannerStyle.detail}`}>{monitoringBanner.detail}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => onNavigate?.('diagnostics')}
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[13px] font-medium transition-colors ${bannerStyle.button}`}
-              >
-                <Stethoscope className="h-3 w-3" />
-                {t("status.diagnose")}
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="grid h-full min-w-0 grid-cols-1 divide-y">
+      <CardContent className="flex flex-col flex-grow p-0">
+        <div className="grid min-w-0 flex-1 grid-cols-1 content-start divide-y divide-hairline">
           {/* Core Engine Status */}
-          <div className="flex min-w-0 flex-grow flex-wrap items-center justify-between gap-2 p-3 transition-colors hover:bg-muted/50">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="relative flex h-2.5 w-2.5">
-                {isRunning && (
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${statusStyle.dotClass} opacity-75`} />
-                )}
-                <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${statusStyle.dotClass}`} />
-              </span>
-              <span className="text-sm font-medium">{t("status.coreEngine")}</span>
-            </div>
-            <Badge className={`h-auto min-w-0 shrink-0 whitespace-normal text-center ${statusStyle.bgClass} ${statusStyle.color}`}>
-              {coreProcessStatus}
-            </Badge>
+          <div className={rowClassName}>
+            <span aria-hidden="true" className={`mt-1.5 size-2 rounded-full ${statusDotClass[coreTone]}`} />
+            <span className="min-w-0 text-sm font-medium">{t("status.coreEngine")}</span>
+            <span className={trailingClassName}><StatusWord tone={coreTone}>{coreStatusLabel(coreProcessStatus)}</StatusWord></span>
           </div>
 
           {/* DVR Connections - one row per server */}
@@ -227,104 +153,101 @@ export function StatusPanel({
               const versionDisplay = formatDvrVersion(status?.version ?? null)
               const isDisabled = server.enabled === false
               const health = getDvrHealthConfig(status, isDisabled)
+              const statusUnknown = status === undefined && !isDisabled
+              const connectionTone: StatusTone = isDisabled || statusUnknown ? "neutral" : isConnected ? "success" : "danger"
+              const connectionLabel = isDisabled
+                ? t("status.badge.disabled")
+                : statusUnknown
+                  ? dataLoaded ? t("status.dvr.unknown") : t("statusOverview.loading")
+                  : isConnected ? t("status.badge.connected") : t("status.badge.notConnected")
               return (
                 <button
                   key={server.id || idx}
                   onClick={() => onNavigate?.('settings:general')}
-                  className="flex w-full min-w-0 flex-grow flex-wrap items-start justify-between gap-2 p-3 text-left transition-colors hover:bg-muted/50"
+                  className={interactiveRowClassName}
                 >
-                  <div className="flex min-w-0 flex-1 items-start gap-2">
-                    <span
-                      className="relative flex h-2 w-2 mt-1.5 flex-shrink-0"
-                      title={health.title}
-                      aria-label={health.title}
-                    >
-                      {health.ping && (
-                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${health.dotClass} opacity-75`} />
-                      )}
-                      <span className={`relative inline-flex rounded-full h-2 w-2 ${health.dotClass}`} />
+                  <span
+                    className={`mt-1.5 size-2 rounded-full ${health.dotClass}`}
+                    title={health.title}
+                    aria-label={health.title}
+                  />
+                  <span className="block min-w-0 break-words">
+                    <span className="block break-words text-sm font-medium">{server.name || server.host}</span>
+                    <span className="block break-words font-mono text-xs text-muted-foreground">
+                      {[formatDvrAddress(server.host, server.port, Boolean(server.name)), versionDisplay].filter(Boolean).join(" · ")}
                     </span>
-                    <div className="min-w-0 [overflow-wrap:anywhere]">
-                      <div className="break-words text-sm font-medium">{server.name || server.host}</div>
-                      <div className="break-words text-xs text-muted-foreground">
-                        {server.host}:{server.port || 8089}
-                      </div>
-                      {versionDisplay && (
-                      <div className="break-words text-[13px] text-muted-foreground">{versionDisplay}</div>
-                      )}
-                    </div>
-                  </div>
-                  <Badge
-                    variant={isConnected ? "default" : "secondary"}
-                    className={`h-auto min-w-0 shrink-0 whitespace-normal text-center ${isConnected ? "bg-green-800 text-white hover:bg-green-900" : isDisabled ? "" : "bg-red-700 text-white dark:bg-red-600"}`}
-                  >
-                    {isDisabled ? t("status.badge.disabled") : isConnected ? t("status.badge.connected") : t("status.badge.notConnected")}
-                  </Badge>
+                    {!isDisabled && !isConnected && status?.connection_error && (
+                      <span className="block break-words text-xs text-danger-fg">{status.connection_error}</span>
+                    )}
+                  </span>
+                  <span className={trailingClassName}>
+                    <StatusWord tone={connectionTone}>{connectionLabel}</StatusWord>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  </span>
                 </button>
               )
             })
           ) : (
             <button
               onClick={() => onNavigate?.('settings:general')}
-              className="p-3 hover:bg-muted/50 transition-colors flex items-center justify-between flex-grow text-left w-full"
+              className={interactiveRowClassName}
             >
-              <div>
-                <div className="text-sm font-medium">{t("status.dvrConnection")}</div>
-                <div className="text-xs text-muted-foreground">{t("common.notConfigured")}</div>
-              </div>
-              <Badge variant="destructive" className="bg-red-700 text-white dark:bg-red-600">{t("status.notConfigured")}</Badge>
+              <span aria-hidden="true" className="mt-1.5 size-2 rounded-full bg-danger" />
+              <span className="block min-w-0 text-sm font-medium">{t("status.dvrConnection")}</span>
+              <span className={trailingClassName}>
+                <StatusBadge variant="danger">{t("status.notConfigured")}</StatusBadge>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              </span>
             </button>
           )}
 
           {/* Monitoring - always active, not clickable */}
-          <div className="p-3 flex-grow">
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-sm font-medium">{t("status.monitoring")}</div>
-              <span className="text-xs text-muted-foreground">{t("status.monitoringAlwaysActive")}</span>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {getMonitoringTypes().map((type) => (
-                <Badge key={type} variant="secondary" className="text-[13px] py-0 min-h-5 px-1 font-normal leading-none">
-                  {type}
-                </Badge>
-              ))}
-            </div>
+          <div className={rowClassName}>
+            <span aria-hidden="true" />
+            <span className="block min-w-0">
+              <span className="block text-sm font-medium">{t("status.monitoring")}</span>
+              <span className="block text-xs leading-5 text-muted-foreground">{getMonitoringTypes().join(" · ")}</span>
+            </span>
+            <span className={`${trailingClassName} text-xs text-muted-foreground`}>{t("status.monitoringAlwaysActive")}</span>
           </div>
+
+          {noSignIn && (
+            <button
+              data-testid="status-no-sign-in-row"
+              onClick={() => onNavigate?.('settings:security')}
+              className={interactiveRowClassName}
+            >
+              <span aria-hidden="true" className="mt-1.5 size-2 rounded-full bg-warning" />
+              <span className="min-w-0 text-sm font-medium">{t("status.security")}</span>
+              <span className={trailingClassName}>
+                <span className="text-xs text-muted-foreground">{t("security.noSignInSet")}</span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              </span>
+            </button>
+          )}
 
           {/* Notifications - clickable */}
           <button
+            data-testid="status-notifications-row"
             onClick={() => onNavigate?.('settings:notifications')}
-            className="p-3 hover:bg-muted/50 transition-colors flex-grow text-left w-full"
+            className={interactiveRowClassName}
           >
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-sm font-medium">{t("status.notifications")}</div>
-              <span className="text-xs text-muted-foreground">{t("status.notificationsCount", { count: activeNotificationServices })}</span>
-            </div>
-            {activeProviderNames.length > 0 ? (
-              <div className="flex flex-wrap gap-1">
-                {activeProviderNames.map((name) => (
-                  <Badge
-                    key={name}
-                    variant="outline"
-                    className={`text-xs py-0 h-5 px-1.5 font-normal ${providerColors[name] || "border-gray-400 text-gray-600 dark:text-gray-400"}`}
-                  >
-                    {name}
-                  </Badge>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">{t("common.noneConfigured")}</p>
-            )}
-            {triggerLabels.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                <span className="text-[13px] text-muted-foreground mr-0.5">{t("status.triggers")}</span>
-                {triggerLabels.map((label) => (
-                  <Badge key={label} variant="secondary" className="text-[13px] py-0 min-h-5 px-1 font-normal leading-none">
-                    {label}
-                  </Badge>
-                ))}
-              </div>
-            )}
+            <span aria-hidden="true" />
+            <span className="block min-w-0">
+              <span className="block text-sm font-medium">{t("status.notifications")}</span>
+              <span className="block text-xs leading-5 text-muted-foreground">
+                {activeProviderNames.length > 0 ? activeProviderNames.join(" · ") : t("common.noneConfigured")}
+              </span>
+              {activeNotificationServices > 0 && triggerLabels.length > 0 && (
+                <span className="block text-xs leading-5 text-muted-foreground">
+                  {t("status.triggers")} {triggerLabels.join(" · ")}
+                </span>
+              )}
+            </span>
+            <span className={trailingClassName}>
+              <span className="text-xs tabular-nums text-muted-foreground">{t("status.notificationsCount", { count: activeNotificationServices })}</span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </span>
           </button>
         </div>
       </CardContent>

@@ -1,7 +1,9 @@
 """Disk space monitoring alert implementation for tracking DVR storage capacity."""
 
+import json
 import time
 import threading
+from pathlib import Path
 from typing import Dict, Any, Optional
 import random
 
@@ -13,7 +15,13 @@ from ..helpers.dvr_connection import build_dvr_base_url
 from ..helpers.dvr_target import build_safe_dvr_request
 from .common.alert_formatter import AlertFormatter
 from .common.session_manager import SessionManager
-from ..helpers.activity_recorder import record_disk_status
+from ..helpers.activity_recorder import (
+    record_activity,
+    record_disk_status,
+    _history_file_path,
+)
+from ..helpers.atomic_io import atomic_write_json
+from ..helpers.diagnostic_context import is_diagnostic_execution
 from ..notifications.template_engine import (
     NotificationTemplateEngine,
     TemplateRenderError,
@@ -36,6 +44,8 @@ class DiskSpaceAlert(BaseAlert):
     DEFAULT_WORSENING_DELTA_GB = 1
     DEFAULT_WORSENING_DELTA_PERCENT = 1.0
     DEFAULT_STARTUP_GRACE_PERIOD = 10
+    DISK_STATE_FILENAME = "disk_alert_state.json"
+    _state_file_lock = threading.Lock()
     SEVERITY_NORMAL = "normal"
     SEVERITY_WARNING = "warning"
     SEVERITY_CRITICAL = "critical"
@@ -68,6 +78,7 @@ class DiskSpaceAlert(BaseAlert):
         self._allow_test_loopback = bool(
             getattr(dvr, "test_only_allow_loopback", False)
         )
+        self._disk_state.update(self._load_persisted_disk_state())
 
         legacy_warning_percent = float(
             getattr(
@@ -480,6 +491,7 @@ class DiskSpaceAlert(BaseAlert):
             disk_state = self._get_disk_state()
 
             previous_status = disk_state.get("status", self.SEVERITY_NORMAL)
+            previous_transition_at = disk_state.get("last_transition_at")
             current_severity = self._get_severity_for_snapshot(snapshot)
             updated_state = self._update_seen_snapshot(disk_state, snapshot)
 
@@ -509,6 +521,14 @@ class DiskSpaceAlert(BaseAlert):
             if current_severity == self.SEVERITY_NORMAL:
                 if previous_status != self.SEVERITY_NORMAL:
                     log("DVR Storage: Returned to normal levels", level=LOG_STANDARD)
+                    self._record_disk_recovery_activity(
+                        free_bytes,
+                        total_bytes,
+                        disk_info,
+                        previous_status=previous_status,
+                        problem_started_at=previous_transition_at,
+                        now=current_time,
+                    )
                     updated_state["last_notification_at"] = None
                     updated_state["last_notified_severity"] = None
                     updated_state["last_notified_free_bytes"] = None
@@ -520,6 +540,14 @@ class DiskSpaceAlert(BaseAlert):
                 return
 
             if not getattr(self.settings, "alert_disk_space", True):
+                return
+
+            # With no notification destinations there is nothing to deliver;
+            # skip the attempt instead of retrying it on every check.
+            has_destinations = getattr(
+                self.notification_manager, "has_configured_destinations", None
+            )
+            if callable(has_destinations) and has_destinations() is False:
                 return
 
             if not self._should_notify_for_severity(
@@ -536,12 +564,30 @@ class DiskSpaceAlert(BaseAlert):
                 level=LOG_STANDARD,
             )
 
+            # The activity entry for this level was written when the level
+            # was entered.  Only a delivered re-alert at the same level (the
+            # configured cooldown plus meaningful worsening) adds another one,
+            # so an unchanged warning never repeats in Recent Activity.
+            is_realert = (
+                self._normalize_severity(updated_state.get("last_notified_severity"))
+                == current_severity
+            )
             notification_sent = self._send_disk_space_alert(
                 free_bytes,
                 total_bytes,
                 disk_info,
                 severity=current_severity,
+                record_activity=False,
             )
+            if notification_sent and is_realert:
+                self._record_disk_space_activity(
+                    self._build_disk_space_notification(
+                        free_bytes,
+                        total_bytes,
+                        disk_info,
+                        severity=current_severity,
+                    )
+                )
             updated_state = self._update_seen_snapshot(updated_state, snapshot)
             updated_state["status"] = current_severity
             if notification_sent:
@@ -598,6 +644,52 @@ class DiskSpaceAlert(BaseAlert):
     def _persist_disk_state(self, state: Dict[str, Any]) -> None:
         self._disk_state.clear()
         self._disk_state.update(state)
+        self._write_persisted_disk_state(dict(state))
+
+    # Disk alert state survives restarts so an unchanged low-space condition
+    # does not notify again every time the service starts.
+    def _disk_state_key(self) -> str:
+        dvr_id = getattr(self.dvr, "id", None)
+        if dvr_id:
+            return str(dvr_id)
+        return f"{self.host or ''}:{self.port}"
+
+    @classmethod
+    def _disk_state_path(cls) -> Path:
+        return Path(_history_file_path()).parent / cls.DISK_STATE_FILENAME
+
+    def _read_disk_state_file(self) -> Dict[str, Any]:
+        path = self._disk_state_path()
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            log(f"Ignoring unreadable disk alert state: {exc}", level=LOG_VERBOSE)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _load_persisted_disk_state(self) -> Dict[str, Any]:
+        if is_diagnostic_execution():
+            return {}
+        with self._state_file_lock:
+            entry = self._read_disk_state_file().get(self._disk_state_key())
+        return dict(entry) if isinstance(entry, dict) else {}
+
+    def _write_persisted_disk_state(self, state: Dict[str, Any]) -> None:
+        if is_diagnostic_execution() or getattr(self, "running_test", False):
+            return
+        try:
+            with self._state_file_lock:
+                data = self._read_disk_state_file()
+                data[self._disk_state_key()] = state
+                path = self._disk_state_path()
+                if not path.parent.is_dir():
+                    return
+                atomic_write_json(path, data)
+        except (OSError, TypeError, ValueError) as exc:
+            log(f"Could not persist disk alert state: {exc}", level=LOG_VERBOSE)
 
     def _update_seen_snapshot(
         self, state: Dict[str, Any], snapshot: Dict[str, Any]
@@ -730,8 +822,8 @@ class DiskSpaceAlert(BaseAlert):
 
     def _get_log_label_for_severity(self, severity: str) -> str:
         if severity == self.SEVERITY_CRITICAL:
-            return "Critical Disk Space"
-        return "Low Disk Space Warning"
+            return "Disk space critically low"
+        return "Disk space low"
 
     def _build_disk_space_notification(
         self,
@@ -750,9 +842,9 @@ class DiskSpaceAlert(BaseAlert):
         path = disk_info.get("path", "/shares/DVR")
 
         if severity == self.SEVERITY_CRITICAL:
-            title = "🚨 Low Disk Space Critical"
+            title = "🚨 Disk space critically low"
         else:
-            title = "⚠️ Low Disk Space Warning"
+            title = "⚠️ Disk space low"
 
         if is_test:
             title_parts = title.split(" ", 1)
@@ -764,7 +856,7 @@ class DiskSpaceAlert(BaseAlert):
         message = (
             f"Free Space: {free_formatted} / {total_formatted} ({free_percentage:.1f}%)\n"
             f"Used Space: {used_formatted}\n"
-            f"DVR Path: {path}"
+            f"{getattr(self.dvr, 'name', '') or 'DVR Storage'}: {path}"
         )
 
         if not self.template_settings.get("use_default", True):
@@ -829,16 +921,22 @@ class DiskSpaceAlert(BaseAlert):
             "used_formatted": used_formatted,
             "path": path,
             "is_test": is_test,
+            "severity": severity,
         }
 
     def _dispatch_disk_space_notification(
-        self, payload: Dict[str, Any], **notification_kwargs
+        self,
+        payload: Dict[str, Any],
+        *,
+        record_activity: bool = True,
+        **notification_kwargs,
     ) -> bool:
         notification_sent = bool(
             self.send_alert(payload["title"], payload["message"], **notification_kwargs)
         )
 
-        self._record_disk_space_activity(payload)
+        if record_activity:
+            self._record_disk_space_activity(payload)
 
         return notification_sent
 
@@ -855,13 +953,71 @@ class DiskSpaceAlert(BaseAlert):
                 free_percentage=payload["free_percentage"],
                 title=payload["title"],
                 message=payload["message"],
-                extra={"path": payload["path"]},
+                extra={
+                    "path": payload["path"],
+                    "free": payload["free_formatted"],
+                    "total": payload["total_formatted"],
+                    "used": payload["used_formatted"],
+                    "free_percentage": round(float(payload["free_percentage"]), 1),
+                    "severity": payload.get("severity"),
+                },
                 dvr_id=getattr(self.dvr, "id", None),
                 dvr_name=getattr(self.dvr, "name", None),
                 is_test=False,
                 notification_history=self._notification_history,
             )
         )
+
+    def _record_disk_recovery_activity(
+        self,
+        free_bytes,
+        total_bytes,
+        disk_info,
+        *,
+        previous_status: str,
+        problem_started_at: Any,
+        now: float,
+    ) -> bool:
+        """Close an earlier warning or critical entry in the activity feed."""
+
+        try:
+            free_percentage = (
+                (free_bytes / total_bytes) * 100 if total_bytes > 0 else 0.0
+            )
+            free_formatted = self._format_bytes(free_bytes)
+            total_formatted = self._format_bytes(total_bytes)
+            message = (
+                f"{free_formatted} free of {total_formatted} "
+                f"({free_percentage:.1f}%)."
+            )
+            if isinstance(problem_started_at, (int, float)) and now > problem_started_at:
+                minutes = int((now - problem_started_at) // 60)
+                hours, minutes = divmod(minutes, 60)
+                duration = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+                message += f" Recovered after {duration}."
+            dvr_id = getattr(self.dvr, "id", None)
+            return bool(
+                record_activity(
+                    activity_type="disk_recovered",
+                    title="Disk space back to normal",
+                    message=message,
+                    extra={
+                        "path": disk_info.get("path", "/shares/DVR"),
+                        "free": free_formatted,
+                        "total": total_formatted,
+                        "free_percentage": round(free_percentage, 1),
+                        "previous_severity": previous_status,
+                    },
+                    dvr_id=dvr_id,
+                    dvr_name=getattr(self.dvr, "name", None),
+                    activity_event_id=(
+                        f"disk-recovered:{dvr_id or 'global'}:{int(now)}"
+                    ),
+                )
+            )
+        except Exception as exc:
+            log(f"Error recording disk recovery: {exc}", level=LOG_STANDARD)
+            return False
 
     # NOTIFICATIONS
     def _send_disk_space_alert(
@@ -872,6 +1028,7 @@ class DiskSpaceAlert(BaseAlert):
         *,
         severity: Optional[str] = None,
         is_test: bool = False,
+        record_activity: bool = True,
         **notification_kwargs,
     ):
         """Sends a disk space alert notification with current storage information."""
@@ -890,7 +1047,7 @@ class DiskSpaceAlert(BaseAlert):
 
             if getattr(self.settings, "alert_disk_space", True):
                 return self._dispatch_disk_space_notification(
-                    payload, **notification_kwargs
+                    payload, record_activity=record_activity, **notification_kwargs
                 )
 
             return False

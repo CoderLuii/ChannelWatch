@@ -48,7 +48,7 @@ describe("report proof preparation", () => {
     await expect(solveReportChallenge(
       { ...challenge, difficulty: 24 },
       { deadlineMs: 1, yieldEvery: 1 },
-    )).rejects.toThrow("attachments are still here")
+    )).rejects.toThrow("Your draft is still here")
   })
 
   it("uses a 30-second default deadline", async () => {

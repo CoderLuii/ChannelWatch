@@ -1,4 +1,4 @@
-import type { AppSettings } from "@/lib/types"
+import type { AppSettings, DVRServer } from "@/lib/types"
 
 export const timezones = [
   "Africa/Abidjan",
@@ -378,8 +378,8 @@ export const diskAdvancedThresholdFields: Array<{
 }> = [
   {
     id: "ds_warning_threshold_percent",
-    label: "Warning Percent",
-    desc: "Send a warning when free space drops below this percent",
+    label: "Warning percent",
+    desc: "Warn when free space drops below this percent",
     min: 0,
     max: 100,
     step: 1,
@@ -389,7 +389,7 @@ export const diskAdvancedThresholdFields: Array<{
   {
     id: "ds_warning_threshold_gb",
     label: "Warning GB",
-    desc: "Send a warning when free space drops below this many gigabytes",
+    desc: "Warn when free space drops below this many gigabytes",
     min: 0,
     step: 1,
     suffix: "GB",
@@ -397,8 +397,8 @@ export const diskAdvancedThresholdFields: Array<{
   },
   {
     id: "ds_critical_threshold_percent",
-    label: "Critical Percent",
-    desc: "Escalate to critical when free space falls below this percent",
+    label: "Critical percent",
+    desc: "Critical when free space drops below this percent",
     min: 0,
     max: 100,
     step: 1,
@@ -408,7 +408,7 @@ export const diskAdvancedThresholdFields: Array<{
   {
     id: "ds_critical_threshold_gb",
     label: "Critical GB",
-    desc: "Escalate to critical when free space falls below this many gigabytes",
+    desc: "Critical when free space drops below this many gigabytes",
     min: 0,
     step: 1,
     suffix: "GB",
@@ -419,7 +419,7 @@ export const diskAdvancedThresholdFields: Array<{
 export const diskAdvancedBehaviorFields: Array<{
   id: DiskAdvancedBehaviorField
   label: string
-  desc: string
+  desc?: string
   min: number
   max?: number
   step: number
@@ -428,7 +428,7 @@ export const diskAdvancedBehaviorFields: Array<{
 }> = [
   {
     id: "ds_startup_grace_seconds",
-    label: "Startup Grace",
+    label: "Startup delay",
     desc: "Wait this many seconds after startup before disk alerts can fire",
     min: 0,
     step: 1,
@@ -437,8 +437,7 @@ export const diskAdvancedBehaviorFields: Array<{
   },
   {
     id: "ds_worsening_delta_gb",
-    label: "Worsening Delta GB",
-    desc: "Send another alert if free space worsens by at least this much",
+    label: "Repeat if free space drops by (GB)",
     min: 0,
     step: 1,
     suffix: "GB",
@@ -446,8 +445,8 @@ export const diskAdvancedBehaviorFields: Array<{
   },
   {
     id: "ds_worsening_delta_percent",
-    label: "Worsening Delta Percent",
-    desc: "Or send again when free-space percent worsens by this amount",
+    label: "Repeat if free space drops by (%)",
+    desc: "Either one triggers a repeat.",
     min: 0,
     max: 100,
     step: 0.1,
@@ -456,7 +455,7 @@ export const diskAdvancedBehaviorFields: Array<{
   },
   {
     id: "ds_alert_cooldown",
-    label: "Disk Alert Cooldown",
+    label: "Disk alert cooldown",
     desc: "Minimum time between repeat low-disk notifications",
     min: 0,
     step: 1,
@@ -478,3 +477,79 @@ export const emptyWebhookEntry = (): AppSettings["webhooks"][number] => ({
   secret: "",
   enabled: true,
 })
+
+type DiskAdvancedField = DiskAdvancedThresholdField | DiskAdvancedBehaviorField
+
+// An emptied number input is kept as NaN while editing so it is never saved
+// as 0. On save a cleared global field restores its default and a cleared
+// per-DVR override is dropped, so that DVR goes back to the global value.
+export function parseNumberFieldInput(raw: string): number {
+  if (raw.trim() === "") return Number.NaN
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : Number.NaN
+}
+
+export function numberFieldInputValue(value: unknown): number | "" {
+  return typeof value === "number" && Number.isFinite(value) ? value : ""
+}
+
+export function isClearedNumberField(value: unknown): boolean {
+  return typeof value === "number" && !Number.isFinite(value)
+}
+
+function diskThresholdError(values: Record<string, unknown>, suffix: string): string | null {
+  const warnPct = values.ds_warning_threshold_percent as number
+  const critPct = values.ds_critical_threshold_percent as number
+  const warnGb = values.ds_warning_threshold_gb as number
+  const critGb = values.ds_critical_threshold_gb as number
+  if (critPct > 0 && warnPct > 0 && critPct >= warnPct) return `Critical percent must be lower than warning percent${suffix}.`
+  if (critGb > 0 && warnGb > 0 && critGb >= warnGb) return `Critical GB must be lower than warning GB${suffix}.`
+  return null
+}
+
+type DvrServerOverrides = Pick<DVRServer, "id" | "name" | "host" | "overrides" | "deleted_at">
+
+export function normalizeDiskAdvancedSettings<T extends Partial<Record<DiskAdvancedField, unknown>> & { dvr_servers?: DvrServerOverrides[] }>(
+  settings: T,
+): { settings: T; error: string | null; errorDvrId: string | null } {
+  const next: Record<string, unknown> = { ...settings }
+  const fields = [...diskAdvancedThresholdFields, ...diskAdvancedBehaviorFields]
+  for (const field of fields) {
+    const value = next[field.id]
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      next[field.id] = Number(field.placeholder)
+    }
+  }
+  const servers = (settings.dvr_servers ?? []).map((server) => {
+    if (!server.overrides) return server
+    const overrides = Object.fromEntries(Object.entries(server.overrides).filter(([, value]) => !isClearedNumberField(value)))
+    return { ...server, overrides }
+  })
+  if (settings.dvr_servers) next.dvr_servers = servers
+
+  let error = diskThresholdError(next, "")
+  let errorDvrId: string | null = null
+  if (!error) {
+    for (const server of servers) {
+      if (server.deleted_at) continue
+      const suffix = ` on ${server.name || server.host || "this DVR"}`
+      // Global values count too: an override can conflict with what the DVR inherits.
+      error = diskThresholdError({ ...next, ...server.overrides }, suffix)
+      for (const field of fields) {
+        if (error) break
+        const value = server.overrides?.[field.id]
+        if (typeof value !== "number") continue
+        if (value < field.min || (field.max !== undefined && value > field.max)) {
+          error = field.max !== undefined
+            ? `${field.label} must be between ${field.min} and ${field.max}${suffix}.`
+            : `${field.label} must be ${field.min} or more${suffix}.`
+        }
+      }
+      if (error) {
+        errorDvrId = server.id
+        break
+      }
+    }
+  }
+  return { settings: next as T, error, errorDvrId }
+}

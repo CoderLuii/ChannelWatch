@@ -49,3 +49,14 @@ def test_concurrent_caller_retries_failed_winner(monkeypatch, record):
     assert len(calls) == 2
     assert record(history) is True
     assert len(calls) == 2
+
+
+def test_distinct_recording_jobs_for_same_program_are_all_recorded(monkeypatch):
+    persist = Mock(return_value=True)
+    monkeypatch.setattr(recorder, 'persist_activity_event', persist)
+    history = {}
+    for job in ('job-1', 'job-2', 'job-1'):
+        assert recorder.record_recording_event(
+            'Scheduled', 'Show', 'Channel', notification_history=history, job_id=job
+        ) is True
+    assert persist.call_count == 2

@@ -16,6 +16,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/base/button"
+import { SheetHandle } from "@/components/base/dialog"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/base/tooltip"
 import { t } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
@@ -36,8 +37,8 @@ interface NavigationItem {
 const primaryNavigation: NavigationItem[] = [
   { view: "overview", labelKey: "nav.dashboard", icon: Home },
   { view: "watch-history", labelKey: "nav.watchHistory", icon: History },
-  { view: "settings", labelKey: "nav.settings", icon: Settings, matches: (view) => view.startsWith("settings") },
   { view: "notification-log", labelKey: "nav.notificationLog", icon: Bell },
+  { view: "settings", labelKey: "nav.settings", icon: Settings, matches: (view) => view.startsWith("settings") },
   { view: "diagnostics", labelKey: "nav.diagnostics", icon: HeartPulse },
 ]
 
@@ -48,19 +49,28 @@ const utilityNavigation: NavigationItem[] = [
 
 const mobilePrimaryNavigation = ["overview", "watch-history", "notification-log", "settings"]
   .map((view) => primaryNavigation.find((item) => item.view === view)!)
-const mobileDrawerNavigation = [...primaryNavigation, ...utilityNavigation]
+export const mobileMoreNavigation = ["diagnostics", "help-feedback", "about"]
+  .map((view) => [...primaryNavigation, ...utilityNavigation].find((item) => item.view === view)!)
 
-const mobileTabLabels: Record<string, string> = {
-  "overview": "Home",
-  "watch-history": "History",
-  "notification-log": "Logs",
+const mobileTabLabelKeys: Record<string, string> = {
+  "overview": "nav.tabHome",
+  "watch-history": "nav.tabHistory",
+  "notification-log": "nav.tabLogs",
 }
+
+// Tab labels and icons use pixel sizes so enlarged root text never splits a
+// label mid-word. The accessible name comes from aria-label at full size.
+const mobileTabClassName = "flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-[2px] rounded-control px-[2px] py-[4px] text-[clamp(10px,0.6875rem,12px)] font-semibold leading-[14px] text-muted-foreground transition-colors active:[&>span:first-child]:bg-selected active:[&>span:first-child]:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+const mobileTabPillClassName = "flex h-[28px] w-[48px] max-w-full items-center justify-center rounded-full transition-colors motion-reduce:transition-none"
+const SIDEBAR_EXPANDED_KEY = "channelwatch-sidebar-expanded"
+const mobileTabLabelClassName = "block max-w-full overflow-hidden text-ellipsis whitespace-nowrap"
 
 export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: SidebarProps) {
   const [isMobile, setIsMobile] = useState(propIsMobile || false)
   const [isOpen, setIsOpen] = useState(false)
-  const [isCollapsed, setIsCollapsed] = useState(true)
-  const [dialogElement, setDialogElement] = useState<HTMLElement | null>(null)
+  const [collapsedChoice, setCollapsedChoice] = useState(true)
+  const [isNarrow, setIsNarrow] = useState(false)
+  const isCollapsed = collapsedChoice || isNarrow
   const previousFocus = useRef<HTMLElement | null>(null)
   const mobileNavigationRef = useRef<HTMLElement | null>(null)
 
@@ -110,13 +120,33 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
   }, [isMobile])
 
   useLayoutEffect(() => {
-    if (!isMobile || !isOpen || !dialogElement) return
-    const background = Array.from(document.body.children)
-      .filter((element): element is HTMLElement => element instanceof HTMLElement && !element.contains(dialogElement) && !element.hasAttribute("data-radix-focus-guard"))
-      .map(element => ({ element, inert: element.inert }))
-    background.forEach(({ element }) => { element.inert = true })
-    return () => { background.forEach(({ element, inert }) => { element.inert = inert }) }
-  }, [dialogElement, isMobile, isOpen])
+    try {
+      if (localStorage.getItem(SIDEBAR_EXPANDED_KEY) === "1") setCollapsedChoice(false)
+    } catch {}
+    const narrow = window.matchMedia("(max-width: 1023.98px)")
+    const syncNarrow = () => setIsNarrow(narrow.matches)
+    syncNarrow()
+    narrow.addEventListener("change", syncNarrow)
+    return () => narrow.removeEventListener("change", syncNarrow)
+  }, [])
+
+  const toggleCollapsed = () => {
+    const next = !collapsedChoice
+    setCollapsedChoice(next)
+    try {
+      localStorage.setItem(SIDEBAR_EXPANDED_KEY, next ? "0" : "1")
+    } catch {}
+  }
+
+  useLayoutEffect(() => {
+    const root = document.documentElement.style
+    if (isMobile) {
+      root.removeProperty("--app-sidebar-width")
+      return
+    }
+    root.setProperty("--app-sidebar-width", `calc(${isCollapsed ? "68px" : "16rem"} + env(safe-area-inset-left))`)
+    return () => { root.removeProperty("--app-sidebar-width") }
+  }, [isMobile, isCollapsed])
 
   const renderNavigationItem = (item: NavigationItem) => {
     const selected = item.matches ? item.matches(activeView) : activeView === item.view
@@ -131,8 +161,8 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
         aria-label={label}
         aria-current={selected ? "page" : undefined}
         className={cn(
-          "min-h-11 w-full text-[15px]",
-          selected && "bg-accent text-accent-foreground hover:bg-accent hover:text-accent-foreground",
+          "min-h-11 w-full text-[15px] active:scale-100",
+          selected && "bg-primary/12 text-primary hover:bg-primary/12 hover:text-primary",
           !isMobile && isCollapsed ? "justify-center px-2" : "justify-start",
         )}
         onClick={() => setActiveView(item.view)}
@@ -141,7 +171,7 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
         {(!isMobile && !isCollapsed) || isMobile ? label : null}
       </Button>
     )
-    if (isMobile || !isCollapsed) return button
+    if (!isCollapsed) return button
     return (
       <Tooltip key={item.view}>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
@@ -158,16 +188,15 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
       <button
         key={item.view}
         type="button"
-        className={cn(
-          "flex min-h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1 text-xs font-semibold leading-tight text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&>span]:max-w-full [&>span]:break-words [&>span]:text-center [&>span]:[overflow-wrap:anywhere]",
-          selected && "text-primary",
-        )}
+        className={cn(mobileTabClassName, selected && "text-primary")}
         aria-label={label}
         aria-current={selected ? "page" : undefined}
         onClick={() => setActiveView(item.view)}
       >
-        <Icon className="h-[21px] w-[21px]" strokeWidth={selected ? 2.2 : 1.8} aria-hidden="true" />
-        <span className="max-w-full">{mobileTabLabels[item.view] ?? label}</span>
+        <span className={cn(mobileTabPillClassName, selected && "bg-primary/12")} aria-hidden="true">
+          <Icon className="h-[21px] w-[21px]" strokeWidth={selected ? 2.2 : 1.8} aria-hidden="true" />
+        </span>
+        <span className={mobileTabLabelClassName} aria-hidden="true">{mobileTabLabelKeys[item.view] ? t(mobileTabLabelKeys[item.view]) : label}</span>
       </button>
     )
   }
@@ -178,14 +207,14 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
       type="button"
       variant="ghost"
       size="sm"
-      className={cn("min-h-11 w-full", isCollapsed ? "justify-center px-2" : "justify-start")}
-      onClick={() => setIsCollapsed((current) => !current)}
+      className={cn("min-h-11 w-full max-lg:hidden", isCollapsed ? "justify-center px-2" : "justify-start")}
+      onClick={toggleCollapsed}
       aria-label={collapseLabel}
       aria-expanded={!isCollapsed}
     >
       <ChevronRight
         className={cn(
-          "h-4 w-4 transition-transform motion-reduce:transition-none",
+          "h-4 w-4 transition-transform duration-[var(--motion-base)] ease-out motion-reduce:transition-none",
           isCollapsed ? "" : "mr-2 rotate-180",
         )}
         aria-hidden="true"
@@ -196,106 +225,131 @@ export function Sidebar({ activeView, setActiveView, isMobile: propIsMobile }: S
 
   const sidebar = (
       <aside
-        ref={isMobile ? setDialogElement : undefined}
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[min(20rem,88vw)] flex-col border-r border-border/70 bg-background",
-          isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
-          !isMobile && isCollapsed ? "md:w-[68px]" : "md:w-64",
-          "transition-all duration-200 ease-in-out motion-reduce:transition-none",
+          "app-sidebar fixed inset-y-0 left-0 z-50 flex flex-col max-md:hidden border-r border-hairline-strong bg-background pl-[env(safe-area-inset-left)]",
+          isCollapsed ? "w-[calc(68px+env(safe-area-inset-left))]" : "w-[calc(16rem+env(safe-area-inset-left))]",
         )}
-        role={isMobile ? "dialog" : undefined}
-        aria-modal={isMobile ? true : undefined}
-        aria-label={isMobile ? t("sidebar.navigation") : undefined}
-        aria-hidden={isMobile && !isOpen ? true : undefined}
-        inert={isMobile && !isOpen}
       >
-        {isMobile ? <DialogPrimitive.Title className="sr-only">{t("sidebar.navigation")}</DialogPrimitive.Title> : null}
         <div className={cn(
-          "flex min-h-16 shrink-0 items-center border-b border-border/70 p-2",
-          !isMobile && isCollapsed ? "justify-center" : "justify-between gap-2 px-4",
+          "sidebar-brand flex min-h-16 shrink-0 items-center border-b border-hairline-strong p-2",
+          isCollapsed ? "justify-center" : "justify-between gap-2 px-4",
         )}>
           <div className="flex min-w-0 items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element -- static export: next/image optimizer unavailable */}
             <img src="/images/channelwatch-logo.png" alt={t("sidebar.logoAlt")} className="h-8 w-auto shrink-0" />
-            {isMobile || !isCollapsed ? <span className="truncate text-[17px] font-semibold tracking-[-0.02em]">{t("sidebar.brandName")}</span> : null}
+            {!isCollapsed ? <span className="truncate text-base font-semibold tracking-[-0.02em]">{t("sidebar.brandName")}</span> : null}
           </div>
-          {isMobile ? (
-            <Button type="button" variant="ghost" size="icon" className="min-h-11 min-w-11" onClick={() => setIsOpen(false)} aria-label={t("sidebar.closeSidebar")}>
-              <X className="h-5 w-5" aria-hidden="true" />
-            </Button>
-          ) : null}
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-3" aria-label={t("sidebar.navigation")}>
-          <div className="space-y-1">{(isMobile ? mobileDrawerNavigation : primaryNavigation).map(renderNavigationItem)}</div>
+          <div className="space-y-1">{primaryNavigation.map(renderNavigationItem)}</div>
         </nav>
 
-        <nav className={cn("shrink-0 border-t border-border/70 px-3 py-2", isMobile && "hidden")} aria-label={t("sidebar.utilityNavigation")}>
+        <nav className="shrink-0 border-t border-hairline-strong px-3 py-2" aria-label={t("sidebar.utilityNavigation")}>
           <div className="space-y-1">{utilityNavigation.map(renderNavigationItem)}</div>
         </nav>
 
-        {!isMobile ? (
-          <div className="shrink-0 border-t border-border p-2">
-            {isCollapsed ? (
-              <Tooltip>
-                <TooltipTrigger asChild>{collapseButton}</TooltipTrigger>
-                <TooltipContent side="right">{collapseLabel}</TooltipContent>
-              </Tooltip>
-            ) : collapseButton}
-          </div>
-        ) : null}
+        <div className="sidebar-collapse shrink-0 border-t border-hairline-strong p-2">
+          {isCollapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>{collapseButton}</TooltipTrigger>
+              <TooltipContent side="right">{collapseLabel}</TooltipContent>
+            </Tooltip>
+          ) : collapseButton}
+        </div>
       </aside>
+  )
+
+  const moreSelected = mobileMoreNavigation.some((item) => item.view === activeView)
+
+  const moreSheet = (
+    <DialogPrimitive.Root open={isOpen} onOpenChange={setIsOpen}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="mobile-sheet-overlay fixed inset-0 z-40 bg-scrim" />
+        <DialogPrimitive.Content
+          data-testid="mobile-more-sheet"
+          aria-describedby={undefined}
+          className="mobile-sheet fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-sheet border-t border-hairline-strong bg-raised pb-[max(16px,env(safe-area-inset-bottom))] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] shadow-3 focus:outline-none"
+          onCloseAutoFocus={event => {
+            event.preventDefault()
+            requestAnimationFrame(() => {
+              const trigger = previousFocus.current
+              if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
+              else document.querySelector<HTMLElement>('nav button[aria-current="page"]')?.focus()
+            })
+          }}
+        >
+          <SheetHandle onDismiss={() => setIsOpen(false)} maxWidth="767.98px" className="shrink-0">
+            <div className="flex items-center justify-between gap-2 px-4 pb-1 pt-2">
+              <DialogPrimitive.Title className="min-w-0 truncate text-base font-semibold">{t("nav.moreSheetTitle")}</DialogPrimitive.Title>
+              <DialogPrimitive.Close asChild>
+                <Button type="button" variant="ghost" size="icon" className="min-h-11 min-w-11 shrink-0" aria-label={t("nav.closeMore")}>
+                  <X className="h-5 w-5" aria-hidden="true" />
+                </Button>
+              </DialogPrimitive.Close>
+            </div>
+          </SheetHandle>
+          <nav className="min-h-0 overflow-y-auto overscroll-contain px-4 pb-1" aria-label={t("sidebar.utilityNavigation")}>
+            <ul className="divide-y divide-hairline overflow-hidden rounded-control bg-fill">
+              {mobileMoreNavigation.map((item) => {
+                const selected = activeView === item.view
+                const Icon = item.icon
+                return (
+                  <li key={item.view}>
+                    <button
+                      type="button"
+                      className={cn(
+                        "press-row flex min-h-[52px] w-full items-center gap-3 px-3 py-2 text-left text-[15px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                        selected && "text-accent-foreground",
+                      )}
+                      aria-current={selected ? "page" : undefined}
+                      onClick={() => {
+                        setActiveView(item.view)
+                        setIsOpen(false)
+                      }}
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center" aria-hidden="true">
+                        <Icon className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{t(item.labelKey)}</span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </nav>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 
   return (
     <TooltipProvider delayDuration={300}>
-      {isMobile ? (
-        <DialogPrimitive.Root open={isOpen} onOpenChange={setIsOpen}>
-          <DialogPrimitive.Portal>
-            <div>
-              <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/35 backdrop-blur-sm" />
-              <DialogPrimitive.Content
-                asChild
-                aria-modal="true"
-                aria-describedby={undefined}
-                onCloseAutoFocus={event => {
-                  event.preventDefault()
-                  requestAnimationFrame(() => {
-                    const trigger = previousFocus.current
-                    if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
-                    else document.querySelector<HTMLElement>('aside button[aria-current="page"]')?.focus()
-                  })
-                }}
-              >
-                {sidebar}
-              </DialogPrimitive.Content>
-            </div>
-          </DialogPrimitive.Portal>
-        </DialogPrimitive.Root>
-      ) : sidebar}
-      {!isMobile ? <div className={cn("hidden transition-all duration-200 ease-in-out motion-reduce:transition-none md:block", isCollapsed ? "ml-[68px]" : "ml-64")} /> : null}
+      {isMobile ? moreSheet : sidebar}
+      {!isMobile ? <div className={cn("hidden md:block", isCollapsed ? "ml-[68px]" : "ml-64")} /> : null}
       {isMobile ? (
         <nav
           ref={mobileNavigationRef}
-          className="ios-navigation-material fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border/70 bg-background/88 px-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 shadow-[0_-12px_34px_-28px_hsl(220_40%_10%/0.34)] backdrop-blur-xl md:hidden"
+          className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-hairline-strong bg-background pb-[max(4px,env(safe-area-inset-bottom))] pl-[max(4px,env(safe-area-inset-left))] pr-[max(4px,env(safe-area-inset-right))] pt-[4px] md:hidden"
           aria-label={t("sidebar.navigation")}
         >
           {mobilePrimaryNavigation.map(renderMobileBottomItem)}
           <button
             type="button"
-            className={cn(
-              "flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1 text-xs font-semibold leading-tight text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&>span]:max-w-full [&>span]:break-words [&>span]:text-center [&>span]:[overflow-wrap:anywhere]",
-              (activeView === "diagnostics" || activeView === "help-feedback" || activeView === "about") && "text-primary",
-            )}
-            aria-label="More"
+            className={cn(mobileTabClassName, moreSelected && "text-primary")}
+            aria-label={t("nav.more")}
+            aria-haspopup="dialog"
             aria-expanded={isOpen}
             onClick={(event) => {
               previousFocus.current = event.currentTarget
               setIsOpen(true)
             }}
           >
-            <MoreHorizontal className="h-[21px] w-[21px]" strokeWidth={1.8} aria-hidden="true" />
-            <span>More</span>
+            <span className={cn(mobileTabPillClassName, moreSelected && "bg-primary/12")} aria-hidden="true">
+              <MoreHorizontal className="h-[21px] w-[21px]" strokeWidth={1.8} aria-hidden="true" />
+            </span>
+            <span className={mobileTabLabelClassName} aria-hidden="true">{t("nav.more")}</span>
           </button>
         </nav>
       ) : null}

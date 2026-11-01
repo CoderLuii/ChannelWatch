@@ -2192,7 +2192,7 @@ def test_scheduler_defers_when_notification_queue_does_not_drain(tmp_path: Path)
     view = service.get_policy_view()
     assert view["attention_required"] is True
     assert view["attention_code"] == "notification-queue-busy"
-    assert "next maintenance window" in view["last_error"]
+    assert "next update window" in view["last_error"]
     assert service.run_once(force_check=True)["status"] == "maintenance-attempt-deferred"
     assert manager.applies == 0
 

@@ -38,7 +38,7 @@ VOD_WATCHING_DEFAULT_BODY = "\n".join(
     ]
 )
 
-RECORDING_EVENTS_DEFAULT_TITLE = "Channels DVR - Recording Event"
+RECORDING_EVENTS_DEFAULT_TITLE = "{recording_status_friendly}: {title}"
 RECORDING_EVENTS_DEFAULT_BODY = "\n".join(
     [
         "{📺 <channel_name}",
@@ -50,12 +50,12 @@ RECORDING_EVENTS_DEFAULT_BODY = "\n".join(
     ]
 )
 
-DISK_SPACE_DEFAULT_TITLE = "⚠️ Low Disk Space Warning"
+DISK_SPACE_DEFAULT_TITLE = "⚠️ Disk space low"
 DISK_SPACE_DEFAULT_BODY = "\n".join(
     [
         "Free Space: {disk_free} / {disk_total} ({disk_percent})",
         "Used Space: {disk_used}",
-        "DVR Path: {disk_path}",
+        "{disk_label}: {disk_path}",
     ]
 )
 

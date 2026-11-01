@@ -170,15 +170,6 @@ export interface AppSettings {
   notification_routing: Record<string, Record<string, Record<string, boolean> | null> | null>
 }
 
-export interface AboutInfo {
-  app_name: string
-  version: string
-  developer: string
-  description: string
-  github_url: string
-  dockerhub_url: string
-}
-
 export interface TestResult {
   test_name: string
   success: boolean
@@ -216,6 +207,7 @@ export interface DVRStatusInfo {
   last_event_at?: string | null
   freshness_age_seconds?: number | null
   stale_threshold_seconds?: number | null
+  connection_error?: string | null
 }
 
 export interface SystemInfo {
@@ -307,25 +299,6 @@ export interface ActivityItem {
   dvr_id?: string
   dvr_name?: string
   is_test?: boolean
-}
-
-export interface PerDvrSystemInfo {
-  dvr_id: string
-  dvr_name: string
-  host: string
-  port: number
-  connected: boolean
-  version: string | null
-  version_compatible: boolean | null
-  version_warning: string | null
-  disk_usage_percent: number | null
-  disk_usage_gb: number | null
-  disk_total_gb: number | null
-  disk_free_gb: number | null
-  disk_severity: 'normal' | 'warning' | 'critical'
-  library_shows: number
-  library_movies: number
-  library_episodes: number
 }
 
 export type AuthMode = "api_key" | "rbac" | "none"

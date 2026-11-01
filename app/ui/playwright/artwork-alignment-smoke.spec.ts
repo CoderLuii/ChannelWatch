@@ -67,5 +67,5 @@ test("initial deep link marks the current desktop navigation item", async ({ pag
   await page.goto("/#watch-history")
   await expect(page.getByRole("heading", { name: "Watch History" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Watch History", exact: true })).toHaveAttribute("aria-current", "page")
-  await expect(page.getByRole("button", { name: "Dashboard", exact: true })).not.toHaveAttribute("aria-current", "page")
+  await expect(page.getByRole("button", { name: "Home", exact: true })).not.toHaveAttribute("aria-current", "page")
 })

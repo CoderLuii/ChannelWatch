@@ -46,7 +46,7 @@ Example payload:
   "dvr_id": "dvr_1234",
   "dvr_name": "Living Room DVR",
   "data": {
-    "title": "Low Disk Space Warning",
+    "title": "Disk space low",
     "message": "Living Room DVR is below the configured free space threshold.",
     "imageUrl": null
   }

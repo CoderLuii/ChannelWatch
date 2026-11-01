@@ -1,6 +1,6 @@
 # Getting started with ChannelWatch
 
-This tutorial takes you from a clean machine to a running ChannelWatch container with one Channels DVR connected and a Channel Watching alert firing.
+This tutorial takes you from a clean machine to a running ChannelWatch container with one Channels DVR connected and a Live TV alert firing.
 
 You will learn the normal setup model as you go: Docker Compose runs the container, then the ChannelWatch web UI configures the app.
 
@@ -44,7 +44,7 @@ This tutorial uses `/opt/channelwatch` as the example install folder. Replace it
 
 2. Do not create `settings.json` by hand for a normal fresh install.
 
-   On first start, ChannelWatch creates the current settings file under `/config`, then the first-run wizard walks you through secure login or trusted-network no-auth mode and DVR setup. This avoids stale schema values and keeps the web UI as the source of truth for application settings.
+   On first start, ChannelWatch creates the current settings file under `/config`, then the first-run wizard walks you through password sign-in or trusted-network no sign-in and DVR setup. This avoids stale schema values and keeps the web UI as the source of truth for application settings.
 
 3. Set the `TZ` environment variable in Compose if you want timestamps to use a different timezone before first start.
 
@@ -99,9 +99,9 @@ This tutorial uses `/opt/channelwatch` as the example install folder. Replace it
    http://your-server-ip:8501
    ```
 
-2. Choose **Secure login** when the setup-first screen appears.
+2. Choose **Password sign-in** when the setup-first screen appears.
 
-   Secure login is the recommended fresh-install path. Create the first admin username and password in the wizard.
+   Password sign-in is the recommended fresh-install path. Create the first admin username and password in the wizard.
 
 3. Add your first Channels DVR server.
 
@@ -109,23 +109,23 @@ This tutorial uses `/opt/channelwatch` as the example install folder. Replace it
 
 4. Configure at least one notification provider.
 
-   Pick the provider you already prepared, then save the settings. Channel Watching alerts are enabled by the minimal `settings.json`, so the app is ready to notify after a DVR and provider are saved.
+   Pick the provider you already prepared, then save the settings. Live TV alerts are enabled by the minimal `settings.json`, so the app is ready to notify after a DVR and provider are saved.
 
 5. Confirm the dashboard shows the DVR as reachable.
 
    This gives you a quick check that ChannelWatch can talk to Channels DVR before you test an alert.
 
-## Step 5: Verify a Channel Watching alert
+## Step 5: Verify a Live TV alert
 
 1. On a device that uses your Channels DVR, start playing a live TV channel.
 
 2. Keep the stream running for a short time.
 
-   ChannelWatch watches the DVR event stream and sends one Channel Watching notification for the viewing session. The notification can include the channel, program, device, client IP, stream source, and current stream count, depending on your settings.
+   ChannelWatch watches the DVR event stream and sends one Live TV notification for the viewing session. The notification can include the channel, program, device, client IP, stream source, and current stream count, depending on your settings.
 
 3. Check your notification destination.
 
-   You should receive a Channel Watching alert for the stream you started.
+   You should receive a Live TV alert for the stream you started.
 
 4. Check the ChannelWatch logs if no alert arrives:
 

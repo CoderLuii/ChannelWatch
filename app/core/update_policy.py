@@ -734,7 +734,7 @@ def _resolve_local_datetime(naive: datetime, zone: tzinfo) -> datetime:
         if roundtrip.replace(tzinfo=None) == shifted:
             return candidate
     raise UpdatePolicyStorageError(
-        "ChannelWatch could not resolve the maintenance window in its timezone."
+        "ChannelWatch could not resolve the update window in its timezone."
     )
 
 
@@ -2179,15 +2179,15 @@ class UpdateAutomationService:
                 if not preflight_ok:
                     preflight_messages = {
                         "insufficient-free-space": (
-                            "Automatic update deferred until the next maintenance "
+                            "Automatic update deferred until the next update "
                             "window because /config does not have enough free space."
                         ),
                         "private-backup-unavailable": (
-                            "Automatic update deferred until the next maintenance "
+                            "Automatic update deferred until the next update "
                             "window because a private pre-update backup cannot be created."
                         ),
                         "unresolved-maintenance-transaction": (
-                            "Automatic update deferred until the next maintenance "
+                            "Automatic update deferred until the next update "
                             "window because protected configuration maintenance is unresolved."
                         ),
                     }
@@ -2243,7 +2243,7 @@ class UpdateAutomationService:
                         opportunity=opportunity,
                         reason="notification-queue-busy",
                         message=(
-                            "Automatic update deferred until the next maintenance "
+                            "Automatic update deferred until the next update "
                             "window because the core notification queue did not drain."
                         ),
                     )

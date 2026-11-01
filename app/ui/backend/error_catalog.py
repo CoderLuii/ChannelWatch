@@ -140,8 +140,8 @@ _CATALOG: dict[str, CatalogEntry] = {
     ErrorCode.AUTH_RBAC_NOT_ENABLED: CatalogEntry(
         code=ErrorCode.AUTH_RBAC_NOT_ENABLED,
         http_status=501,
-        message="Role-based access control (RBAC) is not enabled.",
-        remediation="Enable RBAC in Settings \u2192 Security, then restart the container.",
+        message="Sign-in is turned off.",
+        remediation="Choose password sign-in in Settings, Security.",
     ),
     ErrorCode.AUTH_DB_UNAVAILABLE: CatalogEntry(
         code=ErrorCode.AUTH_DB_UNAVAILABLE,
@@ -153,7 +153,7 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.AUTH_UNAUTHENTICATED,
         http_status=401,
         message="Not authenticated.",
-        remediation="Log in or supply a valid API key.",
+        remediation="Sign in or supply a valid API key.",
     ),
     ErrorCode.AUTH_CREDENTIALS_INVALID: CatalogEntry(
         code=ErrorCode.AUTH_CREDENTIALS_INVALID,
@@ -165,13 +165,12 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.AUTH_ADMIN_EXISTS,
         http_status=409,
         message="An admin user already exists.",
-        remediation="Manage existing users instead of creating a new admin.",
+        remediation="Sign in with the existing admin account.",
     ),
     ErrorCode.AUTH_CREDENTIALS_REQUIRED: CatalogEntry(
         code=ErrorCode.AUTH_CREDENTIALS_REQUIRED,
         http_status=422,
         message="Username and password are required.",
-        remediation="Provide both a username and a password.",
     ),
     ErrorCode.AUTH_CSRF_INVALID: CatalogEntry(
         code=ErrorCode.AUTH_CSRF_INVALID,
@@ -183,7 +182,7 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.AUTH_FORBIDDEN,
         http_status=403,
         message="Insufficient permissions.",
-        remediation="Log in with an account that has sufficient permissions.",
+        remediation="Sign in with an account that has access.",
     ),
     ErrorCode.AUTH_CROSS_SITE_REJECTED: CatalogEntry(
         code=ErrorCode.AUTH_CROSS_SITE_REJECTED,
@@ -272,7 +271,7 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION,
         http_status=422,
         message="Protected-credential reset confirmation did not match.",
-        remediation="Type the exact confirmation shown in the recovery screen before resetting credentials.",
+        remediation="Type the exact confirmation shown on screen.",
     ),
     # Activity / history -------------------------------------------------
     ErrorCode.ACTIVITY_FETCH_FAILED: CatalogEntry(
@@ -390,7 +389,7 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.RESTORE_SCHEMA_AHEAD,
         http_status=409,
         message="Backup was created by a newer version of ChannelWatch.",
-        remediation="Upgrade ChannelWatch to the version that created this backup before restoring.",
+        remediation="Update ChannelWatch, then restore.",
     ),
     ErrorCode.RESTORE_FAILED: CatalogEntry(
         code=ErrorCode.RESTORE_FAILED,
@@ -416,13 +415,13 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.UPDATE_APPLY_FAILED,
         http_status=500,
         message="Failed to apply the update.",
-        remediation="Use Settings -> Updates to review the failure, then retry or roll back if available.",
+        remediation="Check Settings > Updates, then retry or roll back if available.",
     ),
     ErrorCode.UPDATE_LOCKED: CatalogEntry(
         code=ErrorCode.UPDATE_LOCKED,
         http_status=409,
         message="Another update operation is already running.",
-        remediation="Wait for the current update operation to finish, then refresh the Update Center.",
+        remediation="Wait for it to finish, then refresh Update Center.",
     ),
     ErrorCode.UPDATE_IMAGE_REQUIRED: CatalogEntry(
         code=ErrorCode.UPDATE_IMAGE_REQUIRED,
@@ -440,7 +439,7 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.UPDATE_JOB_NOT_FOUND,
         http_status=404,
         message="Update job not found.",
-        remediation="Run the update operation again to create a new job.",
+        remediation="Try again.",
     ),
     ErrorCode.UPDATE_RECOVERY_INACTIVE: CatalogEntry(
         code=ErrorCode.UPDATE_RECOVERY_INACTIVE,
@@ -471,7 +470,7 @@ _CATALOG: dict[str, CatalogEntry] = {
         code=ErrorCode.SUPPORT_REPORT_FORM_INVALID,
         http_status=400,
         message="Support report upload form is invalid.",
-        remediation="Reload ChannelWatch and try submitting the report again.",
+        remediation="Reload ChannelWatch and try again.",
     ),
     ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE: CatalogEntry(
         code=ErrorCode.SUPPORT_REPORT_ATTACHMENT_TOO_LARGE,

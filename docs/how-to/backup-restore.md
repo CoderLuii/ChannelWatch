@@ -98,7 +98,7 @@ Backups created after v0.9.18 migration are self-contained: restore writes the m
 1. Save a copy of the current `/config` directory before restoring. This gives you a way back if you picked the wrong archive.
 2. Open Settings, then Backup.
 3. In the restore section, choose a ChannelWatch backup `.zip` file.
-4. Wait for the success message: `Restore completed. Core process hot-reloaded.`
+4. Wait for the success message: `Reload this page to see the restored settings.`
 5. Reload the page if the UI offers the reload button.
 
 The restore endpoint validates the zip, checks the manifest, refuses backups from a newer settings schema, writes a pre restore snapshot to `/config/backups/`, and restores files into `/config`.

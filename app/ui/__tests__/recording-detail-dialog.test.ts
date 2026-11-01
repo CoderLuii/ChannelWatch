@@ -13,7 +13,7 @@ describe("getRecordingArtworkNote", () => {
         scheduled_time: "Mon, Apr 20, 8:00 PM",
         image: "",
       }),
-    ).toBe("Custom Channels for Channels did not provide artwork for this recording.")
+    ).toBe("No artwork")
   })
 
   it("returns null when artwork exists", () => {

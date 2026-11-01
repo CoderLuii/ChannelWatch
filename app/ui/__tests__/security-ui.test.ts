@@ -43,10 +43,10 @@ describe("SecurityModeBadge", () => {
       }),
     )
 
-    expect(html).toContain("Security: User sign-in")
+    expect(html).toContain("Security: Password sign-in")
   })
 
-  it("keeps the configured mode badge during a runtime override", () => {
+  it("shows the enforced no-auth state during a runtime override", () => {
     const html = renderToStaticMarkup(
       React.createElement(SecurityModeBadge, {
         status: {
@@ -58,7 +58,8 @@ describe("SecurityModeBadge", () => {
       }),
     )
 
-    expect(html).toContain("Security: Legacy API key mode")
+    expect(html).toContain("Security: No sign-in")
+    expect(html).not.toContain("Legacy API key mode")
   })
 })
 
@@ -81,8 +82,8 @@ describe("SecuritySectionSummary", () => {
     )
 
     expect(html).toContain("Temporary runtime auth bypass is active")
-    expect(html).toContain("Configured mode remains: User sign-in")
-    expect(html).toContain("does not rewrite the saved auth mode")
+    expect(html).toContain("Configured mode remains: Password sign-in")
+    expect(html).toContain("Remove it and restart to restore Password sign-in")
   })
 
   it("shows the fallback warning when RBAC still allows the shared API key", () => {
@@ -100,7 +101,7 @@ describe("SecuritySectionSummary", () => {
     )
 
     expect(html).toContain("Legacy API key fallback is still active")
-    expect(html).toContain("older shared API key path still works")
+    expect(html).toContain("older shared API key still works")
     expect(html).not.toContain("ICS and RSS feeds are not implemented yet")
   })
 
@@ -117,7 +118,7 @@ describe("SecuritySectionSummary", () => {
     )
 
     expect(html).toContain("Legacy API key mode")
-    expect(html).toContain("This is a legacy install that still relies on a shared API key")
+    expect(html).toContain("A shared API key still controls browser and API access")
   })
 
   it("keeps persisted no-auth copy distinct from the runtime override banner", () => {
@@ -135,8 +136,8 @@ describe("SecuritySectionSummary", () => {
       }),
     )
 
-    expect(html).toContain("No authentication")
+    expect(html).toContain("No sign-in")
     expect(html).not.toContain("Temporary runtime auth bypass is active")
-    expect(html).not.toContain("Temporary break-glass override")
+    expect(html).not.toContain("Temporary auth bypass")
   })
 })

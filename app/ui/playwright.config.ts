@@ -39,39 +39,39 @@ export default defineConfig({
     },
     {
       name: "visual",
-      testMatch: /.*v101-visual\.spec\.ts/,
+      testMatch: /.*core-visual\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 1080 },
       },
     },
     {
-      name: "v101-firefox",
-      testMatch: /.*v101-smoke\.spec\.ts/,
+      name: "firefox",
+      testMatch: /.*core-smoke\.spec\.ts/,
       use: {
         ...devices["Desktop Firefox"],
         viewport: { width: 1440, height: 1080 },
       },
     },
     {
-      name: "v101-webkit",
-      testMatch: /.*(?:v101|remediation-mobile|remediation-restart)-smoke\.spec\.ts/,
+      name: "webkit",
+      testMatch: /.*(?:core|mobile-nav|motion|restart-recovery)-smoke\.spec\.ts/,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1440, height: 1080 },
       },
     },
     {
-      name: "v101-mobile-safari",
-      testMatch: /.*(?:v101|remediation-mobile|remediation-restart)-smoke\.spec\.ts/,
+      name: "mobile-safari",
+      testMatch: /.*(?:core|mobile-nav|motion|restart-recovery)-smoke\.spec\.ts/,
       use: {
         ...devices["iPhone 13"],
         viewport: { width: 375, height: 812 },
       },
     },
     {
-      name: "v101-responsive",
-      testMatch: /.*v101-responsive\.spec\.ts/,
+      name: "responsive",
+      testMatch: /.*core-responsive\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
       },

@@ -1,36 +1,27 @@
+import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import { buildMonitoringBanner } from "@/components/dashboard/status-panel"
-import type { DVRStatusInfo } from "@/lib/types"
+import { StatusPanel } from "@/components/dashboard/status-panel"
 
-describe("buildMonitoringBanner", () => {
-  it("does not treat an intentionally disabled DVR as degraded monitoring", () => {
-    const disabledDvr = {
-      id: "disabled-dvr",
-      name: "Disabled DVR",
-      enabled: false,
-      connected: false,
-      monitoring_ready: false,
-      monitoring_status: "disabled",
-    } as DVRStatusInfo
+describe("StatusPanel no sign-in row", () => {
+  const base = {
+    dvrStatusList: [],
+    activeNotificationServices: 0,
+    activeProviderNames: [],
+    activeAlertTypes: [],
+    coreProcessStatus: "Running",
+    channelwatchVersion: "1.6.5",
+    currentSettings: null,
+    onNavigate: undefined,
+  }
 
-    expect(buildMonitoringBanner([disabledDvr])).toBeNull()
+  it("shows the row in the first render when the app has no sign-in", () => {
+    const html = renderToStaticMarkup(<StatusPanel {...base} noSignIn />)
+    expect(html).toContain("status-no-sign-in-row")
+    expect(html).toContain("No sign-in set")
   })
 
-  it("still reports an enabled DVR with stale monitoring", () => {
-    const staleDvr = {
-      id: "stale-dvr",
-      name: "Stale DVR",
-      enabled: true,
-      connected: true,
-      monitoring_ready: false,
-      monitoring_status: "stale",
-      monitoring_reason: "No fresh event stream data.",
-    } as DVRStatusInfo
-
-    expect(buildMonitoringBanner([staleDvr])).toMatchObject({
-      tone: "degraded",
-      detail: "No fresh event stream data.",
-    })
+  it("leaves the row out otherwise", () => {
+    expect(renderToStaticMarkup(<StatusPanel {...base} />)).not.toContain("status-no-sign-in-row")
   })
 })

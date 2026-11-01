@@ -98,7 +98,7 @@ describe("container restart recovery", () => {
     expect(RESTART_RECOVERED_EVENT).toBe("channelwatch-restart-recovered")
     expect(header).toContain("window.dispatchEvent(new CustomEvent(RESTART_RECOVERED_EVENT))")
     expect(dashboard).toContain("window.addEventListener(RESTART_RECOVERED_EVENT, handleRestartRecovered)")
-    expect(dashboard).toContain("void bootstrapApp()")
+    expect(dashboard).toContain("void bootstrapApp({ quiet: true })")
     expect(dashboard).toContain("window.removeEventListener(RESTART_RECOVERED_EVENT, handleRestartRecovered)")
     expect(header.match(/monitoringReady === true \? "success" : "degraded"/gu)).toHaveLength(2)
   })

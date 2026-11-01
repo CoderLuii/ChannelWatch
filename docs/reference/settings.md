@@ -204,10 +204,10 @@ The Alert policy selector is a UI operation over existing switches. It is not a 
 - `vod_template_title` | JSON path: `vod_template_title` | Type: string | Default: `"🎬 Channels DVR - Watching DVR Content"` | Description: VOD notification title template. | Valid values: template string using supported VOD placeholders and conditional tags. | Env override: none. | Reload behavior: `restart-required`.
 - `vod_template_body` | JSON path: `vod_template_body` | Type: string | Default: VOD body template from `TEMPLATE_SETTINGS_DEFAULTS`. | Description: VOD notification body template. | Valid values: template string using supported VOD placeholders and conditional tags. | Env override: none. | Reload behavior: `restart-required`.
 - `vod_template_use_default` | JSON path: `vod_template_use_default` | Type: boolean | Default: `true` | Description: Use the built in VOD template instead of custom title and body values. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
-- `rd_template_title` | JSON path: `rd_template_title` | Type: string | Default: `"Channels DVR - Recording Event"` | Description: Recording event notification title template. | Valid values: template string using supported recording placeholders and conditional tags. | Env override: none. | Reload behavior: `restart-required`.
+- `rd_template_title` | JSON path: `rd_template_title` | Type: string | Default: `"{recording_status_friendly}: {title}"` | Description: Recording event notification title template. | Valid values: template string using supported recording placeholders and conditional tags. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_template_body` | JSON path: `rd_template_body` | Type: string | Default: recording body template from `TEMPLATE_SETTINGS_DEFAULTS`. | Description: Recording event notification body template. | Valid values: template string using supported recording placeholders and conditional tags. | Env override: none. | Reload behavior: `restart-required`.
 - `rd_template_use_default` | JSON path: `rd_template_use_default` | Type: boolean | Default: `true` | Description: Use the built in recording event template instead of custom title and body values. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
-- `ds_template_title` | JSON path: `ds_template_title` | Type: string | Default: `"⚠️ Low Disk Space Warning"` | Description: Disk space notification title template. | Valid values: template string using supported disk placeholders. | Env override: none. | Reload behavior: `restart-required`.
+- `ds_template_title` | JSON path: `ds_template_title` | Type: string | Default: `"⚠️ Disk space low"` | Description: Disk space notification title template. | Valid values: template string using supported disk placeholders. | Env override: none. | Reload behavior: `restart-required`.
 - `ds_template_body` | JSON path: `ds_template_body` | Type: string | Default: disk body template from `TEMPLATE_SETTINGS_DEFAULTS`. | Description: Disk space notification body template. | Valid values: template string using supported disk placeholders. | Env override: none. | Reload behavior: `restart-required`.
 - `ds_template_use_default` | JSON path: `ds_template_use_default` | Type: boolean | Default: `true` | Description: Use the built in disk space template instead of custom title and body values. | Valid values: `true`, `false`. | Env override: none. | Reload behavior: `restart-required`.
 
@@ -330,7 +330,7 @@ This is the smallest JSON object accepted by `AppSettings`; omitted fields take 
   "rd_channel_name": true,
   "rd_channel_number": true,
   "rd_type": true,
-  "rd_template_title": "Channels DVR - Recording Event",
+  "rd_template_title": "{recording_status_friendly}: {title}",
   "rd_template_body": "{📺 <channel_name}\n{Channel: <channel_number}\n{status}\n{details}\n{summary_block}\n{time_table}",
   "rd_template_use_default": true,
   "vod_title": true,
@@ -364,8 +364,8 @@ This is the smallest JSON object accepted by `AppSettings`; omitted fields take 
   "ds_worsening_delta_gb": 1,
   "ds_worsening_delta_percent": 1.0,
   "ds_test_route_override": "",
-  "ds_template_title": "⚠️ Low Disk Space Warning",
-  "ds_template_body": "Free Space: {disk_free} / {disk_total} ({disk_percent})\nUsed Space: {disk_used}\nDVR Path: {disk_path}",
+  "ds_template_title": "⚠️ Disk space low",
+  "ds_template_body": "Free Space: {disk_free} / {disk_total} ({disk_percent})\nUsed Space: {disk_used}\n{disk_label}: {disk_path}",
   "ds_template_use_default": true,
   "apprise_pushover": "",
   "apprise_discord": "",

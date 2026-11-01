@@ -1,19 +1,19 @@
 "use client"
 
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { LucideIcon } from "lucide-react"
 import { BellRing, ChevronDown, SlidersHorizontal } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
-import { Badge } from "@/components/base/badge"
+import { Tag } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
-import { Card, CardContent, CardHeader } from "@/components/base/card"
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/base/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
 import { ALERT_POLICY_KEYS, ALERT_PRESET_VALUES, detectAlertPolicy, summarizeAlertPreset, type AlertPolicyKey, type AlertPreset } from "@/lib/alert-presets"
 import { t } from "@/lib/i18n"
 import type { AppSettings } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { cn, revealDisclosure } from "@/lib/utils"
 
 import { DvrTabBar, type DvrHelpers } from "./dvr-field-controls"
 
@@ -39,29 +39,32 @@ export function AlertDisclosureHeader({
   onToggle,
 }: AlertDisclosureHeaderProps) {
   const contentId = `alert-section-${cardId}`
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const wasExpanded = useRef(expanded)
+  useEffect(() => {
+    if (expanded && !wasExpanded.current) revealDisclosure(buttonRef.current?.parentElement)
+    wasExpanded.current = expanded
+  }, [expanded])
   return (
     <button
+      ref={buttonRef}
       type="button"
-      className="flex min-h-11 w-full items-center justify-between gap-3 p-4 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-fill focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       aria-expanded={expanded}
       aria-controls={contentId}
       onClick={onToggle}
     >
-      <span className="flex min-w-0 items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-500/20">
-          <Icon className="h-5 w-5 text-blue-500" aria-hidden="true" />
-        </span>
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="min-w-0">
           <span className="block text-base font-medium">{title}</span>
           <span className="block text-sm text-muted-foreground">{description}</span>
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-2">
-        <Badge variant="outline" className="h-auto max-w-40 whitespace-normal break-words text-center text-xs font-normal [overflow-wrap:anywhere]">
-          {summary}
-        </Badge>
+        <Tag className="max-w-40 truncate">{summary}</Tag>
         <ChevronDown
-          className={cn("h-5 w-5 text-muted-foreground transition-transform motion-reduce:transition-none", expanded && "rotate-180")}
+          className={cn("h-5 w-5 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out motion-reduce:transition-none", expanded && "rotate-180")}
           aria-hidden="true"
         />
       </span>
@@ -75,7 +78,7 @@ interface AlertPolicyCardProps {
 }
 
 export function AlertPolicyCard({ form, dvrHelpers }: AlertPolicyCardProps) {
-  const selectRef = useRef<HTMLButtonElement>(null)
+  const [presetOpen, setPresetOpen] = useState(false)
   const { setValue, watch, formState } = form
   const activeScope = dvrHelpers.getDvrTab("policy")
   const effectiveValues = Object.fromEntries(
@@ -118,33 +121,29 @@ export function AlertPolicyCard({ form, dvrHelpers }: AlertPolicyCardProps) {
   }
 
   return (
-    <Card className="order-1 overflow-hidden border-blue-400/20">
-      <CardHeader className="space-y-3 border-b bg-muted/20 p-4 sm:p-6">
+    <Card className="overflow-hidden">
+      <CardHeader className="space-y-3 border-b border-hairline">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-500/20">
-              <SlidersHorizontal className="h-5 w-5 text-blue-500" aria-hidden="true" />
-            </span>
+          <div className="flex min-w-0 items-center gap-2">
+            <SlidersHorizontal className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <div>
-              <h2 className="text-base font-semibold leading-none tracking-tight">{t("alerts.policy.title")}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{t("alerts.policy.description")}</p>
+              <h2 className="text-base font-semibold leading-snug tracking-[-0.012em]">{t("alerts.policy.title")}</h2>
+              <CardDescription>{t("alerts.policy.description")}</CardDescription>
             </div>
           </div>
-          <Badge variant={detectedPolicy === "custom" ? "secondary" : "outline"}>
-            {t(`alerts.policy.preset.${detectedPolicy}`)}
-          </Badge>
+          <Tag>{t(`alerts.policy.preset.${detectedPolicy}`)}</Tag>
         </div>
         <DvrTabBar cardId="policy" helpers={dvrHelpers} />
       </CardHeader>
-      <CardContent className="space-y-4 p-4 sm:p-6">
+      <CardContent className="space-y-4 pt-4">
         {showUpgradeNotice ? (
-          <Alert className="border-blue-500/30 bg-blue-500/5">
-            <BellRing className="h-4 w-4 text-blue-500" />
+          <Alert className="border-hairline">
+            <BellRing className="h-4 w-4 text-muted-foreground" />
             <AlertTitle>{t("alerts.policy.upgradeTitle")}</AlertTitle>
             <AlertDescription className="space-y-3">
               <p>{t("alerts.policy.upgradeDescription")}</p>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" onClick={() => selectRef.current?.focus()}>
+                <Button type="button" size="sm" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" onClick={() => setPresetOpen(true)}>
                   {t("alerts.policy.reviewPresets")}
                 </Button>
                 <Button
@@ -162,19 +161,21 @@ export function AlertPolicyCard({ form, dvrHelpers }: AlertPolicyCardProps) {
           </Alert>
         ) : null}
 
-        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-          <div className="space-y-2">
-            <label htmlFor="alert-policy-preset" className="text-sm font-medium">
-              {t("alerts.policy.presetLabel")}
-            </label>
+        <div className="grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <label htmlFor="alert-policy-preset" className="text-sm font-medium sm:col-span-2">
+            {t("alerts.policy.presetLabel")}
+          </label>
+          <div className="min-w-0">
             <Select
+              open={presetOpen}
+              onOpenChange={setPresetOpen}
               value={selectedPreset}
               onValueChange={(value) => setSelectedPresets((current) => ({
                 ...current,
                 [activeScope]: value as AlertPreset,
               }))}
             >
-              <SelectTrigger id="alert-policy-preset" ref={selectRef} className="min-h-11">
+              <SelectTrigger id="alert-policy-preset" className="min-h-11">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -183,9 +184,9 @@ export function AlertPolicyCard({ form, dvrHelpers }: AlertPolicyCardProps) {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-sm text-muted-foreground">{t(`alerts.policy.presetDescription.${selectedPreset}`)}</p>
           </div>
-          <Button type="button" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" onClick={applyPreset}>
+          <p className="text-sm text-muted-foreground sm:order-last sm:col-span-2">{t(`alerts.policy.presetDescription.${selectedPreset}`)}</p>
+          <Button type="button" className="mt-2 h-auto min-h-11 max-w-full whitespace-normal py-2 text-center sm:mt-0" onClick={applyPreset}>
             {t("alerts.policy.apply")}
           </Button>
         </div>

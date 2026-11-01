@@ -245,7 +245,13 @@ def test_v162_chain_requires_rollback_to_its_v161_source(tmp_path):
     ("1.6.4", "1.6.2", True),
     ("1.6.4", "1.6.3", True),
     ("1.6.4", "1.6.4", False),
-    ("1.6.5", "1.6.3", False),
+    ("1.6.5", "1.6.0", True),
+    ("1.6.5", "1.6.1", True),
+    ("1.6.5", "1.6.2", True),
+    ("1.6.5", "1.6.3", True),
+    ("1.6.5", "1.6.4", True),
+    ("1.6.5", "1.6.5", False),
+    ("1.6.6", "1.6.4", False),
 ])
 def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monkeypatch, capsys, target_version, source_version, accepted):
     spec = importlib.util.spec_from_file_location("runtime_source_verifier", ROOT / "scripts/release/verify-runtime-source-upgrade.py")

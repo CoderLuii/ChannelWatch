@@ -57,6 +57,7 @@ def run_disk_check(alert, *, free_gib, total_gib, current_time):
         patch("core.alerts.disk_space.time.time", return_value=current_time),
         patch.object(alert, "_get_disk_info", return_value=disk_info),
         patch("core.alerts.disk_space.record_disk_status"),
+        patch("core.alerts.disk_space.record_activity"),
     ):
         alert._check_disk_space()
 
@@ -72,6 +73,57 @@ def get_last_notification_title(notification_manager):
 
 
 class TestDiskSpaceAlertSemantics:
+    def test_disk_alert_activity_keeps_free_space_numbers(self, alert_factory):
+        alert, _notification_manager = alert_factory()
+        alert.settings.alert_disk_space = False
+        disk_info = {
+            "free": 20 * GIB,
+            "total": 500 * GIB,
+            "used": 480 * GIB,
+            "path": "/shares/DVR",
+        }
+
+        with (
+            patch("core.alerts.disk_space.time.time", return_value=1_000),
+            patch.object(alert, "_get_disk_info", return_value=disk_info),
+            patch("core.alerts.disk_space.record_disk_status") as record_status,
+        ):
+            alert._check_disk_space()
+
+        extra = record_status.call_args.kwargs["extra"]
+        assert extra["path"] == "/shares/DVR"
+        assert extra["free"] and extra["total"] and extra["used"]
+        assert extra["free_percentage"] == 4.0
+        assert extra["severity"] in {"warning", "critical"}
+
+    def test_return_to_normal_records_a_recovery_activity(self, alert_factory):
+        alert, _notification_manager = alert_factory()
+        alert.settings.alert_disk_space = False
+        low = {"free": 20 * GIB, "total": 500 * GIB, "used": 480 * GIB, "path": "/shares/DVR"}
+        healthy = {"free": 300 * GIB, "total": 500 * GIB, "used": 200 * GIB, "path": "/shares/DVR"}
+
+        with (
+            patch("core.alerts.disk_space.record_disk_status"),
+            patch("core.alerts.disk_space.record_activity", return_value=True) as record_activity,
+        ):
+            with (
+                patch("core.alerts.disk_space.time.time", return_value=1_000),
+                patch.object(alert, "_get_disk_info", return_value=low),
+            ):
+                alert._check_disk_space()
+            record_activity.assert_not_called()
+            with (
+                patch("core.alerts.disk_space.time.time", return_value=1_000 + 3 * 3600 + 12 * 60),
+                patch.object(alert, "_get_disk_info", return_value=healthy),
+            ):
+                alert._check_disk_space()
+
+        record_activity.assert_called_once()
+        kwargs = record_activity.call_args.kwargs
+        assert kwargs["activity_type"] == "disk_recovered"
+        assert "Recovered after 3h 12m" in kwargs["message"]
+        assert kwargs["extra"]["previous_severity"] in {"warning", "critical"}
+
     def test_monitor_only_records_disk_transition_without_delivery(
         self, alert_factory
     ):
@@ -201,8 +253,8 @@ class TestDiskSpaceAlertSemantics:
     @pytest.mark.parametrize(
         ("severity", "expected_title"),
         [
-            ("warning", "⚠️ Low Disk Space Warning"),
-            ("critical", "🚨 Low Disk Space Critical"),
+            ("warning", "⚠️ Disk space low"),
+            ("critical", "🚨 Disk space critically low"),
         ],
     )
     def test_activity_recorder_reuses_built_notification_payload(
@@ -255,11 +307,11 @@ class TestDiskSpaceAlertSemantics:
                 is_test=True,
             )
 
-        expected_title = "🚨 [TEST] Low Disk Space Critical"
+        expected_title = "🚨 [TEST] Disk space critically low"
         assert sent is True
         assert notification_manager.send_notification.call_args.args == (
             expected_title,
-            "Free Space: 20.00 GB / 500.00 GB (4.0%)\nUsed Space: 480.00 GB\nDVR Path: /shares/DVR",
+            "Free Space: 20.00 GB / 500.00 GB (4.0%)\nUsed Space: 480.00 GB\nDVR Storage: /shares/DVR",
         )
         record_disk_status_mock.assert_not_called()
 
@@ -289,8 +341,8 @@ class TestDiskSpaceAlertSemantics:
     @pytest.mark.parametrize(
         ("free_gib", "total_gib", "expected_status", "expected_title"),
         [
-            (45, 500, "warning", "⚠️ Low Disk Space Warning"),
-            (20, 500, "critical", "🚨 Low Disk Space Critical"),
+            (45, 500, "warning", "⚠️ Disk space low"),
+            (20, 500, "critical", "🚨 Disk space critically low"),
         ],
     )
     def test_startup_grace_suppresses_until_eligible_then_notifies(
@@ -345,7 +397,7 @@ class TestDiskSpaceAlertSemantics:
         assert state["last_notified_severity"] == "warning"
         assert (
             get_last_notification_title(notification_manager)
-            == "⚠️ Low Disk Space Warning"
+            == "⚠️ Disk space low"
         )
 
         state = run_disk_check(alert, free_gib=44.6, total_gib=500, current_time=40.0)
@@ -364,7 +416,7 @@ class TestDiskSpaceAlertSemantics:
         assert state["last_notified_free_percentage"] == pytest.approx(4.0)
         assert (
             get_last_notification_title(notification_manager)
-            == "🚨 Low Disk Space Critical"
+            == "🚨 Disk space critically low"
         )
 
     def test_failed_notification_does_not_persist_last_notified_snapshot(
@@ -434,7 +486,7 @@ class TestDiskSpaceAlertSemantics:
         assert state["last_notified_severity"] == "warning"
         assert (
             get_last_notification_title(notification_manager)
-            == "⚠️ Low Disk Space Warning"
+            == "⚠️ Disk space low"
         )
 
     def test_restart_warning_reapplies_grace_and_persists_last_notified_snapshot(
@@ -514,3 +566,150 @@ class TestDiskSpaceAlertSemantics:
         assert restarted_notification_manager.send_notification.call_count == 0
         assert state["status"] == "critical"
         assert state["last_notified_free_bytes"] == 20 * GIB
+
+
+def test_disk_alert_state_survives_restart(alert_factory, tmp_path, monkeypatch):
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    alert, nm = alert_factory()
+    alert.start_monitoring_time = 0
+    alert.startup_complete_time = 0
+    run_disk_check(alert, free_gib=30, total_gib=1000, current_time=1000)
+    assert nm.send_notification.call_count == 1
+    assert (tmp_path / DiskSpaceAlert.DISK_STATE_FILENAME).exists()
+
+    restarted, nm2 = alert_factory()
+    restarted.start_monitoring_time = 0
+    restarted.startup_complete_time = 0
+    run_disk_check(restarted, free_gib=30, total_gib=1000, current_time=1200)
+    assert nm2.send_notification.call_count == 0
+
+
+def _count_disk_activity(alert, readings):
+    """Run checks for (free_gib, time) readings and count disk activity writes."""
+    with (
+        patch("core.alerts.disk_space.record_disk_status", return_value=True) as rec,
+        patch("core.alerts.disk_space.record_activity", return_value=True) as rec_other,
+    ):
+        for free_gib, current_time in readings:
+            disk_info = {
+                "free": int(free_gib * GIB),
+                "total": 500 * GIB,
+                "used": int((500 - free_gib) * GIB),
+                "path": "/shares/DVR",
+            }
+            with (
+                patch("core.alerts.disk_space.time.time", return_value=current_time),
+                patch.object(alert, "_get_disk_info", return_value=disk_info),
+            ):
+                alert._check_disk_space()
+    return rec, rec_other
+
+
+def test_unchanged_warning_without_delivery_records_activity_once(
+    alert_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    alert, nm = alert_factory()
+    nm.send_notification.return_value = False
+    alert.start_monitoring_time = 0.0
+    alert.startup_complete_time = 0.0
+
+    readings = [(45.0 - i * 0.05, 20.0 + i * 120) for i in range(10)]
+    rec, _ = _count_disk_activity(alert, readings)
+
+    assert rec.call_count == 1
+    assert alert._disk_state["status"] == "warning"
+
+
+def test_unchanged_warning_with_delivery_records_and_notifies_once(
+    alert_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    alert, nm = alert_factory()
+    alert.start_monitoring_time = 0.0
+    alert.startup_complete_time = 0.0
+
+    readings = [(45.0 - i * 0.05, 20.0 + i * 120) for i in range(10)]
+    rec, _ = _count_disk_activity(alert, readings)
+
+    assert nm.send_notification.call_count == 1
+    assert rec.call_count == 1
+
+
+def test_level_changes_each_record_once(alert_factory, tmp_path, monkeypatch):
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    alert, nm = alert_factory()
+    nm.send_notification.return_value = False
+    alert.start_monitoring_time = 0.0
+    alert.startup_complete_time = 0.0
+
+    readings = [
+        (45.0, 20.0),
+        (44.9, 140.0),
+        (20.0, 260.0),
+        (19.9, 380.0),
+        (60.0, 500.0),
+        (60.0, 620.0),
+    ]
+    rec, rec_other = _count_disk_activity(alert, readings)
+
+    titles = [c.kwargs["title"] for c in rec.call_args_list]
+    assert titles == ["⚠️ Disk space low", "🚨 Disk space critically low"]
+    assert rec_other.call_count == 1
+    assert rec_other.call_args.kwargs["activity_type"] == "disk_recovered"
+
+
+def test_configured_realert_records_a_second_entry(
+    alert_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    alert, nm = alert_factory()
+    alert.start_monitoring_time = 0.0
+    alert.startup_complete_time = 0.0
+    alert.cooldown_period = 3600
+
+    readings = [(45.0, 20.0), (44.0, 140.0), (40.0, 4000.0)]
+    rec, _ = _count_disk_activity(alert, readings)
+
+    assert nm.send_notification.call_count == 2
+    assert rec.call_count == 2
+
+
+def test_no_destinations_skips_delivery_attempts_but_records_once(
+    alert_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path))
+    alert, nm = alert_factory()
+    nm.has_configured_destinations.return_value = False
+    alert.start_monitoring_time = 0.0
+    alert.startup_complete_time = 0.0
+
+    readings = [(45.0 - i * 0.05, 20.0 + i * 120) for i in range(10)]
+    rec, _ = _count_disk_activity(alert, readings)
+
+    assert nm.send_notification.call_count == 0
+    assert rec.call_count == 1
+
+    nm.has_configured_destinations.return_value = True
+    _count_disk_activity(alert, [(44.0, 2000.0), (43.9, 2120.0)])
+    assert nm.send_notification.call_count == 1
+
+
+def test_default_disk_template_names_the_dvr():
+    from core.notifications.template_engine import (
+        DISK_SPACE_DEFAULT_BODY,
+        NotificationTemplateEngine,
+    )
+
+    rendered = NotificationTemplateEngine().render(
+        DISK_SPACE_DEFAULT_BODY,
+        {
+            "disk_free": "20 GB",
+            "disk_total": "500 GB",
+            "disk_percent": "96%",
+            "disk_used": "480 GB",
+            "disk_label": "Den DVR",
+            "disk_path": "/shares/DVR",
+        },
+    )
+    assert rendered.splitlines()[-1] == "Den DVR: /shares/DVR"

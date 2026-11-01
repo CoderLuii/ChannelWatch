@@ -90,6 +90,6 @@ test("LAN report preparation can be cancelled without submitting", async ({ page
   await page.getByLabel("Problem summary").fill("Cancelled LAN draft")
   await page.getByRole("button", { name: "Cancel" }).click()
 
-  await expect(page.getByRole("dialog", { name: "Report a Problem" })).toHaveCount(0)
+  await expect(page.getByRole("dialog", { name: "Report a problem" })).toHaveCount(0)
   expect(submitAttempts).toBe(0)
 })

@@ -1492,7 +1492,7 @@ class TestCSRF:
 
         assert resp.status_code == 403
         assert any(
-            args == (csrf_token, csrf_token)
+            args == (csrf_token.encode("utf-8"), csrf_token.encode("utf-8"))
             for args, _kwargs in compare_digest.call_args_list
         )
 

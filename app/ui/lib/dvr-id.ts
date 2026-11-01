@@ -1,5 +1,5 @@
 /**
- * Canonical DVR id utility — browser-compatible TypeScript.
+ * Canonical DVR id utility: browser-compatible TypeScript.
  *
  * Contract: "dvr_" + md5(normalized_host + ":" + port)[:8]
  * Must produce byte-identical output to app/core/helpers/dvr_id.py for the same inputs.

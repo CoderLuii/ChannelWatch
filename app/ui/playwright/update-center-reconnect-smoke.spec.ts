@@ -123,7 +123,7 @@ async function currentTopDocumentLoads(page: Page): Promise<number | null> {
 
 async function policyButtonGeometryViolations(page: Page, state: string) {
   const violations: string[] = []
-  for (const name of ["Automatic during maintenance window", "Notify me only"]) {
+  for (const name of ["Automatic during update window", "Install manually"]) {
     const geometry = await page.getByRole("button", { name, exact: true }).evaluate((element) => {
       const button = element.getBoundingClientRect()
       const parent = element.parentElement?.getBoundingClientRect()
@@ -217,8 +217,8 @@ test("mobile policy controls fit before Apply and while dependencies are prepari
   await page.getByRole("button", { name: "Apply update" }).click()
   await expect(page.getByText("Preparing dependencies", { exact: true })).toBeVisible()
   await expect.poll(() => jobRequests).toBeGreaterThanOrEqual(1)
-  await expect(page.getByRole("button", { name: "Automatic during maintenance window" })).toBeDisabled()
-  await expect(page.getByRole("button", { name: "Notify me only" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Automatic during update window" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Install manually" })).toBeDisabled()
   violations.push(...await policyButtonGeometryViolations(page, "preparing"))
 
   expect(violations).toEqual([])
@@ -290,6 +290,9 @@ test("one Apply action survives a restart disconnect and refreshes once after th
   releaseReload()
   await expect.poll(() => currentTopDocumentLoads(page)).toBeGreaterThan(loadsBeforeApply!)
   await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
+  // Wait for the refreshed dashboard to consume the update handoff. Navigating
+  // earlier races its one-time redirect back to Home.
+  await expect.poll(() => page.evaluate(() => window.sessionStorage.getItem("channelwatch:update-handoff"))).toBeNull()
   await page.goto("/#settings:updates")
   await expect(page).toHaveURL(/#settings:updates$/)
   await expect(page.getByRole("button", { name: "Roll back" })).toBeEnabled()
@@ -317,6 +320,7 @@ test("one Roll back action survives a restart disconnect and restores the exact 
   const rollbackButton = page.getByRole("button", { name: "Roll back" })
   await expect(rollbackButton).toBeEnabled()
   await rollbackButton.click()
+  await page.getByRole("dialog").getByRole("button", { name: "Roll back" }).click()
 
   await expect(page.getByText("Restarting", { exact: true })).toBeVisible()
   await expect(page).toHaveURL(/#overview$/, { timeout: 15_000 })
@@ -442,7 +446,7 @@ test("a restored terminal job unlocks controls even when the initial status snap
   const errorAlert = page.getByRole("alert").filter({ hasText: "Update Center error" })
   await expect(errorAlert.getByText(failedJob.message)).toBeVisible({ timeout: 10_000 })
   await expect(page.getByRole("button", { name: "Check for updates" })).toBeEnabled()
-  await expect(page.getByRole("button", { name: "Retry now" })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "Retry" })).toBeEnabled()
   expect(applyRequests).toBe(0)
 })
 

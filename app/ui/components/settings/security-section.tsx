@@ -2,11 +2,11 @@
 
 import React from "react"
 import { useEffect, useRef, useState } from "react"
-import { AlertTriangle, Loader2, LockKeyhole, ShieldAlert, ShieldCheck, ShieldEllipsis } from "lucide-react"
+import { AlertTriangle, Loader2, LockKeyhole, Shield, ShieldAlert, ShieldCheck, ShieldEllipsis } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
-import { Badge } from "@/components/base/badge"
+import { StatusBadge, type StatusTone } from "@/components/base/status-badge"
 import { Button } from "@/components/base/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
 import { Input } from "@/components/base/input"
@@ -14,33 +14,40 @@ import { Label } from "@/components/base/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
 import { TabsContent } from "@/components/base/tabs"
 import { changeCredentials, completeInitialSetup, fetchKeyRecoveryStatus, fetchSecurityStatus, fetchSetupStatus, fetchWhoAmI, migrateLegacyKey, resetProtectedCredentials, RUNTIME_PREFLIGHT_CHANGED_EVENT } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
 import { t } from "@/lib/i18n"
 import type { AppSettings, AuthMode, KeyRecoveryStatus, SecurityMode, SecurityStatus } from "@/lib/types"
 import { OfficialRecoveryUpdateActions } from "@/components/recovery-update-actions"
 
 const KEY_RESET_CONFIRMATION = "RESET PROTECTED CREDENTIALS" as const
 
-const modeCopy: Record<SecurityMode, { label: string; summary: string; tone: string }> = {
+const modeCopy: Record<SecurityMode, { label: string; summary: string; tone: StatusTone }> = {
   NO_AUTH: {
     label: t("security.mode.noAuth.label"),
     summary: t("security.mode.noAuth.summary"),
-    tone: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
+    tone: "warning",
   },
   API_KEY_ONLY: {
     label: t("security.mode.apiKeyOnly.label"),
     summary: t("security.mode.apiKeyOnly.summary"),
-    tone: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    tone: "warning",
   },
   RBAC_WITH_API_KEY_FALLBACK: {
     label: t("security.mode.rbacWithFallback.label"),
     summary: t("security.mode.rbacWithFallback.summary"),
-    tone: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300",
+    tone: "neutral",
   },
   RBAC_ONLY: {
     label: t("security.mode.rbacOnly.label"),
     summary: t("security.mode.rbacOnly.summary"),
-    tone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
+    tone: "success",
   },
+}
+
+// security_mode describes the configured policy. When a runtime override has
+// disabled auth, the badge must describe what is actually enforced.
+export function getEnforcedSecurityMode(status: Pick<SecurityStatus, "security_mode" | "runtime_auth_override_active">): SecurityStatus["security_mode"] {
+  return status.runtime_auth_override_active ? "NO_AUTH" : status.security_mode
 }
 
 function getSecurityModeCopy(status: SecurityStatus) {
@@ -89,28 +96,26 @@ export function getSecuritySectionViewState({
 }
 
 function getSecurityModeIcon(status: SecurityStatus) {
-  if (status.security_mode === "NO_AUTH") return ShieldAlert
-  if (status.security_mode === "RBAC_ONLY") return ShieldCheck
-  if (status.security_mode === "RBAC_WITH_API_KEY_FALLBACK") return ShieldEllipsis
+  const mode = getEnforcedSecurityMode(status)
+  if (mode === "NO_AUTH") return ShieldAlert
+  if (mode === "RBAC_ONLY") return ShieldCheck
+  if (mode === "RBAC_WITH_API_KEY_FALLBACK") return ShieldEllipsis
   return LockKeyhole
 }
 
 export function SecurityModeBadge({ status, compact = false }: { status: SecurityStatus; compact?: boolean }) {
-  if (status.security_mode === "API_KEY_ONLY" && !isLegacyApiKeyEffectiveMode(status)) {
+  if (!status.runtime_auth_override_active && status.security_mode === "API_KEY_ONLY" && !isLegacyApiKeyEffectiveMode(status)) {
     return null
   }
 
-  const copy = getSecurityModeCopy(status)
+  const copy = modeCopy[getEnforcedSecurityMode(status)]
   const Icon = getSecurityModeIcon(status)
 
   return (
-    <Badge
-      variant="outline"
-      className={`gap-1.5 border ${copy.tone}`}
-    >
+    <StatusBadge variant={copy.tone}>
       <Icon className="h-3.5 w-3.5" />
       <span>{compact ? copy.label : t("security.badge.withPrefix", { label: copy.label })}</span>
-    </Badge>
+    </StatusBadge>
   )
 }
 
@@ -119,39 +124,33 @@ export function SecuritySectionSummary({ status }: { status: SecurityStatus }) {
   const runtimeOverrideActive = status.runtime_auth_override_active
 
   return (
-    <Card className="overflow-hidden border-blue-400/20 shadow-lg dark:shadow-blue-900/10">
-      <div className="relative">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-900/10 to-cyan-900/10 z-0" />
-        <CardHeader className="relative z-10 border-b border-blue-200/10">
+    <Card className="overflow-hidden">
+      <CardHeader className="border-b border-hairline">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="space-y-1.5">
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <ShieldCheck className="h-5 w-5 text-blue-400" />
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 {t("security.title")}
               </CardTitle>
-              <CardDescription>
-                {t("security.description")}
-              </CardDescription>
             </div>
             <SecurityModeBadge status={status} />
           </div>
         </CardHeader>
-      </div>
 
-      <CardContent className="space-y-4 pt-6 sm:pt-2">
+      <CardContent className="space-y-4 pt-4">
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="min-w-0 rounded-xl border border-blue-400/15 bg-background p-4 [overflow-wrap:anywhere]">
-            <p className="break-words text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.currentMode")}</p>
+          <div className="min-w-0 rounded-control bg-fill p-4 [overflow-wrap:anywhere]">
+            <p className="break-words text-xs font-medium text-muted-foreground">{t("security.currentMode")}</p>
             <p className="mt-2 break-words text-base font-semibold">{runtimeOverrideActive ? t("security.runtimeOverrideLabel") : copy.label}</p>
             <p className="mt-2 break-words text-sm text-muted-foreground">
-              {runtimeOverrideActive ? t("security.runtimeOverrideSummary", { label: copy.label }) : copy.summary}
+              {runtimeOverrideActive ? t("security.runtimeOverrideSummary") : copy.summary}
             </p>
             {runtimeOverrideActive ? (
               <p className="mt-3 text-xs text-muted-foreground">{t("security.runtimeOverrideConfiguredMode", { label: copy.label })}</p>
             ) : null}
           </div>
-          <div className="min-w-0 rounded-xl border border-blue-400/15 bg-background p-4 [overflow-wrap:anywhere]">
-            <p className="break-words text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{t("security.atRestProtection")}</p>
+          <div className="min-w-0 rounded-control bg-fill p-4 [overflow-wrap:anywhere]">
+            <p className="break-words text-xs font-medium text-muted-foreground">{t("security.atRestProtection")}</p>
             <p className="mt-2 break-words text-base font-semibold">{t("security.atRestTitle")}</p>
             <p className="mt-2 break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
               {t("security.atRestDesc", { path: status.encryption_key_path })}
@@ -229,10 +228,10 @@ export function KeyRecoveryCard() {
   if (!recovery.recovery_required) {
     if (!message) return null
     return (
-      <Card data-testid="key-recovery-complete" className="border-emerald-500/40">
+      <Card data-testid="key-recovery-complete" className="border-success-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-emerald-500" />
+            <ShieldCheck className="h-5 w-5 text-success" />
             {t("runtimeRecovery.completeTitle")}
           </CardTitle>
           <CardDescription role="status">{message}</CardDescription>
@@ -256,16 +255,16 @@ export function KeyRecoveryCard() {
   }
 
   return (
-    <Card data-testid="key-recovery-card" className="border-amber-500/40">
+    <Card data-testid="key-recovery-card" className="border-warning-border">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ShieldAlert className="h-5 w-5 text-amber-500" />
+          <ShieldAlert className="h-5 w-5 text-warning" />
           {t("runtimeRecovery.title")}
         </CardTitle>
         <CardDescription>{t("runtimeRecovery.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <Alert className="border-amber-500/40 bg-amber-500/5">
+        <Alert className="border-warning-border bg-warning-bg">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>{t("runtimeRecovery.lockedTitle")}</AlertTitle>
           <AlertDescription>
@@ -274,7 +273,7 @@ export function KeyRecoveryCard() {
         </Alert>
 
         {recovery.can_migrate ? (
-          <div className="space-y-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4">
+          <div className="space-y-3 rounded-control border border-success-border bg-success-bg p-4">
             <p className="font-medium">{t("runtimeRecovery.migrateTitle")}</p>
             <p className="text-sm text-muted-foreground">{t("runtimeRecovery.migrateDescription")}</p>
             {!recovery.legacy_input_detected ? (
@@ -304,8 +303,8 @@ export function KeyRecoveryCard() {
                   />
                   <p id="legacy-raw-key-help" className="text-xs text-muted-foreground">{t("runtimeRecovery.rawKeyHelp")}</p>
                 </div>
-                {migrationInputsConflict ? <p role="alert" className="text-sm text-destructive">{t("runtimeRecovery.inputConflict")}</p> : null}
-                {rawKeyFile && !rawKeyValid ? <p role="alert" className="text-sm text-destructive">{t("runtimeRecovery.rawKeyInvalid")}</p> : null}
+                {migrationInputsConflict ? <p role="alert" className="text-sm text-danger-fg">{t("runtimeRecovery.inputConflict")}</p> : null}
+                {rawKeyFile && !rawKeyValid ? <p role="alert" className="text-sm text-danger-fg">{t("runtimeRecovery.rawKeyInvalid")}</p> : null}
               </div>
             ) : null}
             <Button
@@ -324,7 +323,7 @@ export function KeyRecoveryCard() {
                   setMessage(result.message)
                   window.dispatchEvent(new CustomEvent(RUNTIME_PREFLIGHT_CHANGED_EVENT))
                 } catch (nextError) {
-                  setError(nextError instanceof Error ? nextError.message : t("runtimeRecovery.error"))
+                  setError(describeError(nextError, t("runtimeRecovery.error")).message)
                 } finally {
                   clearMigrationInputs()
                   setBusy("idle")
@@ -336,14 +335,14 @@ export function KeyRecoveryCard() {
             </Button>
           </div>
         ) : (
-          <div className="space-y-2 rounded-md border border-border p-4">
+          <div className="space-y-2 rounded-control border border-hairline p-4">
             <p className="font-medium">{t("runtimeRecovery.restoreTitle")}</p>
             <p className="text-sm text-muted-foreground">{t("runtimeRecovery.restoreDescription")}</p>
           </div>
         )}
 
         {recovery.can_reset ? (
-          <div className="space-y-3 rounded-md border border-destructive/40 bg-background p-4">
+          <div className="space-y-3 rounded-control border border-danger-border p-4">
             <p className="font-medium text-foreground">{t("runtimeRecovery.resetTitle")}</p>
             <p className="text-sm text-muted-foreground">{t("runtimeRecovery.resetDescription")}</p>
             <div className="space-y-2">
@@ -359,7 +358,7 @@ export function KeyRecoveryCard() {
             <Button
               type="button"
               variant="destructive"
-              disabled={busy !== "idle" || confirmation !== KEY_RESET_CONFIRMATION}
+              disabled={busy !== "idle" || confirmation.trim().toUpperCase() !== KEY_RESET_CONFIRMATION}
               onClick={async () => {
                 setBusy("resetting")
                 setError(null)
@@ -371,7 +370,7 @@ export function KeyRecoveryCard() {
                   setMessage(result.message)
                   window.dispatchEvent(new CustomEvent(RUNTIME_PREFLIGHT_CHANGED_EVENT))
                 } catch (nextError) {
-                  setError(nextError instanceof Error ? nextError.message : t("runtimeRecovery.error"))
+                  setError(describeError(nextError, t("runtimeRecovery.error")).message)
                 } finally {
                   setBusy("idle")
                 }
@@ -385,8 +384,8 @@ export function KeyRecoveryCard() {
 
         <OfficialRecoveryUpdateActions />
 
-        {message ? <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{message}</p> : null}
-        {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+        {message ? <p role="status" className="text-sm text-success-fg">{message}</p> : null}
+        {error ? <p role="alert" className="text-sm text-danger-fg">{error}</p> : null}
       </CardContent>
     </Card>
   )
@@ -444,7 +443,7 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
           if (!cancelled) setWhoAmI({ authenticated: false })
         }
       } catch (nextError) {
-        if (!cancelled) setError(nextError instanceof Error ? nextError.message : t("security.loadError"))
+        if (!cancelled) setError(describeError(nextError, t("security.loadError")).message)
       }
     }
 
@@ -477,12 +476,17 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
 
       <KeyRecoveryCard />
 
-      <Card className="border-blue-400/20 overflow-hidden">
-        <CardHeader>
-          <CardTitle>{t("security.settingsTitle")}</CardTitle>
-          <CardDescription>{viewState.canBootstrapSecureLogin ? t("security.bootstrapCredsDescription") : t("security.settingsDescription")}</CardDescription>
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-hairline">
+          <div className="flex items-center gap-2">
+            <Shield className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <div>
+              <CardTitle>{t("security.settingsTitle")}</CardTitle>
+              {viewState.canBootstrapSecureLogin ? <CardDescription>{t("security.bootstrapCredsDescription")}</CardDescription> : null}
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-6 pt-4">
           <div className="space-y-2">
             <Label htmlFor="security-auth-mode-select">{t("security.modeLabel")}</Label>
             <Select value={authMode} onValueChange={(value) => {
@@ -490,24 +494,24 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
               setValue("auth_mode", nextAuthMode, { shouldDirty: true })
               setValue("rbac_enabled", nextAuthMode === "rbac", { shouldDirty: true })
             }}>
-              <SelectTrigger id="security-auth-mode-select" className="max-w-sm" data-testid="security-auth-mode-select"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="security-auth-mode-select" data-testid="security-auth-mode-select"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="rbac">{t("dashboard.setup.secureMode")}</SelectItem>
                 <SelectItem value="none">{t("dashboard.setup.noAuthMode")}</SelectItem>
               </SelectContent>
             </Select>
             {viewState.showCompactNoAuthWarning ? (
-              <Alert data-testid="security-noauth-warning" className="max-w-2xl border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+              <Alert data-testid="security-noauth-warning" className="border-warning-border bg-warning-bg text-warning-fg [&>svg]:text-warning-fg">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
-                  <p>{t("dashboard.setup.noAuthWarning")}</p>
+                  <p>{authMode !== "rbac" ? t("dashboard.setup.noAuthWarning") : viewState.canBootstrapSecureLogin ? t("security.signInOffUntilCreated") : t("security.signInOffUntilSaved")}</p>
                 </AlertDescription>
               </Alert>
             ) : null}
           </div>
 
           <div className="space-y-3">
-            <Label>{viewState.canBootstrapSecureLogin ? t("security.bootstrapActionTitle") : t("security.credentialsTitle")}</Label>
+            {viewState.canBootstrapSecureLogin && viewState.showCreateLoginAction ? null : <Label className="block">{t("security.credentialsTitle")}</Label>}
             {viewState.showCreateLoginAction ? (
               <Button
                 type="button"
@@ -518,7 +522,7 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
                   setValue("rbac_enabled", true, { shouldDirty: true })
                 }}
               >
-                {t("security.createAdminAndEnable")}
+                {t("security.setupSignIn")}
               </Button>
             ) : null}
             {viewState.showBootstrapCredentials ? (
@@ -542,9 +546,9 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
                     onChange={(event) => setSetupPassword(event.target.value)}
                   />
                 </div>
-                {credentialError ? <p className="text-sm text-destructive">{credentialError}</p> : null}
-                {credentialSuccess ? <p className="text-sm text-emerald-400">{credentialSuccess}</p> : null}
-                {authMode !== "rbac" ? <p className="text-sm text-amber-300">{t("security.switchToSecureHint")}</p> : null}
+                {credentialError ? <p className="text-sm text-danger-fg">{credentialError}</p> : null}
+                {credentialSuccess ? <p className="text-sm text-success-fg">{credentialSuccess}</p> : null}
+                {authMode !== "rbac" ? <p className="text-sm text-warning-fg">{t("security.switchToSecureHint")}</p> : null}
                 <Button
                   type="button"
                   disabled={authMode !== "rbac" || !setupUsername.trim() || !setupPassword || isSavingCredentials}
@@ -569,7 +573,7 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
                         setNewUsername(nextWhoAmI.username)
                       }
                     } catch (err) {
-                      setCredentialError(err instanceof Error ? err.message : t("dashboard.auth.setupFailed"))
+                      setCredentialError(describeError(err, t("dashboard.auth.setupFailed")).message)
                     } finally {
                       setIsSavingCredentials(false)
                     }
@@ -594,8 +598,8 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
                   <Label htmlFor="security-new-password">{t("security.newPassword")}</Label>
                   <Input id="security-new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
                 </div>
-                {credentialError ? <p className="text-sm text-destructive">{credentialError}</p> : null}
-                {credentialSuccess ? <p className="text-sm text-emerald-400">{credentialSuccess}</p> : null}
+                {credentialError ? <p className="text-sm text-danger-fg">{credentialError}</p> : null}
+                {credentialSuccess ? <p className="text-sm text-success-fg">{credentialSuccess}</p> : null}
                 <Button
                   type="button"
                   disabled={!currentPassword || isSavingCredentials || (!newPassword && !newUsername.trim())}
@@ -604,14 +608,16 @@ export function SecuritySettingsSection({ form }: SecuritySettingsSectionProps) 
                     setCredentialError(null)
                     setCredentialSuccess(null)
                     try {
-                      const result = await changeCredentials(currentPassword, newUsername.trim(), newPassword)
-                      setCredentialSuccess(result.message)
+                      await changeCredentials(currentPassword, newUsername.trim(), newPassword)
+                      // Changing credentials signs out every session, including
+                      // this one. Keep the confirmation visible and let the
+                      // header pick up the signed-out state.
+                      setCredentialSuccess(t("security.credentialsChangedSignIn"))
                       setCurrentPassword("")
                       setNewPassword("")
-                      const refreshed = await fetchWhoAmI()
-                      setWhoAmI(refreshed)
+                      window.dispatchEvent(new CustomEvent("channelwatch-auth-state-changed"))
                     } catch (err) {
-                      setCredentialError(err instanceof Error ? err.message : t("dashboard.auth.loginFailed"))
+                      setCredentialError(describeError(err, t("dashboard.auth.loginFailed")).message)
                     } finally {
                       setIsSavingCredentials(false)
                     }

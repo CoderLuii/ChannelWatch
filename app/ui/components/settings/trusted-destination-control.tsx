@@ -3,7 +3,7 @@ import { ShieldAlert, ShieldCheck, Trash2 } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
-import { Badge } from "@/components/base/badge"
+import { Tag } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
 import {
   Dialog,
@@ -87,7 +87,7 @@ export function TrustedDestinationControl({
   }, [source, trimmedUrl])
 
   if (!trimmedUrl || !preview || preview.status === "unsupported" || preview.status === "public_safe") {
-    return error ? <p className="text-xs text-red-700 dark:text-red-300">{error}</p> : null
+    return error ? <p className="text-xs text-danger-fg">{error}</p> : null
   }
 
   const addDestination = () => {
@@ -121,8 +121,8 @@ export function TrustedDestinationControl({
 
   if (preview.trusted || alreadyTrusted) {
     return (
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-200">
-        <ShieldCheck className="h-3.5 w-3.5" />
+      <div className="flex flex-wrap items-center gap-2 rounded-control bg-fill px-3 py-2 text-xs text-foreground">
+        <ShieldCheck className="h-3.5 w-3.5 text-success" />
         <span>{t("notifications.trusted.allowed")}</span>
         {normalized && (
           <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeDestination(normalized)}>
@@ -136,7 +136,7 @@ export function TrustedDestinationControl({
 
   if (!preview.trustable) {
     return (
-      <Alert variant="destructive" className={`text-red-700 dark:text-red-300 ${compact ? "py-3" : ""}`}>
+      <Alert variant="destructive" className={`text-danger-fg ${compact ? "py-3" : ""}`}>
         <ShieldAlert className="h-4 w-4" />
         <AlertTitle>{t("notifications.trusted.blockedTitle")}</AlertTitle>
         <AlertDescription>{preview.message}</AlertDescription>
@@ -153,8 +153,8 @@ export function TrustedDestinationControl({
           <p>{preview.message}</p>
           {normalized && (
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">{normalized.source === "webhook" ? "Webhook" : "Custom Apprise"}</Badge>
-              <code className="rounded-md bg-muted px-2 py-1 text-xs">{destinationLabel(normalized)}</code>
+              <Tag>{normalized.source === "webhook" ? "Webhook" : "Custom Apprise"}</Tag>
+              <code className="rounded-thumb bg-fill px-1.5 py-0.5 text-xs">{destinationLabel(normalized)}</code>
             </div>
           )}
           <Button type="button" size="sm" onClick={() => setConfirmOpen(true)}>
@@ -171,7 +171,7 @@ export function TrustedDestinationControl({
             <DialogDescription>{t("notifications.trusted.confirmDesc")}</DialogDescription>
           </DialogHeader>
           {normalized && (
-            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+            <div className="rounded-control border border-hairline bg-fill p-3 text-sm">
               <p className="font-medium">{destinationLabel(normalized)}</p>
               <p className="text-xs text-muted-foreground">{t("notifications.trusted.confirmScope")}</p>
             </div>
@@ -211,14 +211,14 @@ export function TrustedDestinationList({ form }: TrustedDestinationListProps) {
   }
 
   return (
-    <div className="space-y-2 rounded-xl border border-emerald-400/20 bg-emerald-500/5 p-4">
+    <div className="space-y-2 rounded-control border border-hairline p-4">
       <div className="flex items-center gap-2">
-        <ShieldCheck className="h-4 w-4 text-emerald-400" />
+        <ShieldCheck className="h-4 w-4 text-success" />
         <p className="text-sm font-medium">{t("notifications.trusted.listTitle")}</p>
       </div>
       <div className="space-y-2">
         {trustedDestinations.map((destination) => (
-          <div key={destinationKey(destination)} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-background/70 px-3 py-2">
+          <div key={destinationKey(destination)} className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-hairline bg-fill px-3 py-2">
             <div className="min-w-0">
               <p className="truncate text-sm">{destinationLabel(destination)}</p>
               <p className="text-xs text-muted-foreground">

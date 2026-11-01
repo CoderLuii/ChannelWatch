@@ -3,8 +3,8 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
-import { resolveDashboardBootstrapShell } from "@/components/dashboard"
-import type { AuthSetupStatus, SecurityStatus } from "@/lib/types"
+import { hasActiveDvrs, resolveDashboardBootstrapShell } from "@/components/dashboard"
+import type { AppSettings, AuthSetupStatus, SecurityStatus } from "@/lib/types"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -49,6 +49,23 @@ const baseSecurityStatus: SecurityStatus = {
     atom_enabled: false,
   },
 }
+
+describe("first-run wizard gate", () => {
+  const dvr = { id: "dvr_a", name: "A", host: "10.0.0.1", port: 8089, enabled: true }
+  const withServers = (dvr_servers: AppSettings["dvr_servers"]) => ({ dvr_servers }) as AppSettings
+
+  it("opens when there is nothing to monitor", () => {
+    expect(hasActiveDvrs(null)).toBe(false)
+    expect(hasActiveDvrs(withServers([]))).toBe(false)
+    expect(hasActiveDvrs(withServers([{ ...dvr, deleted_at: "2026-01-01T00:00:00Z" }]))).toBe(false)
+  })
+
+  it("stays closed when any DVR is still active, including a disabled one", () => {
+    expect(hasActiveDvrs(withServers([dvr]))).toBe(true)
+    expect(hasActiveDvrs(withServers([{ ...dvr, enabled: false }]))).toBe(true)
+    expect(hasActiveDvrs(withServers([{ ...dvr, deleted_at: "2026-01-01T00:00:00Z" }, { ...dvr, id: "dvr_b" }]))).toBe(true)
+  })
+})
 
 describe("Dashboard auth bootstrap", () => {
   it("setup status drives correct shell", () => {

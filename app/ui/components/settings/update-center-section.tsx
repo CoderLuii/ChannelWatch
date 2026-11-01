@@ -4,14 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, CheckCircle2, DownloadCloud, ExternalLink, Loader2, PackageCheck, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
-import { Badge } from "@/components/base/badge"
+import { StatusBadge, type StatusTone } from "@/components/base/status-badge"
 import { Button } from "@/components/base/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/base/dialog"
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
 import { TabsContent } from "@/components/base/tabs"
 import { ApiError, ApiUnavailableError, applyUpdate, checkForUpdate, fetchSettings, fetchUpdateJob, fetchUpdatePolicy, fetchUpdateStatus, postponeUpdate, retryUpdate, rollbackUpdate, saveUpdatePolicy, verifyStartupReady, type UpdateJob, type UpdatePolicy, type UpdatePolicyMode, type UpdateStatus } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
 import { t } from "@/lib/i18n"
+import { cn } from "@/lib/utils"
+import { formatAbsoluteTime, formatRelativeTime } from "@/lib/relative-time"
 import { applyUpdateAndReconnect, isPendingUpdateJob, reloadUpdatedDashboard, requiresUpdateReconnect, UpdateJobPendingError, UpdateReadinessError, UpdateReconnectError, waitForUpdatedRuntime, type RestartJob } from "@/lib/update-reconnect"
 
 type BusyState = "idle" | "checking" | "applying" | "rolling-back" | "polling" | "saving-policy" | "postponing" | "retrying"
@@ -26,17 +30,16 @@ function createUpdateJobId(): string {
   return Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("")
 }
 
-function statusTone(status?: string | null): "default" | "secondary" | "destructive" | "outline" {
-  if (!status) return "outline"
-  if (["success", "current"].includes(status)) return "default"
-  if (["failed", "image_required"].includes(status)) return "destructive"
-  if (["available", "restarting", "validating", "applying", "backing_up", "verifying"].includes(status)) return "secondary"
-  return "outline"
+function statusTone(status?: string | null): StatusTone {
+  if (!status) return "neutral"
+  if (["success", "current"].includes(status)) return "success"
+  if (["failed", "image_required"].includes(status)) return "danger"
+  return "neutral"
 }
 
 function updateErrorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.payload.message
-  return error instanceof Error ? error.message : t("updates.error.default")
+  return describeError(error, t("updates.error.default")).message
 }
 
 function updateErrorRemediation(error: unknown): string | null {
@@ -70,7 +73,7 @@ function maintenanceWindowEnd(start: string, minutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
 }
 
-export function UpdateCenterSection() {
+export function UpdateCenterSection({ active = true }: { active?: boolean }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [job, setJob] = useState<UpdateJob | null>(null)
   const [policy, setPolicy] = useState<UpdatePolicy | null>(null)
@@ -79,6 +82,8 @@ export function UpdateCenterSection() {
   const [busy, setBusy] = useState<BusyState>("idle")
   const [error, setError] = useState<string | null>(null)
   const [remediation, setRemediation] = useState<string | null>(null)
+  const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false)
+  const rollbackButtonRef = useRef<HTMLButtonElement>(null)
   const updateFlightRef = useRef<UpdateFlight | null>(null)
   const updateActionLockedRef = useRef(false)
   const reloadStartedRef = useRef(false)
@@ -123,12 +128,14 @@ export function UpdateCenterSection() {
     if (policyResult.status === "rejected") throw policyResult.reason
   }, [])
 
+  // Settings stays mounted behind other tabs, so this reads again on the way back.
   useEffect(() => {
+    if (!active) return
     loadStatus().catch((err) => {
       setError(updateErrorMessage(err))
       setRemediation(updateErrorRemediation(err))
     })
-  }, [loadStatus])
+  }, [active, loadStatus])
 
   useEffect(() => () => {
     updateFlightRef.current?.controller.abort()
@@ -327,6 +334,7 @@ export function UpdateCenterSection() {
   }
 
   const handleRollback = async () => {
+    setRollbackConfirmOpen(false)
     setBusy("rolling-back")
     setError(null)
     setRemediation(null)
@@ -404,6 +412,18 @@ export function UpdateCenterSection() {
     return t("updates.progress.checking")
   }, [busy, job])
 
+  // The summary is the one headline: what is happening now, then what the last check found.
+  // It only claims "Up to date" after a release check has confirmed it.
+  const summaryMessage = updateStage
+    ?? (!status && error ? t("updates.summary.loadFailed") : null)
+    ?? (!status || status.update_available || primaryMessage !== t("updates.state.current")
+      ? primaryMessage
+      : status.catalog_state === "error"
+        ? t("updates.summary.checkFailed")
+        : status.catalog_state === "not_checked"
+          ? t("updates.summary.notChecked")
+          : t("updates.summary.upToDate"))
+
   const windowStartMatch = /^(\d{2}):(\d{2})$/.exec(maintenanceStart)
   const windowStartValid = Boolean(
     windowStartMatch
@@ -414,74 +434,192 @@ export function UpdateCenterSection() {
   const windowMinutesValid = Number.isInteger(parsedWindowMinutes) && parsedWindowMinutes >= 15 && parsedWindowMinutes <= 720
   const policyFieldsValid = windowStartValid && windowMinutesValid
 
+  const failureReason = policy?.last_error || (job?.status === "failed" ? job.message : null) || null
+  // "Nothing compatible" is a fact about the catalog, not something that went wrong.
+  const failureIsNotice = /no release compatible/i.test(failureReason ?? "")
+  const canRetry = !failureIsNotice && Boolean((policy?.last_error && (latest?.version ?? job?.version)) || (job?.status === "failed" && status?.trusted_target))
+  const isBusy = busy !== "idle" || Boolean(status?.operation_busy && status.operation_state !== "idle")
+  const showNote = Boolean(status) && !isBusy && status?.catalog_state !== "not_checked" && status?.catalog_state !== "error"
+
   const handlePolicySchedule = async () => {
     await handlePolicyMode(policy?.mode ?? "automatic")
   }
 
+  // These fields sit inside the settings form, but they save to the update policy.
+  const handlePolicyFieldKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return
+    event.preventDefault()
+    if (policyFieldsValid && !controlsBusy) void handlePolicySchedule()
+  }
+
   return (
     <TabsContent value="updates" className="space-y-6">
-      <Card className="border-blue-400/20 overflow-hidden">
-        <div className="relative">
-          <div className="absolute inset-0 bg-gradient-to-r from-sky-900/10 to-emerald-900/10 z-0" />
-          <CardHeader className="relative z-10 border-b border-blue-200/10">
-            <div className="flex items-center gap-3">
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-sky-500/20 flex items-center justify-center">
-                <DownloadCloud className="h-5 w-5 text-sky-400" />
-              </div>
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-hairline">
+            <div className="flex items-center gap-2">
+              <DownloadCloud className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <div>
-                <CardTitle className="text-xl">{t("updates.title")}</CardTitle>
-                <CardDescription>{t("updates.description")}</CardDescription>
+                <CardTitle>{t("updates.title")}</CardTitle>
               </div>
             </div>
           </CardHeader>
-        </div>
 
-        <CardContent className="space-y-6 pt-6 sm:pt-6">
-          <div className="grid gap-3 min-[360px]:grid-cols-2 md:gap-4 xl:grid-cols-4 [&>div]:min-w-0 [&>div]:[overflow-wrap:anywhere]">
-            <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.appVersion")}</p>
-              <p className="mt-1 text-lg font-semibold">{versionLabel(status)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t(`updates.runtimeSource.${status?.runtime_source ?? "unknown"}`)}</p>
+        <CardContent className="space-y-6 pt-4">
+          <div data-testid="update-center-summary" className="space-y-3">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 [overflow-wrap:anywhere]">
+                <p className="text-lg font-semibold">{status ? t("updates.summary.onVersion", { version: `v${status.current_version.replace(/^v/, "")}` }) : error ? t("updates.title") : <span aria-hidden="true" className="inline-block h-5 w-40 animate-pulse rounded-thumb bg-muted align-middle" />}</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {summaryMessage}
+                  {status?.catalog_checked_at ? (
+                    <>
+                      {" "}
+                      <span title={formatAbsoluteTime(status.catalog_checked_at)}>{t("updates.summary.lastChecked", { time: formatRelativeTime(status.catalog_checked_at) })}</span>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {status?.update_available && !status.image_required ? (
+                  <Button type="button" onClick={handleApply} disabled={!canApply} className="gap-2">
+                    {busy === "applying" || busy === "polling" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                    {busy === "applying" || busy === "polling" ? t("updates.applying") : t("updates.apply")}
+                  </Button>
+                ) : (
+                  <Button type="button" variant="default" onClick={handleCheck} disabled={controlsBusy} className="gap-2">
+                    {busy === "checking" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    {busy === "checking" ? t("updates.checking") : t("updates.check")}
+                  </Button>
+                )}
+              </div>
             </div>
-            <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.imageVersion")}</p>
-              <p className="mt-1 text-lg font-semibold">{status?.image_version ? `v${status.image_version.replace(/^v/, "")}` : t("common.unknown")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {status?.image_update_available && status.recommended_image_version
+            <div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
+              {status?.update_available && !status.image_required ? (
+                <Button type="button" variant="ghost" onClick={handleCheck} disabled={controlsBusy} className="gap-2">
+                  {busy === "checking" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  {busy === "checking" ? t("updates.checking") : t("updates.check")}
+                </Button>
+              ) : null}
+              {status?.rollback_available ? (
+                <Button type="button" variant="ghost" ref={rollbackButtonRef} onClick={() => setRollbackConfirmOpen(true)} disabled={!canRollback} className="gap-2">
+                  {busy === "rolling-back" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                  {busy === "rolling-back" ? t("updates.rollingBack") : t("updates.rollback")}
+                </Button>
+              ) : null}
+              {status?.update_available ? (
+                <>
+                  <Button type="button" variant="ghost" onClick={() => handlePostpone(24)} disabled={controlsBusy}>
+                    {t("updates.postponeDay")}
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={() => handlePostpone(168)} disabled={controlsBusy}>
+                    {t("updates.postponeWeek")}
+                  </Button>
+                </>
+              ) : null}
+              {latest?.release_url && (
+                <Button type="button" variant="ghost" asChild className="gap-2">
+                  <a href={latest.release_url} target="_blank" rel="noreferrer">
+                    <ExternalLink className="h-4 w-4" />
+                    {t("updates.releaseNotes")}
+                  </a>
+                </Button>
+              )}
+            </div>
+            {failureReason || (canRetry && job?.status === "failed") ? (
+              <Alert data-testid="update-failure" variant={failureIsNotice ? "default" : "destructive"} className={cn("sm:[&>svg+div]:translate-y-0 sm:[&>svg]:top-1/2 sm:[&>svg]:-translate-y-1/2", failureIsNotice && "[&>svg]:text-muted-foreground")}>
+                <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="min-w-0 flex-1 basis-[12rem] [overflow-wrap:anywhere]">
+                    {policy?.last_error ? t("updates.policy.lastError", { error: policy.last_error }) : failureReason ?? t("updates.jobNoMessage")}
+                  </span>
+                  {canRetry ? (
+                    <Button type="button" variant="outline" size="sm" onClick={handleRetry} disabled={controlsBusy} className="min-h-11 shrink-0 gap-2">
+                      {busy === "retrying" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      {t("updates.retry")}
+                    </Button>
+                  ) : null}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {updateStage ? (
+              <Alert aria-live="polite" className="[&>svg]:text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <AlertTitle>{updateStage}</AlertTitle>
+                <AlertDescription>{t("updates.progress.refreshWhenReady")}</AlertDescription>
+              </Alert>
+            ) : null}
+            {error && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>{t("updates.error.title")}</AlertTitle>
+                <AlertDescription>
+                  <span className="block">{error}</span>
+                  {remediation && <span className="mt-1 block">{remediation}</span>}
+                </AlertDescription>
+              </Alert>
+            )}
+            {status?.rollback_available ? (
+              <p data-testid="update-rollback-note" className="text-xs text-muted-foreground">{t("updates.summary.rollbackNote")}</p>
+            ) : null}
+          </div>
+          {status ? <dl data-testid="update-facts" className="min-w-0 [overflow-wrap:anywhere]">
+            {[
+              [t("updates.appVersion"), versionLabel(status), t(`updates.runtimeSource.${status?.runtime_source ?? "unknown"}`)],
+              [
+                t("updates.imageVersion"),
+                status?.image_version ? `v${status.image_version.replace(/^v/, "")}` : t("common.unknown"),
+                status?.image_update_available && status.recommended_image_version
                   ? t("updates.imageUpdateAvailable", { version: `v${status.recommended_image_version.replace(/^v/, "")}` })
                   : status?.image_refresh_recommended
                     ? t("updates.imageRefreshRecommended")
-                    : t("updates.imageCompatible")}
-              </p>
-            </div>
-            <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.compatibleAppVersion")}</p>
-              <p className="mt-1 text-lg font-semibold">{compatibleAppReleaseLabel(status)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {status?.catalog_state === "update_available"
+                    : t("updates.imageCompatible"),
+              ],
+              [
+                t("updates.compatibleAppVersion"),
+                compatibleAppReleaseLabel(status),
+                status?.catalog_state === "update_available"
                   ? t(`updates.delivery.${status.delivery_mode ?? "app_update"}`)
-                  : t("updates.catalog.currentDescription")}
-              </p>
+                  : ["current", "stale_cache"].includes(status?.catalog_state ?? "")
+                    ? t("updates.catalog.currentDescription")
+                    : "",
+              ],
+              [t("updates.protocol"), status?.runtime_abi ?? t("common.unknown"), t("updates.launcherProtocol", { protocol: status?.launcher_protocol ?? t("common.unknown") })],
+            ].map(([label, value, detail]) => (
+              <div key={label} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t border-hairline py-2.5 text-sm">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="text-right font-mono text-sm">{value}</dd>
+                {detail ? <dd className="w-full text-xs text-muted-foreground">{detail}</dd> : null}
+              </div>
+            ))}
+          </dl> : error ? null : (
+            <div data-testid="update-facts-loading" aria-hidden="true" className="min-w-0 animate-pulse">
+              {[0, 1, 2, 3].map((row) => (
+                <div key={row} className="border-t border-hairline py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="h-5 w-32 rounded-thumb bg-muted" />
+                    <span className="h-5 w-16 rounded-thumb bg-muted" />
+                  </div>
+                  <div className="mt-0.5 h-4 w-2/3 rounded-thumb bg-muted" />
+                </div>
+              ))}
             </div>
-            <div className="rounded-xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <p className="text-xs uppercase text-muted-foreground">{t("updates.protocol")}</p>
-              <p className="mt-1 text-sm font-mono">{status?.runtime_abi ?? t("common.unknown")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("updates.launcherProtocol", { protocol: status?.launcher_protocol ?? t("common.unknown") })}</p>
-            </div>
-          </div>
+          )}
 
-          <Alert aria-live="polite" className="border-sky-400/30 bg-sky-500/10 text-sky-900 dark:text-sky-100 [&>svg]:text-sky-500">
-            <PackageCheck className="h-4 w-4" />
-            <AlertTitle>{primaryMessage}</AlertTitle>
-            <AlertDescription>
+          {isBusy && !updateStage ? (
+            <Alert aria-live="polite" className="[&>svg]:text-muted-foreground">
+              <PackageCheck className="h-4 w-4" />
+              <AlertTitle>{primaryMessage}</AlertTitle>
+            </Alert>
+          ) : showNote ? (
+            <p data-testid="update-note" className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
               {status?.update_available && !status.image_required && status.image_update_available && status.recommended_image_version
                 ? t("updates.intermediateAppAvailable", {
                     appVersion: latestVersion ?? t("common.unknown"),
                     imageVersion: `v${status.recommended_image_version.replace(/^v/, "")}`,
                   })
                 : t("updates.bootstrapNote")}
-            </AlertDescription>
-          </Alert>
+            </p>
+          ) : null}
 
           {status?.cached_release_stale ? (
             <Alert data-testid="update-stale-cache-notice">
@@ -492,7 +630,7 @@ export function UpdateCenterSection() {
           ) : null}
 
           {status?.auth_disabled_warning && (
-            <Alert variant="destructive" className="border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100 [&>svg]:text-amber-500">
+            <Alert variant="destructive" className="border-warning-border bg-warning-bg text-warning-fg [&>svg]:text-warning-fg">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle>{t("updates.noAuthWarningTitle")}</AlertTitle>
               <AlertDescription>{t("updates.noAuthWarningDesc")}</AlertDescription>
@@ -500,12 +638,12 @@ export function UpdateCenterSection() {
           )}
 
           {status?.catalog_state === "update_available" && latest?.highlights && latest.highlights.length > 0 && (
-            <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-3">
+            <div className="space-y-3 border-t border-hairline pt-4">
               <p className="text-sm font-semibold">{t("updates.highlights")}</p>
               <ul className="space-y-2 text-sm text-muted-foreground">
                 {latest.highlights.map((item) => (
                   <li key={item} className="flex gap-2">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-500" />
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success" />
                     <span>{item}</span>
                   </li>
                 ))}
@@ -513,29 +651,29 @@ export function UpdateCenterSection() {
             </div>
           )}
 
-          <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-4">
+          <div className="space-y-4 border-t border-hairline pt-4">
             <div>
               <p className="text-sm font-semibold">{t("updates.policy.title")}</p>
               <p className="mt-1 text-sm text-muted-foreground">{t("updates.policy.description")}</p>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-1 rounded-control bg-fill p-1 md:grid-cols-2">
               <Button
                 type="button"
-                variant={(policy?.mode ?? "automatic") === "automatic" ? "default" : "outline"}
+                variant="ghost"
                 disabled={controlsBusy || !policyFieldsValid}
                 aria-pressed={(policy?.mode ?? "automatic") === "automatic"}
-                onClick={() => handlePolicyMode("automatic")}
-                className="h-auto min-h-10 min-w-0 whitespace-normal"
+                onClick={() => { if ((policy?.mode ?? "automatic") !== "automatic") void handlePolicyMode("automatic") }}
+                className={cn("h-auto min-h-11 min-w-0 whitespace-normal rounded-thumb", (policy?.mode ?? "automatic") === "automatic" ? "bg-thumb text-foreground shadow-2 hover:bg-thumb" : "text-muted-foreground")}
               >
                 {t("updates.policy.automatic")}
               </Button>
               <Button
                 type="button"
-                variant={policy?.mode === "notify_only" ? "default" : "outline"}
+                variant="ghost"
                 disabled={controlsBusy || !policyFieldsValid}
                 aria-pressed={policy?.mode === "notify_only"}
-                onClick={() => handlePolicyMode("notify_only")}
-                className="h-auto min-h-10 min-w-0 whitespace-normal"
+                onClick={() => { if (policy?.mode !== "notify_only") void handlePolicyMode("notify_only") }}
+                className={cn("h-auto min-h-11 min-w-0 whitespace-normal rounded-thumb", policy?.mode === "notify_only" ? "bg-thumb text-foreground shadow-2 hover:bg-thumb" : "text-muted-foreground")}
               >
                 {t("updates.policy.notifyOnly")}
               </Button>
@@ -549,8 +687,9 @@ export function UpdateCenterSection() {
                   step={60}
                   value={maintenanceStart}
                   onChange={(event) => setMaintenanceStart(event.target.value)}
+                  onKeyDown={handlePolicyFieldKey}
                   aria-invalid={!windowStartValid}
-                  className="min-w-0"
+                  className="time-input block min-w-0"
                 />
               </div>
               <div className="min-w-0 space-y-2">
@@ -563,12 +702,13 @@ export function UpdateCenterSection() {
                   step={15}
                   value={maintenanceMinutes}
                   onChange={(event) => setMaintenanceMinutes(event.target.value)}
+                  onKeyDown={handlePolicyFieldKey}
                   aria-invalid={!windowMinutesValid}
                   className="min-w-0"
                 />
               </div>
             </div>
-            {!policyFieldsValid ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.windowInvalid")}</p> : null}
+            {!policyFieldsValid ? <p role="alert" className="text-sm text-danger-fg">{t("updates.policy.windowInvalid")}</p> : null}
             <Button type="button" variant="outline" className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-center" disabled={controlsBusy || !policyFieldsValid} onClick={handlePolicySchedule}>
               {busy === "saving-policy" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {t("updates.policy.saveWindow")}
@@ -579,83 +719,45 @@ export function UpdateCenterSection() {
                 end: maintenanceWindowEnd(maintenanceStart, Number(maintenanceMinutes)),
               })}
             </p>
-            {policy?.postponed_until ? <p role="status" className="break-words text-sm text-amber-700 [overflow-wrap:anywhere] dark:text-amber-300">{t("updates.policy.postponedUntil", { time: policy.postponed_until })}</p> : null}
-            {policy?.next_attempt_at ? <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">{t("updates.policy.nextAttempt", { time: policy.next_attempt_at })}</p> : null}
-            {policy?.last_error ? <p role="alert" className="text-sm text-destructive">{t("updates.policy.lastError", { error: policy.last_error })}</p> : null}
+            {policy?.postponed_until ? <p role="status" className="break-words text-sm text-warning-fg [overflow-wrap:anywhere]"><span title={formatAbsoluteTime(policy.postponed_until)}>{t("updates.policy.postponedUntil", { time: formatRelativeTime(policy.postponed_until) })}</span></p> : null}
+            {policy?.next_attempt_at ? <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"><span title={formatAbsoluteTime(policy.next_attempt_at)}>{t("updates.policy.nextAttempt", { time: formatRelativeTime(policy.next_attempt_at) })}</span></p> : null}
           </div>
 
           {job && (
-            <div className="rounded-xl border border-sky-400/15 bg-background/40 p-5 space-y-3">
+            <div className="space-y-3 border-t border-hairline pt-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold">
                   {isPendingUpdateJob(job) ? t("updates.activeJob") : t("updates.lastJob")}
                 </p>
-                <Badge variant={statusTone(job.status)}>{job.status}</Badge>
+                <StatusBadge variant={statusTone(job.status)}>{job.status}</StatusBadge>
               </div>
-              <p className="text-sm text-muted-foreground">{job.message ?? t("updates.jobNoMessage")}</p>
+              {job.status === "failed" ? null : <p className="text-sm text-muted-foreground">{job.message ?? t("updates.jobNoMessage")}</p>}
               {job.backup_path && <p className="text-xs text-muted-foreground">{t("updates.backupCreated", { path: job.backup_path })}</p>}
             </div>
           )}
 
-          {updateStage ? (
-            <Alert aria-live="polite" className="border-sky-400/30 bg-sky-500/10 text-sky-900 dark:text-sky-100 [&>svg]:text-sky-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <AlertTitle>{updateStage}</AlertTitle>
-              <AlertDescription>{t("updates.progress.refreshWhenReady")}</AlertDescription>
-            </Alert>
-          ) : null}
-
-          {error && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>{t("updates.error.title")}</AlertTitle>
-              <AlertDescription>
-                <span className="block">{error}</span>
-                {remediation && <span className="mt-1 block">{remediation}</span>}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant="outline" onClick={handleCheck} disabled={controlsBusy} className="gap-2">
-              {busy === "checking" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {busy === "checking" ? t("updates.checking") : t("updates.check")}
-            </Button>
-            <Button type="button" onClick={handleApply} disabled={!canApply} className="gap-2">
-              {busy === "applying" || busy === "polling" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              {busy === "applying" || busy === "polling" ? t("updates.applying") : t("updates.apply")}
-            </Button>
-            <Button type="button" variant="outline" onClick={handleRollback} disabled={!canRollback} className="gap-2">
-              {busy === "rolling-back" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              {busy === "rolling-back" ? t("updates.rollingBack") : t("updates.rollback")}
-            </Button>
-            {status?.update_available ? (
-              <>
-                <Button type="button" variant="ghost" onClick={() => handlePostpone(24)} disabled={controlsBusy}>
-                  {t("updates.postponeDay")}
-                </Button>
-                <Button type="button" variant="ghost" onClick={() => handlePostpone(168)} disabled={controlsBusy}>
-                  {t("updates.postponeWeek")}
-                </Button>
-              </>
-            ) : null}
-            {(policy?.last_error || (job?.status === "failed" && Boolean(status?.trusted_target))) ? (
-              <Button type="button" variant="outline" onClick={handleRetry} disabled={controlsBusy} className="gap-2">
-                {busy === "retrying" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                {t("updates.retry")}
-              </Button>
-            ) : null}
-            {latest?.release_url && (
-              <Button type="button" variant="ghost" asChild className="gap-2">
-                <a href={latest.release_url} target="_blank" rel="noreferrer">
-                  <ExternalLink className="h-4 w-4" />
-                  {t("updates.releaseNotes")}
-                </a>
-              </Button>
-            )}
-          </div>
         </CardContent>
       </Card>
+
+      <Dialog open={rollbackConfirmOpen} onOpenChange={setRollbackConfirmOpen}>
+        <DialogContent
+          className="max-w-sm"
+          // Opened by state rather than a trigger, so focus is sent back by hand.
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            rollbackButtonRef.current?.focus()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle className="pr-10">{t("updates.rollbackConfirmTitle")}</DialogTitle>
+            <DialogDescription className="text-sm">{t("updates.rollbackConfirmDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setRollbackConfirmOpen(false)}>{t("common.cancel")}</Button>
+            <Button type="button" variant="destructive" onClick={handleRollback}>{t("updates.rollback")}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </TabsContent>
   )
 }

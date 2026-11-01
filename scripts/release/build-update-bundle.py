@@ -64,12 +64,15 @@ COPYLEFT_LICENSE_FETCHER = ROOT / "scripts" / "release" / "copyleft_licenses.py"
 CATALOG_HISTORY_FILE = ROOT / "scripts" / "release" / "update-catalog-history.json"
 INITIAL_V2_BRIDGE_VERSION = (0, 9, 18)
 MAX_CATALOG_RELEASES = 64
+# The Update Center lists these before install, and clients reject more than 32.
+MAX_RELEASE_HIGHLIGHTS = 16
 LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.4.0", "1.4.1", "1.4.5"),
     "1.6.1": ("1.4.0", "1.4.1", "1.4.5", "1.6.0"),
     "1.6.2": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1"),
     "1.6.3": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"),
     "1.6.4": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3"),
+    "1.6.5": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"),
 }
 CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.5.3",),
@@ -77,6 +80,7 @@ CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
     "1.6.2": ("1.5.3", "1.6.0", "1.6.1"),
     "1.6.3": ("1.5.3", "1.6.0", "1.6.1", "1.6.2"),
     "1.6.4": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3"),
+    "1.6.5": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"),
 }
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
@@ -529,7 +533,7 @@ def load_exporter():
 def release_highlights(version: str, exporter=None) -> list[str]:
     source = exporter or load_exporter()
     changelog = source.parse_changelog(version)
-    return list(changelog.get("changelogHighlights") or [])
+    return list(changelog.get("changelogHighlights") or [])[:MAX_RELEASE_HIGHLIGHTS]
 
 
 def load_private_key(raw: str) -> Ed25519PrivateKey:

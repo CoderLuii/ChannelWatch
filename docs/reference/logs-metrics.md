@@ -56,11 +56,12 @@ The current implementation does not instantiate `prometheus_client.Counter`, `Ga
 | `channelwatch_uptime_seconds` | gauge | none | Seconds since the UI backend process started. |
 | `channelwatch_active_streams` | gauge | none on aggregate sample, plus `dvr_id`, `dvr_name`, `host`, `port` on per DVR samples | Active stream count. The unlabeled sample is the total across configured DVRs. Per DVR samples are counted from each DVR `/dvr` activity map. |
 | `channelwatch_core_running` | gauge | none | `1` when supervisor reports the core process as `Running`, otherwise `0`. |
-| `channelwatch_configured_dvrs` | gauge | none | Count of enabled DVRs represented in the system info response. |
+| `channelwatch_configured_dvrs` | gauge | none | Count of DVRs represented in the system info response, including disabled DVRs. |
 | `channelwatch_disk_free_bytes` | gauge | `scope="all"` on aggregate sample, plus `dvr_id`, `dvr_name`, `host`, `port` on per DVR samples | Free DVR storage bytes. Aggregate data is summed across configured DVRs. |
 | `channelwatch_disk_total_bytes` | gauge | `scope="all"` on aggregate sample, plus `dvr_id`, `dvr_name`, `host`, `port` on per DVR samples | Total DVR storage bytes. Aggregate data is summed across configured DVRs. |
 | `channelwatch_disk_used_bytes` | gauge | `scope="all"` on aggregate sample, plus `dvr_id`, `dvr_name`, `host`, `port` on per DVR samples | Used DVR storage bytes. Aggregate data is total minus free. |
-| `channelwatch_dvr_connected` | gauge | `dvr_id`, `dvr_name`, `host`, `port` | `1` when the DVR `/status` request succeeds during system info collection, otherwise `0`. |
+| `channelwatch_dvr_connected` | gauge | `dvr_id`, `dvr_name`, `host`, `port` | `1` when the DVR `/status` request succeeds during system info collection, otherwise `0`. A disabled DVR reports `0`. |
+| `channelwatch_dvr_enabled` | gauge | `dvr_id`, `dvr_name`, `host`, `port` | `1` when the DVR is enabled for monitoring, `0` when it is disabled. Use it to keep disabled DVRs out of connectivity alerts. |
 | `channelwatch_dvr_version_info` | gauge | `dvr_id`, `dvr_name`, `version`, `compatible` | DVR version metadata. The value is always `1`. The `compatible` label is `1`, `0`, or `unknown`. This metric is emitted only for DVRs with a version string. |
 
 ## Activity history

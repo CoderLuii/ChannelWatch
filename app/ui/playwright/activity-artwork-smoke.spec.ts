@@ -23,6 +23,7 @@ for (const width of [320, 375, 390, 768, 1024, 1440]) {
         id: `artwork-${name}`,
         type: "watching_channel",
         title: `${name} artwork with a long channel name`,
+        program_title: `${name} artwork with a long channel name`,
         message: "Living Room is watching a channel",
         timestamp: "2026-08-26T11:45:00Z",
         image_url: name === "missing" ? undefined : `/test-artwork-${name}.svg`,

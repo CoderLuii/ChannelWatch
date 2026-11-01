@@ -68,7 +68,7 @@ test("first-run RBAC setup reaches the authenticated dashboard and caches CSRF",
   await shell.getByLabel("Admin password").fill("ChannelWatch!234")
   await shell.getByRole("button", { name: "Finish setup" }).click()
 
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem("cw_csrf_token"))).toBe("matrix-csrf")
 })
 
@@ -118,9 +118,13 @@ test("backup download and restore exercise the browser-facing success states", a
     contentType: "application/zip",
     body: "backup-zip",
   }))
-  await page.route("**/api/v1/backup/restore", (route) => fulfillJson(route, {
-    message: "Restore completed. Core process hot-reloaded.",
-  }))
+  let restoreRequests = 0
+  await page.route("**/api/v1/backup/restore", (route) => {
+    restoreRequests += 1
+    return fulfillJson(route, {
+      message: "Reload to see the restored settings.",
+    })
+  })
   await page.goto("/#settings:backup")
 
   const download = page.waitForEvent("download")
@@ -130,7 +134,12 @@ test("backup download and restore exercise the browser-facing success states", a
   const chooser = page.waitForEvent("filechooser")
   await page.getByRole("button", { name: "Choose backup file…" }).click()
   await (await chooser).setFiles({ name: "channelwatch-backup.zip", mimeType: "application/zip", buffer: Buffer.from("PK") })
-  await expect(page.getByText("Restore completed. Core process hot-reloaded.")).toBeVisible()
+  const confirmRestore = page.getByRole("alertdialog", { name: "Restore this backup?" })
+  await expect(confirmRestore).toContainText("channelwatch-backup.zip")
+  expect(restoreRequests).toBe(0)
+  await confirmRestore.getByRole("button", { name: "Restore backup" }).click()
+  await expect(page.getByText("Reload to see the restored settings.")).toBeVisible()
+  expect(restoreRequests).toBe(1)
   await expect(page.getByRole("button", { name: "Restored" })).toBeVisible()
 })
 
@@ -151,11 +160,33 @@ test("settings save posts the changed value before requesting core restart", asy
   })
   await page.goto("/#settings:general")
 
-  await page.getByLabel("Log Retention (Days)").fill("21")
-  await page.getByRole("button", { name: "Save Settings" }).click()
-  await expect(page.getByText("Settings saved. Restarting core process...")).toBeVisible()
+  await page.getByLabel("Log retention (days)").fill("21")
+  await page.getByRole("button", { name: "Save settings" }).click()
+  await expect(page.getByText(/settings saved and applied/i)).toBeVisible()
   expect(submitted?.log_retention_days).toBe(21)
-  expect(calls).toEqual(["settings", "restart"])
+  await expect.poll(() => calls).toEqual(["settings", "restart"])
+})
+
+test("settings save skips the core restart when the backend hot-reloaded core", async ({ page }) => {
+  const calls: string[] = []
+  await page.route("**/api/settings", (route) => {
+    if (route.request().method() === "POST") {
+      calls.push("settings")
+      return fulfillJson(route, { message: "Settings saved successfully", applied: "hot" })
+    }
+    return fulfillJson(route, mockSettings)
+  })
+  await page.route("**/api/restart_core", (route) => {
+    calls.push("restart")
+    return fulfillJson(route, { message: "Restart command sent" })
+  })
+  await page.goto("/#settings:general")
+
+  await page.getByLabel("Log retention (days)").fill("21")
+  await page.getByRole("button", { name: "Save settings" }).click()
+  await expect(page.getByText(/settings saved and applied/i)).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(calls).toEqual(["settings"])
 })
 
 test("disabling saved email clears it and keeps it off after reload", async ({ page }) => {
@@ -185,9 +216,9 @@ test("disabling saved email clears it and keeps it off after reload", async ({ p
   const emailToggle = page.getByRole("switch", { name: "Email", exact: true })
   await expect(emailToggle).toBeChecked()
   await emailToggle.click()
-  await page.getByRole("button", { name: "Save Settings" }).click()
+  await page.getByRole("button", { name: "Save settings" }).click()
 
-  await expect(page.getByText("Settings saved. Restarting core process...")).toBeVisible()
+  await expect(page.getByText(/settings saved and applied/i)).toBeVisible()
   expect(submitted?.clear_apprise_fields).toEqual([
     "apprise_email",
     "apprise_email_to",
@@ -220,6 +251,7 @@ test("restart overlay appears and recovers from liveness and startup while monit
   }))
   await page.goto("/#overview")
   await page.getByRole("button", { name: "Restart", exact: true }).click()
+  await page.getByTestId("restart-confirm").getByRole("button", { name: "Restart", exact: true }).click()
 
   await expect(page.getByRole("heading", { name: "Restarting ChannelWatch..." })).toBeVisible()
   await expect(page.getByRole("heading", { name: "ChannelWatch restarted; monitoring needs attention" })).toBeVisible({ timeout: 12_000 })
@@ -236,12 +268,13 @@ test("restart API errors recover to the dashboard with actionable feedback", asy
   }, 503))
   await page.goto("/#overview")
   await page.getByRole("button", { name: "Restart", exact: true }).click()
+  await page.getByTestId("restart-confirm").getByRole("button", { name: "Restart", exact: true }).click()
 
-  await expect(page.getByText("Restart Failed", { exact: true })).toBeVisible()
+  await expect(page.getByText("Restart failed", { exact: true })).toBeVisible()
   await expect(page.getByText(
     "Supervisor is unavailable. Restart the container from the host.",
     { exact: true },
   )).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   await expect(page.getByRole("heading", { name: "Restarting ChannelWatch..." })).toHaveCount(0)
 })

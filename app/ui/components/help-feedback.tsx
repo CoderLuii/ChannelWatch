@@ -6,6 +6,7 @@ import { Bug, ExternalLink, HelpCircle, Lightbulb, MessageCircle } from "lucide-
 import { Button } from "@/components/base/button"
 import { Card, CardContent } from "@/components/base/card"
 import { Separator } from "@/components/base/separator"
+import { PageHeader } from "@/components/base/page-header"
 import { FeatureRequestDialog } from "@/components/feature-request-dialog"
 import { ReportProblemDialog } from "@/components/report-problem-dialog"
 import { fetchSystemInfo } from "@/lib/api"
@@ -14,6 +15,8 @@ import type { AppSettings, SystemInfo } from "@/lib/types"
 
 interface HelpFeedbackProps {
   appSettings: AppSettings | null
+  /** False while this page is kept mounted behind another view. Open sheets step aside and keep their drafts. */
+  active?: boolean
 }
 
 interface FeedbackRowProps {
@@ -27,7 +30,7 @@ function FeedbackRow({ icon, title, description, action }: FeedbackRowProps) {
   return (
     <div className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">
-        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-5">
           {icon}
         </span>
         <div className="min-w-0">
@@ -35,7 +38,7 @@ function FeedbackRow({ icon, title, description, action }: FeedbackRowProps) {
           <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
         </div>
       </div>
-      <div className="shrink-0 sm:pl-4">{action}</div>
+      <div className="shrink-0 sm:w-56 sm:pl-4 sm:[&_a]:w-full sm:[&_button]:w-full">{action}</div>
     </div>
   )
 }
@@ -46,7 +49,7 @@ function ExternalHelpLink({ href, children }: { href: string; children: React.Re
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="press-row inline-flex min-h-11 items-center justify-center gap-2 rounded-control border border-input px-4 py-2 text-sm font-medium text-foreground hover:bg-fill focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
       {children}
       <ExternalLink className="h-4 w-4" aria-hidden="true" />
@@ -55,7 +58,7 @@ function ExternalHelpLink({ href, children }: { href: string; children: React.Re
   )
 }
 
-export function HelpFeedback({ appSettings }: HelpFeedbackProps) {
+export function HelpFeedback({ appSettings, active = true }: HelpFeedbackProps) {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
 
   useEffect(() => {
@@ -74,13 +77,10 @@ export function HelpFeedback({ appSettings }: HelpFeedbackProps) {
   }, [])
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6" data-testid="help-feedback-page">
-      <div className="space-y-2">
-        <h1 className="text-[28px] font-semibold tracking-tight md:text-[32px]">{t("feedback.title")}</h1>
-        <p className="text-sm leading-6 text-muted-foreground sm:text-base">{t("feedback.description")}</p>
-      </div>
+    <div className="w-full max-w-4xl space-y-6" data-testid="help-feedback-page">
+      <PageHeader title={t("feedback.title")} />
 
-      <Card className="border-border/70 shadow-sm">
+      <Card>
         <CardContent className="px-4 py-0 sm:px-6">
           <FeedbackRow
             icon={<Bug className="h-5 w-5" aria-hidden="true" />}
@@ -90,6 +90,7 @@ export function HelpFeedback({ appSettings }: HelpFeedbackProps) {
               <ReportProblemDialog
                 systemInfo={systemInfo}
                 appSettings={appSettings}
+                suspended={!active}
                 trigger={(
                   <Button type="button" variant="outline" className="min-h-11 w-full sm:w-auto" data-testid="help-report-problem">
                     {t("feedback.problem.action")}
@@ -105,6 +106,7 @@ export function HelpFeedback({ appSettings }: HelpFeedbackProps) {
             description={t("feedback.feature.rowDescription")}
             action={(
               <FeatureRequestDialog
+                suspended={!active}
                 trigger={(
                   <Button type="button" variant="outline" className="min-h-11 w-full sm:w-auto" data-testid="help-request-feature">
                     {t("feedback.feature.action")}
@@ -119,7 +121,7 @@ export function HelpFeedback({ appSettings }: HelpFeedbackProps) {
             title={t("feedback.question.title")}
             description={t("feedback.question.description")}
             action={(
-              <div className="flex flex-col gap-2 sm:items-end">
+              <div className="flex flex-col gap-2">
                 <ExternalHelpLink href="https://channelwatch.coderluii.dev/">
                   {t("feedback.question.documentation")}
                 </ExternalHelpLink>

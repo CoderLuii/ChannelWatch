@@ -1,18 +1,35 @@
-import type { AppSettings, AboutInfo, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, PerDvrSystemInfo, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus, KeyRecoveryResult, KeyRecoveryStatus, MaintenanceWindowsResponse } from "@/lib/types"
-import { ErrorCode, parseApiError, type ErrorPayload } from "@/lib/error-catalog"
+import type { AppSettings, TestResult, SystemInfo, RecordingInfo, ActivityItem, SecurityStatus, AuthMode, AuthSetupStatus, WhoAmIResponse, EffectiveAuthMode, NotificationDestinationSafetyPreview, TrustedNotificationDestinationSource, RuntimePreflightStatus, KeyRecoveryResult, KeyRecoveryStatus, MaintenanceWindowsResponse } from "@/lib/types"
+import { ErrorCode, catalogEntry, isNetworkFailure, parseApiError, type ErrorPayload, type FailureKind } from "@/lib/error-catalog"
 import { encodeReportChallengeProof, solveReportChallenge, type ReportChallenge } from "@/lib/report-proof"
+import { t } from "@/lib/i18n"
 
 const API_BASE = "/api"
 let runtimeApiKey = ""
 
 export const RUNTIME_PREFLIGHT_CHANGED_EVENT = "channelwatch-runtime-preflight-changed"
+export const SESSION_EXPIRED_EVENT = "channelwatch-session-expired"
+export const SESSION_RESTORED_EVENT = "channelwatch-session-restored"
+
+// A 401 from these is an answer about the request, not a sign that the session ended.
+const SESSION_NEUTRAL_PATHS = ["/v1/auth/login", "/v1/auth/logout", "/v1/auth/whoami", "/v1/auth/change-credentials"]
+
+// Shadows the global so every call in this file reports an expired session the same way.
+async function fetch(input: string, init?: RequestInit): Promise<Response> {
+  const response = await globalThis.fetch(input, init)
+  if (response.status === 401 && typeof window !== "undefined" && !SESSION_NEUTRAL_PATHS.some((path) => input.includes(path))) {
+    window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT))
+  }
+  return response
+}
 
 export class ApiError extends Error {
   readonly payload: ErrorPayload
-  constructor(payload: ErrorPayload) {
+  readonly status?: number
+  constructor(payload: ErrorPayload, status?: number) {
     super(payload.message)
     this.name = "ApiError"
     this.payload = payload
+    this.status = status
   }
 }
 
@@ -29,9 +46,30 @@ function isApiUnavailableStatus(status: number): boolean {
   return status === 502 || status === 503 || status === 504
 }
 
+async function apiError(response: Response): Promise<ApiError> {
+  return new ApiError(await parseApiError(response), response.status)
+}
+
+/** What a failed read means for the person looking at it. */
+export function failureKind(error: unknown): FailureKind {
+  if (error instanceof ApiUnavailableError || isNetworkFailure(error)) return "unreachable"
+  if (error instanceof ApiError) {
+    if (error.payload.code === ErrorCode.RATE_LIMIT_EXCEEDED) return "rate_limited"
+    if (error.status && isApiUnavailableStatus(error.status) && error.payload.code === ErrorCode.UNKNOWN) return "unreachable"
+  }
+  return "server_error"
+}
+
+/** The headline for a list or page that could not load. Only an outage may blame a restart. */
+export function loadFailureHeadline(error: unknown, thing: string): string {
+  const kind = failureKind(error)
+  if (kind === "rate_limited") return catalogEntry(ErrorCode.RATE_LIMIT_EXCEEDED).message
+  return t(kind === "unreachable" ? "errors.couldNotLoad" : "errors.couldNotLoadServer", { thing })
+}
+
 function throwIfApiUnavailable(response: Response, context: string): void {
   if (isApiUnavailableStatus(response.status)) {
-    throw new ApiUnavailableError(`${context}: ${response.status}`, response.status)
+    throw new ApiUnavailableError(context, response.status)
   }
 }
 
@@ -125,7 +163,7 @@ export async function fetchSetupStatus(): Promise<AuthSetupStatus> {
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch setup status: ${response.status}`)
+    throw await apiError(response)
   }
 
   const body = (await response.json()) as AuthSetupStatus
@@ -137,7 +175,7 @@ export async function fetchRuntimePreflight(): Promise<RuntimePreflightStatus> {
     credentials: "same-origin",
   })
   if (!response.ok) {
-    throw new Error(`Failed to fetch runtime preflight: ${response.status}`)
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -152,7 +190,7 @@ export async function fetchWhoAmI(): Promise<WhoAmIResponse> {
   }
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch auth status: ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -184,7 +222,7 @@ export async function loginWithPassword(username: string, password: string): Pro
     throw new SessionRequiredError("Invalid credentials", 401)
   }
   if (!response.ok) {
-    throw new Error(`Failed to login: ${response.status}`)
+    throw await apiError(response)
   }
 
   const body = await response.json()
@@ -204,7 +242,7 @@ export async function completeInitialSetup(mode: AuthMode, username?: string, pa
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to complete setup: ${response.status}`)
+    throw await apiError(response)
   }
 
   const body = await response.json()
@@ -225,11 +263,17 @@ export async function changeCredentials(currentPassword: string, username?: stri
     },
     body: JSON.stringify({ current_password: currentPassword, username: username ?? "", new_password: newPassword ?? "" }),
   })
-  if (response.status === 401) {
-    throw new SessionRequiredError("Invalid credentials", 401)
-  }
   if (!response.ok) {
-    throw new Error(`Failed to update credentials: ${response.status}`)
+    const payload = await parseApiError(response)
+    // A wrong current password and an expired session both return 401.
+    // Only the expired session should send the user back to sign in.
+    if (payload.code === ErrorCode.AUTH_CREDENTIALS_INVALID) {
+      throw new ApiError({ ...payload, message: t("security.currentPasswordIncorrect") })
+    }
+    if (response.status === 401) {
+      throw new SessionRequiredError(t("security.sessionExpired"), 401)
+    }
+    throw new ApiError(payload)
   }
   return response.json()
 }
@@ -246,8 +290,7 @@ export async function fetchSettings(): Promise<AppSettings> {
     if (response.status === 401) {
       throw new AuthRequiredError("Authentication required to load settings", 401)
     }
-    const errorText = await response.text()
-    throw new Error(`Failed to fetch settings: ${errorText}`)
+    throw await apiError(response)
   }
 
   const data = await response.json()
@@ -267,7 +310,9 @@ export async function verifyStartupReady(): Promise<void> {
   }
 }
 
-export async function saveSettings(settings: AppSettings): Promise<{ message: string }> {
+export async function saveSettings(
+  settings: AppSettings,
+): Promise<{ message: string; applied?: "hot" | "restart_required" }> {
   const response = await fetch(`${API_BASE}/settings`, {
     method: "POST",
     headers: {
@@ -307,18 +352,6 @@ export async function previewNotificationDestinationSafety(
   return response.json()
 }
 
-export async function fetchAboutInfo(): Promise<AboutInfo> {
-  const response = await fetch(`${API_BASE}/about`, {
-    headers: authHeaders(),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
-  }
-
-  return response.json()
-}
-
 export async function fetchSystemInfo(options: { dvr_id?: string; include_all_dvr_status?: boolean } = {}): Promise<SystemInfo> {
   const params = new URLSearchParams()
   if (options.dvr_id) params.set("dvr_id", options.dvr_id)
@@ -329,7 +362,7 @@ export async function fetchSystemInfo(options: { dvr_id?: string; include_all_dv
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -358,7 +391,7 @@ export async function runTest(testName: DiagnosticTestName): Promise<TestResult>
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -371,7 +404,7 @@ export async function signalRestart(): Promise<{ message: string }> {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -509,7 +542,7 @@ export async function fetchRecoveryUpdateStatus(): Promise<RecoveryUpdateStatus>
   })
   if (!response.ok) {
     throwIfApiUnavailable(response, "ChannelWatch is temporarily unavailable while loading recovery status")
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -522,7 +555,7 @@ export async function checkRecoveryUpdate(bootstrapCsrf?: string | null): Promis
     body: JSON.stringify({}),
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -541,7 +574,7 @@ export async function applyRecoveryUpdate(
     }),
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -552,7 +585,7 @@ export async function fetchUpdatePolicy(): Promise<UpdatePolicy> {
     credentials: "same-origin",
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -565,7 +598,7 @@ export async function saveUpdatePolicy(policy: Pick<UpdatePolicy, "mode" | "main
     body: JSON.stringify(policy),
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -578,7 +611,7 @@ export async function postponeUpdate(hours: 24 | 168, reason?: "dirty_report_dra
     body: JSON.stringify(reason ? { hours, reason } : { hours }),
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -614,7 +647,7 @@ export async function fetchKeyRecoveryStatus(): Promise<KeyRecoveryStatus> {
     credentials: "same-origin",
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -630,7 +663,7 @@ export async function migrateLegacyKey(options: { legacyWrappingKey?: string; ra
     body,
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -643,7 +676,7 @@ export async function resetProtectedCredentials(confirmation: "RESET PROTECTED C
     body: JSON.stringify({ confirmation }),
   })
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -746,7 +779,7 @@ export async function testDvrConnection(
     body: JSON.stringify({ host, port, api_key: apiKey || null }),
   })
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
   return response.json()
 }
@@ -757,7 +790,7 @@ export async function discoverServers(): Promise<{ servers: DiscoveredServer[]; 
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -769,7 +802,7 @@ export async function fetchUpcomingRecordings(limit: number = 250): Promise<Reco
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -860,7 +893,7 @@ export async function fetchMaintenanceWindows(
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   const payload: unknown = await response.json()
@@ -868,30 +901,6 @@ export async function fetchMaintenanceWindows(
     throw new Error("Invalid maintenance windows response")
   }
   return payload
-}
-
-export async function fetchActiveRecordingsCount(): Promise<number> {
-  const response = await fetch(`${API_BASE}/recordings/active`, {
-    headers: authHeaders(),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
-  }
-
-  return response.json()
-}
-
-export async function fetchActiveStreamsCount(): Promise<number> {
-  const response = await fetch(`${API_BASE}/streams/active`, {
-    headers: authHeaders(),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
-  }
-
-  return response.json()
 }
 
 export interface StreamDetails {
@@ -908,25 +917,10 @@ export async function fetchStreamDetails(): Promise<StreamDetails> {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
-}
-
-export async function fetchRecentActivity(hours: number = 24, limit: number = 10, client?: string, signal?: AbortSignal): Promise<ActivityItem[]> {
-  const params = new URLSearchParams({ hours: String(hours), limit: String(limit) })
-  if (client) params.set("client", client)
-  const response = await fetch(`${API_BASE}/recent-activity?${params.toString()}`, {
-    headers: authHeaders(),
-    signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`);
-  }
-
-  return response.json();
 }
 
 export interface ActivityHistoryResponse {
@@ -969,7 +963,7 @@ export async function fetchActivityHistory(options: FetchActivityHistoryOptions 
   })
 
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
 
   return response.json()
@@ -1018,7 +1012,7 @@ export async function downloadActivityHistoryCsv(
     credentials: "same-origin",
   })
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
   return response.blob()
 }
@@ -1027,6 +1021,14 @@ export interface ActivityClientFacet {
   value: string
   label: string
   count: number
+}
+
+// Events without a resolvable device are recorded as "Unknown". That bucket is
+// not a real client, so it is not offered as a filter choice.
+function isUnknownClientFacet(item: ActivityClientFacet): boolean {
+  const value = item.value.trim().toLowerCase()
+  const label = item.label.trim().toLowerCase()
+  return value === "" || value === "unknown" || label === "unknown" || label === "unknown device"
 }
 
 export async function fetchActivityClientFilters(options: {
@@ -1045,7 +1047,7 @@ export async function fetchActivityClientFilters(options: {
     headers: authHeaders(),
     signal,
   })
-  if (!response.ok) throw new Error(`HTTP error ${response.status}`)
+  if (!response.ok) throw await apiError(response)
   const payload: unknown = await response.json()
   if (!payload || typeof payload !== "object" || !Array.isArray((payload as { clients?: unknown }).clients)) {
     throw new Error("Activity client filters returned an invalid response")
@@ -1058,34 +1060,8 @@ export async function fetchActivityClientFilters(options: {
       && typeof (item as ActivityClientFacet).label === "string"
       && Number.isFinite((item as ActivityClientFacet).count),
     ),
-  )
+  ).filter((item) => !isUnknownClientFacet(item))
   return { clients }
-}
-
-export async function clearActivityHistory(): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE}/clear-activity-history`, {
-    method: "POST",
-    headers: authHeaders(),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
-  }
-
-  return response.json()
-}
-
-export async function regenerateApiKey(): Promise<{ api_key: string }> {
-  const response = await fetch(`${API_BASE}/regenerate-api-key`, {
-    method: "POST",
-    headers: authHeaders(),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
-  }
-
-  return response.json()
 }
 
 export async function fetchSecurityStatus(): Promise<SecurityStatus> {
@@ -1094,7 +1070,7 @@ export async function fetchSecurityStatus(): Promise<SecurityStatus> {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   const body = (await response.json()) as SecurityStatus
@@ -1133,18 +1109,6 @@ export async function fetchMonitoringReadiness(): Promise<boolean | null> {
   return payload.ready === true
 }
 
-export async function fetchDvrSystemInfo(dvrId: string): Promise<PerDvrSystemInfo> {
-  const response = await fetch(`${API_BASE}/v1/dvrs/${encodeURIComponent(dvrId)}/system-info`, {
-    headers: authHeaders(),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
-  }
-
-  return response.json()
-}
-
 export interface DvrStreamDetails extends StreamDetails {
   dvr_id: string
   dvr_name: string
@@ -1156,7 +1120,7 @@ export async function fetchDvrStreams(dvrId: string): Promise<DvrStreamDetails> 
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -1168,7 +1132,7 @@ export async function fetchDvrUpcomingRecordings(dvrId: string, limit: number = 
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
 
   return response.json()
@@ -1195,7 +1159,7 @@ export async function fetchDvrActivityHistory(
   )
 
   if (!response.ok) {
-    throw new ApiError(await parseApiError(response))
+    throw await apiError(response)
   }
 
   return response.json()
@@ -1529,7 +1493,7 @@ export async function checkReportStatus(
     body: JSON.stringify({ support_code: supportCode }),
     signal,
   })
-  if (!response.ok) throw new ApiError(await parseApiError(response))
+  if (!response.ok) throw await apiError(response)
   return response.json()
 }
 
@@ -1680,7 +1644,7 @@ export async function fetchNotificationLog(
     headers: authHeaders(),
   })
   if (!response.ok) {
-    throw new Error(`HTTP error ${response.status}`)
+    throw await apiError(response)
   }
   return response.json()
 }

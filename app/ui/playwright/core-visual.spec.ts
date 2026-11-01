@@ -29,7 +29,7 @@ async function waitForMaintenanceCard(page: Page, expanded = false) {
   const card = page.getByTestId("maintenance-windows-card")
   const disclosure = card.locator('button[aria-controls="maintenance-windows-content"]')
   await expect(disclosure).toHaveAttribute("aria-expanded", "false")
-  await expect(card.getByRole("button", { name: "Refresh Maintenance windows" })).toBeEnabled()
+  await expect(card.getByRole("button", { name: "Refresh Maintenance Windows" })).toBeEnabled()
   if (expanded) {
     await disclosure.click()
     await expect(disclosure).toHaveAttribute("aria-expanded", "true")
@@ -39,7 +39,7 @@ async function waitForMaintenanceCard(page: Page, expanded = false) {
   await card.scrollIntoViewIfNeeded()
   await expect(card).toBeInViewport()
   await page.evaluate(() => window.scrollTo(0, 0))
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeInViewport()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeInViewport()
   return card
 }
 
@@ -83,7 +83,7 @@ test("Alerts desktop dark", async ({ page }) => {
   }))
   await page.goto("/#settings:alerts")
   await waitForCollapsedDesktopSidebar(page)
-  await expect(page.getByRole("heading", { name: "Alert policy" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Alert Policy" })).toBeVisible()
   await expect(page).toHaveScreenshot("alerts-desktop-dark.png", screenshotOptions)
 })
 
@@ -106,7 +106,7 @@ test("Alerts mobile light", async ({ page }) => {
     rd_alert_interrupted: true,
   }))
   await page.goto("/#settings:alerts")
-  await expect(page.getByRole("heading", { name: "Alert policy" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Alert Policy" })).toBeVisible()
   await expect(page).toHaveScreenshot("alerts-mobile-light.png", screenshotOptions)
 })
 
@@ -174,7 +174,7 @@ test("Recent Activity client filter", async ({ page }) => {
   await waitForCollapsedDesktopSidebar(page)
   await waitForMaintenanceCard(page)
   await page.getByRole("button", { name: "Filter activity by type" }).click()
-  await expect(page.getByText("The timeline remains an aggregate across all clients.")).toBeVisible()
+  await expect(page.getByText("The timeline always covers all clients.")).toBeVisible()
   await expect(page).toHaveScreenshot("recent-activity-client-filter.png", {
     ...screenshotOptions,
     // Chromium clips off-viewport tiles while this menu is open. The dedicated

@@ -1,22 +1,27 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Badge } from "@/components/base/badge"
 import { Button } from "@/components/base/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
+import { Card, CardContent, CardHeader } from "@/components/base/card"
 import { Input } from "@/components/base/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/base/select"
+import { PageHeader } from "@/components/base/page-header"
 import { ActivityDetailDialog } from "@/components/dashboard/activity-detail-dialog"
-import { ClientFilterCombobox } from "@/components/activity/client-filter-combobox"
+import { ClientFilterCombobox, ClientFilterList } from "@/components/activity/client-filter-combobox"
+import { FilterGroup, FilterPill, FilterPills, FilterRow, FilterSheet } from "@/components/base/filter-sheet"
 import {
   ApiError,
   downloadActivityHistoryCsv,
   fetchActivityClientFilters,
   fetchActivityHistory,
   fetchDvrActivityHistory,
+  loadFailureHeadline,
+  SESSION_RESTORED_EVENT,
 } from "@/lib/api"
 import type { ActivityClientFacet, ActivityHistoryResponse, FetchActivityHistoryOptions } from "@/lib/api"
-import { recordingEventPresentation } from "@/lib/activity-presentation"
+import { describeError } from "@/lib/error-catalog"
+import { ROUTINE_ACTIVITY_CLASSES, activityRowText, diskAlertColorClasses, healthEventPresentation, stripLeadingEmoji, recordingEventPresentation } from "@/lib/activity-presentation"
+import { downloadBlob, formatCount } from "@/lib/utils"
 import { canonicalActivityClientValue } from "@/lib/activity-clients"
 import { t } from "@/lib/i18n"
 import { useDvrSelection } from "@/lib/dvr-selection-context"
@@ -69,6 +74,7 @@ export async function fetchWatchHistoryForDvrSelection(
 function formatFullTimestamp(timestamp: string): string {
   try {
     const date = new Date(timestamp)
+    if (!Number.isFinite(date.getTime()) || date.getTime() <= 0) return "–"
     return date.toLocaleString(undefined, {
       weekday: "short",
       month: "short",
@@ -85,6 +91,11 @@ function formatFullTimestamp(timestamp: string): string {
 function getActivityIcon(type: string, message?: string) {
   if (type === "recording_event" && message) {
     const Icon = recordingEventPresentation(message).icon
+    return <Icon className="h-4 w-4" />
+  }
+  const health = healthEventPresentation(type)
+  if (health) {
+    const Icon = health.icon
     return <Icon className="h-4 w-4" />
   }
 
@@ -106,31 +117,24 @@ function getActivityIcon(type: string, message?: string) {
   }
 }
 
-function getIconColorClasses(type: string, message?: string) {
+function getIconColorClasses(type: string, message?: string, extra?: ActivityItem["extra"]) {
   if (type === "recording_event" && message) {
     return recordingEventPresentation(message).colorClasses
   }
+  const health = healthEventPresentation(type)
+  if (health) return health.colorClasses
 
   switch (type) {
-    case "stream_started":
-    case "watching_channel":
-      return "bg-blue-500/20 text-blue-600 dark:text-blue-400"
-    case "vod_playback":
-    case "watching_vod":
-      return "bg-amber-500/20 text-amber-600 dark:text-amber-400"
-    case "recording_started":
-    case "recording_event":
-      return "bg-slate-500/20 text-slate-600 dark:text-slate-300"
-    case "recording_completed":
-      return "bg-purple-500/20 text-purple-600 dark:text-purple-400"
     case "disk_alert":
-      return "bg-red-500/20 text-red-600 dark:text-red-400"
+      return diskAlertColorClasses(extra)
     default:
-      return "bg-slate-500/20 text-slate-600 dark:text-slate-400"
+      return ROUTINE_ACTIVITY_CLASSES
   }
 }
 
 function getTypeLabel(type: string) {
+  const health = healthEventPresentation(type)
+  if (health) return t(health.labelKey)
   switch (type) {
     case "watching_channel":
     case "stream_started":
@@ -152,14 +156,16 @@ function getTypeLabel(type: string) {
   }
 }
 
-export function WatchHistory() {
-  const { selectedDvr } = useDvrSelection()
+export function WatchHistory({ onNavigate }: { onNavigate?: (view: string) => void }) {
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false)
+  const { selectedDvr, availableDvrs } = useDvrSelection()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorRemediation, setErrorRemediation] = useState<string | null>(null)
+  const [errorHeadline, setErrorHeadline] = useState("")
   const [reloadToken, setReloadToken] = useState(0)
   const [failedArtwork, setFailedArtwork] = useState<Set<string>>(() => new Set())
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null)
@@ -175,6 +181,20 @@ export function WatchHistory() {
   const [sortOrder, setSortOrder] = useState<ActivitySortOrder>("desc")
   const [pageSize, setPageSize] = useState(25)
   const [offset, setOffset] = useState(0)
+  const pageTopRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const reload = () => setReloadToken((token) => token + 1)
+    window.addEventListener(SESSION_RESTORED_EVENT, reload)
+    return () => window.removeEventListener(SESSION_RESTORED_EVENT, reload)
+  }, [])
+
+  // A new page starts at its first row, not wherever the pager happened to be.
+  const turnPage = (nextOffset: number) => {
+    setOffset(nextOffset)
+    pageTopRef.current?.scrollIntoView({ block: "start" })
+    pageTopRef.current?.focus({ preventScroll: true })
+  }
   const [urlStateReady, setUrlStateReady] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
@@ -284,7 +304,8 @@ export function WatchHistory() {
         setHistoryLoaded(true)
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return
-        setError(err instanceof Error ? err.message : t("watchHistory.loadError"))
+        setError(describeError(err, t("watchHistory.loadError")).message)
+        setErrorHeadline(loadFailureHeadline(err, t("watchHistory.thing")))
         setErrorRemediation(err instanceof ApiError ? err.payload.remediation ?? null : null)
         setItems([])
         setTotal(0)
@@ -309,14 +330,7 @@ export function WatchHistory() {
         client: clientFilter ?? undefined,
         dvr_id: selectedDvr === "all" ? undefined : selectedDvr,
       })
-      const objectUrl = URL.createObjectURL(blob)
-      const anchor = document.createElement("a")
-      anchor.href = objectUrl
-      anchor.download = "channelwatch-history.csv"
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+      downloadBlob(blob, "channelwatch-history.csv")
     } catch {
       setExportError(t("watchHistory.exportError"))
     } finally {
@@ -331,43 +345,60 @@ export function WatchHistory() {
   const canGoPrevious = offset > 0
   const canGoNext = offset + pageSize < total
   const hasNonDefaultFilters = Boolean(searchInput || typeFilter !== "all" || clientFilter || sortOrder !== "desc" || pageSize !== 25)
+  const typeOptions = [
+    ["all", t("type.all")],
+    ["channel", t("type.liveTV")],
+    ["vod", t("type.vod")],
+    ["recording", t("type.recordings")],
+  ] as const
+  const sortOptions = [
+    ["desc", t("watchHistory.sortNewest")],
+    ["asc", t("watchHistory.sortOldest")],
+  ] as const
+  const typeLabel = typeOptions.find(([value]) => value === typeFilter)?.[1] ?? t("type.all")
+  const sortLabel = sortOptions.find(([value]) => value === sortOrder)?.[1] ?? t("watchHistory.sortNewest")
+  const clientLabel = clientFacets.find((client) => client.value === clientFilter)?.label ?? clientFilter
+  const clearFilters = () => {
+    setSearchInput("")
+    setSearchQuery("")
+    setTypeFilter("all")
+    setClientFilter(null)
+    setSortOrder("desc")
+    setPageSize(25)
+    setOffset(0)
+    setClientStatus(null)
+  }
 
   return (
     <>
       <div className="space-y-5">
-        <Card className="border-border/70 shadow-sm">
-          <CardHeader className="gap-4 px-4 pb-4 pt-5 sm:px-5">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10"><Clock className="h-5 w-5 text-primary" /></span>
-                  <CardTitle className="text-[22px] font-semibold tracking-tight sm:text-2xl"><h1>{t("watchHistory.title")}</h1></CardTitle>
-                  <Badge variant="secondary">{total}</Badge>
+        <PageHeader
+          title={t("watchHistory.title")}
+          actions={error ? undefined : (
+            <>
+              {total > 0 ? (
+                <div className="text-sm tabular-nums text-muted-foreground">
+                  {t("watchHistory.showing", { from: formatCount(showingFrom), to: formatCount(showingTo), total: formatCount(total) })}
                 </div>
-                <CardDescription>
-                  {t("watchHistory.description")}
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                <div className="text-sm text-muted-foreground">
-                  {t("watchHistory.showing", { from: showingFrom, to: showingTo, total })}
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="min-h-11 sm:min-h-9"
-                  onClick={exportHistory}
-                  disabled={exporting || loading}
-                >
-                  {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                  {t("watchHistory.exportCsv")}
-                </Button>
-              </div>
-            </div>
-
-            <div className="grid gap-3 min-[360px]:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_190px_220px_170px_150px]">
-              <div className="relative min-[360px]:col-span-2 xl:col-span-1">
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-h-11 sm:min-h-9"
+                onClick={exportHistory}
+                disabled={exporting || loading}
+              >
+                {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {t("watchHistory.exportCsv")}
+              </Button>
+            </>
+          )}
+        />
+        <Card>
+          <CardHeader className="gap-4">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-3 xl:grid-cols-[minmax(0,1.4fr)_190px_220px_170px_150px]">
+              <div className="relative col-span-full xl:col-span-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={searchInput}
@@ -378,6 +409,13 @@ export function WatchHistory() {
                 />
               </div>
 
+              <FilterPills className="col-span-full">
+                <FilterPill label={typeLabel} active={typeFilter !== "all"} aria-label={`${typeLabel}. ${t("watchHistory.aria.filterType")}`} onClick={() => setFilterSheetOpen(true)} />
+                <FilterPill label={clientLabel ?? t("activity.allClients")} active={Boolean(clientFilter)} aria-label={`${clientLabel ?? t("activity.allClients")}. ${t("watchHistory.aria.filterClient")}`} onClick={() => setFilterSheetOpen(true)} />
+                <FilterPill label={sortLabel} active={sortOrder !== "desc"} aria-label={`${sortLabel}. ${t("watchHistory.aria.sort")}`} onClick={() => setFilterSheetOpen(true)} />
+              </FilterPills>
+
+              <div className="contents max-md:hidden">
               <Select
                 value={typeFilter}
                 onValueChange={(value) => {
@@ -442,26 +480,38 @@ export function WatchHistory() {
                   ))}
                 </SelectContent>
               </Select>
+              </div>
             </div>
+            <FilterSheet open={filterSheetOpen} onOpenChange={setFilterSheetOpen} clearLabel={t("activity.clearFilters")} onClear={hasNonDefaultFilters ? clearFilters : undefined}>
+              <FilterGroup title={t("activity.types")}>
+                {typeOptions.map(([value, label]) => (
+                  <FilterRow key={value} label={label} selected={typeFilter === value} onSelect={() => { setTypeFilter(value); setOffset(0) }} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title={t("activity.client")} plain>
+                <ClientFilterList clients={clientFacets} value={clientFilter} onChange={(value) => { setClientFilter(value); setClientStatus(null); setOffset(0) }} listClassName="max-h-44" />
+              </FilterGroup>
+              <FilterGroup title={t("filters.sort")}>
+                {sortOptions.map(([value, label]) => (
+                  <FilterRow key={value} label={label} selected={sortOrder === value} onSelect={() => { setSortOrder(value as ActivitySortOrder); setOffset(0) }} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title={t("filters.perPage")}>
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <FilterRow key={option} label={t("watchHistory.perPage", { count: option })} selected={pageSize === option} onSelect={() => { setPageSize(option); setOffset(0) }} />
+                ))}
+              </FilterGroup>
+            </FilterSheet>
             {(exportError || clientStatus || clientFacetError || hasNonDefaultFilters) && <div className="flex min-h-6 flex-wrap items-center justify-between gap-2">
               <div aria-live="polite" className="text-sm text-muted-foreground">
-                {exportError ?? clientStatus ?? (clientFacetError ? t("watchHistory.clientFilterError") : "")}
+                {exportError ?? clientStatus ?? (clientFacetError && !error ? t("activity.clientFilterError") : "")}
               </div>
               {hasNonDefaultFilters ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => {
-                    setSearchInput("")
-                    setSearchQuery("")
-                    setTypeFilter("all")
-                    setClientFilter(null)
-                    setSortOrder("desc")
-                    setPageSize(25)
-                    setOffset(0)
-                    setClientStatus(null)
-                  }}
+                  onClick={clearFilters}
                 >
                   {t("activity.clearFilters")}
                 </Button>
@@ -470,11 +520,12 @@ export function WatchHistory() {
           </CardHeader>
         </Card>
 
+        <div ref={pageTopRef} tabIndex={-1} role="group" aria-label={t("watchHistory.pageOf", { page: currentPage, total: pageCount })} className="scroll-mt-[calc(var(--app-header-height,4rem)+0.5rem)] focus:outline-none" />
         <Card>
           <CardContent className="relative p-0">
             {loading && !historyLoaded ? (
               <div className="flex min-h-[360px] items-center justify-center">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="loading-delayed flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {t("watchHistory.loading")}
                 </div>
@@ -483,35 +534,45 @@ export function WatchHistory() {
               <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 text-center">
                 <AlertCircle className="h-8 w-8 text-muted-foreground/50" />
                 <div className="min-w-0 max-w-xl space-y-1 [overflow-wrap:anywhere]">
-                  <p className="text-sm font-medium">{t("watchHistory.errorTitle")}</p>
-                  <p className="text-sm text-muted-foreground">{error}</p>
+                  <p className="text-sm font-medium">{errorHeadline}</p>
                   {errorRemediation && <p className="text-sm text-muted-foreground">{errorRemediation}</p>}
+                  {error === errorHeadline ? null : (
+                    <details className="text-xs text-muted-foreground">
+                      <summary className="cursor-pointer">{t("notificationLog.errorDetail")}</summary>
+                      <p className="mt-1">{error}</p>
+                    </details>
+                  )}
                 </div>
+                <div className="flex flex-wrap justify-center gap-2">
                   <Button
-                  variant="outline"
-                  onClick={() => {
-                    setReloadToken((currentToken) => currentToken + 1)
-                  }}
-                >
-                  {t("watchHistory.tryAgain")}
-                </Button>
+                    variant="outline"
+                    onClick={() => {
+                      setReloadToken((currentToken) => currentToken + 1)
+                    }}
+                  >
+                    {t("watchHistory.tryAgain")}
+                  </Button>
+                  {onNavigate ? <Button variant="ghost" onClick={() => onNavigate("diagnostics")}>{t("diagnostics.open")}</Button> : null}
+                </div>
               </div>
             ) : items.length === 0 ? (
               <div className="flex min-h-[360px] flex-col items-center justify-center gap-2 px-6 text-center">
                 <Clock className="h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm font-medium">{t("watchHistory.emptyTitle")}</p>
+                <p className="text-sm font-medium">{t(hasNonDefaultFilters ? "watchHistory.emptyTitle" : "watchHistory.emptyNoneTitle")}</p>
                 <p className="text-sm text-muted-foreground">
                   {clientFilter
                     ? t("watchHistory.emptyClientHint", { client: clientFilter })
-                    : t("watchHistory.emptyHint")}
+                    : t(hasNonDefaultFilters ? "watchHistory.emptyHint" : "watchHistory.emptyNoneHint")}
                 </p>
               </div>
             ) : (
-              <div className="divide-y divide-border/40">
+              <div className="divide-y divide-hairline">
                 {items.map((activity) => {
-                  const colorClasses = getIconColorClasses(activity.type, activity.message)
+                  const colorClasses = getIconColorClasses(activity.type, activity.message, activity.extra)
                   const artworkKey = `${activity.id}:${activity.image_url || ""}`
                   const hasImage = Boolean(activity.image_url && !failedArtwork.has(artworkKey))
+                  const row = activityRowText(activity, stripLeadingEmoji(activity.title), getTypeLabel(activity.type))
+                  const showChannel = activity.channel_name && activity.channel_name !== row.title && activity.channel_name !== row.detail
 
                   return (
                     <button
@@ -521,17 +582,29 @@ export function WatchHistory() {
                         dialogTriggerRef.current = event.currentTarget
                         setSelectedActivity(activity)
                       }}
-                      className="grid w-full grid-cols-[80px_minmax(0,1fr)] items-start gap-3 p-4 text-left transition-colors hover:bg-muted/40 sm:flex"
+                      className="press-row flex w-full flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3 text-left transition-colors hover:bg-fill"
                     >
-                      <div className={`hidden h-9 w-9 shrink-0 items-center justify-center rounded-full sm:flex ${colorClasses.split(" ")[0]}`}>
+                      <div className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full ${colorClasses.split(" ")[0]}`}>
                         <div className={colorClasses.split(" ").slice(1).join(" ")}>
                           {getActivityIcon(activity.type, activity.message)}
                         </div>
                       </div>
 
-                      <div aria-hidden="true" className="flex h-12 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/40 bg-muted sm:h-14 sm:w-24">
-                        {hasImage ? (
-                          <>
+                      <div className="min-w-0 flex-1 basis-[8rem]">
+                        <p className="line-clamp-2 min-w-0 break-words text-sm font-medium leading-snug" title={row.title}>{row.title}</p>
+                        <p className="mt-0.5 min-w-0 break-words text-xs leading-snug text-muted-foreground">
+                          {row.detail ? <span title={row.detail}>{row.detail}<span className="hidden sm:inline"> · </span></span> : null}
+                          <span className="block whitespace-nowrap tabular-nums sm:inline">{formatFullTimestamp(activity.timestamp)}</span>
+                        </p>
+                        {showChannel || (activity.dvr_name && availableDvrs.length > 1) ? (
+                          <p className="mt-0.5 min-w-0 truncate text-xs text-muted-foreground">
+                            {[showChannel ? activity.channel_name : null, availableDvrs.length > 1 ? activity.dvr_name : null].filter(Boolean).join(" · ")}
+                          </p>
+                        ) : null}
+                      </div>
+
+                      {hasImage ? (
+                        <div aria-hidden="true" className="flex h-10 w-16 shrink-0 items-center justify-center overflow-hidden rounded-thumb bg-fill sm:h-14 sm:w-24">
                           {/* eslint-disable-next-line @next/next/no-img-element -- static export with dynamic remote artwork URL; next/image optimizer unavailable */}
                           <img
                             src={activity.image_url}
@@ -547,42 +620,16 @@ export function WatchHistory() {
                             className="h-full w-full object-contain"
                             loading="lazy"
                           />
-                          </>
-                        ) : <Video className="h-5 w-5 text-muted-foreground/70" />}
-                      </div>
-
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                          <div className="min-w-0 space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">{activity.title}</p>
-                              <Badge variant="outline" className="text-xs uppercase tracking-wide text-muted-foreground">
-                                {getTypeLabel(activity.type)}
-                              </Badge>
-                              {activity.dvr_name && <Badge variant="secondary" className="h-auto min-w-0 max-w-full whitespace-normal py-1" title={activity.dvr_name}><span className="break-words [overflow-wrap:anywhere]">{activity.dvr_name}</span></Badge>}
-                            </div>
-                            <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">{activity.message}</p>
-                          </div>
-
-                          <div className="shrink-0 text-xs text-muted-foreground">
-                            {formatFullTimestamp(activity.timestamp)}
-                          </div>
                         </div>
-
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                          {activity.program_title && <span>{t("watchHistory.meta.program")}: {activity.program_title}</span>}
-                          {activity.channel_name && <span>{t("watchHistory.meta.channel")}: {activity.channel_name}</span>}
-                          {activity.device_name && <span>{t("watchHistory.meta.device")}: {activity.device_name}</span>}
-                        </div>
-                      </div>
+                      ) : null}
                     </button>
                   )
                 })}
               </div>
             )}
             {loading && historyLoaded ? (
-              <div className="absolute inset-0 z-10 flex items-start justify-center bg-background/45 pt-6" aria-live="polite">
-                <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm text-muted-foreground shadow-sm">
+              <div className="absolute inset-0 z-10 flex items-start justify-center bg-fill pt-6" aria-live="polite">
+                <div className="flex items-center gap-2 rounded-control border border-hairline bg-raised px-3 py-2 text-sm text-muted-foreground shadow-3">
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                   {t("watchHistory.loading")}
                 </div>
@@ -591,6 +638,7 @@ export function WatchHistory() {
           </CardContent>
         </Card>
 
+        {pageCount > 1 && !error ? (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm text-muted-foreground">
             {t("watchHistory.pageOf", { page: currentPage, total: pageCount })}
@@ -599,7 +647,7 @@ export function WatchHistory() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setOffset((currentOffset) => Math.max(0, currentOffset - pageSize))}
+              onClick={() => turnPage(Math.max(0, offset - pageSize))}
               disabled={!canGoPrevious || loading}
               className="min-w-0 flex-1 sm:flex-none"
             >
@@ -609,7 +657,7 @@ export function WatchHistory() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setOffset((currentOffset) => currentOffset + pageSize)}
+              onClick={() => turnPage(offset + pageSize)}
               disabled={!canGoNext || loading}
               className="min-w-0 flex-1 sm:flex-none"
             >
@@ -618,18 +666,21 @@ export function WatchHistory() {
             </Button>
           </div>
         </div>
+        ) : null}
       </div>
 
       <ActivityDetailDialog
         activity={selectedActivity}
         open={!!selectedActivity}
         onOpenChange={(open) => {
-          if (open) return
-          setSelectedActivity(null)
-          requestAnimationFrame(() => {
-            const trigger = dialogTriggerRef.current
-            if (trigger?.isConnected && trigger.getClientRects().length > 0) trigger.focus()
-          })
+          if (!open) setSelectedActivity(null)
+        }}
+        onCloseAutoFocus={(event) => {
+          const trigger = dialogTriggerRef.current
+          if (trigger?.isConnected && trigger.getClientRects().length > 0) {
+            event.preventDefault()
+            trigger.focus()
+          }
         }}
       />
     </>

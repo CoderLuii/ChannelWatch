@@ -126,7 +126,7 @@ class TestViewerForbiddenOnWrites:
         detail = resp.json()["detail"]
         assert detail["code"] == "ERR_AUTH_FORBIDDEN"
         assert detail["message"] == "Requires operator role or higher"
-        assert "sufficient permissions" in detail["remediation"]
+        assert "has access" in detail["remediation"]
 
     def test_viewer_403_on_clear_activity_history(
         self, rbac_client, viewer_user, auth_engine

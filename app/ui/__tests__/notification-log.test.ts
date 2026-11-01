@@ -11,6 +11,7 @@ type HookRuntime = {
   useState<T>(initial: T | (() => T)): [T, (next: T | ((previous: T) => T)) => void]
   useEffect(effect: () => void | Promise<void>, deps?: unknown[]): void
   useCallback<T extends (...args: never[]) => unknown>(callback: T, deps?: unknown[]): T
+  useRef<T>(initial: T): { current: T }
 }
 
 const hookRuntime = vi.hoisted(() => ({ current: null as HookRuntime | null }))
@@ -22,6 +23,7 @@ vi.mock("react", async (importOriginal) => {
     useState: <T,>(initial: T | (() => T)) => hookRuntime.current!.useState(initial),
     useEffect: (effect: () => void | Promise<void>, deps?: unknown[]) => hookRuntime.current!.useEffect(effect, deps),
     useCallback: <T extends (...args: never[]) => unknown>(callback: T, deps?: unknown[]) => hookRuntime.current!.useCallback(callback, deps),
+    useRef: <T,>(initial: T) => hookRuntime.current!.useRef(initial),
   }
 })
 
@@ -61,7 +63,7 @@ vi.mock("@/components/base/select", async () => {
   }
 })
 
-import { NotificationLog, buildNotificationLogOptions } from "@/components/notification-log"
+import { NotificationLog, buildNotificationLogOptions, deliveryRowFacts, destinationLabel } from "@/components/notification-log"
 
 type TestNode = {
   type: string
@@ -122,6 +124,12 @@ class RenderHarness implements HookRuntime {
       this.hooks[index] = deps
       this.pendingEffects.push(effect)
     }
+  }
+
+  useRef<T>(initial: T): { current: T } {
+    const index = this.hookIndex++
+    if (!(index in this.hooks)) this.hooks[index] = { current: initial }
+    return this.hooks[index] as { current: T }
   }
 
   useCallback<T extends (...args: never[]) => unknown>(callback: T, deps?: unknown[]): T {
@@ -253,7 +261,7 @@ describe("NotificationLog rendered behavior", () => {
     expect(apiMocks.fetchNotificationLog).toHaveBeenLastCalledWith(expect.objectContaining({
       dvr_id: undefined,
       offset: 0,
-      limit: 50,
+      limit: 25,
     }))
 
     selectionMock.selectedDvr = "dvr_aaa11111"
@@ -264,10 +272,10 @@ describe("NotificationLog rendered behavior", () => {
     expect(apiMocks.fetchNotificationLog).toHaveBeenLastCalledWith(expect.objectContaining({
       dvr_id: "dvr_aaa11111",
       offset: 0,
-      limit: 50,
+      limit: 25,
     }))
 
-    fireEvent.change(view.getByLabelText("Filter notification log by channel"), "webhook")
+    fireEvent.change(view.getByLabelText("Filter notification log by destination"), "webhook")
     await flushPromises()
     fireEvent.change(view.getByLabelText("Filter notification log by status"), "failed")
     await flushPromises()
@@ -280,23 +288,65 @@ describe("NotificationLog rendered behavior", () => {
       dvr_id: "dvr_aaa11111",
       channel: "webhook",
       status: "failed",
-      since: "2026-04-27T00:00:00.000Z",
-      until: "2026-04-28T00:00:00.000Z",
+      since: new Date(2026, 3, 27).toISOString(),
+      until: new Date(2026, 3, 28, 23, 59, 59, 999).toISOString(),
       offset: 0,
-      limit: 50,
+      limit: 25,
     })
 
-    expect(view.getByText(/Page 1 of 2/)).toBeTruthy()
-    const nextButton = view.getAllByRole("button").find((button) => button.props.disabled !== true)
+    expect(view.getByText(/Page 1 of 4/)).toBeTruthy()
+    const nextButton = view.getAllByRole("button").find((button) => button.props["aria-label"] === "Next" && button.props.disabled !== true)
     if (!nextButton) throw new Error("Next page button was not rendered")
     fireEvent.click(nextButton)
     await flushPromises()
 
     expect(apiMocks.fetchNotificationLog).toHaveBeenLastCalledWith(expect.objectContaining({
       dvr_id: "dvr_aaa11111",
-      offset: 50,
-      limit: 50,
+      offset: 25,
+      limit: 25,
     }))
+  })
+})
+
+describe("NotificationLog failed delivery", () => {
+  beforeEach(() => {
+    vi.stubGlobal("React", React)
+    selectionMock.selectedDvr = "all"
+    apiMocks.fetchNotificationLog.mockReset()
+    apiMocks.fetchNotificationLog.mockResolvedValue({
+      offset: 0,
+      limit: 25,
+      total: 1,
+      items: [{ id: 9, dvr_id: "dvr_aaa11111", activity_event_id: null, provider_type: "apprise", channel_id: "discord", channel: "discord", event_type: "disk_alert", status: "circuit_open", sent_at: "2026-04-28T12:00:00Z", retry_count: 0, payload_size: 0, error: "Circuit open \u2014 delivery skipped" }],
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it("leads with the friendly text and keeps the raw error behind Details", async () => {
+    const view = render(React.createElement(NotificationLog))
+    await flushPromises()
+
+    const article = view.getAllByRole("listitem")[0]
+    const details = allNodes(article.children).find((node) => node.type === "details")
+    if (!details) throw new Error("Details disclosure was not rendered")
+    expect(textContent(article)).toContain("ChannelWatch paused this service for 5 minutes")
+    expect(textContent(details)).toContain("Circuit open \u2014 delivery skipped")
+    expect(details.props.open).toBeUndefined()
+    const outside = textContent(article).replace(textContent(details), "")
+    expect(outside).not.toContain("Circuit open")
+  })
+})
+
+describe("NotificationLog phone row", () => {
+  it("keeps one line of facts and leaves out what says nothing", () => {
+    expect(deliveryRowFacts({ event_type: "disk_alert", payload_size: 512, retry_count: 0 })).toMatch(/^.+ · 512 Bytes$/)
+    expect(deliveryRowFacts({ event_type: "disk_alert", payload_size: 0, retry_count: 1 })).toMatch(/^.+ · 1 retry$/)
+    expect(deliveryRowFacts({ event_type: "disk_alert", payload_size: 0, retry_count: 3 })).toMatch(/^.+ · 3 retries$/)
+    expect(deliveryRowFacts({ event_type: "disk_alert", payload_size: 0, retry_count: 0 })).not.toContain("·")
   })
 })
 
@@ -313,10 +363,50 @@ describe("NotificationLog filter and pagination helpers", () => {
       dvr_id: "dvr_aaa11111",
       channel: "webhook",
       status: "failed",
-      since: "2026-04-27T00:00:00.000Z",
-      until: "2026-04-28T00:00:00.000Z",
+      since: new Date(2026, 3, 27).toISOString(),
+      until: new Date(2026, 3, 28, 23, 59, 59, 999).toISOString(),
       offset: 50,
-      limit: 50,
+      limit: 25,
     })
+  })
+})
+
+describe("NotificationLog local-day date range", () => {
+  it("includes the whole selected 'to' day in local time", () => {
+    const options = buildNotificationLogOptions({ since: "2026-10-29", until: "2026-10-29", offset: 0 })
+    const since = new Date(options.since!)
+    const until = new Date(options.until!)
+    expect([since.getFullYear(), since.getMonth(), since.getDate(), since.getHours()]).toEqual([2026, 9, 29, 0])
+    expect([until.getFullYear(), until.getMonth(), until.getDate(), until.getHours(), until.getMinutes()]).toEqual([2026, 9, 29, 23, 59])
+  })
+
+  it("ignores a stale response that resolves after a newer filter request", async () => {
+    vi.stubGlobal("React", React)
+    apiMocks.fetchNotificationLog.mockReset()
+    let resolveFirst: (value: unknown) => void = () => {}
+    apiMocks.fetchNotificationLog
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValue({ total: 0, items: [] })
+    const view = render(React.createElement(NotificationLog))
+    fireEvent.change(view.getByLabelText("Filter notification log by status"), "failed")
+    await flushPromises()
+    resolveFirst(deliveryResponse(100))
+    await flushPromises()
+    expect(() => view.getByText(/Page 1 of 4/)).toThrow()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe("destinationLabel", () => {
+  it.each([
+    [{ channel: "apprise", channel_id: "pushover" }, "Pushover"],
+    [{ channel: "apprise", channel_id: "discord:2" }, "Discord"],
+    [{ channel: "apprise", channel_id: "custom" }, "Custom URL"],
+    [{ channel: "webhook", channel_id: "webhook" }, "Webhook"],
+    [{ channel: "webhook", channel_id: "" }, "Webhook"],
+    [{ channel: "apprise", channel_id: "apprise" }, "Notification services"],
+    [{ channel: "apprise", channel_id: "" }, "Notification services"],
+  ])("%o reads as %s", (item, label) => {
+    expect(destinationLabel(item)).toBe(label)
   })
 })

@@ -134,7 +134,7 @@ describe("Security section auth flows", () => {
 
     expect(section).toContain('data-testid="key-recovery-card"')
     expect(section).toContain('const KEY_RESET_CONFIRMATION = "RESET PROTECTED CREDENTIALS"')
-    expect(section).toContain('confirmation !== KEY_RESET_CONFIRMATION')
+    expect(section).toContain('confirmation.trim().toUpperCase() !== KEY_RESET_CONFIRMATION')
     expect(section).toContain('type="password"')
     expect(section).toContain('type="file"')
     expect(section).toContain("clearMigrationInputs()")

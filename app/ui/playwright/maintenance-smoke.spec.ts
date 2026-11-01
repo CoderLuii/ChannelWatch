@@ -15,7 +15,7 @@ test("maintenance windows follow activity and recordings and start compact", asy
 
   await expect(disclosure).toHaveAttribute("aria-expanded", "false")
   await expect(card.getByText("Main DVR", { exact: true })).toBeHidden()
-  await expect(card.getByText(/Potential open time/)).toBeHidden()
+  await expect(card.getByText(/Times with no recording scheduled/)).toBeHidden()
   const cardHandle = await card.elementHandle()
   expect(cardHandle).not.toBeNull()
   expect(await activityRecordings.evaluate((node, maintenanceCard) => Boolean(node.compareDocumentPosition(maintenanceCard as Node) & Node.DOCUMENT_POSITION_FOLLOWING), cardHandle)).toBe(true)
@@ -30,7 +30,7 @@ test("dashboard shows the known per-DVR maintenance window after expansion", asy
   await disclosure.click()
 
   await expect(disclosure).toHaveAttribute("aria-expanded", "true")
-  await expect(card.getByText(/Potential open time/)).toBeVisible()
+  await expect(card.getByText(/Times with no recording scheduled/)).toBeVisible()
   await expect(card.getByText("Main DVR", { exact: true })).toBeVisible()
   await expect(card.getByText("Known schedule only", { exact: true })).toBeVisible()
   await expect(card.getByText("2h 30m", { exact: true })).toBeVisible()
@@ -40,7 +40,8 @@ test("dashboard shows the known per-DVR maintenance window after expansion", asy
     const url = new URL(request.url())
     return url.pathname === "/api/v1/maintenance-windows" && url.searchParams.get("minimum_minutes") === "120"
   })
-  await card.getByLabel("Minimum window").selectOption("120")
+  await card.getByRole("combobox", { name: "Minimum window" }).click()
+  await page.getByRole("option", { name: "2h", exact: true }).click()
   await filteredRequest
 })
 
@@ -95,7 +96,7 @@ test("malformed maintenance response shows an error without crashing the dashboa
 
   await page.goto("/#overview")
 
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   const card = page.getByTestId("maintenance-windows-card")
   const disclosure = card.locator('button[aria-controls="maintenance-windows-content"]')
   await expect(disclosure).toHaveAttribute("aria-expanded", "false")
@@ -145,7 +146,7 @@ for (const [caseName, payload] of [
 
     await page.goto("/#overview")
 
-    await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
     await expect(page.getByTestId("maintenance-windows-card").locator('button[aria-controls="maintenance-windows-content"]').getByText("Maintenance windows could not be loaded.", { exact: true })).toBeVisible()
     expect(pageErrors).toEqual([])
   })

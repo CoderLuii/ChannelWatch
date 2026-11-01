@@ -5,18 +5,18 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex min-h-11 items-center justify-center gap-2 whitespace-normal text-center rounded-xl text-[15px] font-semibold tracking-[-0.01em] ring-offset-background transition-[background-color,color,border-color,transform,box-shadow] duration-150 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-[18px] [&_svg]:shrink-0",
+  "inline-flex min-h-11 items-center justify-center gap-2 whitespace-normal text-center rounded-control text-[15px] font-semibold tracking-[-0.01em] ring-offset-background transition-[background-color,color,border-color,scale,box-shadow] duration-[var(--motion-fast)] ease-out active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-[18px] [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground shadow-[0_1px_2px_hsl(211_100%_20%/0.12)] hover:bg-primary/90",
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
         destructive:
           "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline:
-          "border border-border bg-card text-foreground shadow-[0_1px_2px_hsl(220_40%_20%/0.05)] hover:bg-secondary",
+          "border border-input bg-transparent text-foreground hover:bg-fill",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "text-foreground hover:bg-secondary hover:text-foreground",
+          "bg-fill text-secondary-foreground hover:bg-selected",
+        ghost: "text-foreground hover:bg-fill hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

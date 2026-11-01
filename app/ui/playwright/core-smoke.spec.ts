@@ -9,22 +9,11 @@ const fulfillJson = (route: Route, body: unknown, status = 200) => route.fulfill
 })
 
 
-async function openDashboardDetails(page: Page) {
-  if ((page.viewportSize()?.width ?? 1440) >= 1280) return
-  for (const id of ["mobile-uptime-details", "mobile-timeline-details"]) {
-    const toggle = page.locator(`[aria-controls="${id}"]`)
-    await expect(toggle).toBeVisible()
-    if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click()
-    await expect(toggle).toHaveAttribute("aria-expanded", "true")
-    await expect(page.locator(`#${id}`)).toBeVisible()
-  }
-}
-
 test.beforeEach(async ({ page }) => {
   await installApiMocks(page)
 })
 
-test("Recording Outcomes program image can be disabled globally and per DVR", async ({ page }) => {
+test("Recordings program image can be disabled globally and per DVR", async ({ page }) => {
   let savedSettings: Record<string, unknown> | null = null
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() === "POST") {
@@ -35,7 +24,7 @@ test("Recording Outcomes program image can be disabled globally and per DVR", as
   })
 
   await page.goto("/#settings:alerts")
-  await page.getByRole("button", { name: /Recording Outcomes/ }).click()
+  await page.getByRole("button", { name: /^Recordings/ }).click()
   await expect(page.locator("#rd_image")).toHaveAttribute("data-state", "checked")
   await page.locator("#alert-section-rec").getByRole("button", { name: "Main DVR" }).click()
   await expect(page.locator("#rec_rd_image")).toBeVisible()
@@ -43,7 +32,7 @@ test("Recording Outcomes program image can be disabled globally and per DVR", as
   await page.locator("#alert-section-rec").getByRole("button", { name: "Global", exact: true }).click()
   await page.locator("#rd_image").click()
   await expect(page.locator("#rd_image")).toHaveAttribute("data-state", "unchecked")
-  await page.getByRole("button", { name: "Save Settings" }).click()
+  await page.getByRole("button", { name: "Save settings" }).click()
   await expect.poll(() => savedSettings).not.toBeNull()
   expect((savedSettings as unknown as Record<string, unknown>).rd_image).toBe(false)
   expect((savedSettings as unknown as { dvr_servers: Array<{ overrides?: { rd_image?: boolean } }> }).dvr_servers[0].overrides?.rd_image).toBe(false)
@@ -82,9 +71,9 @@ test("temporary restart failures never expose an empty savable Settings form", a
 
   await page.goto("/#settings:general")
 
-  await expect(page.getByRole("alert").getByText("Settings are temporarily unavailable", { exact: true })).toBeVisible()
-  await expect(page.getByText("Your saved settings have not been changed.")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Save Settings" })).toHaveCount(0)
+  await expect(page.getByRole("alert").getByText("ChannelWatch isn't answering", { exact: true })).toBeVisible()
+  await expect(page.getByText("Your settings are unchanged.")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Save settings" })).toHaveCount(0)
   await expect(page.getByText("No DVR servers configured.")).toHaveCount(0)
 
   settingsAvailable = true
@@ -92,7 +81,7 @@ test("temporary restart failures never expose an empty savable Settings form", a
 
   await expect(page.getByText("DVR & App", { exact: true })).toBeVisible()
   await expect(page.getByPlaceholder("e.g., Main DVR")).toHaveValue("Main DVR")
-  await expect(page.getByRole("button", { name: "Save Settings" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Save settings" })).toHaveCount(0)
 })
 
 test("Active Streams renders recorded-content title and clean client metadata", async ({ page }) => {
@@ -115,10 +104,13 @@ test("Active Streams renders recorded-content title and clean client metadata", 
   }))
 
   await page.goto("/#overview")
-  await openDashboardDetails(page)
-  await page.getByLabel("Refresh", { exact: true }).click()
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
 
-  await expect(page.getByText("bedroom channels watching WYFF News 4 at 6pm")).toBeVisible()
+  const now = page.getByTestId("now-list")
+  await expect(now).toContainText("WYFF News 4 at 6pm")
+  await expect(now).toContainText("bedroom channels")
+  // The tile summary is a wide-screen extra. Phones lead with Now instead.
+  if ((page.viewportSize()?.width ?? 1440) >= 768) await expect(page.getByText("bedroom channels watching WYFF News 4 at 6pm")).toBeVisible()
   const activeStreamsCard = page.getByText("Active Streams").locator("..", { hasText: "Active Streams" }).locator("..")
   await expect(activeStreamsCard).not.toContainText("Unknown")
 })
@@ -140,14 +132,13 @@ test("post-update monitoring startup clears itself without a manual refresh", as
   })
 
   await page.goto("/#overview")
-  await openDashboardDetails(page)
   await expect(page.getByText("Monitoring starting on Main DVR")).toBeVisible()
   await expect(page.getByText("Monitoring starting on Main DVR")).toHaveCount(0, { timeout: 10_000 })
   expect(systemInfoRequests).toBeGreaterThanOrEqual(3)
   expect(systemInfoRequests).toBeLessThan(8)
 })
 
-test("alert presets remain unsaved until Save Settings and disclosures are semantic", async ({ page }) => {
+test("alert presets remain unsaved until Save settings and disclosures are semantic", async ({ page }) => {
   let savedSettings: Record<string, unknown> | null = null
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() === "POST") {
@@ -171,20 +162,20 @@ test("alert presets remain unsaved until Save Settings and disclosures are seman
   await expect(healthDisclosure).toHaveAttribute("aria-expanded", "false")
   await healthDisclosure.click()
   await expect(healthDisclosure).toHaveAttribute("aria-expanded", "true")
-  await expect(page.getByText("ChannelWatch can report DVR outages only while ChannelWatch itself is running.")).toBeVisible()
+  await expect(page.getByText("ChannelWatch can report outages only while it is running.")).toBeVisible()
   const healthSection = page.locator("#alert-section-health")
   await healthSection.getByRole("button", { name: "Main DVR" }).click()
   await expect(healthDisclosure).toContainText("Inherited")
-  await healthSection.getByLabel("DVR Health").click()
+  await healthSection.getByLabel("DVR health").click()
   await expect(healthDisclosure).toContainText("Overridden")
 
   await page.getByLabel("Preset").click()
-  await page.getByRole("option", { name: "Important Only" }).click()
+  await page.getByRole("option", { name: "Important only" }).click()
   await page.getByRole("button", { name: "Apply preset" }).click()
-  await expect(page.getByText(/alert types enabled; .* disabled\. Save Settings/)).toBeVisible()
+  await expect(page.getByText(/alert types enabled; .* disabled\. Save settings/)).toBeVisible()
   expect(savedSettings).toBeNull()
 
-  await page.getByRole("button", { name: "Save Settings" }).click()
+  await page.getByRole("button", { name: "Save settings" }).click()
   await expect.poll(() => savedSettings).not.toBeNull()
   const persisted = savedSettings as unknown as Record<string, unknown>
   expect(persisted.notification_preferences_version).toBe(1)
@@ -228,20 +219,19 @@ test("Recent Activity applies an exact client without changing the aggregate tim
     new URL(response.url()).pathname === "/api/v1/activity-history/filters" && response.ok(),
   )
   await page.goto("/#overview")
-  await openDashboardDetails(page)
   await clientFiltersLoaded
   const filterButton = page.getByRole("button", { name: "Filter activity by type" })
   await expect(filterButton.locator(".animate-spin")).toHaveCount(0)
   await filterButton.click()
-  await expect(page.getByText("The timeline remains an aggregate across all clients.")).toBeVisible()
+  await expect(page.getByText("The timeline always covers all clients.")).toBeVisible()
   await page.getByRole("option", { name: /Living Room Apple TV/ }).click()
 
   await expect.poll(() => clientQueries).toContain("Living Room Apple TV")
   await expect(page.getByText("Filtered live TV activity")).toBeVisible()
-  await expect(page.locator("#mobile-timeline-details").getByText("24-Hour Timeline")).toBeVisible()
+  await expect(page.getByTestId("activity-timeline").getByText("24 hours", { exact: true })).toBeVisible()
 })
 
-test("24-Hour Timeline tooltip matches a discrete event interval without an unnamed zero row", async ({ page }, testInfo) => {
+test("24-hour lanes report a discrete event interval", async ({ page }, testInfo) => {
   const bucketMs = 20 * 60 * 1000
   const currentIntervalStart = Math.floor(Date.now() / bucketMs) * bucketMs
   const windowEnd = currentIntervalStart + bucketMs
@@ -276,45 +266,22 @@ test("24-Hour Timeline tooltip matches a discrete event interval without an unna
   })
 
   await page.goto("/#overview")
-  await openDashboardDetails(page)
-  await expect(page.locator("#mobile-timeline-details").getByText("Detected events in each 20-minute interval")).toBeVisible()
+  await expect(page.getByTestId("timeline-verdict")).toBeVisible()
   await expect(page.getByText("Recording 0", { exact: true })).toBeVisible()
 
-  const chart = page.getByRole("img", { name: /24-hour activity timeline/ })
-  if (testInfo.project.name === "v101-mobile-safari") {
-    await expect(chart).toHaveAttribute("aria-label", /events grouped into 20-minute intervals/i)
-    await expect(page.getByRole("button", { name: "Toggle recordings on chart" })).toHaveAttribute("aria-pressed", "true")
-    await expect(page.getByRole("button", { name: "Toggle VOD on chart" })).toHaveAttribute("aria-pressed", "true")
-    return
-  }
-  const box = await chart.boundingBox()
+  await expect(page.getByTestId("timeline-verdict")).toContainText("4 recording events")
+  await expect(page.getByTestId("timeline-verdict")).toContainText("1 VOD session")
+  if (testInfo.project.name === "mobile-safari") return
+  const lane = page.getByTestId("timeline-lane-recordings").locator("[data-lane]")
+  const box = await lane.boundingBox()
   expect(box).not.toBeNull()
   const tooltip = page.getByTestId("activity-timeline-tooltip")
-  const eventPoint = Math.floor(eventTime / bucketMs) * bucketMs + bucketMs / 2
-  const plotLeft = 30
-  const plotWidth = box!.width - plotLeft
-  const targetX = box!.x + plotLeft + ((eventPoint - windowStart) / (windowEnd - windowStart)) * plotWidth
-  const targetY = box!.y + box!.height / 2
-  await page.mouse.move(targetX - 100, targetY)
-  await page.mouse.move(targetX, targetY, { steps: 20 })
-  await page.locator(".recharts-wrapper").dispatchEvent("mousemove", {
-    clientX: targetX,
-    clientY: targetY,
-    bubbles: true,
-  })
-
-  const activeDots = page.locator(".recharts-active-dot")
-  await expect(activeDots).toHaveCount(3)
-  expect(await activeDots.evaluateAll((nodes) => nodes.map((node) => (
-    node.getAttribute("r") ?? node.querySelector("circle")?.getAttribute("r")
-  )))).toEqual(["0", "0", "0"])
+  const bucket = Math.floor((eventTime - windowStart) / bucketMs)
+  await page.mouse.move(box!.x + ((bucket + 0.5) / 72) * box!.width, box!.y + box!.height / 2)
   await expect(page.getByTestId("activity-timeline-tooltip-streams")).toContainText("Live TV")
-  await expect(page.getByTestId("activity-timeline-tooltip-streams")).toContainText("0 events")
-  await expect(page.getByTestId("activity-timeline-tooltip-recordings")).toContainText("Recordings")
-  await expect(page.getByTestId("activity-timeline-tooltip-recordings")).toContainText("4 events")
-  await expect(page.getByTestId("activity-timeline-tooltip-vod")).toContainText("VOD")
-  await expect(page.getByTestId("activity-timeline-tooltip-vod")).toContainText("1 event")
-  await expect(tooltip).not.toContainText(": 0")
+  await expect(page.getByTestId("activity-timeline-tooltip-streams")).toContainText("0")
+  await expect(page.getByTestId("activity-timeline-tooltip-recordings")).toContainText("4")
+  await expect(page.getByTestId("activity-timeline-tooltip-vod")).toContainText("1")
   const expectedStart = new Date(Math.floor(eventTime / bucketMs) * bucketMs).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
@@ -351,11 +318,16 @@ test("a seven-day Recent Activity selection keeps the Timeline query fixed at 24
   })
 
   await page.goto("/#overview")
-  await openDashboardDetails(page)
-  await expect(page.locator("#mobile-timeline-details").getByText("Detected events in each 20-minute interval")).toBeVisible()
+  await expect(page.getByTestId("timeline-verdict")).toBeVisible()
   activityQueries.length = 0
-  await page.getByRole("combobox", { name: "Select activity time range" }).click()
-  await page.getByRole("option", { name: "Last 7 Days" }).click()
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await page.getByRole("button", { name: /Select activity time range/ }).click()
+    await page.getByTestId("filter-sheet").getByRole("button", { name: "Last 7 days", exact: true }).click()
+    await page.getByRole("button", { name: "Show results", exact: true }).click()
+  } else {
+    await page.getByRole("combobox", { name: "Select activity time range" }).click()
+    await page.getByRole("option", { name: "Last 7 days" }).click()
+  }
 
   await expect.poll(() => activityQueries.filter((url) => url.searchParams.get("hours") === "168").length).toBe(3)
   const sevenDayOffsets = activityQueries
@@ -367,6 +339,7 @@ test("a seven-day Recent Activity selection keeps the Timeline query fixed at 24
 })
 
 test("Watch History sends the exact client filter and resets it with Clear filters", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Below 768 these filters live in the sheet, covered in mobile-nav-smoke.")
   const activityQueries: URL[] = []
   const exportQueries: URL[] = []
   await page.route("**/api/activity-history**", async (route) => {
@@ -461,23 +434,20 @@ test("ChannelWatch uptime keeps DVR details in a standard dialog", async ({ page
   }))
 
   await page.goto("/#overview")
+  const isWide = (page.viewportSize()?.width ?? 1440) >= 1280
+  await expect(page.getByText(/DVR health/)).toBeVisible()
   const details = page.locator("#mobile-uptime-details")
-  const disclosure = details.locator("button").filter({ hasText: "1 of 2 connected" })
-  await expect(disclosure).toContainText("DVR uptime")
-  if ((page.viewportSize()?.width ?? 1440) < 1280) {
-    const detailsToggle = page.locator('[aria-controls="mobile-uptime-details"]')
-    await detailsToggle.click()
-    await expect(detailsToggle).toHaveAttribute("aria-expanded", "true")
-  }
+  const disclosure = isWide
+    ? details.locator("button").filter({ hasText: "1 of 2 connected" })
+    : page.getByTestId("mobile-uptime-details-tile").getByRole("button").first()
   await expect(disclosure).toBeVisible({ timeout: 15_000 })
-  await expect(details).toBeVisible()
-  if ((page.viewportSize()?.width ?? 1440) >= 1280) {
+  if (isWide) {
+    await expect(disclosure).toContainText("DVR uptime")
     await expect(details.getByText("ChannelWatch Uptime")).toBeVisible()
   }
-  await expect(page.getByText("DVR Health", { exact: true })).toBeVisible()
   await disclosure.click()
 
-  const dialog = page.getByRole("dialog", { name: "DVR uptime" })
+  const dialog = page.getByRole("dialog", { name: isWide ? "DVR uptime" : "Uptime" })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText("Main DVR with a deliberately long but readable name")).toBeVisible()
   await expect(dialog.getByText("Backup DVR")).toBeVisible()
@@ -487,8 +457,8 @@ test("ChannelWatch uptime keeps DVR details in a standard dialog", async ({ page
 })
 
 for (const diskSummaryCase of [
-  { name: "mobile warning", width: 375, severity: "warning", label: "Warning", icon: ".lucide-triangle-alert", color: /text-amber-700/ },
-  { name: "tablet critical", width: 768, severity: "critical", label: "Critical", icon: ".lucide-circle-alert", color: /text-red-700/ },
+  { name: "mobile warning", width: 375, severity: "warning", label: "Warning", color: /text-warning-fg/ },
+  { name: "tablet critical", width: 768, severity: "critical", label: "Critical", color: /text-danger-fg/ },
 ] as const) {
   test(`collapsed disk space shows ${diskSummaryCase.name} severity`, async ({ page }) => {
     await page.setViewportSize({ width: diskSummaryCase.width, height: 812 })
@@ -498,14 +468,13 @@ for (const diskSummaryCase of [
     }))
 
     await page.goto("/#overview")
-    const disclosure = page.locator('[aria-controls="mobile-disk-details"]')
+    const disclosure = page.getByTestId("mobile-disk-details-tile").getByRole("button").first()
     await expect(disclosure).toBeVisible()
     await expect(disclosure).toHaveAttribute("aria-expanded", "false")
     const severity = disclosure.getByText(diskSummaryCase.label, { exact: true })
     await expect(severity).toBeVisible()
     await expect(severity).toHaveClass(diskSummaryCase.color)
-    await expect(severity.locator(diskSummaryCase.icon)).toBeVisible()
-    await expect(disclosure).toContainText("Free")
+    await expect(disclosure).toContainText("of ")
   })
 }
 
@@ -864,7 +833,7 @@ test("a successful in-app update shows dependency progress and hard-refreshes on
   await expect(page.getByText("Restarting", { exact: true })).toBeVisible()
   await expect(page.getByText("Checking the update", { exact: true })).toBeVisible()
   await expect(page).toHaveURL(/#overview$/, { timeout: 10_000 })
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   expect(applyRequests).toBe(1)
 })
 
@@ -941,10 +910,10 @@ test("a retry restart disconnect follows the activated runtime instead of showin
   await page.route("**/api/v1/update/jobs/*", (route) => fulfillJson(route, successfulJob()))
 
   await page.goto("/#settings:updates")
-  await page.getByRole("button", { name: "Retry now" }).click()
+  await page.getByRole("button", { name: "Retry" }).click()
 
   await expect(page).toHaveURL(/#overview$/, { timeout: 10_000 })
-  await expect(page.getByRole("heading", { name: "Dashboard Overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible()
   await expect(page.getByText("Failed to fetch")).toHaveCount(0)
 })
 

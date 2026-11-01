@@ -112,3 +112,14 @@ def test_logs_download_returns_full_log_attachment(client, tmp_path):
     assert response.text.replace("\r\n", "\n") == "line 1\nline 2\n"
     assert response.headers["content-type"].startswith("text/plain")
     assert 'filename="channelwatch.log"' in response.headers["content-disposition"]
+
+
+def test_logs_endpoint_zero_lines_returns_the_maximum(client, tmp_path):
+    log_file = tmp_path / "channelwatch.log"
+    log_file.write_text("\n".join(f"line {i}" for i in range(1100)) + "\n")
+
+    with patch("ui.backend.main.LOG_FILE", log_file):
+        response = client.get("/api/logs?lines=0")
+
+    assert response.status_code == 200
+    assert len(response.json()["lines"]) == 1000

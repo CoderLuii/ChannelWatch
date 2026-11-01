@@ -126,7 +126,7 @@ export async function solveReportChallengeInline(
         options.onProgress?.(attempt + 1)
         lastProgressAt = now
       }
-      if (now - started >= deadlineMs) throw new Error("Secure report preparation timed out. Your report and attachments are still here; retry, use the upload portal, or download the offline package.")
+      if (now - started >= deadlineMs) throw new Error("Report preparation timed out. Your draft is still here. Retry, use the upload portal, or download the offline package.")
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
   }

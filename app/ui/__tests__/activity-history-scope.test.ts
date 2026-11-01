@@ -36,3 +36,16 @@ describe("activity scope", () => {
     }
   })
 })
+
+describe("client facets", () => {
+  it("does not offer the Unknown device bucket as a selectable client", async () => {
+    const clients = [
+      { value: "living room", label: "Living Room", count: 4 },
+      { value: "unknown", label: "Unknown", count: 9 },
+      { value: "", label: "", count: 1 },
+    ]
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ clients }))))
+    const result = await fetchActivityClientFilters()
+    expect(result.clients.map((client) => client.label)).toEqual(["Living Room"])
+  })
+})

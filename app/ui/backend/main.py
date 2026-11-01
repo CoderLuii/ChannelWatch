@@ -1,6 +1,7 @@
 # IMPORTS
 import http.client
 import inspect
+import math
 import os
 import signal
 import stat
@@ -304,6 +305,20 @@ except ImportError:
 _dvr_http_client = httpx.AsyncClient(timeout=30.0, trust_env=False)
 
 
+def _describe_dvr_connection_error(result: Any) -> Optional[str]:
+    """Explain why a DVR status probe failed, in words an operator can act on."""
+    if isinstance(result, httpx.TimeoutException):
+        return "Timed out waiting for the DVR. Check that it is running and reachable from the container."
+    if isinstance(result, httpx.ConnectError):
+        return "Connection refused or host unreachable. Check the DVR host and port."
+    if isinstance(result, BaseException):
+        return "The DVR could not be reached. Check the DVR host and port."
+    status_code = getattr(result, "status_code", None)
+    if isinstance(status_code, int) and status_code != 200:
+        return f"The DVR answered with HTTP {status_code}."
+    return None
+
+
 async def _safe_dvr_get_url(url: str, *, timeout: float) -> httpx.Response:
     """Resolve, validate, and pin a configured DVR URL for one GET request."""
     parsed = urlsplit(url)
@@ -601,6 +616,21 @@ def _get_user_role_for_auth_check(user_id: int) -> tuple[bool, Optional[str]]:
     return True, user.role if user is not None else None
 
 
+def _safe_compare_digest(supplied: Any, expected: Any) -> bool:
+    """Constant-time compare that treats non-ASCII or non-string input as a mismatch.
+
+    secrets.compare_digest raises TypeError for str values with non-ASCII
+    characters, which would otherwise surface as a 500 instead of a 401/403.
+    """
+    if isinstance(supplied, str):
+        supplied = supplied.encode("utf-8")
+    if isinstance(expected, str):
+        expected = expected.encode("utf-8")
+    if not isinstance(supplied, bytes) or not isinstance(expected, bytes):
+        return False
+    return secrets.compare_digest(supplied, expected)
+
+
 # ROLE-BASED ACCESS CONTROL
 ROLE_HIERARCHY: Dict[str, int] = {"viewer": 0, "operator": 1, "admin": 2}
 
@@ -687,7 +717,7 @@ async def verify_api_key(request: Request):
     if not api_key:
         return
     provided_key = request.headers.get("X-API-Key", "")
-    if not secrets.compare_digest(provided_key, api_key):
+    if not _safe_compare_digest(provided_key, api_key):
         raise structured_error(ErrorCode.AUTH_INVALID_KEY)
 
 
@@ -891,6 +921,16 @@ class InMemoryRateLimiter:
             self._requests.move_to_end(key)
             return True
 
+    def retry_after_seconds(self, key: str) -> int:
+        """Seconds until the oldest request for key leaves the window."""
+        now = time.monotonic()
+        with self._lock:
+            request_times = self._requests.get(key)
+            if not request_times:
+                return 1
+            remaining = request_times[0] + self.window_seconds - now
+        return max(1, int(math.ceil(remaining)))
+
 
 rate_limiter = InMemoryRateLimiter(window_seconds=RATE_LIMIT_WINDOW_SECONDS)
 _SYSTEM_INFO_LIBRARY_CACHE_TTL_SECONDS = 900.0
@@ -1087,6 +1127,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 ),
                 status_code=429,
                 media_type="application/json",
+                headers={"Retry-After": str(rate_limiter.retry_after_seconds(key))},
             )
 
         return await call_next(request)
@@ -1121,14 +1162,14 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if _is_auth_path and not CW_DISABLE_AUTH and not _is_exempt:
             provided_key = request.headers.get("X-API-Key", "")
             if auth_mode == "api_key":
-                if not api_key or not secrets.compare_digest(provided_key, api_key):
+                if not api_key or not _safe_compare_digest(provided_key, api_key):
                     return _structured_error_response(ErrorCode.AUTH_INVALID_KEY)
                 request.state.api_key_authenticated = True
             elif auth_mode == "rbac":
                 if (
                     api_key
                     and legacy_api_key_fallback
-                    and secrets.compare_digest(provided_key, api_key)
+                    and _safe_compare_digest(provided_key, api_key)
                 ):
                     request.state.api_key_authenticated = True
                 else:
@@ -1166,7 +1207,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             if (
                 not csrf_header
                 or not csrf_expected
-                or not secrets.compare_digest(csrf_header, csrf_expected)
+                or not _safe_compare_digest(csrf_header, csrf_expected)
             ):
                 return _structured_error_response(ErrorCode.AUTH_CSRF_INVALID)
 
@@ -1604,7 +1645,7 @@ async def reset_runtime_protected_credentials(body: ProtectedCredentialResetRequ
 
     from core.helpers.credential_maintenance import reset_protected_credentials
 
-    if not secrets.compare_digest(body.confirmation, _KEY_RESET_CONFIRMATION):
+    if not _safe_compare_digest(body.confirmation, _KEY_RESET_CONFIRMATION):
         raise structured_error(ErrorCode.RUNTIME_KEY_RESET_CONFIRMATION)
     before_dvr, before_notifications = await asyncio.to_thread(
         _protected_credential_counts
@@ -1635,7 +1676,11 @@ async def reset_runtime_protected_credentials(body: ProtectedCredentialResetRequ
     return payload
 
 
-@app.get("/api/discover-servers", tags=["Information"])
+@app.get(
+    "/api/discover-servers",
+    tags=["Information"],
+    dependencies=[require_role("operator")],
+)
 async def discover_servers():
     try:
         raw = await asyncio.to_thread(_scan_for_dvrs, 3.0)
@@ -1773,10 +1818,10 @@ async def get_settings_endpoint(request: Request):
         provided_key = request.headers.get("X-API-Key", "")
         authorized = False
         if mode == "api_key":
-            authorized = bool(api_key and secrets.compare_digest(provided_key, api_key))
+            authorized = bool(api_key and _safe_compare_digest(provided_key, api_key))
         elif mode == "rbac":
             if api_key and _legacy_api_key_fallback_allowed(settings):
-                authorized = bool(secrets.compare_digest(provided_key, api_key))
+                authorized = bool(_safe_compare_digest(provided_key, api_key))
             if not authorized:
                 authorized = await _request_has_valid_session_async(request)
         if not authorized:
@@ -1862,6 +1907,32 @@ def _validate_persisted_dvr_servers(settings: AppSettings) -> None:
         server["host"] = host
         server["port"] = port
         server["name"] = dvr_display_name(server.get("name"), host)
+
+
+def _drop_superseded_archived_dvrs(settings: AppSettings) -> None:
+    """Drop an archived DVR entry once the same DVR has been added back.
+
+    DVR ids derive from host:port, so re-adding an archived DVR reuses its id.
+    Keeping both entries would let the archive purge later remove the active
+    DVR and its history along with the expired archive.
+    """
+    servers = list(getattr(settings, "dvr_servers", None) or [])
+    active_ids = {
+        str(server.get("id"))
+        for server in servers
+        if isinstance(server, dict) and server.get("id") and not server.get("deleted_at")
+    }
+    if not active_ids:
+        return
+    settings.dvr_servers = [
+        server
+        for server in servers
+        if not (
+            isinstance(server, dict)
+            and server.get("deleted_at")
+            and str(server.get("id") or "") in active_ids
+        )
+    ]
 
 
 def _webhook_model_identity(webhook: BaseModel | dict, index: int) -> str:
@@ -2028,6 +2099,7 @@ def _resolve_masked_settings_and_save(settings: AppSettings) -> None:
         ):
             settings.api_key = existing.api_key
 
+        _drop_superseded_archived_dvrs(settings)
         settings.notification_routing = normalize_notification_routing(
             settings.notification_routing,
             settings.dvr_servers,
@@ -2036,9 +2108,51 @@ def _resolve_masked_settings_and_save(settings: AppSettings) -> None:
         backend_config.save_settings(settings, lock_already_held=True)
 
 
+def _disk_threshold_order_error(settings: AppSettings) -> Optional[str]:
+    """Critical disk thresholds must be stricter than warning thresholds."""
+    pairs = (
+        ("ds_warning_threshold_percent", "ds_critical_threshold_percent", "percent"),
+        ("ds_warning_threshold_gb", "ds_critical_threshold_gb", "GB"),
+    )
+
+    def order_error(overrides: dict[str, Any], suffix: str) -> Optional[str]:
+        def value(key: str) -> Any:
+            override = overrides.get(key)
+            return override if override is not None else getattr(settings, key, 0)
+
+        for warning_key, critical_key, unit in pairs:
+            try:
+                warning = float(value(warning_key) or 0)
+                critical = float(value(critical_key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if warning > 0 and critical > 0 and critical >= warning:
+                return f"Critical {unit} must be lower than warning {unit}{suffix}."
+        return None
+
+    error = order_error({}, "")
+    if error:
+        return error
+    # A DVR's overrides are checked against the global values it inherits.
+    for server in getattr(settings, "dvr_servers", None) or []:
+        if server.get("deleted_at"):
+            continue
+        label = server.get("name") or server.get("host") or "this DVR"
+        error = order_error(server.get("overrides") or {}, f" on {label}")
+        if error:
+            return error
+    return None
+
+
 @app.post("/api/settings", dependencies=[require_role("operator")])
 async def update_settings_endpoint(settings: AppSettings):
     _require_persistent_config_writable()
+    disk_threshold_error = _disk_threshold_order_error(settings)
+    if disk_threshold_error:
+        raise structured_error(
+            ErrorCode.SETTINGS_VALIDATION_FAILED,
+            message=disk_threshold_error,
+        )
     try:
         try:
             await asyncio.to_thread(_resolve_masked_settings_and_save, settings)
@@ -2047,9 +2161,12 @@ async def update_settings_endpoint(settings: AppSettings):
                 ErrorCode.SETTINGS_VALIDATION_FAILED,
                 message=str(exc),
             ) from exc
-        await asyncio.to_thread(_signal_core_hot_reload)
+        hot_reloaded = await asyncio.to_thread(_signal_core_hot_reload)
         _refresh_runtime_auth_state(settings)
-        return {"message": "Settings saved successfully"}
+        return {
+            "message": "Settings saved successfully",
+            "applied": "hot" if hot_reloaded else "restart_required",
+        }
     except HTTPException:
         raise
     except EncryptionKeyUnavailableError as exc:
@@ -2144,7 +2261,7 @@ async def restore_backup(
         RestoreValidationError,
     )
 
-    if reset_protected_credentials and not secrets.compare_digest(
+    if reset_protected_credentials and not _safe_compare_digest(
         str(reset_confirmation or ""),
         _KEY_RESET_CONFIRMATION,
     ):
@@ -2172,7 +2289,7 @@ async def restore_backup(
 
     await asyncio.to_thread(_signal_core_hot_reload)
     return {
-        "message": "Restore completed. Core process hot-reloaded.",
+        "message": "Reload to see the restored settings.",
         "manifest": manifest,
     }
 
@@ -3196,7 +3313,7 @@ ACTIVITY_TYPE_FILTERS = {
         "recording_stopped",
         "recording_cancelled",
     },
-    "disk": {"disk_alert"},
+    "disk": {"disk_alert", "disk_recovered"},
 }
 
 WATCH_ACTIVITY_TYPES = frozenset(
@@ -3670,6 +3787,7 @@ class DVRStatus(BaseModel):
     last_event_at: Optional[str] = None
     freshness_age_seconds: Optional[float] = None
     stale_threshold_seconds: Optional[int] = None
+    connection_error: Optional[str] = None
 
 
 class SystemInfo(BaseModel):
@@ -3778,15 +3896,45 @@ async def _get_dvr_server_by_id_async(dvr_id: str) -> Optional[tuple]:
     return None
 
 
-def _simple_disk_status(free_gb: Optional[float], total_gb: Optional[float]) -> str:
+def _simple_disk_status(
+    free_gb: Optional[float], total_gb: Optional[float], cfg: Any = None
+) -> str:
+    """Classify free space with the operator's disk thresholds.
+
+    Falls back to the shipped defaults only when no settings object is
+    available, so every surface agrees with the core disk alerts.
+    """
     if free_gb is None or total_gb is None or total_gb <= 0:
         return "unknown"
+
+    def _threshold(name: str, default: float) -> float:
+        try:
+            return float(getattr(cfg, name, default))
+        except (TypeError, ValueError):
+            return default
+
+    crit_pct = _threshold("ds_critical_threshold_percent", 5.0)
+    crit_gb = _threshold("ds_critical_threshold_gb", 25.0)
+    warn_pct = _threshold("ds_warning_threshold_percent", 10.0)
+    warn_gb = _threshold("ds_warning_threshold_gb", 50.0)
     free_pct = (free_gb / total_gb) * 100
-    if free_pct < 5.0 or free_gb < 25.0:
+    if free_pct < crit_pct or free_gb < crit_gb:
         return "critical"
-    if free_pct < 10.0 or free_gb < 50.0:
+    if free_pct < warn_pct or free_gb < warn_gb:
         return "warning"
     return "normal"
+
+
+_DISK_SEVERITY_RANK = {"normal": 0, "unknown": 0, "warning": 1, "critical": 2}
+
+
+def _worst_disk_severity(severities: List[str]) -> str:
+    """Return the most urgent severity so one full DVR is never averaged away."""
+    worst = "normal"
+    for severity in severities:
+        if _DISK_SEVERITY_RANK.get(severity, 0) > _DISK_SEVERITY_RANK[worst]:
+            worst = severity
+    return worst
 
 
 def _parse_storage_size_gb(value: Any) -> Optional[float]:
@@ -4075,7 +4223,13 @@ async def get_system_info(
                 pass
 
         s_version_status = _cache_dvr_version_status(dvr_id, s_version)
+        s_connection_error = None
+        if not s_connected:
+            s_connection_error = _describe_dvr_connection_error(status_result) or (
+                "The DVR returned a status response ChannelWatch could not read."
+            )
         return DVRStatus(
+            connection_error=s_connection_error,
             id=dvr_id,
             name=dvr_name,
             host=dvr_url.replace("http://", "").rsplit(":", 1)[0],
@@ -4121,7 +4275,15 @@ async def get_system_info(
         disk_free_gb = round(agg_free, 2) if agg_free else None
         disk_usage_gb = round(agg_used, 2) if agg_total else None
         disk_usage_percent = round((agg_used / agg_total) * 100) if agg_total else None
-        disk_severity = _get_disk_severity(free_gb=agg_free, total_gb=agg_total)
+        # The aggregate can look healthy while one DVR is nearly full, so the
+        # reported severity is the worst of the aggregate and every DVR.
+        disk_severity = _worst_disk_severity(
+            [_get_disk_severity(free_gb=agg_free, total_gb=agg_total)]
+            + [
+                _get_disk_severity(free_gb=d.disk_free_gb, total_gb=d.disk_total_gb)
+                for d in summary_status_list
+            ]
+        )
 
     core_status = "Unknown"
     actual_core_start_time = None
@@ -4255,7 +4417,7 @@ async def metrics():
             "channelwatch_core_running",
             1 if system_info.core_status == "Running" else 0,
         ),
-        "# HELP channelwatch_configured_dvrs Number of enabled DVRs configured in settings.",
+        "# HELP channelwatch_configured_dvrs Number of DVRs configured in settings, including disabled ones.",
         "# TYPE channelwatch_configured_dvrs gauge",
         _prometheus_metric_line(
             "channelwatch_configured_dvrs", len(system_info.dvr_status)
@@ -4307,13 +4469,16 @@ async def metrics():
             "# TYPE channelwatch_dvr_connected gauge",
         ]
     )
-    for dvr in system_info.dvr_status:
-        labels = {
+    def _dvr_labels(dvr) -> dict[str, Any]:
+        return {
             "dvr_id": dvr.id or dvr.host,
             "dvr_name": dvr.name,
             "host": dvr.host,
             "port": dvr.port,
         }
+
+    for dvr in system_info.dvr_status:
+        labels = _dvr_labels(dvr)
         lines.append(
             _prometheus_metric_line(
                 "channelwatch_dvr_connected",
@@ -4351,6 +4516,23 @@ async def metrics():
                 "channelwatch_active_streams",
                 per_dvr_stream_counts.get(dvr.id or dvr.host, 0),
                 labels,
+            )
+        )
+
+    # A disabled DVR reports dvr_connected=0 by design. Expose whether each DVR
+    # is enabled so alert rules can exclude disabled DVRs instead of paging.
+    lines.extend(
+        [
+            "# HELP channelwatch_dvr_enabled Whether each configured DVR is enabled for monitoring (1=yes, 0=disabled).",
+            "# TYPE channelwatch_dvr_enabled gauge",
+        ]
+    )
+    for dvr in system_info.dvr_status:
+        lines.append(
+            _prometheus_metric_line(
+                "channelwatch_dvr_enabled",
+                0 if dvr.monitoring_status == "disabled" else 1,
+                _dvr_labels(dvr),
             )
         )
 
@@ -4706,7 +4888,7 @@ def _require_tokenized_feed_access(
         )
 
     configured_token = str(getattr(settings, token_field, "") or "").strip()
-    if not configured_token or not secrets.compare_digest(token, configured_token):
+    if not configured_token or not _safe_compare_digest(token, configured_token):
         raise structured_error(
             ErrorCode.FEED_TOKEN_INVALID, message=f"Invalid {feed_name} token"
         )
@@ -5478,7 +5660,7 @@ async def _run_test_background_async(test_name: str) -> TestResult:
                         setattr(test_settings, key, value)
 
             policy = {
-                "Channel-Watching": [("alert_channel_watching", "Channel Watching")],
+                "Channel-Watching": [("alert_channel_watching", "Live TV")],
                 "VOD-Watching": [("alert_vod_watching", "VOD Watching")],
                 "Disk-Space": [("alert_disk_space", "Disk Space")],
             }
@@ -5491,7 +5673,7 @@ async def _run_test_background_async(test_name: str) -> TestResult:
             }
             required = policy.get(test_key, [])
             if test_key.startswith("Recording-"):
-                required = [("alert_recording_events", "Recording Events")]
+                required = [("alert_recording_events", "Recordings")]
                 required += (
                     list(recording_policy.values())
                     if test_key == "Recording-Events"
@@ -5558,7 +5740,7 @@ async def _run_test_background_async(test_name: str) -> TestResult:
                 )
 
             if not notification_manager.has_configured_destinations():
-                reason = "No notification destinations are configured for this test."
+                reason = "No notification destinations configured."
                 return TestResult(
                     test_name=test_name, success=False, status="failed",
                     message=reason, reason=reason, target_dvr=target_dvr,
@@ -5999,7 +6181,9 @@ LOG_TAIL_MAX_LINES = 1000
 
 
 def _tail_log_lines(path: Path, requested_lines: int) -> list[str]:
-    line_count = max(1, min(int(requested_lines or 100), LOG_TAIL_MAX_LINES))
+    requested = int(requested_lines if requested_lines is not None else 100)
+    # 0 (or less) asks for as much as the API allows.
+    line_count = LOG_TAIL_MAX_LINES if requested <= 0 else min(requested, LOG_TAIL_MAX_LINES)
     chunk_size = 8192
     chunks: list[bytes] = []
     newline_count = 0
@@ -6095,7 +6279,7 @@ def get_supervisor_proxy():
     if not os.path.exists(socket_path):
         print(
             f"[WebUI Supervisor] WARNING: Supervisor socket unavailable"
-            f" — socket not found or unreadable: {socket_path}"
+            f": socket not found or unreadable: {socket_path}"
         )
         return None
     try:
@@ -6554,14 +6738,14 @@ async def _authorize_recovery_update(
         if (
             configured_key
             and (mode == "api_key" or _legacy_api_key_fallback_allowed(settings))
-            and secrets.compare_digest(supplied_key, configured_key)
+            and _safe_compare_digest(supplied_key, configured_key)
         ):
             return
         if not await _request_has_valid_session_async(request):
             raise structured_error(ErrorCode.AUTH_UNAUTHENTICATED)
         csrf_header = request.headers.get("X-CSRF-Token", "")
         csrf_expected = str(getattr(request.state, "auth_session_csrf", "") or "")
-        if not csrf_header or not secrets.compare_digest(csrf_header, csrf_expected):
+        if not csrf_header or not _safe_compare_digest(csrf_header, csrf_expected):
             raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
         user_id = getattr(request.state, "auth_user_id", None)
         available, role = await asyncio.to_thread(
@@ -6587,13 +6771,13 @@ async def _authorize_recovery_update(
         or time.monotonic() > expected[1]
         or not supplied
         or not cookie
-        or not secrets.compare_digest(client, expected[0])
-        or not secrets.compare_digest(cookie, supplied)
+        or not _safe_compare_digest(client, expected[0])
+        or not _safe_compare_digest(cookie, supplied)
     ):
         raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
     if require_confirmation and not (
         confirmation
-        and secrets.compare_digest(confirmation, _RECOVERY_UPDATE_CONFIRMATION)
+        and _safe_compare_digest(confirmation, _RECOVERY_UPDATE_CONFIRMATION)
     ):
         raise structured_error(
             ErrorCode.UPDATE_RECOVERY_CONFIRMATION,
@@ -7326,18 +7510,7 @@ async def get_dvr_system_info_v1(dvr_id: str):
 
     s_severity = "normal"
     if s_free is not None and s_total is not None and s_total > 0:
-        try:
-            crit_pct = float(getattr(_cfg, "ds_critical_threshold_percent", 5.0))
-            crit_gb = float(getattr(_cfg, "ds_critical_threshold_gb", 25.0))
-            warn_pct = float(getattr(_cfg, "ds_warning_threshold_percent", 10.0))
-            warn_gb = float(getattr(_cfg, "ds_warning_threshold_gb", 50.0))
-            free_pct = (s_free / s_total) * 100
-            if free_pct < crit_pct or s_free < crit_gb:
-                s_severity = "critical"
-            elif free_pct < warn_pct or s_free < warn_gb:
-                s_severity = "warning"
-        except Exception:
-            s_severity = _simple_disk_status(s_free, s_total)
+        s_severity = _simple_disk_status(s_free, s_total, _cfg)
 
     s_version_status = _cache_dvr_version_status(sid, s_version)
     s_used_gb = (
@@ -7548,6 +7721,11 @@ async def get_dvr_health_v1(dvr_id: str):
     host = surl.replace("http://", "").rsplit(":", 1)[0]
     port = int(surl.rsplit(":", 1)[1])
 
+    if CORE_APP_AVAILABLE:
+        _health_cfg = await asyncio.to_thread(_get_core_settings_sync)
+    else:
+        _health_cfg = await _load_settings_async()
+
     s_version = None
     s_free, s_total = None, None
     s_connected = False
@@ -7601,7 +7779,7 @@ async def get_dvr_health_v1(dvr_id: str):
         version=s_version_status["version"],
         version_compatible=s_version_status["version_compatible"],
         version_warning=s_version_status["version_warning"],
-        disk_status=_simple_disk_status(s_free, s_total),
+        disk_status=_simple_disk_status(s_free, s_total, _health_cfg),
         disk_free_gb=s_free,
         disk_total_gb=s_total,
         last_checked=datetime.now(_tz.utc).isoformat(),
@@ -7808,7 +7986,7 @@ async def auth_logout(request: Request, response: Response):
         if (
             not csrf_header
             or not csrf_expected
-            or not secrets.compare_digest(csrf_header, csrf_expected)
+            or not _safe_compare_digest(csrf_header, csrf_expected)
         ):
             raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
     token = request.cookies.get("channelwatch_session", "")
@@ -7833,7 +8011,7 @@ async def auth_change_credentials(body: _ChangeCredentialsRequest, request: Requ
     if (
         not csrf_header
         or not csrf_expected
-        or not secrets.compare_digest(csrf_header, csrf_expected)
+        or not _safe_compare_digest(csrf_header, csrf_expected)
     ):
         raise structured_error(ErrorCode.AUTH_CSRF_INVALID)
     user_id = getattr(request.state, "auth_user_id", None)

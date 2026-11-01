@@ -59,7 +59,7 @@ Escalation rules:
 3. Repeated `warning` or repeated `critical` alerts send only after meaningful worsening and cooldown.
 4. When storage returns to `normal`, ChannelWatch clears the last notification state so the next future low-space condition can alert again.
 
-Notification titles are severity-specific. Warning alerts use `Low Disk Space Warning`; critical alerts use `Low Disk Space Critical`. Custom disk templates can render the `{severity}` placeholder.
+Notification titles are severity-specific. Warning alerts use `Disk space low`; critical alerts use `Disk space critically low`. Custom disk templates can render the `{severity}` placeholder.
 
 ## Settings fields
 
@@ -77,7 +77,7 @@ Disk fields are stored in `/config/settings.json`. See `docs/reference/settings.
 | `ds_worsening_delta_gb` | `1` | GiB drop that counts as meaningful worsening. |
 | `ds_worsening_delta_percent` | `1.0` | Free percentage drop that counts as meaningful worsening. |
 | `ds_test_route_override` | `""` | Optional route override used by disk alert tests. |
-| `ds_template_title` | `"⚠️ Low Disk Space Warning"` | Custom disk notification title template. |
+| `ds_template_title` | `"⚠️ Disk space low"` | Custom disk notification title template. |
 | `ds_template_body` | Default disk body template | Custom disk notification body template. |
 | `ds_template_use_default` | `true` | Use the built in disk message instead of custom disk templates. |
 | `notification_routing.<dvr_id>.disk.<destination>` | Missing keys enabled | Per-DVR disk notification routing. |

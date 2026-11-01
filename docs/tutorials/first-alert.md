@@ -70,7 +70,7 @@ For the full list of supported destination fields and URL shapes, see [Apprise p
 
 1. Select **Diagnostics**.
 2. Find the **Tests** card.
-3. In the **Notifications** section, find **Test Channel Watching Alert**.
+3. In the **Notifications** section, find **Live TV Alert**.
 4. Select its **Run** button.
 
    This is the UI test action for sending a safe notification. The frontend sends it to the backend as `POST /api/run_test/Test_Channel_Watching_Alert`.

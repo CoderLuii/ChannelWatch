@@ -180,7 +180,7 @@ export const mockSettings = {
 }
 
 export const mockSystemInfo = {
-  channelwatch_version: "1.0.1",
+  channelwatch_version: "1.6.5",
   channels_dvr_host: "192.168.1.50",
   channels_dvr_port: 8089,
   channels_dvr_server_version: "2024.12.1",

@@ -825,6 +825,7 @@ test("authenticated live Update Center applies and rolls back the exact candidat
   )
   auditPhase = "rollback_restart"
   await page.getByRole("button", { name: "Roll back" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Roll back" }).click()
   const rollbackJob = await queuedRollbackJob(await rollbackResponsePromise, expectedVersion)
   consoleAudit.acknowledge("rollback_restart", rollbackJob.job_id)
 

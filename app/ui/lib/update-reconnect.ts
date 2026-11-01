@@ -90,8 +90,8 @@ export class UpdateJobPendingError extends Error {
 export class UpdateTransactionUnconfirmedError extends Error {
   constructor() {
     super(
-      "ChannelWatch could not confirm which update transaction started after the connection closed. "
-      + "Refresh Update Center and review the current job before trying again.",
+      "The connection closed before ChannelWatch could confirm the update. "
+      + "Refresh Update Center and check the job before retrying.",
     )
     this.name = "UpdateTransactionUnconfirmedError"
   }

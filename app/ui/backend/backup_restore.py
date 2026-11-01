@@ -68,9 +68,9 @@ _SECURITY_WARNING_TEXT = (
     "SECURITY WARNING\n"
     "================\n\n"
     "This folder contains the encryption key used to protect DVR API keys and\n"
-    "notification credentials stored in settings.json.\n\n"
+    "webhook credentials stored in settings.json.\n\n"
     "DO NOT share this backup archive with untrusted parties.\n\n"
-    "The encryption key alone does not expose secrets — it only becomes sensitive\n"
+    "The encryption key alone does not expose secrets. It only becomes sensitive\n"
     "when paired with settings.json. Together they allow decryption of protected\n"
     "credentials.\n\n"
     "If restoring to a different machine, ensure the destination volume is secured\n"
@@ -480,7 +480,7 @@ def validate_restore_zip(zip_bytes: bytes) -> dict[str, Any]:
 
         if f"{prefix}/settings.json" not in names:
             raise RestoreValidationError(
-                "Backup is missing settings.json — archive may be incomplete."
+                "Backup is missing settings.json. The archive may be incomplete."
             )
 
         manifest_files = manifest.get("files")

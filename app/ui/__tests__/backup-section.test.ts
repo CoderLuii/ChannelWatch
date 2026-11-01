@@ -51,6 +51,7 @@ type TestNode = {
   children: TestChild[]
   value?: string
   click?: ReturnType<typeof vi.fn>
+  focus?: ReturnType<typeof vi.fn>
 }
 type TestChild = TestNode | string
 type Matcher = string | RegExp
@@ -151,6 +152,7 @@ function renderReactNode(node: React.ReactNode): TestChild[] {
     children,
     value: typeof props.value === "string" ? props.value : "",
     click: vi.fn(() => fireEvent.click(testNode)),
+    focus: vi.fn(),
   }
   const ref = props.ref as { current?: unknown } | undefined
   if (ref && typeof ref === "object") ref.current = testNode
@@ -268,6 +270,7 @@ describe("BackupSettingsSection rendered behavior", () => {
 
     expect(apiMocks.downloadBackup).toHaveBeenCalledTimes(1)
     expect(createObjectURL).toHaveBeenCalledWith(backupBlob)
+    vi.advanceTimersByTime(0)
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:backup")
     expect(clickedDownloads).toContain("channelwatch_backup_2026-04-28T01-02-03.zip")
 
@@ -276,6 +279,7 @@ describe("BackupSettingsSection rendered behavior", () => {
 
     expect(apiMocks.downloadDebugBundle).toHaveBeenCalledTimes(1)
     expect(createObjectURL).toHaveBeenCalledWith(debugBlob)
+    vi.advanceTimersByTime(0)
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:debug")
     expect(clickedDownloads).toContain("channelwatch_debug_2026-04-28T01-02-03.zip")
 
@@ -289,6 +293,9 @@ describe("BackupSettingsSection rendered behavior", () => {
     await flushPromises()
 
     expect(changeEvent.target.value).toBe("")
+    expect(apiMocks.restoreFromBackup).not.toHaveBeenCalled()
+    fireEvent.click(view.getByRole("button", { name: /Restore backup/i }))
+    await flushPromises()
     expect(apiMocks.restoreFromBackup).toHaveBeenCalledWith(selectedFile)
     expect(view.getByText("Restore complete")).toBeTruthy()
     fireEvent.click(view.getByRole("button", { name: /Reload page/i }))
@@ -303,9 +310,32 @@ describe("BackupSettingsSection rendered behavior", () => {
 
     await fireEvent.change(fileInput, { target: { files: [new File(["bad"], "bad.zip")], value: "bad.zip" } })
     await flushPromises()
+    fireEvent.click(view.getByRole("button", { name: /Restore backup/i }))
+    await flushPromises()
 
     expect(apiMocks.restoreFromBackup).toHaveBeenCalledTimes(1)
     expect(view.getByText("bad archive")).toBeTruthy()
+  })
+})
+
+describe("BackupSettingsSection restore confirmation", () => {
+  beforeEach(() => {
+    apiMocks.restoreFromBackup.mockReset()
+    vi.stubGlobal("React", React)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("does not restore when the staged file is cancelled", async () => {
+    const view = render(React.createElement(BackupSettingsSection))
+    await fireEvent.change(view.getByInputAccept(".zip"), { target: { files: [new File(["x"], "x.zip")], value: "x.zip" } })
+    expect(view.getByText(/x\.zip will replace your settings/)).toBeTruthy()
+    fireEvent.click(view.getByRole("button", { name: /^Cancel$/ }))
+    await flushPromises()
+    expect(apiMocks.restoreFromBackup).not.toHaveBeenCalled()
+    expect(() => view.getByRole("button", { name: /Restore backup/i })).toThrow()
   })
 })
 

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
 import {
   Loader2,
   Tv,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/api"
 import { canonicalDvrId } from "@/lib/dvr-id"
 import { t } from "@/lib/i18n"
+import { describeError, formatErrorWithRemediation } from "@/lib/error-catalog"
 import type { AppSettings, DVRServer } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -61,6 +63,7 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
   const [testedName, setTestedName] = useState<string | null>(null)
 
   const [pendingDvr, setPendingDvr] = useState<PendingDvr | null>(null)
+  const [confirmFrom, setConfirmFrom] = useState<"discover" | "manual">("manual")
   const [isSaving, setIsSaving] = useState(false)
 
   const { toast } = useToast()
@@ -90,6 +93,7 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
       port: server.port,
       api_key: "",
     })
+    setConfirmFrom("discover")
     setStep("confirm")
   }
 
@@ -111,9 +115,9 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
         setTestState("fail")
         setTestError(result.error ?? t("wizard.manual.connectionRefused"))
       }
-    } catch {
+    } catch (err) {
       setTestState("fail")
-      setTestError(t("wizard.manual.requestFailed"))
+      setTestError(formatErrorWithRemediation(err, t("wizard.manual.requestFailed")))
     }
   }
 
@@ -125,6 +129,7 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
       port: Number(manualPort) || 8089,
       api_key: manualApiKey.trim(),
     })
+    setConfirmFrom("manual")
     setStep("confirm")
   }
 
@@ -157,7 +162,7 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
       toast({
         variant: "destructive",
         title: t("wizard.save.failed"),
-        description: err instanceof Error ? err.message : t("wizard.save.failedFallback"),
+        description: describeError(err, t("wizard.save.failedFallback")).message,
       })
     } finally {
       setIsSaving(false)
@@ -184,11 +189,19 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
   const stepIndex = { welcome: 0, discover: 1, manual: 1, confirm: 2 }[step]
 
   return (
+    <DialogPrimitive.Root open>
+    <DialogPrimitive.Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
-      <div className="fixed inset-0 bg-black/85 backdrop-blur-sm" />
+      <div className="fixed inset-0 bg-black/85" />
 
-      <div className="relative z-10 my-auto w-full max-w-md">
-        <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+      <DialogPrimitive.Content
+        aria-describedby={undefined}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        className="relative z-10 my-auto w-full max-w-md focus:outline-none"
+      >
+        <DialogPrimitive.Title className="sr-only">{t("wizard.dialogLabel")}</DialogPrimitive.Title>
+        <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-group border border-hairline-strong bg-raised shadow-3">
           <div className="px-6 pt-6 pb-4">
             <StepDots current={stepIndex} total={3} />
           </div>
@@ -228,12 +241,14 @@ export function FirstRunWizard({ currentSettings, onComplete, onSkip }: FirstRun
               />
             )}
             {step === "confirm" && pendingDvr && (
-              <ConfirmStep dvr={pendingDvr} isSaving={isSaving} onSave={handleSave} onBack={() => setStep(pendingDvr.host ? "manual" : "discover")} />
+              <ConfirmStep dvr={pendingDvr} isSaving={isSaving} onSave={handleSave} onBack={() => setStep(confirmFrom)} />
             )}
           </div>
         </div>
-      </div>
+      </DialogPrimitive.Content>
     </div>
+    </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }
 
@@ -244,12 +259,12 @@ function StepDots({ current, total }: { current: number; total: number }) {
         <div
           key={i}
           className={cn(
-            "h-1.5 rounded-full transition-all duration-300",
+            "h-1.5 rounded-full transition-colors",
             i < current
-              ? "w-4 bg-blue-500"
+              ? "w-4 bg-primary/60"
               : i === current
-              ? "w-6 bg-blue-400"
-              : "w-4 bg-zinc-700",
+              ? "w-6 bg-primary"
+              : "w-4 bg-muted-foreground/30",
           )}
         />
       ))}
@@ -270,13 +285,13 @@ function WelcomeStep({
     <div className="space-y-6">
       <div className="text-center space-y-3">
         <div className="flex justify-center">
-          <div className="w-16 h-16 rounded-2xl bg-blue-500/20 flex items-center justify-center">
-            <Tv className="h-8 w-8 text-blue-400" />
+          <div className="w-16 h-16 rounded-control bg-fill flex items-center justify-center">
+            <Tv className="h-8 w-8 text-muted-foreground" />
           </div>
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-zinc-100">{t("wizard.welcome.title")}</h2>
-          <p className="text-sm text-zinc-400 mt-1">
+          <h2 className="text-xl font-semibold text-foreground">{t("wizard.welcome.title")}</h2>
+          <p className="text-sm text-muted-foreground mt-1">
             {t("wizard.welcome.subtitle")}
           </p>
         </div>
@@ -284,7 +299,7 @@ function WelcomeStep({
 
       <div className="space-y-3">
         <Button
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white gap-2"
+          className="w-full bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
           onClick={onDiscover}
         >
           <Wifi className="h-4 w-4" />
@@ -292,7 +307,7 @@ function WelcomeStep({
         </Button>
         <Button
           variant="outline"
-          className="w-full border-zinc-600 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100 gap-2"
+          className="w-full border-input bg-raised text-foreground hover:bg-fill hover:text-foreground gap-2"
           onClick={onManual}
         >
           <PenLine className="h-4 w-4" />
@@ -303,7 +318,7 @@ function WelcomeStep({
       <div className="text-center">
         <button
           type="button"
-          className="inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-[13px] text-zinc-500 underline underline-offset-2 transition-colors hover:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
+          className="inline-flex min-h-11 items-center justify-center rounded-control px-3 text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-raised"
           onClick={onSkip}
         >
           {t("wizard.welcome.skip")}
@@ -336,32 +351,31 @@ function DiscoverStep({
         <button
           type="button"
           onClick={onBack}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-fill hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t("common.back")}
           title={t("common.back")}
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         </button>
         <div>
-          <h2 className="text-base font-semibold text-zinc-100">{t("wizard.discover.title")}</h2>
-          <p className="text-xs text-zinc-500">{t("wizard.discover.subtitle")}</p>
+          <h2 className="text-base font-semibold text-foreground">{t("wizard.discover.title")}</h2>
         </div>
       </div>
 
       {isDiscovering && (
         <div className="flex flex-col items-center gap-3 py-6">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
-          <p className="text-sm text-zinc-400">{t("wizard.discover.scanning")}</p>
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">{t("wizard.discover.scanning")}</p>
         </div>
       )}
 
       {discoveryDone && servers.length === 0 && (
-        <div className="rounded-xl border border-zinc-700 bg-zinc-800/50 p-4 text-center space-y-3">
-          <Search className="h-6 w-6 text-zinc-500 mx-auto" />
-          <p className="text-sm text-zinc-400">
+        <div className="rounded-control bg-fill p-4 text-center space-y-3">
+          <Search className="h-6 w-6 text-muted-foreground mx-auto" />
+          <p className="text-sm text-muted-foreground">
             {error ? t("wizard.discover.scanError", { error }) : t("wizard.discover.noServers")}
           </p>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted-foreground">
             {t("wizard.discover.hint")}
           </p>
         </div>
@@ -369,19 +383,19 @@ function DiscoverStep({
 
       {servers.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs text-zinc-500 font-medium">
+          <p className="text-xs text-muted-foreground font-medium">
             {t(servers.length === 1 ? "wizard.discover.serverFound" : "wizard.discover.serversFound", { count: servers.length })}
           </p>
           {servers.map((s, i) => (
             <div
               key={`${s.host}:${s.port}-${i}`}
-              className="flex items-center justify-between p-3 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 transition-colors"
+              className="flex items-center justify-between p-3 rounded-control border border-hairline bg-fill hover:bg-fill transition-colors"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <Server className="h-4 w-4 text-blue-400 shrink-0" />
+                <Server className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
-                  <p className="text-sm text-zinc-200 font-medium truncate">{s.name || s.host}</p>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-sm text-foreground font-medium truncate">{s.name || s.host}</p>
+                  <p className="text-xs text-muted-foreground">
                     {s.host}:{s.port}
                     {s.version ? ` · v${s.version}` : ""}
                   </p>
@@ -389,10 +403,10 @@ function DiscoverStep({
               </div>
               <Button
                 size="sm"
-                className="h-7 text-xs bg-blue-600 hover:bg-blue-700 text-white shrink-0 ml-2"
+                className="h-7 text-xs bg-primary hover:bg-primary/90 text-primary-foreground shrink-0 ml-2"
                 onClick={() => onSelect(s)}
               >
-                Use <ChevronRight className="h-3 w-3 ml-0.5" />
+                {t("wizard.discover.useBtn")} <ChevronRight className="h-3 w-3 ml-0.5" />
               </Button>
             </div>
           ))}
@@ -402,7 +416,7 @@ function DiscoverStep({
       {discoveryDone && (
         <Button
           variant="outline"
-          className="w-full border-zinc-600 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100 gap-2 text-sm"
+          className="w-full border-input bg-raised text-foreground hover:bg-fill hover:text-foreground gap-2 text-sm"
           onClick={onManual}
         >
           <PenLine className="h-4 w-4" />
@@ -447,90 +461,114 @@ function ManualStep({
   onBack: () => void
 }) {
   return (
-    <div className="space-y-5">
+    <form
+      className="space-y-5"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (canProceed) onProceed()
+      }}
+      onKeyDown={(event) => {
+        // A disabled Continue stops the browser's own Enter submit, so Enter runs the test until it passes.
+        if (event.key !== "Enter" || canProceed || (event.target as HTMLElement).tagName !== "INPUT") return
+        event.preventDefault()
+        if (host.trim() && testState !== "testing") onTest()
+      }}
+    >
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={onBack}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-fill hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t("common.back")}
           title={t("common.back")}
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         </button>
         <div>
-          <h2 className="text-base font-semibold text-zinc-100">{t("wizard.manual.title")}</h2>
-          <p className="text-xs text-zinc-500">{t("wizard.manual.subtitle")}</p>
+          <h2 className="text-base font-semibold text-foreground">{t("wizard.manual.title")}</h2>
         </div>
       </div>
 
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="text-xs text-zinc-400">{t("wizard.manual.nameLbl")}</Label>
+          <Label htmlFor="wizard-name" className="text-xs text-muted-foreground">{t("wizard.manual.nameLbl")}</Label>
           <Input
+            id="wizard-name"
             placeholder="e.g. Living Room DVR"
             value={name}
             onChange={(e) => onChangeName(e.target.value)}
-            className="bg-zinc-800 border-zinc-600 text-zinc-100 placeholder:text-zinc-600 h-9 text-sm"
+            className="h-9 text-sm"
           />
         </div>
 
         <div className="flex gap-2">
           <div className="flex-1 space-y-1.5">
-            <Label className="text-xs text-zinc-400">{t("wizard.manual.hostLbl")}</Label>
+            <Label htmlFor="wizard-host" className="text-xs text-muted-foreground">{t("wizard.manual.hostLbl")}</Label>
             <Input
+              id="wizard-host"
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               placeholder="192.168.1.100"
               value={host}
               onChange={(e) => onChangeHost(e.target.value)}
-              className="bg-zinc-800 border-zinc-600 text-zinc-100 placeholder:text-zinc-600 h-9 text-sm"
+              className="h-9 text-sm"
             />
           </div>
           <div className="w-24 space-y-1.5">
-            <Label className="text-xs text-zinc-400">{t("wizard.manual.portLbl")}</Label>
+            <Label htmlFor="wizard-port" className="text-xs text-muted-foreground">{t("wizard.manual.portLbl")}</Label>
             <Input
+              id="wizard-port"
               placeholder="8089"
               value={port}
               onChange={(e) => onChangePort(e.target.value)}
               type="number"
               min={1}
               max={65535}
-              className="bg-zinc-800 border-zinc-600 text-zinc-100 placeholder:text-zinc-600 h-9 text-sm"
+              className="h-9 text-sm"
             />
           </div>
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-xs text-zinc-400">{t("wizard.manual.apiKeyLbl")}</Label>
+          <Label htmlFor="wizard-api-key" className="text-xs text-muted-foreground">{t("wizard.manual.apiKeyLbl")}</Label>
           <Input
+            id="wizard-api-key"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder={t("wizard.manual.apiKeyPlaceholder")}
             value={apiKey}
             onChange={(e) => onChangeApiKey(e.target.value)}
             type="password"
-            className="bg-zinc-800 border-zinc-600 text-zinc-100 placeholder:text-zinc-600 h-9 text-sm"
+            className="h-9 text-sm"
           />
         </div>
       </div>
 
       {testState === "ok" && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-500/10 border border-green-500/20">
-          <CheckCircle className="h-4 w-4 text-green-400 shrink-0" />
-          <p className="text-xs text-green-300">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-control bg-success-bg border border-success-border">
+          <CheckCircle className="h-4 w-4 text-success shrink-0" />
+          <p className="text-xs text-success-fg">
             {t("wizard.manual.connected")}{testedName ? ` · ${testedName}` : ""}
           </p>
         </div>
       )}
 
       {testState === "fail" && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
-          <XCircle className="h-4 w-4 text-red-400 shrink-0" />
-          <p className="text-xs text-red-300">{testError || t("wizard.manual.connectionFailed")}</p>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-control bg-danger-bg border border-danger-border">
+          <XCircle className="h-4 w-4 text-danger shrink-0" />
+          <p className="text-xs text-danger-fg">{testError || t("wizard.manual.connectionFailed")}</p>
         </div>
       )}
 
       <div className="grid min-w-0 grid-cols-2 gap-2">
         <Button
+          type="button"
           variant="outline"
-          className="h-auto min-h-11 min-w-0 w-full whitespace-normal border-zinc-600 bg-zinc-900 px-2 py-2 text-center text-sm leading-tight text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal border-input bg-raised px-2 py-2 text-center text-sm leading-tight text-foreground hover:bg-fill hover:text-foreground"
           disabled={!host.trim() || testState === "testing"}
           onClick={onTest}
         >
@@ -540,15 +578,15 @@ function ManualStep({
           {t("wizard.manual.testBtn")}
         </Button>
         <Button
-          className="h-auto min-h-11 min-w-0 w-full whitespace-normal bg-blue-600 px-2 py-2 text-center text-sm leading-tight text-white hover:bg-blue-700"
+          type="submit"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal bg-primary px-2 py-2 text-center text-sm leading-tight text-primary-foreground hover:bg-primary/90"
           disabled={!canProceed}
-          onClick={onProceed}
         >
           {t("wizard.manual.continueBtn")}
           <ChevronRight className="h-4 w-4 ml-1" />
         </Button>
       </div>
-    </div>
+    </form>
   )
 }
 
@@ -567,22 +605,21 @@ function ConfirmStep({
     <div className="space-y-5">
       <div className="text-center space-y-3">
         <div className="flex justify-center">
-          <div className="w-14 h-14 rounded-xl bg-green-500/20 flex items-center justify-center">
-            <CheckCircle className="h-7 w-7 text-green-400" />
+          <div className="w-14 h-14 rounded-control bg-success-bg flex items-center justify-center">
+            <CheckCircle className="h-7 w-7 text-success" />
           </div>
         </div>
         <div>
-          <h2 className="text-base font-semibold text-zinc-100">{t("wizard.confirm.title")}</h2>
-          <p className="text-xs text-zinc-500 mt-0.5">{t("wizard.confirm.subtitle")}</p>
+          <h2 className="text-base font-semibold text-foreground">{t("wizard.confirm.title")}</h2>
         </div>
       </div>
 
-      <div className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-4 space-y-2">
+      <div className="rounded-control bg-fill p-4 space-y-2">
         <div className="flex items-center gap-2.5">
-          <Server className="h-5 w-5 text-blue-400 shrink-0" />
+          <Server className="h-5 w-5 text-muted-foreground shrink-0" />
           <div className="min-w-0">
-            <p className="text-sm font-medium text-zinc-100 truncate">{dvr.name}</p>
-            <p className="text-xs text-zinc-500">
+            <p className="text-sm font-medium text-foreground truncate">{dvr.name}</p>
+            <p className="text-xs text-muted-foreground">
               {dvr.host}:{dvr.port}
             </p>
           </div>
@@ -592,7 +629,7 @@ function ConfirmStep({
       <div className="grid min-w-0 grid-cols-2 gap-2">
         <Button
           variant="outline"
-          className="h-auto min-h-11 min-w-0 w-full whitespace-normal border-zinc-600 bg-zinc-900 px-2 py-2 text-center text-sm leading-tight text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal border-input bg-raised px-2 py-2 text-center text-sm leading-tight text-foreground hover:bg-fill hover:text-foreground"
           onClick={onBack}
           disabled={isSaving}
         >
@@ -600,7 +637,7 @@ function ConfirmStep({
           {t("common.back")}
         </Button>
         <Button
-          className="h-auto min-h-11 min-w-0 w-full whitespace-normal bg-blue-600 px-2 py-2 text-center text-sm leading-tight text-white hover:bg-blue-700"
+          className="h-auto min-h-11 min-w-0 w-full whitespace-normal bg-primary px-2 py-2 text-center text-sm leading-tight text-primary-foreground hover:bg-primary/90"
           onClick={onSave}
           disabled={isSaving}
         >

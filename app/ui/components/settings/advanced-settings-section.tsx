@@ -1,4 +1,4 @@
-import { ChevronDown, Clock, Database, Gauge, HardDrive, Info, Bug } from "lucide-react"
+import { ChevronDown, Clock, Database, Gauge, HardDrive, Bug } from "lucide-react"
 import type { UseFormReturn } from "react-hook-form"
 
 import { Card, CardContent } from "@/components/base/card"
@@ -10,7 +10,7 @@ import type { AppSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { t } from "@/lib/i18n"
 
-import { diskAdvancedBehaviorFields, diskAdvancedThresholdFields } from "./constants"
+import { diskAdvancedBehaviorFields, diskAdvancedThresholdFields, numberFieldInputValue, parseNumberFieldInput } from "./constants"
 import { DvrFieldInput, DvrFieldSelect, DvrFieldText, DvrHelpers, DvrTabBar } from "./dvr-field-controls"
 
 type NumericSettingKey =
@@ -42,42 +42,40 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
 
   return (
     <TabsContent value="advanced" className="space-y-4">
-      <Card className="border-blue-400/20 overflow-hidden">
-        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.cache} aria-controls="settings-cache-content" onClick={() => toggleAlert("cache")}>
-          <span className="flex gap-3 items-center">
-            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <Database className="h-5 w-5 text-blue-400" />
-            </span>
+      <Card className="overflow-hidden">
+        <button type="button" className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-fill transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.cache} aria-controls="settings-cache-content" onClick={() => toggleAlert("cache")}>
+          <span className="flex gap-2 items-center">
+            <Database className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>
-              <span className="block text-base font-medium">{t("advanced.cache.title")}</span>
+              <span className="block text-base font-semibold">{t("advanced.cache.title")}</span>
               <span className="block text-sm text-muted-foreground">{t("advanced.cache.desc")}</span>
             </span>
           </span>
-          <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.cache && "rotate-180")} />
+          <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out", expandedAlerts.cache && "rotate-180")} />
         </button>
         {expandedAlerts.cache && (
-          <CardContent id="settings-cache-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
+          <CardContent id="settings-cache-content" className="disclosure-enter border-t border-hairline pt-4 space-y-2">
             <DvrTabBar cardId="cache" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("cache") === "global" ? (
-              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                  {[
                    { id: "channel_cache_ttl", label: t("advanced.cache.channelList"), desc: t("advanced.cache.channelListDesc"), placeholder: "86400", hint: t("advanced.cache.channelListHint") },
                    { id: "program_cache_ttl", label: t("advanced.cache.programGuide"), desc: t("advanced.cache.programGuideDesc"), placeholder: "86400", hint: t("advanced.cache.programGuideHint") },
                    { id: "job_cache_ttl", label: t("advanced.cache.recordingJobs"), desc: t("advanced.cache.recordingJobsDesc"), placeholder: "3600", hint: t("advanced.cache.recordingJobsHint") },
                    { id: "vod_cache_ttl", label: t("advanced.cache.vodLibrary"), desc: t("advanced.cache.vodLibraryDesc"), placeholder: "86400", hint: t("advanced.cache.vodLibraryHint") },
                  ].map(({ id, label, desc, placeholder, hint }) => (
-                  <div key={id} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+                  <div key={id} className="p-3 rounded-control bg-fill space-y-2">
                     <Label htmlFor={id}>
-                      <span className="text-sm block">{label}</span>
-                      <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
+                      <span className="block text-sm">{label}</span>
+                      <span className="text-xs leading-5 text-muted-foreground">{desc}</span>
                     </Label>
                     <Input id={id} type="number" min="0" max="604800" step="1" placeholder={placeholder} {...register(id as keyof AppSettings, { valueAsNumber: true, min: { value: 0, message: t("advanced.cache.validation.minZero") }, max: { value: 604800, message: t("advanced.cache.validation.max7days") } })} className="h-11 text-sm sm:h-9" />
-                    <p className="text-[13px] leading-5 text-muted-foreground">{hint}</p>
+                    <p className="text-xs leading-5 text-muted-foreground">{hint}</p>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <DvrFieldSelect cardId="cache" fieldKey="channel_cache_ttl" label={t("advanced.cache.channelList")} desc={t("advanced.cache.channelListDesc")} defaultValue="86400" options={[{ value: "3600", label: t("opt.1hour") }, { value: "21600", label: t("opt.6hours") }, { value: "43200", label: t("opt.12hours") }, { value: "86400", label: t("opt.24hours.default") }, { value: "259200", label: t("opt.3days") }, { value: "604800", label: t("opt.7days") }]} helpers={dvrHelpers} />
                 <DvrFieldSelect cardId="cache" fieldKey="program_cache_ttl" label={t("advanced.cache.programGuide")} desc={t("advanced.cache.programGuideDesc")} defaultValue="86400" options={[{ value: "3600", label: t("opt.1hour") }, { value: "21600", label: t("opt.6hours") }, { value: "43200", label: t("opt.12hours") }, { value: "86400", label: t("opt.24hours.default") }, { value: "259200", label: t("opt.3days") }, { value: "604800", label: t("opt.7days") }]} helpers={dvrHelpers} />
                 <DvrFieldSelect cardId="cache" fieldKey="job_cache_ttl" label={t("advanced.cache.recordingJobs")} desc={t("advanced.cache.recordingJobsDesc")} defaultValue="3600" options={[{ value: "900", label: t("opt.15min") }, { value: "1800", label: t("opt.30min") }, { value: "3600", label: t("opt.1hour.default") }, { value: "21600", label: t("opt.6hours") }, { value: "43200", label: t("opt.12hours") }, { value: "86400", label: t("opt.24hours") }]} helpers={dvrHelpers} />
@@ -88,28 +86,26 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
         )}
       </Card>
 
-      <Card className="border-blue-400/20 overflow-hidden">
-        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.rate} aria-controls="settings-rate-content" onClick={() => toggleAlert("rate")}>
-          <span className="flex gap-3 items-center">
-            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <Gauge className="h-5 w-5 text-blue-400" />
-            </span>
+      <Card className="overflow-hidden">
+        <button type="button" className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-fill transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.rate} aria-controls="settings-rate-content" onClick={() => toggleAlert("rate")}>
+          <span className="flex gap-2 items-center">
+            <Gauge className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>
-              <span className="block text-base font-medium">{t("advanced.rate.title")}</span>
+              <span className="block text-base font-semibold">{t("advanced.rate.title")}</span>
               <span className="block text-sm text-muted-foreground">{t("advanced.rate.desc")}</span>
             </span>
           </span>
-          <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.rate && "rotate-180")} />
+          <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out", expandedAlerts.rate && "rotate-180")} />
         </button>
         {expandedAlerts.rate && (
-          <CardContent id="settings-rate-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
+          <CardContent id="settings-rate-content" className="disclosure-enter border-t border-hairline pt-4 space-y-2">
             <DvrTabBar cardId="rate" helpers={dvrHelpers} />
             {dvrHelpers.getDvrTab("rate") === "global" ? (
-              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
-                <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="p-3 rounded-control bg-fill space-y-2">
                   <Label>
-                    <span className="text-sm block">{t("advanced.rate.maxNotif")}</span>
-                     <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.rate.maxNotifDesc")}</span>
+                    <span className="block text-sm">{t("advanced.rate.maxNotif")}</span>
+                     <span className="text-xs leading-5 text-muted-foreground">{t("advanced.rate.maxNotifDesc")}</span>
                   </Label>
                   <Select value={String(watch("global_rate_limit") || 20)} onValueChange={(value) => setValue("global_rate_limit", Number(value), { shouldDirty: true })}>
                   <SelectTrigger className="h-11 text-sm sm:h-9"><SelectValue /></SelectTrigger>
@@ -122,10 +118,9 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                      </SelectContent>
                   </Select>
                 </div>
-                <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+                <div className="p-3 rounded-control bg-fill space-y-2">
                   <Label>
-                    <span className="text-sm block">{t("advanced.rate.window")}</span>
-                     <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.rate.windowDesc")}</span>
+                    <span className="block text-sm">{t("advanced.rate.window")}</span>
                   </Label>
                   <Select value={String(watch("global_rate_window") || 300)} onValueChange={(value) => setValue("global_rate_window", Number(value), { shouldDirty: true })}>
                   <SelectTrigger className="h-11 text-sm sm:h-9"><SelectValue /></SelectTrigger>
@@ -140,32 +135,30 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <DvrFieldSelect cardId="rate" fieldKey="global_rate_limit" label={t("advanced.rate.maxNotif")} desc={t("advanced.rate.maxNotifDesc")} defaultValue="20" options={[{ value: "5", label: t("opt.5notif") }, { value: "10", label: t("opt.10notif") }, { value: "20", label: t("opt.20notif.default") }, { value: "50", label: t("opt.50notif") }, { value: "100", label: t("opt.100notif") }]} helpers={dvrHelpers} />
-                <DvrFieldSelect cardId="rate" fieldKey="global_rate_window" label={t("advanced.rate.window")} desc={t("advanced.rate.windowDesc")} defaultValue="300" options={[{ value: "60", label: t("opt.1min") }, { value: "300", label: t("opt.5min.default") }, { value: "900", label: t("opt.15min") }, { value: "1800", label: t("opt.30min") }, { value: "3600", label: t("opt.1hour") }]} helpers={dvrHelpers} />
+                <DvrFieldSelect cardId="rate" fieldKey="global_rate_window" label={t("advanced.rate.window")} defaultValue="300" options={[{ value: "60", label: t("opt.1min") }, { value: "300", label: t("opt.5min.default") }, { value: "900", label: t("opt.15min") }, { value: "1800", label: t("opt.30min") }, { value: "3600", label: t("opt.1hour") }]} helpers={dvrHelpers} />
               </div>
             )}
           </CardContent>
         )}
       </Card>
 
-      <Card className="border-blue-400/20 overflow-hidden">
-        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.timing} aria-controls="settings-timing-content" onClick={() => toggleAlert("timing")}>
-          <span className="flex gap-3 items-center">
-            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <Clock className="h-5 w-5 text-blue-400" />
-            </span>
+      <Card className="overflow-hidden">
+        <button type="button" className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-fill transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.timing} aria-controls="settings-timing-content" onClick={() => toggleAlert("timing")}>
+          <span className="flex gap-2 items-center">
+            <Clock className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>
-              <span className="block text-base font-medium">{t("advanced.timing.title")}</span>
+              <span className="block text-base font-semibold">{t("advanced.timing.title")}</span>
               <span className="block text-sm text-muted-foreground">{t("advanced.timing.desc")}</span>
             </span>
           </span>
-          <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.timing && "rotate-180")} />
+          <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out", expandedAlerts.timing && "rotate-180")} />
         </button>
         {expandedAlerts.timing && (
-          <CardContent id="settings-timing-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
+          <CardContent id="settings-timing-content" className="disclosure-enter border-t border-hairline pt-4 space-y-2">
             <DvrTabBar cardId="timing" helpers={dvrHelpers} />
-            <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50">
+            <div className="grid grid-cols-1 gap-2">
               {dvrHelpers.getDvrTab("timing") === "global" ? (
                 <>
                    {([
@@ -173,10 +166,10 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                       { key: "vod_alert_cooldown", label: t("advanced.timing.vodCooldown"), desc: t("advanced.timing.vodCooldownDesc"), defaultVal: "300", options: [{ value: "60", label: t("opt.1min") }, { value: "300", label: t("opt.5min.default") }, { value: "900", label: t("opt.15min") }, { value: "1800", label: t("opt.30min") }, { value: "3600", label: t("opt.1hour") }] },
                       { key: "vod_significant_threshold", label: t("advanced.timing.vodMinWatch"), desc: t("advanced.timing.vodMinWatchDesc"), defaultVal: "300", options: [{ value: "30", label: t("opt.30sec") }, { value: "60", label: t("opt.1min") }, { value: "300", label: t("opt.5min.default") }, { value: "600", label: t("opt.10min") }, { value: "900", label: t("opt.15min") }] },
                    ] satisfies Array<{ key: NumericSettingKey; label: string; desc: string; defaultVal: string; options: Array<{ value: string; label: string }> }>).map(({ key, label, desc, defaultVal, options }) => (
-                    <div key={key} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+                    <div key={key} className="p-3 rounded-control bg-fill space-y-2">
                       <Label>
-                        <span className="text-sm block">{label}</span>
-                        <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
+                        <span className="block text-sm">{label}</span>
+                        <span className="text-xs leading-5 text-muted-foreground">{desc}</span>
                       </Label>
                        <Select value={String(watch(key) || defaultVal)} onValueChange={(value) => setValue(key, Number(value), { shouldDirty: true })}>
                         <SelectTrigger className="h-11 text-sm sm:h-9"><SelectValue /></SelectTrigger>
@@ -201,42 +194,34 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
         )}
       </Card>
 
-      <Card className="border-blue-400/20 overflow-hidden">
-        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.diskAdvanced} aria-controls="settings-diskAdvanced-content" onClick={() => toggleAlert("diskAdvanced")}>
-          <span className="flex gap-3 items-center">
-            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <HardDrive className="h-5 w-5 text-blue-400" />
-            </span>
+      <Card className="overflow-hidden">
+        <button type="button" className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-fill transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.diskAdvanced} aria-controls="settings-diskAdvanced-content" onClick={() => toggleAlert("diskAdvanced")}>
+          <span className="flex gap-2 items-center">
+            <HardDrive className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>
-              <span className="block text-base font-medium">{t("advanced.diskControls.title")}</span>
+              <span className="block text-base font-semibold">{t("advanced.diskControls.title")}</span>
               <span className="block text-sm text-muted-foreground">{t("advanced.diskControls.desc")}</span>
             </span>
           </span>
-          <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.diskAdvanced && "rotate-180")} />
+          <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out", expandedAlerts.diskAdvanced && "rotate-180")} />
         </button>
         {expandedAlerts.diskAdvanced && (
-          <CardContent id="settings-diskAdvanced-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4 sm:pt-5">
+          <CardContent id="settings-diskAdvanced-content" className="disclosure-enter border-t border-hairline pt-4 space-y-4">
             <DvrTabBar cardId="disk" helpers={dvrHelpers} />
-            <div className="flex items-start gap-2 rounded-lg border border-blue-400/10 bg-blue-500/5 p-3">
-              <Info className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
-              <p className="text-[13px] leading-5 text-muted-foreground">
-                {t("advanced.diskControls.hint")}
-              </p>
-            </div>
 
             {dvrHelpers.getDvrTab("disk") === "global" ? (
               <div className={cn("space-y-4", !watch("alert_disk_space") && "opacity-50 pointer-events-none")}>
                  <div className="space-y-2">
-                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.severityThresholds")}</p>
-                  <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+                   <p className="text-xs font-medium text-muted-foreground">{t("advanced.diskControls.severityThresholds")}</p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {diskAdvancedThresholdFields.map(({ id, label, desc, min, max, step, suffix, placeholder }) => (
-                      <div key={id} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+                      <div key={id} className="p-3 rounded-control bg-fill space-y-2">
                         <Label htmlFor={id}>
-                          <span className="text-sm block">{label}</span>
-                          <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
+                          <span className="block text-sm">{label}</span>
+                          <span className="text-xs leading-5 text-muted-foreground">{desc}</span>
                         </Label>
                         <div className="flex items-center gap-2">
-                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={watch(id) ?? ""} onChange={(event) => setValue(id, Number(event.target.value) || 0, { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
+                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={numberFieldInputValue(watch(id))} onChange={(event) => setValue(id, parseNumberFieldInput(event.target.value), { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
                           <span className="text-muted-foreground text-sm shrink-0">{suffix}</span>
                         </div>
                       </div>
@@ -245,16 +230,16 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                 </div>
 
                 <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.timingBehavior")}</p>
-                   <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+                  <p className="text-xs font-medium text-muted-foreground">{t("advanced.diskControls.timingBehavior")}</p>
+                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                      {diskAdvancedBehaviorFields.map(({ id, label, desc, min, max, step, suffix, placeholder }) => (
-                      <div key={id} className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+                      <div key={id} className="p-3 rounded-control bg-fill space-y-2">
                         <Label htmlFor={id}>
-                          <span className="text-sm block">{label}</span>
-                          <span className="text-[13px] leading-5 text-muted-foreground">{desc}</span>
+                          <span className="block text-sm">{label}</span>
+                          {desc ? <span className="text-xs leading-5 text-muted-foreground">{desc}</span> : null}
                         </Label>
                         <div className="flex items-center gap-2">
-                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={watch(id) ?? ""} onChange={(event) => setValue(id, Number(event.target.value) || 0, { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
+                          <Input id={id} type="number" min={min} max={max} step={step} placeholder={placeholder} value={numberFieldInputValue(watch(id))} onChange={(event) => setValue(id, parseNumberFieldInput(event.target.value), { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
                           <span className="text-muted-foreground text-sm shrink-0">{suffix}</span>
                         </div>
                       </div>
@@ -263,15 +248,15 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                 </div>
 
                 <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.testRouting")}</p>
-                   <div className="rounded-xl p-3 border border-blue-400/10 bg-background/50">
-                     <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">{t("advanced.diskControls.testRouting")}</p>
+                   <div>
+                     <div className="p-3 rounded-control bg-fill space-y-2">
                        <Label htmlFor="ds_test_route_override">
-                         <span className="text-sm block">{t("advanced.diskControls.testRouteLabel")}</span>
-                         <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteDesc")}</span>
+                         <span className="block text-sm">{t("advanced.diskControls.testRouteLabel")}</span>
+                         <span className="text-xs leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteDesc")}</span>
                        </Label>
                        <Input id="ds_test_route_override" type="text" placeholder={t("advanced.diskControls.testRoutePlaceholder")} value={watch("ds_test_route_override") ?? ""} onChange={(event) => setValue("ds_test_route_override", event.target.value, { shouldDirty: true })} className="h-11 text-sm sm:h-9" />
-                       <p className="text-[13px] leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteFallback")}</p>
+                       <p className="text-xs leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteFallback")}</p>
                      </div>
                    </div>
                  </div>
@@ -279,8 +264,8 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
             ) : (
               <div className={cn("space-y-4", !dvrHelpers.dvrFieldValue("disk", "alert_disk_space").value && "opacity-50 pointer-events-none")}>
                 <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.severityThresholds")}</p>
-                   <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+                  <p className="text-xs font-medium text-muted-foreground">{t("advanced.diskControls.severityThresholds")}</p>
+                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                      {diskAdvancedThresholdFields.map(({ id, label, desc, min, max, step, suffix }) => (
                        <DvrFieldInput key={id} cardId="disk" fieldKey={id} label={label} desc={desc} min={min} max={max} step={step} suffix={suffix} helpers={dvrHelpers} />
                      ))}
@@ -288,8 +273,8 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                  </div>
 
                  <div className="space-y-2">
-                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.timingBehavior")}</p>
-                  <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
+                   <p className="text-xs font-medium text-muted-foreground">{t("advanced.diskControls.timingBehavior")}</p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {diskAdvancedBehaviorFields.map(({ id, label, desc, min, max, step, suffix }) => (
                       <DvrFieldInput key={id} cardId="disk" fieldKey={id} label={label} desc={desc} min={min} max={max} step={step} suffix={suffix} helpers={dvrHelpers} />
                     ))}
@@ -297,37 +282,34 @@ export function AdvancedSettingsSection({ form, dvrHelpers, expandedAlerts, togg
                 </div>
 
                  <div className="space-y-2">
-                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{t("advanced.diskControls.testRouting")}</p>
-                   <div className="rounded-xl p-3 border border-blue-400/10 bg-background/50">
+                   <p className="text-xs font-medium text-muted-foreground">{t("advanced.diskControls.testRouting")}</p>
+                   <div>
                      <DvrFieldText cardId="disk" fieldKey="ds_test_route_override" label={t("advanced.diskControls.testRouteLabel")} desc={t("advanced.diskControls.testRouteDesc")} placeholder={t("advanced.diskControls.testRoutePlaceholder")} helpers={dvrHelpers} />
                    </div>
-                   <p className="text-[13px] leading-5 text-muted-foreground">{t("advanced.diskControls.testRouteFallbackDvr")}</p>
                  </div>
               </div>
             )}
           </CardContent>
         )}
       </Card>
-      <Card className="border-blue-400/20 overflow-hidden">
-        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.errorReporting} aria-controls="settings-errorReporting-content" onClick={() => toggleAlert("errorReporting")}>
-          <span className="flex gap-3 items-center">
-            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <Bug className="h-5 w-5 text-blue-400" />
-            </span>
+      <Card className="overflow-hidden">
+        <button type="button" className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-fill transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.errorReporting} aria-controls="settings-errorReporting-content" onClick={() => toggleAlert("errorReporting")}>
+          <span className="flex gap-2 items-center">
+            <Bug className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>
-              <span className="block text-base font-medium">{t("advanced.errorReporting.title")}</span>
+              <span className="block text-base font-semibold">{t("advanced.errorReporting.title")}</span>
               <span className="block text-sm text-muted-foreground">{t("advanced.errorReporting.desc")}</span>
             </span>
           </span>
-          <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.errorReporting && "rotate-180")} />
+          <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out", expandedAlerts.errorReporting && "rotate-180")} />
         </button>
         {expandedAlerts.errorReporting && (
-          <CardContent id="settings-errorReporting-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-2 sm:pt-5">
-            <div className="rounded-xl p-3 border border-blue-400/10 bg-background/50">
-              <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+          <CardContent id="settings-errorReporting-content" className="disclosure-enter border-t border-hairline pt-4 space-y-2">
+            <div>
+              <div className="p-3 rounded-control bg-fill space-y-2">
                 <Label htmlFor="error_reporting_dsn">
-                  <span className="text-sm block">{t("advanced.errorReporting.dsnLabel")}</span>
-                  <span className="text-[13px] leading-5 text-muted-foreground">{t("advanced.errorReporting.dsnDesc")}</span>
+                  <span className="block text-sm">{t("advanced.errorReporting.dsnLabel")}</span>
+                  <span className="text-xs leading-5 text-muted-foreground">{t("advanced.errorReporting.dsnDesc")}</span>
                 </Label>
                 <Input
                   id="error_reporting_dsn"

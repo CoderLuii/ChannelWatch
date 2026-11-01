@@ -8,6 +8,7 @@ import { Button } from "@/components/base/button"
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
 import { ApiError, ApiUnavailableError, applyRecoveryUpdate, checkRecoveryUpdate, fetchRecoveryUpdateStatus, verifyStartupReady, type RecoveryUpdateStatus } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
 import { t } from "@/lib/i18n"
 import { applyUpdateAndReconnect, reloadUpdatedDashboard, UpdateReadinessError, UpdateReconnectError } from "@/lib/update-reconnect"
 
@@ -78,7 +79,7 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
   const latest = status.latest
   const latestVersion = latest?.version ?? null
   const latestVersionLabel = latest?.version_tag ?? latestVersion ?? t("common.unknown")
-  const confirmationValid = !status.confirmation_required || confirmation === RECOVERY_UPDATE_CONFIRMATION
+  const confirmationValid = !status.confirmation_required || confirmation.trim().toUpperCase() === RECOVERY_UPDATE_CONFIRMATION
   const authorizationReady = !compact || Boolean(bootstrapCsrfRef.current)
   const canApply = Boolean(status.update_available && !status.image_required && latestVersion && confirmationValid && authorizationReady && busy === "idle")
 
@@ -121,7 +122,7 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
             try {
               acceptStatus(await checkRecoveryUpdate(bootstrapCsrfRef.current))
             } catch (nextError) {
-              setError(nextError instanceof Error ? nextError.message : t("updates.error.default"))
+              setError(describeError(nextError, t("updates.error.default")).message)
             } finally {
               setBusy("idle")
             }
@@ -155,7 +156,16 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
                 setConfirmation("")
                 setMessage(result?.message ?? t("runtimeRecovery.updateStarted"))
               } catch (nextError) {
-                setError(nextError instanceof Error ? nextError.message : t("updates.error.default"))
+                setError(describeError(nextError, t("updates.error.default")).message)
+                // The bootstrap token is single-use, so a failed apply has
+                // already consumed it. Fetch a fresh token before any retry.
+                bootstrapCsrfRef.current = null
+                setConfirmation("")
+                try {
+                  acceptStatus(await fetchRecoveryUpdateStatus())
+                } catch {
+                  // Keep the original error visible; the next status poll retries.
+                }
               } finally {
                 setBusy("idle")
               }
@@ -169,25 +179,25 @@ export function OfficialRecoveryUpdateActions({ compact = false }: { compact?: b
 
       {!status.update_available ? <p role="status" className="text-sm text-muted-foreground">{t("runtimeRecovery.updateCurrent")}</p> : null}
       {!authorizationReady ? <p role="status" className="text-sm text-muted-foreground">{t("runtimeRecovery.updateSignInRequired")}</p> : null}
-      {status.image_required ? <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("runtimeRecovery.updateImageRequired")}</p> : null}
+      {status.image_required ? <p role="status" className="text-sm text-warning-fg">{t("runtimeRecovery.updateImageRequired")}</p> : null}
       {status.update_available && !status.image_required && status.image_update_available && status.recommended_image_version ? (
-        <p role="status" className="text-sm text-amber-700 dark:text-amber-300">
+        <p role="status" className="text-sm text-warning-fg">
           {t("runtimeRecovery.intermediateUpdateAvailable", {
             appVersion: latestVersionLabel,
             imageVersion: `v${status.recommended_image_version.replace(/^v/, "")}`,
           })}
         </p>
       ) : null}
-      {message ? <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{message}</p> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {message ? <p role="status" className="text-sm text-success-fg">{message}</p> : null}
+      {error ? <p role="alert" className="text-sm text-danger-fg">{error}</p> : null}
     </div>
   )
 
   if (compact) return content
 
   return (
-    <Alert className="border-sky-500/30 bg-sky-500/5">
-      <DownloadCloud className="h-4 w-4 text-sky-600" />
+    <Alert>
+      <DownloadCloud className="h-4 w-4 text-muted-foreground" />
       <AlertTitle>{t("runtimeRecovery.updateTitle")}</AlertTitle>
       <AlertDescription>{content}</AlertDescription>
     </Alert>

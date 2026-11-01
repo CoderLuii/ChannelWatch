@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/base/button";
+import { pageTitleClassName } from "@/components/base/page-header"
 import type { AppSettings, DVRStatusInfo, RecordingInfo } from "@/lib/types";
-import { RefreshCw, Loader2, Tv, Calendar } from "lucide-react";
+import { RefreshCw, Loader2, Tv, Calendar, Clock, HardDrive } from "lucide-react";
 import {
   fetchSystemInfo,
   fetchUpcomingRecordings,
@@ -13,8 +14,10 @@ import {
   fetchDvrStreams,
   fetchDvrUpcomingRecordings,
   fetchActivityClientFilters,
+  failureKind,
+  SESSION_RESTORED_EVENT,
 } from "@/lib/api";
-import type { ActivityClientFacet } from "@/lib/api";
+import type { ActivityClientFacet, StreamDetails } from "@/lib/api";
 import { canonicalActivityClientValue } from "@/lib/activity-clients";
 import {
   buildActivityTimeline,
@@ -23,7 +26,8 @@ import {
 import { useDvrSelection } from "@/lib/dvr-selection-context";
 import { t } from "@/lib/i18n";
 import type { ActivityItem } from "@/lib/types";
-import { formatDiskSizeFromGB } from "@/lib/utils";
+import { collapseRepeatedDiskAlerts } from "@/lib/activity-presentation";
+import { cn, formatDiskSizeFromGB, formatUptimeTile } from "@/lib/utils";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { UptimeCard } from "@/components/dashboard/uptime-card";
 import {
@@ -38,33 +42,49 @@ import { RecentActivityList } from "@/components/dashboard/recent-activity-list"
 import { UpcomingRecordingsList } from "@/components/dashboard/upcoming-recordings-list";
 import { MobileDashboardDetails } from "@/components/dashboard/mobile-dashboard-details";
 import { MaintenanceWindowsCard } from "@/components/dashboard/maintenance-windows-card";
+import { HealthVerdictLine } from "@/components/dashboard/health-verdict-line";
+import { NowList } from "@/components/dashboard/now-list";
+import { buildHealthVerdict, type HealthVerdictActionKind } from "@/lib/health-verdict";
+import { isRateLimited } from "@/lib/rate-limit";
+import type { FailureKind } from "@/lib/error-catalog";
+import { formatCountdown, formatFreshness } from "@/lib/relative-time";
 
 interface StatusOverviewProps {
   settings: AppSettings | null;
   onNavigate?: (view: string) => void;
+  noSignIn?: boolean;
+  /** Home stays mounted behind other tabs. Paused, it holds its data and reads nothing. */
+  paused?: boolean;
 }
 
-export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
+export function StatusOverview({ settings, onNavigate, noSignIn, paused = false }: StatusOverviewProps) {
   const { selectedDvr } = useDvrSelection();
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [lastSuccessAt, setLastSuccessAt] = useState<Date | null>(null);
+  const [freshnessNow, setFreshnessNow] = useState(() => Date.now());
+  const [diskSheetSignal, setDiskSheetSignal] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [failedFetches, setFailedFetches] = useState<Set<string>>(new Set());
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [systemFailureKind, setSystemFailureKind] = useState<FailureKind | undefined>(undefined);
   const metricsIntervalRef = React.useRef<ReturnType<
     typeof setInterval
   > | null>(null);
   const refreshInFlightRef = React.useRef(false);
+  const pausedRef = React.useRef(paused);
+  pausedRef.current = paused;
+  const staleWhilePausedRef = React.useRef(false);
   const latestRefreshRef = React.useRef<
     (manual?: boolean) => Promise<void> | void
   >(() => undefined);
   const [coreStartedAt, setCoreStartedAt] = useState<Date | null>(null);
   const [uiStartedAt, setUiStartedAt] = useState<Date | null>(null);
-  const [coreUptime, setCoreUptime] = useState({
-    days: 0,
-    hours: 0,
-    minutes: 0,
-    seconds: 0,
-  });
+  const [coreUptime, setCoreUptime] = useState<{
+    days: number;
+    hours: number;
+    minutes: number;
+    seconds: number;
+  } | null>(null);
   const [uiUptimeDisplay, setUiUptimeDisplay] = useState<string>(t("uptime.unavailable"));
   const [diskSpace, setDiskSpace] = useState<DiskSpaceState>({
     usedPercent: 0,
@@ -82,16 +102,19 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     DiskSeverity | undefined
   >(undefined);
   const [dvrStatusList, setDvrStatusList] = useState<DVRStatusInfo[]>([]);
-  const [activeStreams, setActiveStreams] = useState(0);
+  const [activeStreams, setActiveStreams] = useState<number | null>(null);
+  const [watching, setWatching] = useState<StreamDetails["watching"]>([]);
+  const [recording, setRecording] = useState<StreamDetails["recording"]>([]);
   const [streamSubtitle, setStreamSubtitle] = useState(
     t("statusOverview.noActiveStreams"),
   );
   const [streamImage, setStreamImage] = useState("");
-  const [upcomingRecordings, setUpcomingRecordings] = useState(0);
+  const [upcomingRecordings, setUpcomingRecordings] = useState<number | null>(null);
   const [upcomingRecordingsList, setUpcomingRecordingsList] = useState<
     RecordingInfo[]
   >([]);
   const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
+  const [activityTotal, setActivityTotal] = useState(0);
   const [clientActivity, setClientActivity] = useState<ActivityItem[] | null>(null);
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [clientFacets, setClientFacets] = useState<ActivityClientFacet[]>([]);
@@ -112,11 +135,6 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const [selectedFilters, setSelectedFilters] = useState<string[]>(["all"]);
   const [streamingData, setStreamingData] = useState<ActivityTimelinePoint[]>([]);
 
-  const [chartVisibility, setChartVisibility] = useState({
-    streams: true,
-    recordings: true,
-    vod: true,
-  });
   const [refreshedSettings, setRefreshedSettings] =
     useState<AppSettings | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -140,7 +158,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       const freeGB = diskFreeGb;
       const usedGB = totalGB - freeGB;
       const usedPercent = diskUsagePercent;
-      const freePercent = 100 - usedPercent;
+      const freePercent = Math.round((100 - usedPercent) * 10) / 10;
       setDiskSpace({
         usedPercent,
         freePercent,
@@ -152,6 +170,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         libraryMovies: libMovies,
         libraryEpisodes: libEpisodes,
         usedFormatted: formatDiskSizeFromGB(usedGB),
+        totalGb: totalGB,
+        freeGb: freeGB,
       });
     } else {
       setDiskSpace((prev: DiskSpaceState) => ({
@@ -227,14 +247,17 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         setDvrStatusList(nextDvrStatuses);
       }
       markFetchFailure("system", false);
+      setSystemFailureKind(undefined);
       return nextDvrStatuses;
     } catch (error) {
+      const kind = failureKind(error);
+      setSystemFailureKind(kind);
       setCoreProcessStatus("Unavailable");
       setDiskServerSeverity(undefined);
       setDiskSpace((prev: DiskSpaceState) => ({
         ...prev,
         loading: false,
-        error: t("statusOverview.diskError"),
+        error: t(kind === "unreachable" ? "statusOverview.diskError" : "statusOverview.diskUnavailable"),
       }));
       markFetchFailure("system", true);
       console.error("Error fetching system info:", error);
@@ -252,6 +275,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         setUpcomingRecordingsList(upcomingRecords);
         setUpcomingRecordings(upcomingRecords.length);
         setActiveStreams(streamData.total);
+        setWatching(streamData.watching ?? []);
+        setRecording(streamData.recording ?? []);
         setStreamSubtitle(streamData.subtitle);
         setStreamImage(streamData.image || "");
       } else {
@@ -260,6 +285,8 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         setUpcomingRecordings(upcomingRecords.length);
         const streamData = await fetchStreamDetails();
         setActiveStreams(streamData.total);
+        setWatching(streamData.watching ?? []);
+        setRecording(streamData.recording ?? []);
         setStreamSubtitle(streamData.subtitle);
         setStreamImage(streamData.image || "");
       }
@@ -285,11 +312,11 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     }, maxItems);
   };
 
-  const fetchAggregateActivityData = async () => {
+  const fetchAggregateActivityData = async (background = false) => {
     aggregateActivityRequestRef.current?.abort();
     const controller = new AbortController();
     aggregateActivityRequestRef.current = controller;
-    setActivityLoading(true);
+    if (!background) setActivityLoading(true);
     try {
       const [timelineActivity, recent] = activityHours === 24
         ? await loadActivity(controller).then((activity) => [activity, activity.slice(0, 250)] as const)
@@ -299,6 +326,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           ]);
       if (controller.signal.aborted) return;
       setRecentActivity(recent);
+      setActivityTotal(activityHours === 24 ? timelineActivity.length : recent.length);
       const chartData = buildActivityTimeline(timelineActivity);
       setStreamingData(chartData);
       markFetchFailure("activity", false);
@@ -341,12 +369,20 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     }
   };
 
-  const fetchActivityData = async () => {
+  const fetchActivityData = async (background = false) => {
     await Promise.all([
-      fetchAggregateActivityData(),
+      fetchAggregateActivityData(background),
       fetchClientActivityData(),
     ]);
   };
+
+  const refreshAfterSignIn = useRef(fetchActivityData);
+  refreshAfterSignIn.current = fetchActivityData;
+  useEffect(() => {
+    const refresh = () => void refreshAfterSignIn.current(true);
+    window.addEventListener(SESSION_RESTORED_EVENT, refresh);
+    return () => window.removeEventListener(SESSION_RESTORED_EVENT, refresh);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -424,7 +460,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     if (settingsToUse.alert_recording_events)
       alertTypes.push(t("alerts.recordingEvents.title"));
     if (settingsToUse.alert_dvr_health)
-      alertTypes.push(t("alerts.health.title"));
+      alertTypes.push(t("alerts.health.label"));
     return alertTypes;
   };
 
@@ -433,6 +469,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   const startMetricsTimer = React.useCallback(() => {
     if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
     metricsIntervalRef.current = setInterval(() => {
+      if (isRateLimited() || pausedRef.current) return;
       latestRefreshRef.current();
     }, 30000);
   }, []);
@@ -459,6 +496,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
         await wait();
         if (cancelled) return;
+        if (pausedRef.current) continue;
         const statuses = await fetchSystemData();
         if (cancelled) return;
         setLastUpdated(new Date());
@@ -481,7 +519,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   }, [transientMonitoringSignature, selectedDvr]);
 
   useEffect(() => {
-    if (dataLoaded) fetchActivityData();
+    if (dataLoaded && !pausedRef.current) fetchActivityData();
     startMetricsTimer();
     return () => {
       if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
@@ -495,6 +533,10 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
+      return;
+    }
+    if (pausedRef.current) {
+      staleWhilePausedRef.current = true;
       return;
     }
     setDataLoaded(false);
@@ -538,7 +580,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         const hours = Math.floor(uiDiff / 3600);
         uiDiff %= 3600;
         const minutes = Math.floor(uiDiff / 60);
-        setUiUptimeDisplay(days > 0 ? `${days}d ${hours}h ${minutes}m` : `${hours}h ${minutes}m`);
+        setUiUptimeDisplay(formatUptimeTile({ days, hours, minutes }));
       }
     };
     tick();
@@ -547,6 +589,10 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   }, [coreStartedAt, uiStartedAt]);
 
   useEffect(() => {
+    if (pausedRef.current && dataLoaded) {
+      staleWhilePausedRef.current = true;
+      return;
+    }
     fetchSettings()
       .then((newSettings) => {
         setRefreshedSettings(newSettings);
@@ -588,17 +634,18 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   }, [settings]);
 
   const refreshDashboardData = async (manual = false) => {
+    // The 30-second tick stays silent, so the page only moves when something changed.
+    if (manual) setIsRefreshing(true);
     // Ref-based gate (state updates are async and can race between rapid ticks).
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
 
     try {
-      setIsRefreshing(true);
-
       await Promise.allSettled([
         fetchSystemData(),
         fetchRecordingsInfo(),
-        fetchActivityData(),
+        // The button already shows a manual refresh, so the list stays put either way.
+        fetchActivityData(true),
       ]);
 
       setDataLoaded(true);
@@ -617,9 +664,43 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
 
   latestRefreshRef.current = refreshDashboardData;
 
-  const formatLastUpdated = () => {
-    return lastUpdated?.toLocaleTimeString() ?? t("common.loading");
-  };
+  // Only a clean pass counts as fresh. A failed read leaves the last good time where it was.
+  const lastUpdatedTime = lastUpdated?.getTime() ?? 0;
+  const failureCount = failedFetches.size;
+  useEffect(() => {
+    if (lastUpdatedTime > 0 && failureCount === 0) setLastSuccessAt(new Date(lastUpdatedTime));
+  }, [lastUpdatedTime, failureCount]);
+
+  useEffect(() => {
+    if (paused) return;
+    setFreshnessNow(Date.now());
+    const timer = setInterval(() => setFreshnessNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, [paused, lastUpdatedTime]);
+
+  // Back on Home: read at once, then pick up a DVR or settings change made elsewhere.
+  const wasPausedRef = React.useRef(paused);
+  useEffect(() => {
+    if (wasPausedRef.current && !paused) {
+      if (staleWhilePausedRef.current) {
+        staleWhilePausedRef.current = false;
+        fetchSettings()
+          .then((newSettings) => {
+            setRefreshedSettings(newSettings);
+            const services = calculateActiveNotificationServices(newSettings);
+            setActiveNotificationServices(services.count);
+            setActiveProviderNames(services.names);
+            setActiveAlertTypes(getActiveAlertTypes(newSettings));
+          })
+          .catch(() => undefined);
+      }
+      void latestRefreshRef.current(false);
+      startMetricsTimer();
+    }
+    wasPausedRef.current = paused;
+    // Runs on the paused edge only; the refresh goes through the latest closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paused]);
 
   const currentSettings = refreshedSettings || settings;
   const diskSeverity = resolveDiskSeverity({
@@ -636,7 +717,9 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
       };
 
   const filteredActivity = React.useMemo((): ActivityItem[] => {
-    const sourceActivity = selectedClient ? (clientActivity ?? []) : recentActivity;
+    const sourceActivity = collapseRepeatedDiskAlerts(
+      selectedClient ? (clientActivity ?? []) : recentActivity,
+    );
     if (selectedFilters.includes("all")) {
       return sourceActivity;
     }
@@ -669,7 +752,7 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
         return true;
       }
 
-      if (activity.type === "disk_alert") {
+      if (activity.type === "disk_alert" || activity.type === "disk_recovered") {
         return true;
       }
 
@@ -709,10 +792,6 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     return t("statusOverview.filtersCount", { count: selectedFilters.length });
   };
 
-  const handleToggleChartVisibility = (key: keyof typeof chartVisibility) => {
-    setChartVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
   const statusPanelDvrStatusList = React.useMemo(
     () => selectedDvr === "all"
       ? dvrStatusList
@@ -721,21 +800,13 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
   );
 
   let nextRecordingLabel = t("dashboard.noUpcomingRecordings");
-  if (upcomingRecordings > 0) {
+  if (upcomingRecordings) {
     const next = upcomingRecordingsList[0];
     if (next && next.start_time && lastUpdated) {
-      const diffMin = Math.floor((next.start_time * 1000 - lastUpdated.getTime()) / 60000);
-      if (diffMin <= 0) {
-        nextRecordingLabel = t("dashboard.recordingNow");
-      } else {
-        const h = Math.floor(diffMin / 60);
-        const m = diffMin % 60;
-        const countdown = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
-        nextRecordingLabel = t("dashboard.nextRecording", {
-          title: next.title,
-          countdown,
-        });
-      }
+      const countdown = formatCountdown(next.start_time, lastUpdated.getTime());
+      nextRecordingLabel = countdown
+        ? t("dashboard.nextRecording", { title: next.title, countdown })
+        : t("dashboard.recordingNow", { title: next.title });
     } else {
       nextRecordingLabel = t("dashboard.recordingsScheduled", {
         count: upcomingRecordings,
@@ -743,88 +814,130 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
     }
   }
 
+  const healthVerdict = buildHealthVerdict({
+    loaded: dataLoaded,
+    coreStatus: coreProcessStatus,
+    dvrs: statusPanelDvrStatusList,
+    diskSeverity,
+    diskDetail: diskSpace.freeFormatted && diskSpace.totalFormatted
+      ? t("dashboard.verdict.diskDetail", { free: diskSpace.freeFormatted, total: diskSpace.totalFormatted })
+      : undefined,
+    hasFailedFetches: failedFetches.size > 0,
+    failureKind: systemFailureKind,
+    notificationServices: currentSettings ? activeNotificationServices : undefined,
+  });
+
+  const handleVerdictAction = (kind: HealthVerdictActionKind) => {
+    if (kind === "disk") setDiskSheetSignal((current) => current + 1);
+    else if (kind === "add-dvr") onNavigate?.("settings:general");
+    else onNavigate?.(kind === "notifications" ? "settings:notifications" : "diagnostics");
+  };
+
+  const scrollToSection = (testId: string) => {
+    document.querySelector(`[data-testid="${testId}"]`)?.scrollIntoView({
+      block: "start",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  };
+
+  const hasFailures = failedFetches.size > 0;
+  const freshnessText = formatFreshness(lastSuccessAt, hasFailures, freshnessNow);
+
+  // One grid with named areas per width (see .home-grid). reading-flow keeps focus and
+  // screen readers in visual order where the browser supports it.
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3 sm:gap-4">
-        <div className="min-w-0 flex-1 basis-56">
-          <h1 className="break-words pt-1 text-[28px] font-semibold leading-tight tracking-tight md:pt-0 md:text-[32px]">
+    <div className="home-grid">
+      <HealthVerdictLine verdict={healthVerdict} onAction={handleVerdictAction} className="home-area-verdict" />
+      <div className="home-freshness home-area-fresh flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:gap-x-4">
+        <div className="min-w-0 flex-1 basis-40">
+          <h1 className={cn(pageTitleClassName, "max-md:sr-only")}>
             {t("dashboard.title")}
           </h1>
           <p
-            className={`mt-1 break-words text-[13px] [overflow-wrap:anywhere] ${failedFetches.size > 0 ? "text-red-500" : "text-muted-foreground"}`}
-            aria-live="polite"
+            data-testid="home-freshness"
+            className={`break-words text-xs tabular-nums md:mt-1 ${hasFailures ? "text-warning-fg" : "text-muted-foreground"}`}
+            title={lastSuccessAt?.toLocaleString() ?? undefined}
+            aria-live={hasFailures ? "polite" : "off"}
           >
-            {t("dashboard.lastUpdated", { time: formatLastUpdated() })}
-            {failedFetches.size > 0 ? t("dashboard.staleWarning") : ""}
+            {freshnessText}
           </p>
         </div>
-        <div className="flex min-w-0 max-w-full gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-auto min-h-11 max-w-full whitespace-normal rounded-xl px-4 py-2 text-center"
-            onClick={() => refreshDashboardData(true)}
-            disabled={isRefreshing}
-            aria-label={t("common.refresh")}
-          >
-            {isRefreshing ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-2" />
-            )}
-            {t("common.refresh")}
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-mr-3 h-auto min-h-11 whitespace-nowrap px-3 py-2 text-center"
+          onClick={() => refreshDashboardData(true)}
+          disabled={isRefreshing}
+        >
+          {isRefreshing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4" />
+          )}
+          {isRefreshing ? t("dashboard.refreshing") : t("common.refresh")}
+        </Button>
+      </div>
+
+      <div className="home-area-heart">
+      <div className="home-area-now min-w-0">
+        <NowList
+          watching={watching}
+          recording={recording}
+          loading={!dataLoaded}
+          hasError={failedFetches.has("recordings")}
+        />
+      </div>
+
+      <div className="home-area-upcoming min-w-0 xl:[&>*]:h-full">
+        <UpcomingRecordingsList
+          recordings={upcomingRecordingsList}
+          count={upcomingRecordings ?? 0}
+          loading={!dataLoaded}
+          hasError={failedFetches.has("recordings")}
+          onRetry={fetchRecordingsInfo}
+        />
+      </div>
       </div>
 
       {/* Key Metrics Section */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div data-testid="dashboard-kpi-grid" className="home-area-tiles grid grid-cols-[repeat(auto-fit,minmax(min(100%,9.5rem),1fr))] gap-3 md:grid-cols-2 lg:grid-cols-4 xl:auto-rows-[minmax(12.375rem,auto)]">
         <MetricCard
           title={t("dashboard.activeStreams")}
           icon={Tv}
           value={activeStreams}
-          subtitle={streamSubtitle}
+          subtitle={activeStreams === 0 ? t("dashboard.tile.nothingPlaying") : streamSubtitle}
           backgroundImage={streamImage}
           loading={!dataLoaded}
           hasError={failedFetches.has("recordings")}
-          gradientClasses="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-950 dark:to-blue-900 border-blue-200 dark:border-blue-800"
-          iconBgClass="bg-blue-500/20"
-          iconColorClass="text-blue-600 dark:text-blue-400"
-          valueColorClass="text-blue-700 dark:text-blue-300"
-          subtitleColorClass="text-blue-700 dark:text-blue-400"
-          loadingColorClass="text-blue-700 dark:text-blue-400"
+          asOf={lastSuccessAt?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          onActivate={activeStreams ? () => scrollToSection("now-list") : undefined}
+          activateLabel={t("dashboard.tile.scrollToNow", { value: activeStreams ?? "–" })}
         />
-
-        <MobileDashboardDetails integratedCard id="mobile-uptime-details" title={t("uptime.title")} summary={`${coreUptime.days}d ${coreUptime.hours}h ${coreUptime.minutes}m`} className="order-last xl:order-none" hasError={failedFetches.has("system")}><UptimeCard
-          coreUptime={coreUptime}
-          uiUptimeDisplay={uiUptimeDisplay}
-          dvrStatusList={dvrStatusList}
-          loading={!dataLoaded}
-          hasError={failedFetches.has("system")}
-        /></MobileDashboardDetails>
 
         <MetricCard
           title={t("dashboard.upcomingRecordings")}
+          mobileTitle={t("dashboard.tile.upcoming")}
           icon={Calendar}
           value={upcomingRecordings}
           subtitle={nextRecordingLabel}
           backgroundImage={upcomingRecordingsList[0]?.image || ""}
           loading={!dataLoaded}
           hasError={failedFetches.has("recordings")}
-          gradientClasses="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-950 dark:to-amber-900 border-amber-200 dark:border-amber-800"
-          iconBgClass="bg-amber-500/20"
-          iconColorClass="text-amber-600 dark:text-amber-400"
-          valueColorClass="text-amber-700 dark:text-amber-300"
-          subtitleColorClass="text-amber-700 dark:text-amber-400"
-          loadingColorClass="text-amber-700 dark:text-amber-400"
+          asOf={lastSuccessAt?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          onActivate={upcomingRecordings ? () => scrollToSection("upcoming-recordings") : undefined}
+          activateLabel={t("dashboard.tile.scrollToUpcoming", { value: upcomingRecordings ?? "–" })}
         />
 
         <MobileDashboardDetails
           id="mobile-disk-details"
           integratedCard
           title={t("disk.title")}
-          summary={!dataLoaded ? t("common.loading") : diskSpace.error || (failedFetches.has("system") ? t("uptime.unavailable") : t("disk.free", { value: diskSpace.freeFormatted }))}
+          summary={t("dashboard.tile.diskFreeOf", { total: diskSpace.totalFormatted })}
+          errorSummary={diskSpace.error || t("statusOverview.diskUnavailable")}
           summaryStatus={dataLoaded && !diskSpace.error && !failedFetches.has("system") ? diskSummaryStatus : undefined}
+          hasError={dataLoaded && (Boolean(diskSpace.error) || failedFetches.has("system"))}
+          tile={{ label: t("dashboard.tile.diskLeft"), value: diskSpace.freeFormatted || null, icon: HardDrive, loading: !dataLoaded }}
+          openSignal={diskSheetSignal}
         ><DiskSpaceCard
           diskSpace={diskSpace}
           loading={!dataLoaded}
@@ -836,32 +949,28 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           criticalThresholdPercent={
             currentSettings?.ds_critical_threshold_percent
           }
+          warningThresholdGb={currentSettings?.ds_warning_threshold_gb}
+          criticalThresholdGb={currentSettings?.ds_critical_threshold_gb}
+        /></MobileDashboardDetails>
+
+        <MobileDashboardDetails
+          integratedCard
+          id="mobile-uptime-details"
+          title={t("uptime.title")}
+          summary={t("dashboard.tile.uptimeSince")}
+          errorSummary={t("uptime.unavailable")}
+          hasError={failedFetches.has("system")}
+          tile={{ label: t("dashboard.tile.uptime"), value: coreUptime ? formatUptimeTile(coreUptime) : null, icon: Clock, loading: !dataLoaded }}
+        ><UptimeCard
+          coreUptime={coreUptime}
+          uiUptimeDisplay={uiUptimeDisplay}
+          dvrStatusList={dvrStatusList}
+          loading={!dataLoaded}
+          hasError={failedFetches.has("system")}
         /></MobileDashboardDetails>
       </div>
 
-      {/* Combined Streaming Activity and Status */}
-      <div className="grid gap-4 xl:grid-cols-3">
-        <MobileDashboardDetails id="mobile-timeline-details" title={t("timeline.title")} summary={t("timeline.description")} className="order-last xl:order-none"><ActivityTimeline
-          streamingData={streamingData}
-          chartVisibility={chartVisibility}
-          onToggleVisibility={handleToggleChartVisibility}
-        /></MobileDashboardDetails>
-
-        <StatusPanel
-          dvrStatusList={statusPanelDvrStatusList}
-          activeNotificationServices={activeNotificationServices}
-          activeProviderNames={activeProviderNames}
-          activeAlertTypes={activeAlertTypes}
-          coreProcessStatus={coreProcessStatus}
-          channelwatchVersion={channelwatchVersion}
-          currentSettings={currentSettings}
-          onNavigate={onNavigate}
-          selectedDvr={selectedDvr}
-        />
-      </div>
-
-      {/* Recent Activity and Upcoming Recordings side by side */}
-      <div data-testid="dashboard-activity-recordings" className="grid gap-4 xl:grid-cols-2">
+      <div data-testid="dashboard-activity-recordings" className="home-area-activity min-w-0 xl:[&>*]:h-full">
         <RecentActivityList
           recentActivity={recentActivity}
           filteredActivity={filteredActivity}
@@ -883,19 +992,37 @@ export function StatusOverview({ settings, onNavigate }: StatusOverviewProps) {
           clientsLoading={clientFacetsLoading}
           clientsError={clientFacetsError}
           clientStatus={clientFilterStatus}
-        />
-
-        <UpcomingRecordingsList
-          recordings={upcomingRecordingsList}
-          count={upcomingRecordings}
+          totalCount={selectedClient || !selectedFilters.includes("all") ? undefined : activityTotal}
+          onNavigate={onNavigate}
         />
       </div>
 
-      <MaintenanceWindowsCard
-        selectedDvr={selectedDvr}
-        refreshKey={lastUpdated?.getTime() ?? 0}
-      />
+      <div className="home-area-timeline min-w-0 xl:[&>*]:h-full">
+        <ActivityTimeline streamingData={streamingData} loading={!dataLoaded} />
+      </div>
 
+      <div className="home-area-status min-w-0">
+        <StatusPanel
+          dvrStatusList={statusPanelDvrStatusList}
+          activeNotificationServices={activeNotificationServices}
+          activeProviderNames={activeProviderNames}
+          activeAlertTypes={activeAlertTypes}
+          coreProcessStatus={coreProcessStatus}
+          channelwatchVersion={channelwatchVersion}
+          currentSettings={currentSettings}
+          onNavigate={onNavigate}
+          selectedDvr={selectedDvr}
+          noSignIn={noSignIn}
+          dataLoaded={dataLoaded}
+        />
+      </div>
+
+      <div className="home-area-maintenance min-w-0">
+        <MaintenanceWindowsCard
+          selectedDvr={selectedDvr}
+          refreshKey={lastUpdated?.getTime() ?? 0}
+        />
+      </div>
     </div>
   );
 }

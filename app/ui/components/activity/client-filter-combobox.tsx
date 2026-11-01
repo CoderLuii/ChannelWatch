@@ -20,6 +20,31 @@ interface ClientFilterComboboxProps {
   ariaLabel?: string
 }
 
+/** The searchable client list on its own, for a sheet where a popover would be one layer too many. */
+export function ClientFilterList({ clients, value, onChange, listClassName }: { clients: ActivityClientFacet[]; value: string | null; onChange: (value: string | null) => void; listClassName?: string }) {
+  return (
+    <Command className="rounded-control bg-fill">
+      <CommandInput placeholder={t("activity.searchClients")} />
+      <CommandList className={listClassName}>
+        <CommandEmpty>{t("activity.noClients")}</CommandEmpty>
+        <CommandGroup>
+          <CommandItem value={t("activity.allClients")} onSelect={() => onChange(null)} className="min-h-11">
+            <Check className={cn("h-4 w-4", value === null ? "opacity-100" : "opacity-0")} />
+            <span>{t("activity.allClients")}</span>
+          </CommandItem>
+          {clients.map((client) => (
+            <CommandItem key={client.value} value={`${client.label} ${client.value}`} onSelect={() => onChange(client.value)} className="min-h-11">
+              <Check className={cn("h-4 w-4 shrink-0", value === client.value ? "opacity-100" : "opacity-0")} />
+              <span className="line-clamp-2 min-w-0 flex-1 break-words" title={client.label}>{client.label}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">{client.count}</span>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      </CommandList>
+    </Command>
+  )
+}
+
 export function ClientFilterCombobox({
   clients,
   value,
@@ -43,7 +68,7 @@ export function ClientFilterCombobox({
           aria-label={ariaLabel}
           disabled={disabled}
           className={cn(
-            "min-h-11 justify-between gap-2 font-normal",
+            "min-h-11 justify-between gap-2 bg-well font-normal",
             compact ? "h-8 min-h-8 max-w-44 px-2 text-xs" : "w-full",
           )}
         >

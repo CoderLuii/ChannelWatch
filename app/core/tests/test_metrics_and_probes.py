@@ -422,6 +422,23 @@ class TestMetricsPerDvrLabels:
             in body
         )
 
+    def test_metrics_marks_disabled_dvr_as_not_enabled(self, client):
+        si = _mock_system_info()
+        si.dvr_status[1].monitoring_status = "disabled"
+        with (
+            patch("ui.backend.main.get_system_info", return_value=si),
+            patch("ui.backend.main.get_active_streams_count", return_value=3),
+            patch("ui.backend.main._dvr_http_client", self._mock_dvr_activity([2, 1])),
+        ):
+            resp = client.get("/metrics")
+        enabled = {
+            line
+            for line in resp.text.splitlines()
+            if line.startswith("channelwatch_dvr_enabled{")
+        }
+        assert any('dvr_id="dvr_aaa11111"' in line and line.endswith(" 1") for line in enabled)
+        assert any('dvr_id="dvr_bbb22222"' in line and line.endswith(" 0") for line in enabled)
+
     def test_metrics_has_per_dvr_active_streams(self, client):
         si = _mock_system_info()
         with (

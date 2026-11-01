@@ -1,8 +1,8 @@
-import { CheckIcon, ChevronDown, ChevronsUpDown, Server, Tv } from "lucide-react"
+import { CheckIcon, ChevronDown, Server, Trash2, Tv } from "lucide-react"
 import { Controller, type FieldErrors, type UseFormReturn } from "react-hook-form"
 
 import { Button } from "@/components/base/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/base/command"
 import { Input } from "@/components/base/input"
 import { Label } from "@/components/base/label"
@@ -50,26 +50,19 @@ export function GeneralSettingsSection({
 
   return (
     <TabsContent value="general" className="space-y-6">
-      <Card className="overflow-hidden border-blue-400/20 dark:border-blue-500/20 shadow-lg dark:shadow-blue-900/10">
-        <div className="relative">
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-900/10 to-indigo-900/10 z-0" />
-          <div className="absolute -top-14 -right-14 w-32 h-32 rounded-full bg-blue-500/10 backdrop-blur-3xl" />
-          <CardHeader className="relative z-10 border-b border-blue-200/10">
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-hairline">
             <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-full bg-blue-500/20 backdrop-blur-sm flex items-center justify-center">
-                <Server className="h-5 w-5 text-blue-400" />
-              </div>
+              <Server className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <div>
                 <CardTitle>{t("settings.general.title")}</CardTitle>
-                <CardDescription>{t("settings.general.description")}</CardDescription>
               </div>
             </div>
           </CardHeader>
-        </div>
-        <CardContent className="space-y-6 relative z-10 pt-6 sm:pt-6">
+        <CardContent className="space-y-6 pt-4">
           <div className="space-y-4">
             <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-              <Label className="text-sm font-medium">{t("settings.general.dvrServers")}</Label>
+              <h3 className="text-sm font-medium">{t("settings.general.dvrServers")}</h3>
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
@@ -88,51 +81,52 @@ export function GeneralSettingsSection({
             </div>
 
             {showDiscoverResults && (
-              <div className="p-2 rounded-lg border border-green-400/20 bg-green-500/5 space-y-2">
+              <div className="p-2 rounded-control bg-fill space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">
                   {discoveredServers.length > 0
                     ? t(discoveredServers.length === 1 ? "settings.general.foundServers" : "settings.general.foundServersPlural", { count: discoveredServers.length })
                     : t("settings.general.noNewServers")}
                 </p>
                 {discoveredServers.map((server, index) => (
-                  <div key={`${server.host}-${server.port}-${index}`} className="flex min-w-0 flex-col items-start gap-2 rounded border border-green-400/10 bg-background/50 p-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0 break-words text-[13px]">
+                  <div key={`${server.host}-${server.port}-${index}`} className="flex min-w-0 flex-col items-start gap-2 rounded-thumb p-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 break-words text-xs">
                       <span className="font-medium">{server.name || server.host}</span>
                       <span className="text-muted-foreground ml-2">
                         {server.host}:{server.port}
                       </span>
                       {server.version && <span className="text-muted-foreground ml-2">v{server.version}</span>}
                     </div>
-                    <Button type="button" variant="outline" size="sm" className="min-h-11 shrink-0 px-3 text-[13px]" onClick={() => onAddDiscoveredServer(server, index)}>
+                    <Button type="button" variant="outline" size="sm" className="min-h-11 shrink-0 px-3 text-xs" onClick={() => onAddDiscoveredServer(server, index)}>
                       {t("settings.general.addBtn")}
                     </Button>
                   </div>
                 ))}
-                <button type="button" className="min-h-11 px-2 text-[13px] text-muted-foreground hover:text-foreground underline" onClick={onDismissDiscovery}>
+                <button type="button" className="min-h-11 px-2 text-xs text-muted-foreground hover:text-foreground underline" onClick={onDismissDiscovery}>
                   {t("common.dismiss")}
                 </button>
               </div>
             )}
 
-            {(watch("dvr_servers") || []).map((server: DVRServer, index: number) => (
-              <div key={server.id || index} className="p-3 rounded-lg border border-blue-400/20 bg-blue-500/5 space-y-2">
+            {(watch("dvr_servers") || []).map((server: DVRServer, index: number, servers: DVRServer[]) => server.deleted_at ? null : (
+              <div key={server.id || index} className="p-3 rounded-control border border-hairline space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">{t("settings.general.serverN", { n: index + 1 })}</span>
+                  <span className="text-xs font-medium text-muted-foreground">{t("settings.general.serverN", { n: servers.slice(0, index + 1).filter((entry) => !entry.deleted_at).length })}</span>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-11 w-11 shrink-0 p-0 text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                    className="-mr-[13px] h-11 w-11 shrink-0 p-0 text-danger-fg hover:text-danger-fg"
                     aria-label={`Remove ${server.name || server.host || `server ${index + 1}`}`}
                     onClick={() => onRemoveServer(index)}
                   >
-                    X
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
                 <div className="grid gap-2 md:grid-cols-3">
                   <div className="space-y-1">
-                    <Label className="text-xs">{t("settings.general.nameLbl")}</Label>
+                    <Label htmlFor={`dvr-${index}-name`} className="text-xs">{t("settings.general.nameLbl")}</Label>
                     <Input
+                       id={`dvr-${index}-name`}
                        placeholder={t("settings.general.namePlaceholder")}
                       value={server.name || ""}
                       onChange={(event) => {
@@ -144,9 +138,14 @@ export function GeneralSettingsSection({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">{t("settings.general.hostLbl")}</Label>
+                    <Label htmlFor={`dvr-${index}-host`} className="text-xs">{t("settings.general.hostLbl")}</Label>
                     <Input
+                      id={`dvr-${index}-host`}
                       placeholder="e.g., 192.168.1.100"
+                      inputMode="url"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
                       value={server.host || ""}
                       onChange={(event) => {
                         const current = [...(getValues("dvr_servers") || [])]
@@ -157,14 +156,16 @@ export function GeneralSettingsSection({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">{t("settings.general.portLbl")}</Label>
+                    <Label htmlFor={`dvr-${index}-port`} className="text-xs">{t("settings.general.portLbl")}</Label>
                     <Input
+                      id={`dvr-${index}-port`}
                       type="number"
                       placeholder="8089"
-                      value={server.port || 8089}
+                      // Empty while typing. Saving an empty port uses 8089.
+                      value={server.port || ""}
                       onChange={(event) => {
                         const current = [...(getValues("dvr_servers") || [])]
-                        current[index] = { ...current[index], port: Number(event.target.value) || 8089 }
+                        current[index] = { ...current[index], port: Number(event.target.value) || 0 }
                         setValue("dvr_servers", current, { shouldDirty: true })
                       }}
                       className="h-8 text-sm"
@@ -174,7 +175,7 @@ export function GeneralSettingsSection({
               </div>
             ))}
 
-            {(!watch("dvr_servers") || watch("dvr_servers").length === 0) && (
+            {!(watch("dvr_servers") || []).some((server: DVRServer) => !server.deleted_at) && (
               <p className="text-xs text-muted-foreground text-center py-4">{t("settings.general.noDvrEmpty")}</p>
             )}
           </div>
@@ -191,13 +192,14 @@ export function GeneralSettingsSection({
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button
+                          id="tz"
                           variant="outline"
                           role="combobox"
                           aria-label={t("settings.general.timezoneLbl")}
-                          className={cn("w-full justify-between", !field.value && "text-muted-foreground")}
+                          className={cn("w-full justify-between bg-well px-3.5 font-normal [&_svg]:size-4", !field.value && "text-muted-foreground")}
                         >
                           {field.value ? field.value : t("settings.general.timezoneSelect")}
-                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-[300px] p-0">
@@ -238,44 +240,40 @@ export function GeneralSettingsSection({
                   <SelectItem value="2">{t("settings.general.logLevelVerbose")}</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">{t("settings.general.logLevelHint")}</p>
             </div>
-          </div>
 
-          <div className="space-y-2">
+            <div className="space-y-2">
               <Label htmlFor="log_retention_days">{t("settings.general.logRetentionLbl")}</Label>
             <Input
               id="log_retention_days"
               type="number"
               min="1"
               {...register("log_retention_days", { valueAsNumber: true, min: { value: 1, message: t("settings.general.logRetentionMin") } })}
-              className={errors.log_retention_days ? "max-w-xs border-red-500" : "max-w-xs"}
+              className={errors.log_retention_days ? "border-danger" : undefined}
             />
             <p className="text-xs text-muted-foreground">{t("settings.general.logRetentionHint")}</p>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="border-blue-400/20 overflow-hidden">
-        <button type="button" className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.display} aria-controls="settings-display-content" onClick={() => toggleAlert("display")}>
-          <span className="flex gap-3 items-center">
-            <span className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <Tv className="h-5 w-5 text-blue-400" />
-            </span>
+      <Card className="overflow-hidden">
+        <button type="button" className="press-row flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-fill transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" aria-expanded={!!expandedAlerts.display} aria-controls="settings-display-content" onClick={() => toggleAlert("display")}>
+          <span className="flex gap-2 items-center">
+            <Tv className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>
-              <span className="block text-base font-medium">{t("settings.general.bgImages")}</span>
+              <span className="block text-base font-semibold">{t("settings.general.bgImages")}</span>
               <span className="block text-sm text-muted-foreground">{t("settings.general.bgImagesDesc")}</span>
             </span>
           </span>
-          <ChevronDown className={cn("h-5 w-5 text-muted-foreground transition-transform", expandedAlerts.display && "rotate-180")} />
+          <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-[var(--motion-base)] ease-out", expandedAlerts.display && "rotate-180")} />
         </button>
         {expandedAlerts.display && (
-          <CardContent id="settings-display-content" className="border-t border-blue-400/10 bg-muted/20 pt-5 space-y-4 sm:pt-5">
-            <div className="grid grid-cols-1 gap-2 rounded-xl p-3 border border-blue-400/10 bg-background/50 sm:grid-cols-2">
-              <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+          <CardContent id="settings-display-content" className="disclosure-enter border-t border-hairline pt-4 space-y-4">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="p-3 rounded-control bg-fill space-y-2">
                 <Label>
-                   <span className="text-sm block">{t("settings.general.bgActiveStreams")}</span>
-                   <span className="text-[11px] text-muted-foreground">{t("settings.general.bgActiveStreamsHint")}</span>
+                   <span className="block text-sm">{t("settings.general.bgActiveStreams")}</span>
                 </Label>
                 <Select value={watch("stream_card_image") || "program"} onValueChange={(value) => setValue("stream_card_image", value, { shouldDirty: true })}>
                   <SelectTrigger className="h-8 text-sm" aria-label={t("settings.general.bgActiveStreams")}>
@@ -288,10 +286,9 @@ export function GeneralSettingsSection({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="p-3 rounded-lg bg-muted/40 border border-blue-400/10 space-y-2">
+              <div className="p-3 rounded-control bg-fill space-y-2">
                 <Label>
-                   <span className="text-sm block">{t("settings.general.bgUpcoming")}</span>
-                   <span className="text-[11px] text-muted-foreground">{t("settings.general.bgUpcomingHint")}</span>
+                   <span className="block text-sm">{t("settings.general.bgUpcoming")}</span>
                 </Label>
                 <Select value={watch("recording_card_image") || "program"} onValueChange={(value) => setValue("recording_card_image", value, { shouldDirty: true })}>
                   <SelectTrigger className="h-8 text-sm" aria-label={t("settings.general.bgUpcoming")}>

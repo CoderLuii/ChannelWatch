@@ -414,3 +414,27 @@ class TestDvrManagementEndpoints:
         history_rows = json.loads((config_dir / "activity_history.json").read_text())
         assert [row["dvr_id"] for row in history_rows] == ["dvr_keep2222"]
         reload_mock.assert_called_once()
+
+
+class TestReaddedArchivedDvr:
+    def test_save_drops_archived_entry_when_same_dvr_is_added_back(self):
+        import ui.backend.main as ui_main
+        from ui.backend.schemas import AppSettings
+
+        settings = AppSettings(
+            dvr_servers=[
+                _dvr(dvr_id="dvr_same1111", deleted_at="2026-01-01T00:00:00+00:00"),
+                _dvr(dvr_id="dvr_other222", host="192.168.1.2", deleted_at="2026-01-01T00:00:00+00:00"),
+                _dvr(dvr_id="dvr_same1111"),
+            ]
+        )
+
+        ui_main._drop_superseded_archived_dvrs(settings)
+
+        assert [(s["id"], bool(s.get("deleted_at"))) for s in settings.dvr_servers] == [
+            ("dvr_other222", True),
+            ("dvr_same1111", False),
+        ]
+        # The surviving active entry must not be purged with an expired archive.
+        assert purge_expired_dvrs(Path("."), settings.dvr_servers, defer_data_purge=True) == ["dvr_other222"]
+        assert [s["id"] for s in settings.dvr_servers] == ["dvr_same1111"]

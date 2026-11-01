@@ -5,9 +5,11 @@ import { AlertTriangle, Archive, Bug, Check, Download, Loader2, RotateCcw, Uploa
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/base/alert"
 import { Button } from "@/components/base/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/base/card"
 import { TabsContent } from "@/components/base/tabs"
 import { downloadBackup, downloadDebugBundle, restoreFromBackup } from "@/lib/api"
+import { describeError } from "@/lib/error-catalog"
+import { downloadBlob } from "@/lib/utils"
 import { t } from "@/lib/i18n"
 
 export function backupTimestamp(now: Date = new Date()): string {
@@ -23,33 +25,35 @@ export function debugBundleFilename(now: Date = new Date()): string {
 }
 
 export function restoreErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : t("backup.restoreDefaultError")
+  return describeError(err, t("backup.restoreDefaultError")).message
 }
 
 export function restoreSuccessMessage(result: { message?: string }): string {
   return result.message || t("backup.restoreDefaultMessage")
 }
 
-export function BackupSettingsSection() {
+export function BackupSettingsSection({ onRestored, hasUnsavedChanges = false }: { onRestored?: () => Promise<void>; hasUnsavedChanges?: boolean }) {
   const [downloadState, setDownloadState] = useState<"idle" | "loading" | "done" | "error">("idle")
   const [debugBundleState, setDebugBundleState] = useState<"idle" | "loading" | "done" | "error">("idle")
   const [restoreState, setRestoreState] = useState<"idle" | "loading" | "done" | "error">("idle")
   const [restoreError, setRestoreError] = useState<string | null>(null)
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null)
+  const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const restoreButtonRef = useRef<HTMLButtonElement>(null)
+
+  // The question appears below the fold on a phone, so it is brought to the reader.
+  const focusRestoreConfirm = (confirm: HTMLDivElement | null) => {
+    if (!confirm) return
+    confirm.scrollIntoView({ block: "center", behavior: "instant" })
+    confirm.focus({ preventScroll: true })
+  }
 
   const handleDownload = async () => {
     setDownloadState("loading")
     try {
       const blob = await downloadBackup()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = backupFilename()
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      downloadBlob(blob, backupFilename())
       setDownloadState("done")
       setTimeout(() => setDownloadState("idle"), 3000)
     } catch {
@@ -62,14 +66,7 @@ export function BackupSettingsSection() {
     setDebugBundleState("loading")
     try {
       const blob = await downloadDebugBundle()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = debugBundleFilename()
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      downloadBlob(blob, debugBundleFilename())
       setDebugBundleState("done")
       setTimeout(() => setDebugBundleState("idle"), 3000)
     } catch {
@@ -82,12 +79,28 @@ export function BackupSettingsSection() {
     fileInputRef.current?.click()
   }
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Picking a file only stages it. Restore overwrites settings, the database
+  // and the encryption key, so it runs after an explicit confirmation.
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!e.target.files) return
     e.target.value = ""
     if (!file) return
+    setRestoreError(null)
+    setRestoreMessage(null)
+    setRestoreState("idle")
+    setPendingRestoreFile(file)
+  }
 
+  const handleCancelRestore = () => {
+    setPendingRestoreFile(null)
+    setTimeout(() => restoreButtonRef.current?.focus())
+  }
+
+  const handleConfirmRestore = async () => {
+    const file = pendingRestoreFile
+    if (!file) return
+    setPendingRestoreFile(null)
     setRestoreState("loading")
     setRestoreError(null)
     setRestoreMessage(null)
@@ -96,6 +109,7 @@ export function BackupSettingsSection() {
       const result = await restoreFromBackup(file)
       setRestoreState("done")
       setRestoreMessage(restoreSuccessMessage(result))
+      await onRestored?.()
     } catch (err) {
       setRestoreState("error")
       setRestoreError(restoreErrorMessage(err))
@@ -104,26 +118,18 @@ export function BackupSettingsSection() {
 
   return (
     <TabsContent value="backup" className="space-y-6">
-      <Card className="border-blue-400/20 overflow-hidden">
-        <div className="relative">
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-900/10 to-cyan-900/10 z-0" />
-          <CardHeader className="relative z-10 border-b border-blue-200/10">
-            <div className="flex items-center gap-3">
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                <Archive className="h-5 w-5 text-blue-400" />
-              </div>
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-hairline">
+            <div className="flex items-center gap-2">
+              <Archive className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <div>
-                <CardTitle className="text-xl">{t("backup.title")}</CardTitle>
-                <CardDescription>
-                  {t("backup.description")}
-                </CardDescription>
+                <CardTitle>{t("backup.title")}</CardTitle>
               </div>
             </div>
           </CardHeader>
-        </div>
 
-        <CardContent className="space-y-6 pt-6 sm:pt-6">
-          <div className="rounded-xl border border-blue-400/15 bg-blue-500/5 p-5 space-y-3">
+        <CardContent className="divide-y divide-hairline p-0">
+          <div className="space-y-3 p-4">
             <p className="text-sm font-semibold">{t("backup.downloadSection")}</p>
             <p className="text-sm text-muted-foreground">
               {t("backup.downloadDescPre")}<code>settings.json</code>{t("backup.downloadDescPost")}
@@ -136,8 +142,8 @@ export function BackupSettingsSection() {
               className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-2 text-center"
             >
               {downloadState === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
-              {downloadState === "done" && <Check className="h-4 w-4 text-emerald-500" />}
-              {downloadState === "error" && <AlertTriangle className="h-4 w-4 text-red-500" />}
+              {downloadState === "done" && <Check className="h-4 w-4 text-success" />}
+              {downloadState === "error" && <AlertTriangle className="h-4 w-4 text-danger" />}
               {downloadState === "idle" && <Download className="h-4 w-4" />}
               {downloadState === "loading"
                 ? t("backup.downloadingBtn")
@@ -149,9 +155,9 @@ export function BackupSettingsSection() {
             </Button>
           </div>
 
-          <div className="rounded-xl border border-blue-400/15 bg-blue-500/5 p-5 space-y-3">
+          <div className="space-y-3 p-4">
             <p className="text-sm font-semibold">{t("backup.debugBundleSection")}</p>
-            <p className="text-sm text-muted-foreground">{t("backup.debugBundleDesc")}</p>
+            <p className="max-w-prose text-sm text-muted-foreground">{t("backup.debugBundleDesc")}</p>
             <Button
               type="button"
               variant="outline"
@@ -160,8 +166,8 @@ export function BackupSettingsSection() {
               className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-2 text-center"
             >
               {debugBundleState === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
-              {debugBundleState === "done" && <Check className="h-4 w-4 text-emerald-500" />}
-              {debugBundleState === "error" && <AlertTriangle className="h-4 w-4 text-red-500" />}
+              {debugBundleState === "done" && <Check className="h-4 w-4 text-success" />}
+              {debugBundleState === "error" && <AlertTriangle className="h-4 w-4 text-danger" />}
               {debugBundleState === "idle" && <Bug className="h-4 w-4" />}
               {debugBundleState === "loading"
                 ? t("backup.debugBundleDownloadingBtn")
@@ -173,10 +179,10 @@ export function BackupSettingsSection() {
             </Button>
           </div>
 
-          <div className="rounded-xl border border-amber-400/25 bg-amber-500/5 p-5 space-y-4">
+          <div className="space-y-4 p-4">
             <p className="text-sm font-semibold">{t("backup.restoreSection")}</p>
 
-            <Alert variant="destructive" className="border-amber-600/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 [&>svg]:text-amber-600">
+            <Alert variant="destructive" className="border-warning-border bg-warning-bg text-warning-fg [&>svg]:text-warning-fg">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle>{t("backup.destructiveTitle")}</AlertTitle>
               <AlertDescription>
@@ -197,15 +203,16 @@ export function BackupSettingsSection() {
                 onChange={handleFileChange}
               />
               <Button
+                ref={restoreButtonRef}
                 type="button"
                 variant="outline"
                 onClick={handleRestoreSelect}
-                disabled={restoreState === "loading"}
-                className="h-auto min-h-11 max-w-full gap-2 whitespace-normal border-amber-400/40 py-2 text-center hover:border-amber-400/60"
+                disabled={restoreState === "loading" || pendingRestoreFile !== null}
+                className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-2 text-center"
               >
                 {restoreState === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
-                {restoreState === "done" && <Check className="h-4 w-4 text-emerald-500" />}
-                {restoreState === "error" && <AlertTriangle className="h-4 w-4 text-red-500" />}
+                {restoreState === "done" && <Check className="h-4 w-4 text-success" />}
+                {restoreState === "error" && <AlertTriangle className="h-4 w-4 text-danger" />}
                 {restoreState === "idle" && <Upload className="h-4 w-4" />}
                 {restoreState === "loading"
                   ? t("backup.restoringBtn")
@@ -215,6 +222,24 @@ export function BackupSettingsSection() {
                       ? t("backup.restoreFailedBtn")
                       : t("backup.restoreBtn")}
               </Button>
+
+              {pendingRestoreFile && (
+                <div ref={focusRestoreConfirm} tabIndex={-1} role="alertdialog" aria-labelledby="restore-confirm-title" aria-describedby="restore-confirm-desc" className="basis-full space-y-3 rounded-control border border-warning-border p-4 focus:outline-none">
+                  <p id="restore-confirm-title" className="text-sm font-semibold">{t("backup.confirmTitle")}</p>
+                  <p id="restore-confirm-desc" className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                    {t("backup.confirmDesc", { file: pendingRestoreFile.name })}
+                    {hasUnsavedChanges ? ` ${t("backup.confirmUnsaved")}` : ""}
+                  </p>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <Button type="button" variant="outline" onClick={handleCancelRestore} className="min-h-11">
+                      {t("backup.confirmCancel")}
+                    </Button>
+                    <Button type="button" variant="destructive" onClick={handleConfirmRestore} className="min-h-11">
+                      {t("backup.confirmRestore")}
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {restoreState === "done" && (
                 <Button
@@ -239,7 +264,7 @@ export function BackupSettingsSection() {
             )}
 
             {restoreState === "done" && restoreMessage && (
-              <Alert className="border-emerald-400/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 [&>svg]:text-emerald-600">
+              <Alert className="border-success-border bg-success-bg text-success-fg [&>svg]:text-success-fg">
                 <Check className="h-4 w-4" />
                 <AlertTitle>{t("backup.restoreCompleteTitle")}</AlertTitle>
                 <AlertDescription>{restoreMessage}</AlertDescription>

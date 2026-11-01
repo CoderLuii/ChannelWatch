@@ -4,6 +4,7 @@ import { GitMerge, Tv, Film, CircleDot, HardDrive, ShieldAlert } from "lucide-re
 import type { UseFormReturn } from "react-hook-form"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/base/card"
+import { Button } from "@/components/base/button"
 import { Switch } from "@/components/base/switch"
 import { TabsContent } from "@/components/base/tabs"
 import { cn } from "@/lib/utils"
@@ -39,11 +40,11 @@ interface DestChannel {
 
 function getEventColumns(): EventColumn[] {
   return [
-    { key: "channel", label: t("routing.event.channel"), icon: Tv, accentClass: "text-blue-700 dark:text-blue-300", headerClass: "bg-blue-500/10 border-blue-400/20" },
-    { key: "vod", label: t("type.vod"), icon: Film, accentClass: "text-purple-700 dark:text-purple-300", headerClass: "bg-purple-500/10 border-purple-400/20" },
-    { key: "recording", label: t("type.recording"), icon: CircleDot, accentClass: "text-amber-700 dark:text-amber-300", headerClass: "bg-amber-500/10 border-amber-400/20" },
-    { key: "disk", label: t("status.monitoring.disk"), icon: HardDrive, accentClass: "text-red-700 dark:text-red-300", headerClass: "bg-red-500/10 border-red-400/20" },
-    { key: "health", label: t("routing.event.health"), icon: ShieldAlert, accentClass: "text-orange-700 dark:text-orange-300", headerClass: "bg-orange-500/10 border-orange-400/20" },
+    { key: "channel", label: t("routing.event.channel"), icon: Tv, accentClass: "text-muted-foreground", headerClass: "" },
+    { key: "vod", label: t("type.vod"), icon: Film, accentClass: "text-muted-foreground", headerClass: "" },
+    { key: "recording", label: t("type.recording"), icon: CircleDot, accentClass: "text-muted-foreground", headerClass: "" },
+    { key: "disk", label: t("status.monitoring.disk"), icon: HardDrive, accentClass: "text-muted-foreground", headerClass: "" },
+    { key: "health", label: t("routing.event.health"), icon: ShieldAlert, accentClass: "text-muted-foreground", headerClass: "" },
   ]
 }
 
@@ -134,7 +135,7 @@ function RoutingCell({ dvrId, dvrName, eventKey, routing, activeChannels, onTogg
               checked={on}
               onCheckedChange={(v) => onToggle(dvrId, eventKey, ch.key, v)}
               aria-label={`${ch.label}, ${eventKey}, ${dvrName}`}
-              className={cn("scale-[0.8] shrink-0", on ? "data-[state=checked]:bg-teal-600" : "")}
+              className={cn("scale-[0.8] shrink-0", on ? "" : "")}
             />
             <span className={cn("text-xs leading-tight transition-colors", on ? "text-foreground" : "text-muted-foreground line-through")}>
               {ch.label}
@@ -150,7 +151,7 @@ interface RoutingSettingsSectionProps {
   form: UseFormReturn<AppSettings>
 }
 
-export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
+export function RoutingSettingsSection({ form, onGoToNotifications }: RoutingSettingsSectionProps & { onGoToNotifications?: () => void }) {
   const { watch, setValue } = form
 
   const routing: RoutingState = watch("notification_routing") ?? {}
@@ -172,15 +173,10 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
 
   return (
     <TabsContent value="routing" className="space-y-6">
-      <Card className="overflow-hidden border-teal-400/20 dark:border-teal-500/20 shadow-lg dark:shadow-teal-900/10">
-        <div className="relative">
-          <div className="absolute inset-0 bg-gradient-to-r from-teal-900/10 to-emerald-900/10 z-0" />
-          <div className="absolute -top-14 -right-14 w-32 h-32 rounded-full bg-teal-500/10 backdrop-blur-3xl" />
-          <CardHeader className="relative z-10 border-b border-teal-200/10">
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-hairline">
             <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-full bg-teal-500/20 backdrop-blur-sm flex items-center justify-center">
-                <GitMerge className="h-5 w-5 text-teal-400" />
-              </div>
+              <GitMerge className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <div>
                 <CardTitle>{t("settings.routing.title")}</CardTitle>
                 <CardDescription>
@@ -189,19 +185,75 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
               </div>
             </div>
           </CardHeader>
-        </div>
-        <CardContent className="relative z-10 pt-6 sm:pt-6">
+        <CardContent className="pt-4">
           {servers.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-teal-400/30 bg-teal-500/5 p-8 text-center text-sm text-muted-foreground">
+            <div className="rounded-control border border-dashed border-hairline p-8 text-center text-sm text-muted-foreground">
               {t("settings.routing.noDvr")}
             </div>
           ) : activeChannels.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-teal-400/30 bg-teal-500/5 p-8 text-center text-sm text-muted-foreground">
-              {t("settings.routing.noDestinations")}
+            <div className="rounded-control border border-dashed border-hairline p-8 text-center text-sm text-muted-foreground">
+              <p>{t("settings.routing.noDestinations")}</p>
+              {onGoToNotifications ? (
+                <Button type="button" variant="outline" size="sm" className="mt-3 min-h-11" onClick={onGoToNotifications}>{t("settings.goToNotifications")}</Button>
+              ) : null}
             </div>
           ) : (
-            <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={t("settings.routing.title")}>
-              <p className="mb-2 text-[13px] text-muted-foreground lg:hidden">{t("settings.routing.scrollHint")}</p>
+            <>
+            <div data-testid="routing-mobile-list" className="space-y-4 md:hidden">
+              {servers.map((server) => {
+                const dvrName = server.name || server.host || server.id
+                return (
+                  <section key={server.id} aria-label={dvrName} className="min-w-0 space-y-3">
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-semibold" title={dvrName}>{dvrName}</h3>
+                        <p className="truncate font-mono text-xs text-muted-foreground">{server.host}:{server.port}</p>
+                      </div>
+                      {routing[server.id] ? (
+                        <button
+                          type="button"
+                          onClick={() => resetDvr(server.id)}
+                          className="min-h-11 shrink-0 text-xs text-muted-foreground underline underline-offset-2"
+                        >
+                          {t("settings.routing.resetToDefaults")}
+                        </button>
+                      ) : null}
+                    </div>
+                    {getEventColumns().map((col) => {
+                      const Icon = col.icon
+                      return (
+                        <div key={col.key} className="overflow-hidden rounded-control border border-hairline bg-fill">
+                          <div className={"flex items-center gap-2 border-b border-hairline px-3 py-2"}>
+                            <Icon className={cn("h-4 w-4 shrink-0", col.accentClass)} aria-hidden="true" />
+                            <span className={cn("min-w-0 truncate text-xs font-medium", col.accentClass)}>{col.label}</span>
+                          </div>
+                          <ul className="divide-y divide-hairline">
+                            {activeChannels.map((ch) => {
+                              const on = getRoutingValue(routing, server.id, col.key, ch.key)
+                              return (
+                                <li key={ch.key}>
+                                  <label className="flex min-h-[48px] cursor-pointer items-center justify-between gap-3 px-3 py-1.5">
+                                    <span className={cn("min-w-0 truncate text-sm", on ? "text-foreground" : "text-muted-foreground")}>{ch.label}</span>
+                                    <Switch
+                                      checked={on}
+                                      onCheckedChange={(v) => handleToggle(server.id, col.key, ch.key, v)}
+                                      aria-label={`${ch.label}, ${col.label}, ${dvrName}`}
+                                      className="shrink-0"
+                                    />
+                                  </label>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        </div>
+                      )
+                    })}
+                  </section>
+                )
+              })}
+            </div>
+            <div className="hidden overflow-x-auto md:block" tabIndex={0} role="region" aria-label={t("settings.routing.title")}>
+              <p className="mb-2 text-xs text-muted-foreground xl:hidden">{t("settings.routing.scrollHint")}</p>
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr>
@@ -211,11 +263,11 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                       return (
                         <th
                           key={col.key}
-                          className={cn("min-w-36 rounded-t-lg border-x border-t p-2 text-center", col.headerClass)}
+                          className={"min-w-36 border-b border-hairline p-2 text-center"}
                         >
                           <div className="flex items-center justify-center gap-1.5">
                             <Icon className={cn("h-3.5 w-3.5", col.accentClass)} />
-                            <span className={cn("break-words text-xs font-semibold uppercase tracking-wide [overflow-wrap:anywhere]", col.accentClass)}>{col.label}</span>
+                            <span className={cn("break-words text-xs font-medium [overflow-wrap:anywhere]", col.accentClass)}>{col.label}</span>
                           </div>
                         </th>
                       )
@@ -225,18 +277,17 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                 <tbody>
                   {servers.map((server, idx: number) => {
                     const hasCustomRouting = !!routing[server.id]
-                    const isEven = idx % 2 === 0
                     return (
                       <tr
                         key={server.id}
-                        className={cn("border-b border-border/40 transition-colors", isEven ? "bg-background/40" : "bg-muted/10")}
+                        className={"border-b border-hairline"}
                       >
                         <td className="p-3 align-top">
                           <div className="flex flex-col gap-0.5">
                             <span className="max-w-[160px] break-words text-sm font-medium [overflow-wrap:anywhere]">
                               {server.name || server.host || server.id}
                             </span>
-                            <span className="max-w-[160px] break-all font-mono text-xs text-muted-foreground">
+                            <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
                               {server.host}:{server.port}
                             </span>
                           </div>
@@ -244,7 +295,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                             <button
                               type="button"
                               onClick={() => resetDvr(server.id)}
-                              className="mt-1.5 min-h-11 text-xs text-teal-400/80 hover:text-teal-400 transition-colors underline underline-offset-2"
+                              className="mt-1.5 min-h-11 text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
                             >
                               {t("settings.routing.resetToDefaults")}
                             </button>
@@ -253,7 +304,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                          {getEventColumns().map((col) => (
                           <td
                             key={col.key}
-                            className={cn("p-3 border-x border-border/20 align-top", col.headerClass)}
+                            className={cn("p-3 border-x border-hairline align-top", col.headerClass)}
                           >
                             <RoutingCell
                               dvrId={server.id}
@@ -271,6 +322,7 @@ export function RoutingSettingsSection({ form }: RoutingSettingsSectionProps) {
                 </tbody>
               </table>
             </div>
+            </>
           )}
 
           {activeChannels.length > 0 && (

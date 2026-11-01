@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from core.alerts import recording_events as recording_events_module
+from core.alerts.common.alert_formatter import AlertFormatter
 from core.alerts.recording_events import RecordingEventsAlert
 from core.alerts.recording_outcomes import RecordingOutcome
 from core.diagnostics.alerts import recording_events as recording_diagnostics
@@ -672,3 +673,53 @@ async def test_completed_api_recording_cannot_later_be_reported_interrupted(
         "Completed"
     ]
     assert not alert.outcome_tracker.started_jobs_missing([])
+
+
+def _title_alert(template_settings: dict[str, Any]) -> RecordingEventsAlert:
+    alert = RecordingEventsAlert.__new__(RecordingEventsAlert)
+    alert.settings = SimpleNamespace(rd_image=False)
+    alert.alert_formatter = AlertFormatter()
+    alert.template_settings = template_settings
+    return alert
+
+
+def _format_title(alert: RecordingEventsAlert, **context: Any) -> str:
+    return alert._format_recording_alert(
+        default_message="body", image_url=None, context=context
+    )["title"]
+
+
+def test_default_recording_title_leads_with_status_and_program():
+    alert = _title_alert({"use_default": True, "title": "stored", "body": "stored"})
+    assert (
+        _format_title(alert, recording_status_friendly="Failed", title="The Bear")
+        == "Failed: The Bear"
+    )
+    assert _format_title(alert, title="The Bear") == alert.ALERT_TITLE
+
+
+def test_custom_recording_title_template_is_left_alone():
+    alert = _title_alert(
+        {
+            "use_default": False,
+            "title": "Channels DVR - Recording Event",
+            "body": "{title}",
+        }
+    )
+    assert (
+        _format_title(alert, recording_status_friendly="Failed", title="The Bear")
+        == "Channels DVR - Recording Event"
+    )
+
+
+def test_default_recording_title_template_renders_with_real_fields():
+    from core.notifications.template_engine import (
+        RECORDING_EVENTS_DEFAULT_TITLE,
+        NotificationTemplateEngine,
+    )
+
+    rendered = NotificationTemplateEngine().render(
+        RECORDING_EVENTS_DEFAULT_TITLE,
+        {"recording_status_friendly": "Failed", "title": "The Bear"},
+    )
+    assert rendered == "Failed: The Bear"

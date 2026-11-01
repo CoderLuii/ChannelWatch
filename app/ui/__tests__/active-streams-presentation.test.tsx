@@ -16,12 +16,6 @@ describe("Active Streams presentation", () => {
         subtitle,
         loading: false,
         hasError: false,
-        gradientClasses: "",
-        iconBgClass: "",
-        iconColorClass: "",
-        valueColorClass: "",
-        subtitleColorClass: "",
-        loadingColorClass: "",
       }),
     )
 
@@ -38,12 +32,6 @@ describe("Active Streams presentation", () => {
         subtitle: "Living room",
         loading: false,
         hasError: false,
-        gradientClasses: "",
-        iconBgClass: "",
-        iconColorClass: "",
-        valueColorClass: "",
-        subtitleColorClass: "",
-        loadingColorClass: "",
         backgroundImage: "https://example.test/custom-artwork.webp",
       }),
     )
@@ -63,12 +51,6 @@ describe("Active Streams presentation", () => {
         subtitle: "No active streams",
         loading: false,
         hasError: false,
-        gradientClasses: "",
-        iconBgClass: "",
-        iconColorClass: "",
-        valueColorClass: "",
-        subtitleColorClass: "",
-        loadingColorClass: "",
         backgroundImage: "/images/channelwatch-logo.png",
       }),
     )

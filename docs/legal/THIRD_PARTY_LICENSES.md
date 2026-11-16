@@ -20,7 +20,7 @@ ChannelWatch is built on open-source software. This file lists the major runtime
 | [bcrypt](https://github.com/pyca/bcrypt/) | >=5.0.0 | Apache 2.0 | Password hashing |
 | [cryptography](https://cryptography.io/) | >=50.0.2 | Apache 2.0 / BSD | Per-DVR API-key encryption and TLS helpers |
 | [apprise](https://github.com/caronc/apprise) | >=1.13.1, <2 | MIT | Multi-provider notification delivery |
-| [oauthlib](https://github.com/oauthlib/oauthlib) | >=4.0.0 | BSD 3-Clause | OAuth request signing used by notification providers |
+| [oauthlib](https://github.com/oauthlib/oauthlib) | >=4.0.1 | BSD 3-Clause | OAuth request signing used by notification providers |
 | [fastapi](https://fastapi.tiangolo.com/) | >=0.143.0 | MIT | Web API framework |
 | [uvicorn](https://uvicorn.dev/) | >=0.54.0 | BSD 3-Clause | ASGI server |
 | [python-multipart](https://github.com/Kludex/python-multipart) | >=0.0.32 | Apache 2.0 | Multipart form parsing for FastAPI uploads |
@@ -41,7 +41,7 @@ The packages above pull in additional dependencies. This table records the exact
 | [httptools](https://github.com/MagicStack/httptools) | 0.9.0 | MIT | HTTP protocol parser used by uvicorn |
 | [idna](https://github.com/kjd/idna) | 3.20 | BSD-like | Internationalized domain names |
 | [Markdown](https://github.com/Python-Markdown/markdown) | 3.11 | BSD 3-Clause | Markdown processing used by Apprise |
-| [opentelemetry-api](https://github.com/open-telemetry/opentelemetry-python) | 1.45.1 | Apache 2.0 | Observability API used by FastAPI |
+| [opentelemetry-api](https://github.com/open-telemetry/opentelemetry-python) | 1.45.2 | Apache 2.0 | Observability API used by FastAPI |
 | [pycparser](https://github.com/eliben/pycparser) | 3.11 | BSD 3-Clause | C parser used by cffi |
 | [python-dotenv](https://github.com/theskumar/python-dotenv) | 1.2.4 | BSD 3-Clause | Environment-file support used by uvicorn |
 | [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy) | 2.1.4 | MIT | Database toolkit used by SQLModel |

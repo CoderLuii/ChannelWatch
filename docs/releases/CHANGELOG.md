@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-11-16
+
+### Fixed
+
+- Update OAuthLib and OpenTelemetry dependencies to include upstream security fixes. Supported protocol-4 images install the refreshed Python packages with the signed runtime update.
+
+### Changed
+
+- Refresh compatible dashboard dependencies, including Next.js and React Hook Form.
+- Keep the existing Python, notification providers, settings and update rollback behavior. Containers using the legacy app-only updater retain their image-owned Python packages; recreate the container with the new image to receive those dependency fixes.
+
 ## [1.6.5] - 2026-11-01
 
 ### Changed
@@ -1138,7 +1149,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.5...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.6...HEAD
+[1.6.6]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.5...v1.6.6
 [1.6.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.4...v1.6.5
 [1.6.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.3...v1.6.4
 [1.6.3]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.2...v1.6.3

@@ -98,7 +98,7 @@ def test_runtime_update_lock_is_exact_hash_only_binary_input():
 
 def test_runtime_dependency_builder_accepts_release_inputs():
     builder = load_dependency_builder()
-    assert len(builder.parse_requested_requirements(REQ)) == 13
+    assert len(builder.parse_requested_requirements(REQ)) == 14
     locked = builder.parse_locked_requirements(LOCK)
     assert len(locked) == 40
     assert {item.name: item.version for item in locked}["sqlalchemy"] == "2.1.4"

@@ -54,12 +54,14 @@ ifaddr==0.2.0
     # via zeroconf
 markdown==3.11
     # via apprise
-oauthlib==4.0.0
+oauthlib==4.0.1
     # via
     #   -r deploy/requirements/runtime.txt
     #   requests-oauthlib
-opentelemetry-api==1.45.1
-    # via fastapi
+opentelemetry-api==1.45.2
+    # via
+    #   -r deploy/requirements/runtime.txt
+    #   fastapi
 pycparser==3.11
     # via cffi
 pydantic==2.14.0

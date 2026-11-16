@@ -342,7 +342,7 @@ def test_schema_two_legacy_app_bridge_rejects_noncanonical_release(field, value)
         )
 
 
-@pytest.mark.parametrize("version", ["1.6.6", "1.7.0", "2.0.0"])
+@pytest.mark.parametrize("version", ["1.6.7", "1.7.0", "2.0.0"])
 def test_schema_two_legacy_app_bridge_rejects_any_future_target(version):
     builder = _load("legacy_160_future_target", "scripts/release/build-update-bundle.py")
     release = _release_160()
@@ -503,7 +503,7 @@ def test_asset_verifier_loads_only_the_exact_target_legacy_bridge(tmp_path: Path
     config.write_text(
         json.dumps(
             {
-                "version": "1.6.6",
+                "version": "1.6.7",
                 "legacy_app_update_sources": [
                     "1.4.0",
                     "1.4.1",
@@ -515,7 +515,7 @@ def test_asset_verifier_loads_only_the_exact_target_legacy_bridge(tmp_path: Path
         encoding="utf-8",
     )
     with pytest.raises(Exception, match="supported release target"):
-        verifier.load_legacy_app_update_sources(config, expected_version="1.6.6")
+        verifier.load_legacy_app_update_sources(config, expected_version="1.6.7")
 
 
 def test_protocol_four_161_catalog_accepts_only_153_and_160_sources():
@@ -670,7 +670,7 @@ def test_protocol_four_runtime_binding_requires_exact_source_versions(
         )
 
 
-@pytest.mark.parametrize("version", ["1.6.3", "1.6.4"])
+@pytest.mark.parametrize("version", ["1.6.3", "1.6.4", "1.6.6"])
 def test_v163_real_asset_cli_accepts_the_signed_legacy_and_native_catalogs(tmp_path, monkeypatch, version):
     from core.tests import test_runtime_release_assets as fixtures
     from core.tests.test_release_tooling import _signed_update_assets
@@ -705,16 +705,20 @@ def test_v163_real_asset_cli_accepts_the_signed_legacy_and_native_catalogs(tmp_p
     )
     canonical = json.loads(json.dumps(_release_161()).replace("1.6.1", version))
     canonical["compatible_source_application_versions"] = ["1.5.3", "1.6.0", "1.6.1", "1.6.2"]
-    if version == "1.6.4":
+    if version in {"1.6.4", "1.6.6"}:
         canonical["compatible_source_application_versions"].append("1.6.3")
+    if version == "1.6.6":
+        canonical["compatible_source_application_versions"].extend(["1.6.4", "1.6.5"])
     canonical["bundle_sha256"] = hashlib.sha256(bundle).hexdigest()
     canonical["bundle_signature"] = base64.b64encode(private.sign(hashlib.sha256(bundle).digest())).decode("ascii")
     manifest = json.loads(manifest_bytes)
     manifest["payload"].update(canonical)
     manifest["signature"]["value"] = base64.b64encode(private.sign(builder.canonical_payload_bytes(manifest["payload"]))).decode("ascii")
     legacy_sources = ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2"]
-    if version == "1.6.4":
+    if version in {"1.6.4", "1.6.6"}:
         legacy_sources.append("1.6.3")
+    if version == "1.6.6":
+        legacy_sources.extend(["1.6.4", "1.6.5"])
     app_catalog = _signed_schema_two(builder, private, builder.project_current_release_v2(canonical, legacy_sources))
     bundles = _runtime_archives(tmp_path / "runtime", monkeypatch, application_version=version)
     runtime_catalog = builder.build_runtime_catalog_v3(
@@ -752,7 +756,7 @@ def test_v163_real_asset_cli_accepts_the_signed_legacy_and_native_catalogs(tmp_p
     ).decode("ascii")
     paths["runtime"].write_text(json.dumps(refresh_runtime), encoding="utf-8")
     refresh_result = subprocess.run(arguments, capture_output=True, text=True, check=False)
-    if version == "1.6.3":
+    if version in {"1.6.3", "1.6.6"}:
         assert refresh_result.returncode == 0, refresh_result.stderr
     else:
         assert refresh_result.returncode == 1
@@ -1262,7 +1266,7 @@ def test_runtime_asset_verifier_checks_inventory_and_interpreter_binding(
 
 def test_v163_history_retains_the_exact_published_v162_legacy_record():
     builder = _load("v163_history_builder", "scripts/release/build-update-bundle.py")
-    history = builder.load_catalog_history("1.6.5")
+    history = builder.load_catalog_history("1.6.6")
     predecessor = next(release for release in history if release["version"] == "1.6.2")
     assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "1aa1aab169f81223084cc6ace956c662a64b02cd8830a7dd8004879093728740"
     projected = builder.project_catalog_history_v2(history)
@@ -1277,9 +1281,9 @@ def test_v163_history_retains_the_exact_published_v162_legacy_record():
 def test_v164_history_retains_authentic_v163_without_rewriting_prior_records():
     builder = _load("v164_history_builder", "scripts/release/build-update-bundle.py")
     raw = json.loads((ROOT / "scripts/release/update-catalog-history.json").read_text(encoding="utf-8"))["releases"]
-    assert len(raw) == 27
-    assert hashlib.sha256(builder.canonical_payload_bytes(raw[:-2])).hexdigest() == "3e85e0b4bf3ccd5fa93ab880172ff9a895049dba7888e326682e64cec109626d"
-    history = builder.load_catalog_history("1.6.5")
+    assert len(raw) == 28
+    assert hashlib.sha256(builder.canonical_payload_bytes(raw[:25])).hexdigest() == "3e85e0b4bf3ccd5fa93ab880172ff9a895049dba7888e326682e64cec109626d"
+    history = builder.load_catalog_history("1.6.6")
     predecessor = next(release for release in history if release["version"] == "1.6.3")
     assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "b7d4e205bd7c102e1d3985dd3693d958b39a84f0477ae583a1b01dfb9e6b54b8"
     assert next(release for release in builder.project_catalog_history_v2(history) if release["version"] == "1.6.3") == predecessor
@@ -1290,9 +1294,9 @@ def test_v164_history_retains_authentic_v163_without_rewriting_prior_records():
 def test_v165_history_retains_authentic_v164_without_rewriting_prior_records():
     builder = _load("v165_history_builder", "scripts/release/build-update-bundle.py")
     raw = json.loads((ROOT / "scripts/release/update-catalog-history.json").read_text(encoding="utf-8"))["releases"]
-    assert len(raw) == 27
-    assert hashlib.sha256(builder.canonical_payload_bytes(raw[:-1])).hexdigest() == "cbfd098f3412c153cc87ac3fc4a2b66b4c8eba2314c14709aca617f2ea86a97c"
-    history = builder.load_catalog_history("1.6.5")
+    assert len(raw) == 28
+    assert hashlib.sha256(builder.canonical_payload_bytes(raw[:26])).hexdigest() == "cbfd098f3412c153cc87ac3fc4a2b66b4c8eba2314c14709aca617f2ea86a97c"
+    history = builder.load_catalog_history("1.6.6")
     predecessor = next(release for release in history if release["version"] == "1.6.4")
     assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "9d6478041966bfe27e6f64d0d1fee0d951cb4ed9d26a063ebe548fdb593b4004"
     assert predecessor["bundle_sha256"] == "3a7f034ca2df13b1e16674663c9ba3dfc58b88f19e0e94cc535a8d1385b20c74"

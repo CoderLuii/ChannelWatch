@@ -13,7 +13,8 @@ cryptography>=50.0.2
 
 # Notifications
 apprise>=1.13.1,<2
-oauthlib>=4.0.0
+oauthlib>=4.0.1
+opentelemetry-api>=1.45.2
 
 # Web
 fastapi>=0.143.0

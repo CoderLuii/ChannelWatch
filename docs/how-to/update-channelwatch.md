@@ -1,12 +1,12 @@
 # Update ChannelWatch
 
-On v1.6.4, v1.6.3, v1.6.2, v1.6.1, v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.6.5 directly from **Settings > Updates** without recreating the container. No intermediate release is needed. ChannelWatch briefly restarts its processes and reconnects; the container and saved configuration stay in place.
+On v1.6.5, v1.6.4, v1.6.3, v1.6.2, v1.6.1, v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.6.6 directly from **Settings > Updates** without recreating the container. No intermediate release is needed. ChannelWatch briefly restarts its processes and reconnects; the container and saved configuration stay in place.
 
-Install v1.6.5 manually from Update Center. Automatic installation remains disabled.
+Install v1.6.6 manually from Update Center. Automatic installation remains disabled.
 
-The v1.4.x route updates the application and interface while keeping the image's existing Python packages. To receive the certifi security update on v1.4.x, preserve `/config` and replace the container with the v1.6.5 image. The v1.5.3, v1.6.0, v1.6.1, v1.6.2, v1.6.3 and v1.6.4 protocol-4 route updates the application and packages together, including certifi. Python itself, system libraries and the image-owned launcher still require a container image update when those components change.
+The v1.4.x route updates the application and interface while keeping the image's existing Python packages. To receive the certifi security update on v1.4.x, preserve `/config` and replace the container with the v1.6.6 image. The v1.5.3, v1.6.0, v1.6.1, v1.6.2, v1.6.3 and v1.6.4 protocol-4 route updates the application and packages together, including certifi. Python itself, system libraries and the image-owned launcher still require a container image update when those components change.
 
-The v1.6.5 image uses Python 3.14.9. Its signed package generation retains a Python 3.14.8 minimum so existing v1.5.3 and newer compatible containers can install it in-app. This interface update does not replace the image interpreter or operating-system packages.
+The v1.6.6 image uses Python 3.14.9. Its signed package generation retains a Python 3.14.8 minimum so existing v1.5.3 and newer compatible containers can install it in-app. This interface update does not replace the image interpreter or operating-system packages.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. **Retry now** uses the same checks when a restart briefly disconnects the dashboard. Application and immutable container image versions are reported separately.
 
@@ -30,7 +30,7 @@ Operational v0.9.11–v0.9.17 installations can upgrade directly to v0.9.18 thro
 
 An already-blocked v0.9.17 installation with a missing or incorrect external key cannot reach the old authenticated Update Center. Preserve `/config` and pull/recreate v1.5.3, or restore the correct old key for one migration restart. Fresh installations using the current image do not need an encryption variable.
 
-The older-client restart report in [issue #22](https://github.com/CoderLuii/ChannelWatch/issues/22) remains open. Its cause has not been proven, and v1.5.3 does not present it as resolved.
+The older-client restart report in [issue #22](https://github.com/CoderLuii/ChannelWatch/issues/22) is closed. Keep the supported update path and preserve `/config` when replacing an image.
 
 If a future credential-protection problem blocks normal administrator navigation after v0.9.18 is installed, the setup/recovery shell can check and apply only the official signed stable recovery update. That narrow path requires same-origin anti-CSRF state and exact typed confirmation; it cannot accept a custom feed, upload, signing key, URL, or downgrade.
 
@@ -158,3 +158,7 @@ Update Center runtime files live under `/config/channelwatch-runtime/`:
 | `trust/<generation-sha256>.json` | Retained signed catalog used by the image launcher. |
 
 Normal app backups do not include downloaded app bundles. Keep your normal `/config` backup routine for disaster recovery.
+
+Legacy app-only updates retain image-owned OAuthLib and OpenTelemetry packages.
+Recreate the container with the v1.6.6 image to receive those dependency security
+fixes on legacy images; preserve `/config` and your existing external key setup.

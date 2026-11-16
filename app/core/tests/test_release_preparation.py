@@ -190,3 +190,19 @@ def test_manual_event_cannot_enter_the_production_release_path(event, ref, actor
         expression = jobs[name]["if"].replace("&&", " and ").replace("||", " or ")
         result = eval(expression, {"__builtins__": {}}, {"github": context, "startsWith": lambda value, prefix: value.startswith(prefix)})
         assert result is expected, (name, event, ref)
+
+
+def test_hosted_measurements_fetch_the_release_history_the_verifier_requires():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/docker-publish.yml").read_text())
+    job = workflow["jobs"]["release-validation"]
+    checkout = next(step for step in job["steps"] if step.get("name") == "Checkout measured source")
+    assert checkout["with"]["fetch-depth"] == 0
+
+
+def test_hosted_measurements_retain_reports_without_uploading_virtualenvs():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/docker-publish.yml").read_text())["jobs"]
+    upload = next(step for step in jobs["release-validation"]["steps"] if step.get("name") == "Retain hosted measurements and install logs")
+    assert upload["with"]["path"].splitlines() == [
+        "${{ runner.temp }}/verifier-benchmark/*.json",
+        "${{ runner.temp }}/verifier-benchmark/*.log",
+    ]

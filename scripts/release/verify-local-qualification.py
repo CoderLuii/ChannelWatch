@@ -34,9 +34,13 @@ FIELDS = {
 }
 
 
+class QualificationError(ValueError):
+    """A fixed diagnostic that is safe to show without exposing record values."""
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
-        raise ValueError(message)
+        raise QualificationError(message)
 
 
 def exact_fields(value, fields: set[str], name: str) -> None:
@@ -161,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
             output.write(content)
         with digest_path.open("x", encoding="ascii", newline="\n") as output:
             output.write(digest + "\n")
+    except QualificationError as exc:
+        print(f"Local qualification rejected: {exc}", file=sys.stderr)
+        return 1
     except (ValueError, TypeError, KeyError, OSError, RecursionError, subprocess.SubprocessError):
         print("Local qualification rejected: record, source or evidence validation failed.", file=sys.stderr)
         return 1

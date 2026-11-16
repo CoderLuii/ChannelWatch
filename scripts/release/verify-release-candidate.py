@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 from collections.abc import Iterable
 
 
@@ -85,7 +87,18 @@ def _git(*args: str) -> str:
 
 def _release_count_base(candidate_tag: str, previous_tag: str, candidate_commit: str) -> str:
     if candidate_tag != "v1.6.4":
-        return previous_tag
+        # Historical candidates retain their published contract. Future releases
+        # may follow ordinary main commits, but never an untagged release.
+        if _version(candidate_tag) <= (1, 6, 5):
+            return previous_tag
+        _git("merge-base", "--is-ancestor", previous_tag, candidate_commit)
+        parents = _git("rev-list", "--parents", "-n", "1", candidate_commit).split()
+        if len(parents) != 2:
+            raise ValueError("The release commit must have exactly one parent.")
+        subjects = _git("log", "--format=%s", f"{previous_tag}..{parents[1]}").splitlines()
+        if any(SEMVER_TAG.fullmatch(subject.strip()) for subject in subjects):
+            raise ValueError("The candidate range contains an untagged release commit.")
+        return parents[1]
     if (
         previous_tag != "v1.6.3"
         or _git("cat-file", "-t", previous_tag) != "commit"
@@ -109,10 +122,23 @@ def main() -> int:
         help="Optional event SHA; it must dereference to the candidate tag commit.",
     )
     parser.add_argument("--main-ref", default="origin/main")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--event-ref")
+    parser.add_argument("--event-sha")
     args = parser.parse_args()
 
     try:
         _version(args.tag)
+        if args.config is not None:
+            config = json.loads(args.config.read_text(encoding="utf-8"))
+            if args.tag != f"v{config.get('version')}":
+                raise ValueError("Release tag does not match the release configuration.")
+        if args.event_ref is not None or args.event_sha is not None:
+            if args.event_ref != f"refs/tags/{args.tag}":
+                raise ValueError("The workflow must be triggered by the exact release tag.")
+            if (not args.sha or not re.fullmatch(r"[0-9a-f]{40}", args.sha)
+                    or args.event_sha != args.sha or _git("rev-parse", "HEAD") != args.sha):
+                raise ValueError("The event SHA, requested source and checked-out commit must match.")
         tags = _git("tag", "--list").splitlines()
         candidate_commit = _git("rev-parse", "--verify", f"{args.tag}^{{commit}}")
         main_commit = _git("rev-parse", "--verify", f"{args.main_ref}^{{commit}}")

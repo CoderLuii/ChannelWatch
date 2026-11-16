@@ -3280,7 +3280,8 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
         encoding="utf-8"
     )
 
-    assert "group: channelwatch-release-publication" in workflow
+    assert "channelwatch-release-publication-v2" in workflow
+    assert "channelwatch-release-validation" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "\npermissions: {}\n" in workflow
     assert "verify-release-candidate.py" in workflow
@@ -3397,7 +3398,7 @@ def test_release_workflow_uses_one_tag_driven_candidate_run():
         1,
     )[0]
 
-    assert "workflow_dispatch:" not in workflow
+    assert "workflow_dispatch:" in workflow
     assert "RELEASE_TAG: ${{ github.ref_name }}" in workflow
     assert "RELEASE_SHA: ${{ github.sha }}" in workflow
     assert workflow.count("ref: ${{ env.RELEASE_SHA }}") == 7
@@ -3417,8 +3418,8 @@ def test_release_workflow_has_one_candidate_publication_run_per_release():
     assert "push:\n    branches:" not in trigger
     assert "pull_request:\n    branches:\n      - main" in trigger
     assert "cleanup-failed-v0918" not in workflow
-    assert "workflow_dispatch:" not in workflow
-    assert 'run-name: "${{ github.event_name == \'push\' && github.ref_name' in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "github.event_name == 'push' && github.ref_name" in workflow
 
 
 def test_pull_requests_run_the_complete_backend_suite_without_retry():
@@ -3526,7 +3527,7 @@ def test_release_workflow_publishes_only_the_scanned_multiarch_archive():
     assert "load: true" in candidate
     assert "push: false" in candidate
     assert "Verify pinned bridge or run v0.9.18 historical canaries" in candidate
-    assert 'if [ "${GITHUB_SHA}" != "${EXPECTED_SHA}" ]' in candidate
+    assert '--event-sha "${GITHUB_SHA}"' in candidate
     assert 'cmp --silent "${archive}" "${second_archive}"' in candidate
     assert "channelwatch-image-${tag}.oci.tar" in candidate
 
@@ -3758,12 +3759,12 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
         "name: channelwatch-release-candidate-${{ github.sha }}"
         in candidate
     )
-    assert 'run-name: "${{ github.event_name == \'push\' && github.ref_name' in candidate
+    assert "github.event_name == 'push' && github.ref_name" in candidate
     assert "push:" in candidate
     assert '- "v*"' in candidate
     assert "branches:\n      - main\n  pull_request:" not in candidate
-    assert "workflow_dispatch:" not in candidate
-    assert "if: startsWith(github.ref, 'refs/tags/v')" in candidate
+    assert "workflow_dispatch:" in candidate
+    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in candidate
     assert "CHANNELWATCH_BUILD_ID: ${{ github.sha }}" in candidate
     assert not (ROOT / ".github/workflows/release-candidate.yml").exists()
     assert not (ROOT / ".github/workflows/ci.yml").exists()
@@ -3772,10 +3773,9 @@ def test_publication_requires_byte_identical_exact_sha_candidate_assets():
     ]
     assert "EXPECTED_TAG: ${{ github.ref_name }}" in candidate
     assert "EXPECTED_SHA: ${{ github.sha }}" in candidate
-    assert 'actual_tag="v${actual_version}"' in candidate
-    assert '"${GITHUB_REF}" != "refs/tags/${actual_tag}"' in candidate
-    assert 'tag_object_type="$(git cat-file -t "refs/tags/${EXPECTED_TAG}")"' in candidate
-    assert '"${remote_main}" != "${EXPECTED_SHA}"' in candidate
+    assert '--config scripts/release/release-config.json' in candidate
+    assert '--event-ref "${GITHUB_REF}" --event-sha "${GITHUB_SHA}"' in candidate
+    assert '--tag "${EXPECTED_TAG}" --sha "${EXPECTED_SHA}" --main-ref origin/main' in candidate
     assert 'git push origin "${RELEASE_SHA}:refs/tags/${RELEASE_TAG}"' not in candidate
     upload_block = candidate.split(
         "      - name: Retain sealed nonpublishing candidate evidence", 1
@@ -3910,7 +3910,7 @@ def test_site_release_handoff_preserves_publication_and_live_feed_gates():
         (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
     )
     job = workflow["jobs"]["sync-site"]
-    assert job["if"] == "startsWith(github.ref, 'refs/tags/v')"
+    assert job["if"] == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
     assert "verify-public-release-assets" in job["needs"]
     prepare = next(
         step for step in job["steps"]
@@ -4127,7 +4127,7 @@ def test_release_requires_local_qualification_before_native_preparation():
     )
     jobs = workflow["jobs"]
     preflight = jobs["release-preflight"]
-    assert preflight["if"] == "startsWith(github.ref, 'refs/tags/v')"
+    assert "startsWith(github.ref, 'refs/tags/v')" in preflight["if"]
     assert preflight["permissions"] == {"contents": "read"}
     assert preflight.get("continue-on-error", False) is False
     assert "${{ secrets." not in json.dumps(preflight)
@@ -4145,7 +4145,7 @@ def test_release_requires_local_qualification_before_native_preparation():
     assert gate["env"]["CHANNELWATCH_LOCAL_QUALIFICATION"] == (
         "${{ vars.CHANNELWATCH_LOCAL_QUALIFICATION }}"
     )
-    assert "if" not in gate
+    assert gate["if"] == "github.event_name == 'push'"
     assert gate.get("continue-on-error", False) is False
     for script in (
         "verify-release-candidate.py", "verify-release-timing.py",
@@ -4157,7 +4157,7 @@ def test_release_requires_local_qualification_before_native_preparation():
         step for step in preflight["steps"]
         if step.get("name") == "Retain accepted local qualification"
     )
-    assert "if" not in retained
+    assert retained["if"] == "github.event_name == 'push'"
     assert retained["with"]["if-no-files-found"] == "error"
     assert retained["with"]["name"] == "local-qualification-${{ github.sha }}"
 
@@ -4195,7 +4195,7 @@ def test_release_source_result_is_required_before_candidate_promotion():
     }.items():
         job = jobs[consumer]
         assert prerequisites <= set(job["needs"])
-        assert job.get("if") == "startsWith(github.ref, 'refs/tags/v')"
+        assert job.get("if") == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
         assert job.get("continue-on-error", False) is False
         checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
         assert checkout["with"]["ref"] in {"${{ github.sha }}", "${{ env.RELEASE_SHA }}"}
@@ -4282,6 +4282,8 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     assert workflow["jobs"]
     protected_jobs = {
         "release-preflight",
+        "release-validation",
+        "prepare-runtime-archives",
         "candidate-source-gates",
         "candidate-signing",
         "runtime-capability",
@@ -5058,15 +5060,15 @@ def test_release_candidate_cli_bounds_the_approved_164_chain(tmp_path, mutation)
 @pytest.mark.parametrize("mutation, error", [
     (None, None),
     ("ref", "workflow must be triggered by the exact"),
-    ("expected-tag", "workflow must be triggered by the exact"),
-    ("event", "workflow must run from the exact tagged release commit"),
-    ("sha", "Checked-out SHA does not match"),
-    ("config", "workflow must be triggered by the exact"),
-    ("main", "current main must identify the same commit"),
+    ("expected-tag", "does not match the release configuration"),
+    ("event", "event SHA, requested source and checked-out commit must match"),
+    ("sha", "event SHA, requested source and checked-out commit must match"),
+    ("config", "does not match the release configuration"),
+    ("main", "is not current main"),
     ("extra-commit", "exact approved"),
-    ("annotated", "must be a lightweight tag"),
+    ("annotated", "must be lightweight"),
     ("newer", "newer release tag"),
-    ("body", "with an empty body"),
+    ("body", "must be exactly"),
 ])
 def test_candidate_identity_workflow_shell_checks_the_actual_release_chain(
     tmp_path, mutation, error,
@@ -5101,6 +5103,11 @@ def test_candidate_identity_workflow_shell_checks_the_actual_release_chain(
     )
     subprocess.run(
         ["git", "checkout", "--detach", candidate], cwd=checkout,
+        check=True, capture_output=True, text=True, env=environment, timeout=30,
+    )
+    # Match actions/checkout fetch-depth: 0, which supplies all branch/tag history.
+    subprocess.run(
+        ["git", "fetch", "--force", "--tags", "origin"], cwd=checkout,
         check=True, capture_output=True, text=True, env=environment, timeout=30,
     )
     result = subprocess.run(

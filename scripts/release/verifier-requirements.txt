@@ -1,0 +1,6 @@
+# Imports reached by catalog and runtime-archive verification. Install with the
+# existing runtime constraints; this does not change the product dependency set.
+cryptography
+httpx
+pytz
+sqlmodel

@@ -21,7 +21,7 @@ def test_tag_candidate_requires_existing_deployment_docs_and_security_gates():
         assert "startsWith(github.ref, 'refs/tags/v')" in jobs[name]['if']
 
     assert jobs["build-and-push"]["needs"] == "build-update-bundle-and-release"
-    assert "if" not in jobs["build-and-push"]
+    assert jobs["build-and-push"]["if"] == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 
 def test_browser_diagnostics_and_local_release_evidence_precede_signing():
     workflow = yaml.load((ROOT / '.github/workflows/docker-publish.yml').read_text(), Loader=yaml.BaseLoader)
@@ -47,7 +47,9 @@ def test_browser_diagnostics_and_local_release_evidence_precede_signing():
         '${{ runner.temp }}/local-qualification.json.sha256',
     ]
     assert jobs['runtime-dependencies']['needs'] == 'release-preflight'
-    assert jobs['candidate-source-gates']['needs'] == 'runtime-dependencies'
+    assert jobs['candidate-source-gates']['needs'] == 'release-preflight'
+    assert set(jobs['prepare-runtime-archives']['needs']) == {'candidate-source-gates', 'runtime-dependencies'}
+    assert 'prepare-runtime-archives' in jobs['candidate-signing']['needs']
     assert not any('pnpm exec playwright test' in step.get('run', '')
                    for step in jobs['candidate-source-gates']['steps'])
 

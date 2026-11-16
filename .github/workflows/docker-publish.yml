@@ -1,5 +1,5 @@
 name: ChannelWatch - Release
-run-name: "${{ github.event_name == 'push' && github.ref_name || format('PR #{0}', github.event.pull_request.number) }}"
+run-name: "${{ github.event_name == 'workflow_dispatch' && 'Validate release preparation' || github.event_name == 'push' && github.ref_name || format('PR #{0}', github.event.pull_request.number) }}"
 
 # Required repository secrets:
 # - CHANNELWATCH_UPDATE_SIGNING_KEY: Ed25519 private key used only for app-bundle signing.
@@ -9,6 +9,7 @@ run-name: "${{ github.event_name == 'push' && github.ref_name || format('PR #{0}
 # - SITE_SYNC_TOKEN: Required only for hosted site sync; limited to ChannelWatch-site dispatches.
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -17,7 +18,7 @@ on:
       - main
 
 concurrency:
-  group: channelwatch-release-publication-v2
+  group: ${{ github.event_name == 'workflow_dispatch' && 'channelwatch-release-validation' || 'channelwatch-release-publication-v2' }}
   cancel-in-progress: false
 
 permissions: {}
@@ -296,9 +297,9 @@ jobs:
 
   release-preflight:
     name: Verify release identity before preparation
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'CoderLuii')
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -309,29 +310,43 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify release identity and local qualification
+        if: github.event_name == 'push'
         env:
           CHANNELWATCH_LOCAL_QUALIFICATION: ${{ vars.CHANNELWATCH_LOCAL_QUALIFICATION }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(git rev-parse HEAD)" != "${RELEASE_SHA}" ]; then
-            echo "::error::Checked-out source differs from the release event."
-            exit 1
-          fi
-          if [ "v$(jq -r '.version' scripts/release/release-config.json)" != "${RELEASE_TAG}" ]; then
-            echo "::error::Release configuration and tag versions differ."
-            exit 1
-          fi
-          if [ "${GITHUB_REF}" != "refs/tags/${RELEASE_TAG}" ]; then
-            echo "::error::Release preparation requires the exact version tag."
-            exit 1
-          fi
           python3 scripts/release/verify-release-candidate.py \
-            --tag "${RELEASE_TAG}" --sha "${RELEASE_SHA}" --main-ref origin/main
+            --tag "${RELEASE_TAG}" --sha "${RELEASE_SHA}" --main-ref origin/main \
+            --config scripts/release/release-config.json \
+            --event-ref "${GITHUB_REF}" --event-sha "${GITHUB_SHA}"
           python3 scripts/release/verify-release-timing.py --source-ref "${RELEASE_SHA}"
           python3 scripts/release/verify-local-qualification.py \
             --output "${RUNNER_TEMP}/local-qualification.json"
+
+      - name: Set up pinned Python for catalog input validation
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install catalog input verifier dependencies
+        run: python -m pip install -c deploy/requirements/runtime.constraints.txt -r scripts/release/verifier-requirements.txt
+      - name: Validate source-derived catalog inputs
+        run: python scripts/release/verify-release-inputs.py
+      - name: Exercise release policy and qualification failure cases
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          python -m pip install -c deploy/requirements/dev.constraints.txt pytest pyyaml
+          python -m pytest -c deploy/config/pytest.ini app/core/tests/test_release_preparation.py app/core/tests/test_release_gate_coverage.py app/core/tests/test_local_qualification.py -q --junitxml="${RUNNER_TEMP}/release-preflight-tests.xml"
+      - name: Retain validation diagnostics
+        if: github.event_name == 'workflow_dispatch' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-validation-preflight-${{ github.sha }}
+          path: ${{ runner.temp }}/release-preflight-tests.xml
+          if-no-files-found: warn
+          retention-days: 30
       - name: Retain accepted local qualification
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: local-qualification-${{ github.sha }}
@@ -344,7 +359,7 @@ jobs:
   runtime-dependencies:
     name: Build native ${{ matrix.architecture }} runtime dependencies
     needs: release-preflight
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'CoderLuii')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
@@ -379,7 +394,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/release/verify-release-timing.py --source-ref "${GITHUB_SHA}"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            python3 scripts/release/verify-release-timing.py --source-ref "${GITHUB_SHA}"
+          fi
           docker pull "${RUNTIME_BUILDER_IMAGE}"
           image_digest="$(docker image inspect --format '{{join .RepoDigests "\n"}}' \
             "${RUNTIME_BUILDER_IMAGE}" | grep -Fx "python@${RUNTIME_BUILDER_DIGEST}")"
@@ -469,8 +486,8 @@ jobs:
 
   candidate-source-gates:
     name: Prepare locally verified release source and static frontend
-    needs: runtime-dependencies
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release-preflight
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'CoderLuii')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -503,11 +520,6 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Install constrained Python dependencies
-        run: |
-          python -m pip install --upgrade \
-            -c deploy/requirements/runtime.constraints.txt \
-            -r deploy/requirements/runtime.txt
       - name: Validate source release metadata
         run: |
           python scripts/release/release_version_policy.py
@@ -527,6 +539,33 @@ jobs:
           path: app/ui/out/
           retention-days: 7
           if-no-files-found: error
+  prepare-runtime-archives:
+    name: Assemble deterministic unsigned runtime archives
+    needs: [candidate-source-gates, runtime-dependencies]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'CoderLuii')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install constrained Python dependencies
+        run: python -m pip install -c deploy/requirements/runtime.constraints.txt -r scripts/release/verifier-requirements.txt
+      - name: Download verified static frontend
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-static-${{ github.sha }}
+          path: app/ui/out
+
       - name: Download native runtime dependency closures
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -582,10 +621,68 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  release-validation:
+    name: Report nonpublishing release preparation measurements
+    needs: [release-preflight, runtime-dependencies, candidate-source-gates, prepare-runtime-archives]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'CoderLuii'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout measured source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Measure full and minimal verifier installations
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import statistics
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "verifier-benchmark"
+          root.mkdir()
+          samples = {"full": [], "minimal": []}
+          for iteration in range(3):
+              for kind, requirement in (("full", "deploy/requirements/runtime.txt"), ("minimal", "scripts/release/verifier-requirements.txt")):
+                  environment = root / f"{kind}-{iteration}"
+                  subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+                  python = str(environment / "bin/python")
+                  started = time.perf_counter()
+                  with (root / f"{kind}-{iteration}.log").open("w") as log:
+                      subprocess.run([python, "-m", "pip", "install", "-c", "deploy/requirements/runtime.constraints.txt", "-r", requirement], check=True, stdout=log, stderr=subprocess.STDOUT)
+                  elapsed = time.perf_counter() - started
+                  subprocess.run([python, "scripts/release/verify-release-inputs.py"], check=True)
+                  samples[kind].append(elapsed)
+          medians = {kind: statistics.median(values) for kind, values in samples.items()}
+          report = {"scope": "verifier installation only; fresh virtualenvs, shared pip cache, alternating full/minimal order", "source_commit": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"], "samples_seconds": samples, "median_seconds": medians, "improvement_percent": 100 * (1 - medians["minimal"] / medians["full"])}
+          (root / "measurements.json").write_text(json.dumps(report, indent=2) + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write("Nonpublishing preparation passed on native AMD64 and ARM64. Production identity, signing, image lifecycle, publication and deployment remain separate release requirements.\n\n" + json.dumps(report, indent=2) + "\n")
+          PY
+      - name: Retain hosted measurements and install logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-validation-measurements-${{ github.sha }}
+          path: ${{ runner.temp }}/verifier-benchmark/
+          retention-days: 30
+          if-no-files-found: error
+
   candidate-signing:
     name: Sign and seal candidate assets on a fresh runner
-    needs: [candidate-source-gates, runtime-dependencies]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [candidate-source-gates, runtime-dependencies, prepare-runtime-archives]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -687,7 +784,7 @@ jobs:
   runtime-capability:
     name: Prove protocol-4 runtime lifecycle (${{ matrix.architecture }})
     needs: [candidate-source-gates, candidate-signing, runtime-dependencies]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
@@ -978,7 +1075,7 @@ jobs:
   legacy-app-upgrade:
     name: Prove legacy in-app upgrade (${{ matrix.architecture }})
     needs: [candidate-source-gates, candidate-signing, runtime-dependencies]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
@@ -1151,7 +1248,7 @@ jobs:
   candidate-qualification:
     needs: [docs-config, helm, security, runtime-dependencies, candidate-source-gates, candidate-signing, runtime-capability, legacy-app-upgrade]
     name: Build and verify private signed candidate
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
@@ -1228,47 +1325,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual_sha="$(git rev-parse HEAD)"
-          actual_version="$(jq -r '.version' scripts/release/release-config.json)"
-          actual_tag="v${actual_version}"
-          actual_subject="$(git log -1 --format=%s)"
-          actual_body="$(git log -1 --format=%b)"
-          if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::The pushed candidate must resolve to a complete commit SHA."
-            exit 1
-          fi
-          if [ "${EXPECTED_TAG}" != "${actual_tag}" ] || [ "${GITHUB_REF}" != "refs/tags/${actual_tag}" ]; then
-            echo "::error::The workflow must be triggered by the exact ${actual_tag} tag."
-            exit 1
-          fi
-          if [ "${actual_subject}" != "${actual_tag}" ] || [ -n "${actual_body}" ]; then
-            echo "::error::The release commit must use subject ${actual_tag} with an empty body."
-            exit 1
-          fi
-          if [ "${actual_sha}" != "${EXPECTED_SHA}" ]; then
-            echo "::error::Checked-out SHA does not match the requested candidate."
-            exit 1
-          fi
-          if [ "${GITHUB_SHA}" != "${EXPECTED_SHA}" ]; then
-            echo "::error::The workflow must run from the exact tagged release commit."
-            exit 1
-          fi
-          git fetch --force origin main --tags
-          remote_main="$(git rev-parse refs/remotes/origin/main)"
-          tag_sha="$(git rev-parse "${EXPECTED_TAG}^{commit}")"
-          tag_object_type="$(git cat-file -t "refs/tags/${EXPECTED_TAG}")"
-          if [ "${tag_object_type}" != "commit" ]; then
-            echo "::error::${EXPECTED_TAG} must be a lightweight tag."
-            exit 1
-          fi
-          if [ "${tag_sha}" != "${EXPECTED_SHA}" ] || [ "${remote_main}" != "${EXPECTED_SHA}" ]; then
-            echo "::error::The release tag, workflow SHA, and current main must identify the same commit."
-            exit 1
-          fi
           python scripts/release/verify-release-candidate.py \
-            --tag "${EXPECTED_TAG}" \
-            --sha "${EXPECTED_SHA}" \
-            --main-ref origin/main
+            --tag "${EXPECTED_TAG}" --sha "${EXPECTED_SHA}" --main-ref origin/main \
+            --config scripts/release/release-config.json \
+            --event-ref "${GITHUB_REF}" --event-sha "${GITHUB_SHA}"
 
       - name: Set up pinned Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2035,7 +2095,7 @@ jobs:
   signed-candidate:
     name: Finalize sealed qualified candidate on a fresh runner
     needs: [candidate-signing, candidate-qualification]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -2106,7 +2166,7 @@ jobs:
   native-image-qualification:
     name: Native image qualification (${{ matrix.architecture }})
     needs: [signed-candidate, runtime-dependencies]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -2511,7 +2571,7 @@ jobs:
   build-update-bundle-and-release:
     name: Build signed update bundle and release
     needs: [signed-candidate, native-image-qualification]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write # Create the exact-SHA draft and upload signed update assets.
@@ -3076,6 +3136,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
   build-and-push:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     name: Build and push Docker image
     runs-on: ubuntu-24.04
     needs: build-update-bundle-and-release
@@ -3697,7 +3758,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/docker-auth/.docker
           HOME: ${{ runner.temp }}/docker-auth
@@ -3711,7 +3772,7 @@ jobs:
     name: Update Docker Hub description
     runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
     needs: advance-compatible-aliases
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 
@@ -3737,7 +3798,7 @@ jobs:
     needs:
       - build-update-bundle-and-release
       - build-and-push
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write # Promote the exact-SHA draft to the public GitHub release.
 
@@ -4118,7 +4179,7 @@ jobs:
       - build-update-bundle-and-release
       - build-and-push
       - publish-github-release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 
@@ -4374,7 +4435,7 @@ jobs:
       - build-and-push
       - publish-github-release
       - verify-public-release-assets
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
 
@@ -4535,6 +4596,7 @@ jobs:
           if-no-files-found: error
 
   verify-live-update-manifest:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     name: Verify live stable update manifest
     runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
     needs:
@@ -4665,6 +4727,7 @@ jobs:
           python scripts/release/verify-pinned-v1-bridge.py
 
   advance-compatible-aliases:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     name: Advance verified latest images
     runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
     needs:

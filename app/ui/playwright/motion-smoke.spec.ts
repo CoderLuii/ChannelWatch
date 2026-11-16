@@ -23,21 +23,87 @@ async function sheetOffsets(page: Page, selector: string, ms: number) {
   }), { selector, ms })
 }
 
-/** Milliseconds until the element leaves the page. Watches the DOM, because headless WebKit paints too rarely to time this by frames. */
-async function removalTime(page: Page, selector: string, ms: number) {
-  return page.evaluate(({ selector, ms }) => new Promise<number>((resolve) => {
-    const start = performance.now()
-    const observer = new MutationObserver(() => {
-      if (document.querySelector(selector)) return
-      observer.disconnect()
-      resolve(performance.now() - start)
+type ClosingSurface = { state: string | undefined; top: number; opacity: number; durations: number[] }
+type ClosingFrame = { sheet: ClosingSurface | null; overlay: ClosingSurface | null; viewport: number }
+type ClosingEvidence = { trusted: boolean; reduced: boolean; elapsed: number; cleanupReady: boolean; styles: ClosingSurface[]; frames: ClosingFrame[] }
+
+/** Observe reduced-motion output and lifecycle completion, not host rendering speed. */
+async function armReducedClosing(page: Page, selector: string, ms: number) {
+  return page.evaluateHandle(({ selector, ms }) => {
+    const marks = { keydownAt: null as number | null }
+    const result = new Promise<ClosingEvidence>((resolve) => {
+      const evidence: ClosingEvidence = { trusted: false, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches, elapsed: 0, cleanupReady: false, styles: [], frames: [] }
+      const trigger = document.querySelector<HTMLElement>('button[aria-haspopup="dialog"][aria-label="More"]')
+      let done = false
+      let timeout: number | undefined
+      let frame: number | undefined
+      const surface = (element: Element | null): ClosingSurface | null => {
+        if (!element) return null
+        const style = getComputedStyle(element)
+        const durations = [style.animationDuration, style.transitionDuration].flatMap(value => value.split(",").map(part => parseFloat(part) * (part.trim().endsWith("ms") ? 1 : 1000)))
+        return { state: element.getAttribute("data-state") ?? undefined, top: element.getBoundingClientRect().top, opacity: Number(style.opacity), durations }
+      }
+      const snapshot = (): ClosingFrame => ({ sheet: surface(document.querySelector(selector)), overlay: surface(document.querySelector(".mobile-sheet-overlay")), viewport: innerHeight })
+      const recordStyles = () => {
+        const current = snapshot()
+        for (const value of [current.sheet, current.overlay]) if (value?.state === "closed") evidence.styles.push(value)
+      }
+      const finish = (cleanupReady: boolean) => {
+        if (done) return
+        done = true
+        evidence.cleanupReady = cleanupReady
+        evidence.elapsed = marks.keydownAt === null ? Number.POSITIVE_INFINITY : performance.now() - marks.keydownAt
+        observer.disconnect()
+        document.removeEventListener("keydown", keydown, true)
+        clearTimeout(timeout)
+        if (frame !== undefined) cancelAnimationFrame(frame)
+        resolve(evidence)
+      }
+      const ready = () => {
+        if (!evidence.frames.length || document.querySelector(selector) || document.querySelector(".mobile-sheet-overlay") || !trigger || document.activeElement !== trigger) return false
+        const rect = trigger.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return !!hit && trigger.contains(hit)
+      }
+      const tick = () => {
+        if (done) return
+        evidence.frames.push(snapshot())
+        recordStyles()
+        if (ready()) finish(true)
+        else frame = requestAnimationFrame(tick)
+      }
+      const keydown = (event: KeyboardEvent) => {
+        if (event.key !== "Escape" || !event.isTrusted || marks.keydownAt !== null) return
+        marks.keydownAt = performance.now()
+        evidence.trusted = true
+        timeout = window.setTimeout(() => finish(false), ms)
+        frame = requestAnimationFrame(tick)
+      }
+      const observer = new MutationObserver(() => { if (marks.keydownAt !== null) recordStyles() })
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] })
+      document.addEventListener("keydown", keydown, true)
     })
-    observer.observe(document.body, { childList: true, subtree: true })
-    setTimeout(() => {
-      observer.disconnect()
-      resolve(Number.POSITIVE_INFINITY)
-    }, ms)
-  }), { selector, ms })
+    return { result, marks }
+  }, { selector, ms })
+}
+
+function assertReducedClosing(evidence: ClosingEvidence) {
+  expect(evidence.trusted).toBe(true)
+  expect(evidence.reduced).toBe(true)
+  for (const surface of evidence.styles) for (const duration of surface.durations) expect(duration).toBeLessThanOrEqual(1)
+  expect(evidence.frames.length).toBeGreaterThan(0)
+  for (const frame of evidence.frames) {
+    if (frame.sheet) {
+      expect(frame.sheet.state).toBe("closed")
+      expect(Math.round(frame.sheet.top)).toBeGreaterThanOrEqual(Math.round(frame.viewport))
+    }
+    if (frame.overlay) {
+      expect(frame.overlay.state).toBe("closed")
+      expect(frame.overlay.opacity).toBe(0)
+    }
+  }
+  expect(evidence.cleanupReady).toBe(true)
+  expect(evidence.elapsed).toBeLessThanOrEqual(1000)
 }
 
 test.beforeEach(async ({ page }) => {
@@ -58,9 +124,19 @@ test.describe("reduced motion", () => {
     expect(opening.length).toBeGreaterThan(0)
     expect(new Set(opening.map((frame) => frame.y))).toEqual(new Set([0]))
 
-    const closing = removalTime(page, '[data-testid="mobile-more-sheet"]', 1000)
-    await page.keyboard.press("Escape")
-    expect(await closing).toBeLessThan(134)
+    const closing = await armReducedClosing(page, '[data-testid="mobile-more-sheet"]', 1000)
+    try {
+      await page.keyboard.press("Escape")
+      assertReducedClosing(await closing.evaluate(({ result }) => result))
+      const remaining = await closing.evaluate(({ marks }) => 1000 - (performance.now() - marks.keydownAt!))
+      expect(remaining).toBeGreaterThan(0)
+      // A real underlying click proves the invisible overlay no longer blocks input.
+      await page.getByRole("button", { name: "More", exact: true }).click({ timeout: remaining })
+      await expect(page.getByTestId("mobile-more-sheet")).toHaveAttribute("data-state", "open", { timeout: remaining })
+      expect(await closing.evaluate(({ marks }) => performance.now() - marks.keydownAt!)).toBeLessThanOrEqual(1000)
+    } finally {
+      await closing.dispose()
+    }
   })
 })
 
@@ -89,8 +165,8 @@ test.describe("phone sheets", () => {
   test("the More sheet turns around when closed while opening", async ({ page }) => {
     await page.goto("/#overview")
     await expect(page.getByTestId("health-verdict")).toBeVisible()
-    const sampling = sheetOffsets(page, '[data-testid="mobile-more-sheet"]', 640)
     await page.getByRole("button", { name: "More", exact: true }).click()
+    const sampling = sheetOffsets(page, '[data-testid="mobile-more-sheet"]', 640)
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-testid="mobile-more-sheet"]')
       if (!el) return false

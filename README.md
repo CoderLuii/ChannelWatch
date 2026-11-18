@@ -10,6 +10,8 @@
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg?style=flat&logo=buy-me-a-coffee)](https://buymeacoffee.com/CoderLuii)
 [![Twitter Follow](https://img.shields.io/twitter/follow/CoderLuii?style=social)](https://x.com/CoderLuii)
 
+<p align="center"><a href="https://holyarrs.com/sponsor"><img src="https://holyarrs.com/sponsors/channelwatch.gif" alt="Sponsors"></a></p>
+
 ChannelWatch is a self-hosted Channels DVR monitor that watches DVR activity, shows it in a web UI, and sends notifications when something worth knowing happens.
 
 > Disclaimer: ChannelWatch is an independent community tool. It is not affiliated with, endorsed by, or sponsored by Fancy Bits LLC or Channels DVR. "Channels DVR" is a product of Fancy Bits LLC. Channel logos displayed in notifications belong to their respective owners and are shown for identification purposes only.

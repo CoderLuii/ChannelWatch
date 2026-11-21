@@ -7,6 +7,7 @@ import argparse
 import base64
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -31,8 +32,13 @@ def validate_inputs(root: Path, *, builder=None) -> dict:
     history = builder.load_catalog_history(version)
     tags = subprocess.run(["git", "-C", str(root), "tag", "--list"],
                           check=True, capture_output=True, text=True).stdout.splitlines()
-    builder.require_previous_catalog_release(version, history, tags,
-        unpublished_predecessor_tags=config.get("unpublished_predecessor_tags"), repo_root=root)
+    builder.require_previous_catalog_release(
+        version, history, tags,
+        unpublished_predecessor_tags=config.get("unpublished_predecessor_tags"),
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        github_token=os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", ""),
+        repo_root=root,
+    )
     # This checks source metadata, not artifact bytes or production signatures.
     # The isolated key never leaves this process and is not a trusted update key.
     key = Ed25519PrivateKey.generate()

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
-## [1.6.7] - 2026-11-21
+## [1.6.8] - 2026-11-21
 
 ### Fixed
 
@@ -1160,8 +1160,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.7...HEAD
-[1.6.7]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.6...v1.6.7
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.8...HEAD
+[1.6.8]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.6...v1.6.8
 [1.6.6]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.5...v1.6.6
 [1.6.5]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.4...v1.6.5
 [1.6.4]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.3...v1.6.4

@@ -46,6 +46,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.5": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"],
     "1.6.6": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
     "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
+    "1.6.8": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
 }
 BRIDGE_RELEASE_160 = {
     "version": "1.6.0",
@@ -117,10 +118,10 @@ def validate_baselines(value: object, *, target_version: str) -> list[dict[str, 
     expected_sources = LEGACY_SOURCE_CONTRACTS.get(target_version)
     if expected_sources is None or value.get("legacy_sources") != expected_sources:
         raise LegacyAppUpgradeError("Legacy source versions are incomplete.")
-    if target_version in {"1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"}:
+    if target_version in {"1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8"}:
         if value.get("qualification_modes") != ["direct", "chained"]:
             raise LegacyAppUpgradeError("Legacy qualification modes are incomplete.")
-        expected_bridge = BRIDGE_RELEASE_166 if target_version == "1.6.7" else BRIDGE_RELEASE_160
+        expected_bridge = BRIDGE_RELEASE_166 if target_version in {"1.6.7", "1.6.8"} else BRIDGE_RELEASE_160
         if value.get("bridge_release") != expected_bridge:
             raise LegacyAppUpgradeError("Legacy bridge release is not the immutable predecessor release.")
     scenarios = value.get("scenarios")
@@ -796,8 +797,23 @@ def wait_job(client, *, endpoint: str, version: str, timeout: int, image_version
             raise
         if job.get("job_id") != job_id:
             raise LegacyAppUpgradeError("Update job identity changed.")
-        if job.get("status") in {"failed", "rolled_back", "cancelled", "rejected"}:
-            raise LegacyAppUpgradeError("Signed legacy app update failed.")
+        status = job.get("status")
+        if status in ("failed", "rolled_back", "cancelled", "rejected"):
+            restart_error = job.get("restart_error") or job.get("error")
+            if restart_error is not None and restart_error not in (
+                "restart_helper_spawn_failed",
+                "restart_helper_ack_timeout",
+                "restart_helper_rejected",
+                "restart_supervisor_unavailable",
+            ):
+                restart_error = "<unrecognized>"
+            restart_started = _diagnostic_scalar(
+                job.get("restart_started"), bool, allow_none=True
+            )
+            raise LegacyAppUpgradeError(
+                f"Signed legacy app update failed at {endpoint}: status={status}, "
+                f"restart_started={restart_started}, restart_error={restart_error}."
+            )
         return job if job.get("status") == "success" else None
     return image_tool.wait_until(completed, timeout, f"legacy update job {job_id}")
 

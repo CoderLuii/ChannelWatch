@@ -22,6 +22,7 @@ SOURCE_CONTRACTS = {
     "1.6.5": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"],
     "1.6.6": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
     "1.6.7": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
+    "1.6.8": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
 }
 SOURCE_IDENTITIES = {
     "1.6.6": (
@@ -209,7 +210,7 @@ def main() -> int:
     release_config = json.loads(args.release_config.read_text(encoding="utf-8"))
     target_version = str(release_config.get("version") or "")
     sources = SOURCE_CONTRACTS.get(target_version)
-    require(sources is not None, "Source matrix is bounded to v1.6.1, v1.6.2, v1.6.3, v1.6.4, v1.6.5, v1.6.6 and v1.6.7.")
+    require(sources is not None, "Source matrix is bounded to v1.6.1, v1.6.2, v1.6.3, v1.6.4, v1.6.5, v1.6.6, v1.6.7 and v1.6.8.")
     require(
         release_config.get("compatible_source_application_versions")
         == sources,

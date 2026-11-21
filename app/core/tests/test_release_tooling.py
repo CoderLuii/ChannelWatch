@@ -1048,7 +1048,7 @@ def test_current_release_delivery_dependency_diff_requires_evidence_since_publis
         )
 
 
-def test_release_config_declares_167_in_app_update_on_published_153_image():
+def test_release_config_declares_168_in_app_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -1057,13 +1057,13 @@ def test_release_config_declares_167_in_app_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.7"
+    assert config["version"] == "1.6.8"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update_with_image_refresh"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.7"
+    assert config["recommended_image_version"] == "1.6.8"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
@@ -1078,7 +1078,7 @@ def test_release_config_declares_167_in_app_update_on_published_153_image():
     )
     assert config["runtime_compatibility_evidence"] == {}
     assert "recovers_unpublished_image_milestone" not in config
-    assert config["unpublished_predecessor_tags"] == []
+    assert config["unpublished_predecessor_tags"] == ["v1.6.7"]
     assert config["unpublished_release_tags"] == [
         "v1.4.2",
         "v1.4.3",
@@ -1087,8 +1087,9 @@ def test_release_config_declares_167_in_app_update_on_published_153_image():
         "v1.5.1",
         "v1.5.2",
         "v1.5.4",
+        "v1.6.7",
     ]
-    assert config["release_heading"] == "# ChannelWatch v1.6.7 - Dependency updates"
+    assert config["release_heading"] == "# ChannelWatch v1.6.8 - Dependency updates"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1162,16 +1163,16 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
 
     output = capsys.readouterr().out
     assert output.splitlines()[0] == config["release_heading"]
-    assert re.fullmatch(r"# ChannelWatch v1\.6\.7 - .+", output.splitlines()[0])
+    assert re.fullmatch(r"# ChannelWatch v1\.6\.8 - .+", output.splitlines()[0])
     assert re.findall(r"^# .+$", output, re.MULTILINE) == [
         config["release_heading"]
     ]
     for heading in ("Fixed", "Changed", "Images", "License and verification"):
         assert f"\n## {heading}\n" in output
     assert "https://channelwatch.coderluii.dev/" in output
-    assert "channelwatch-v1.6.7-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.7`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.7`" in output
+    assert "channelwatch-v1.6.8-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.8`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.8`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1281,7 +1282,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_167_release():
+def test_release_version_surfaces_use_168_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1292,11 +1293,11 @@ def test_release_version_surfaces_use_167_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.7"
-    assert metadata["versionTag"] == "v1.6.7"
-    assert metadata["dockerTag"] == "1.6.7"
-    assert metadata["helmChartVersion"] == "1.6.7"
-    assert metadata["helmAppVersion"] == "1.6.7"
+    assert metadata["version"] == "1.6.8"
+    assert metadata["versionTag"] == "v1.6.8"
+    assert metadata["dockerTag"] == "1.6.8"
+    assert metadata["helmChartVersion"] == "1.6.8"
+    assert metadata["helmAppVersion"] == "1.6.8"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -4976,6 +4977,8 @@ def _release_candidate_repository(tmp_path, mutation, *, files=None, release="1.
         previous = base = "efa510f0ea9c5b436fc996171fb0be91143fbdf9"
     if release == "1.6.7":
         previous = base = "2764b98f7b95a778162e844a1b31b81d7f149386"
+    if release == "1.6.8":
+        previous = base = "7d49fb90c46d96a72d46380d5401bcce1673aafe"
     repository = tmp_path / "release.git"
     environment = {
         **os.environ,
@@ -5016,7 +5019,7 @@ def _release_candidate_repository(tmp_path, mutation, *, files=None, release="1.
         parents.extend(["-p", side])
     message = tag + ("\n\nextra body\n" if mutation == "body" else "\n")
     candidate = git("commit-tree", tree, *parents, message=message)
-    git("update-ref", {"1.6.4": "refs/tags/v1.6.3", "1.6.5": "refs/tags/v1.6.4", "1.6.6": "refs/tags/v1.6.5", "1.6.7": "refs/tags/v1.6.6"}[release], previous)
+    git("update-ref", {"1.6.4": "refs/tags/v1.6.3", "1.6.5": "refs/tags/v1.6.4", "1.6.6": "refs/tags/v1.6.5", "1.6.7": "refs/tags/v1.6.6", "1.6.8": "refs/tags/v1.6.7"}[release], previous)
     git("update-ref", f"refs/tags/{tag}", candidate)
     git("update-ref", "refs/remotes/origin/main", base if mutation == "main" else candidate)
     if mutation == "wrong-predecessor":
@@ -5155,7 +5158,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
         "scripts/release/verify-release-timing.py",
         "scripts/release/verify-local-qualification.py",
         "scripts/release/release-config.json",
-        "deploy/security/channelwatch-v1.6.7.openvex.json",
+        "deploy/security/channelwatch-v1.6.8.openvex.json",
         "docs/releases/CHANGELOG.md", "app/ui/package.json", "app/ui/pnpm-lock.yaml",
     )
     files = {name: (ROOT / name).read_text(encoding="utf-8") for name in paths}
@@ -5165,7 +5168,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
         if step.get("name") == "Verify release identity and local qualification"
     )
     repository, environment, git, tag, candidate, base = _release_candidate_repository(
-        tmp_path, "main" if mutation == "main" else None, files=files, release="1.6.7",
+        tmp_path, "main" if mutation == "main" else None, files=files, release="1.6.8",
     )
     git("update-ref", "refs/heads/main", base if mutation == "main" else candidate)
     git("symbolic-ref", "HEAD", "refs/heads/main")
@@ -5190,7 +5193,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
     }
     record = {
         "schema": 1, "type": "maintainer_local", "repository": "CoderLuii/ChannelWatch",
-        "actor": "CoderLuii", "tag": tag, "version": "1.6.7",
+        "actor": "CoderLuii", "tag": tag, "version": "1.6.8",
         "source_commit": candidate, "source_tree": git("rev-parse", f"{candidate}^{{tree}}"),
         "workflow_sha256": hashlib.sha256(files[paths[0]].encode()).hexdigest(),
         "release_config_sha256": hashlib.sha256(

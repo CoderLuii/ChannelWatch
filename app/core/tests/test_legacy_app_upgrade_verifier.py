@@ -903,7 +903,7 @@ def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes(
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    scenarios = module.validate_baselines(fixture, target_version="1.6.7")
+    scenarios = module.validate_baselines(fixture, target_version="1.6.8")
     assert [row["id"] for row in scenarios] == [
         "stock-1.4.0",
         "overlay-1.4.0-to-1.4.1",
@@ -915,7 +915,7 @@ def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes(
     broken = copy.deepcopy(fixture)
     broken["scenarios"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_baselines(broken, target_version="1.6.7")
+        module.validate_baselines(broken, target_version="1.6.8")
 
 
 def test_fixture_binds_exact_immutable_166_bridge():
@@ -923,7 +923,7 @@ def test_fixture_binds_exact_immutable_166_bridge():
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    module.validate_baselines(fixture, target_version="1.6.7")
+    module.validate_baselines(fixture, target_version="1.6.8")
     assert fixture["qualification_modes"] == ["direct", "chained"]
     assert fixture["bridge_release"] == {
         "version": "1.6.6",
@@ -940,12 +940,12 @@ def test_release_config_requires_exact_legacy_source_contract():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text()
     )
-    assert module.validate_release_config(config, target_version="1.6.7") == [
+    assert module.validate_release_config(config, target_version="1.6.8") == [
         "1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"
     ]
     config["legacy_app_update_sources"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_release_config(config, target_version="1.6.7")
+        module.validate_release_config(config, target_version="1.6.8")
 
     historical = {
         "version": "1.6.0",
@@ -2001,3 +2001,44 @@ def test_finalize_keeps_passed_receipt_when_logs_and_cleanup_pass(
         },
         "cleanup": {"status": "passed", "failures": []},
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "restart_error", "expected"),
+    [
+        ("error", "restart_helper_rejected", "restart_helper_rejected"),
+        ("restart_error", "restart_helper_ack_timeout", "restart_helper_ack_timeout"),
+        ("error", "token=private-value", "<unrecognized>"),
+    ],
+)
+def test_wait_job_reports_safe_terminal_reapply_evidence(field, restart_error, expected):
+    module = load_module()
+
+    class Client:
+        def request(self, path, payload=None):
+            if payload:
+                self.job_id = payload["job_id"]
+                return {"job_id": self.job_id}
+            return {
+                "job_id": self.job_id,
+                "status": "failed",
+                field: restart_error,
+                "restart_started": False,
+                "message": "token=private-value",
+            }
+
+    with pytest.raises(module.LegacyAppUpgradeError) as raised:
+        module.wait_job(
+            Client(),
+            endpoint="/api/v1/update/retry",
+            version="1.6.7",
+            timeout=1,
+            image_version="1.4.1",
+        )
+
+    summary = str(raised.value)
+    assert "/api/v1/update/retry" in summary
+    assert "status=failed" in summary
+    assert "restart_started=False" in summary
+    assert f"restart_error={expected}" in summary
+    assert "private-value" not in summary

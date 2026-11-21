@@ -30,15 +30,26 @@ def validate_inputs(root: Path, *, builder=None) -> dict:
     builder.validate_release_config(config)
     version = config["version"]
     history = builder.load_catalog_history(version)
-    tags = subprocess.run(["git", "-C", str(root), "tag", "--list"],
+    tags = subprocess.run(["git", "-C", str(root), "tag", "--merged", "HEAD", "--list"],
                           check=True, capture_output=True, text=True).stdout.splitlines()
-    builder.require_previous_catalog_release(
+    predecessor = builder.require_previous_catalog_release(
         version, history, tags,
         unpublished_predecessor_tags=config.get("unpublished_predecessor_tags"),
         repository=os.environ.get("GITHUB_REPOSITORY", ""),
         github_token=os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", ""),
         repo_root=root,
     )
+    if predecessor and config["delivery_mode"] == "app_update_with_image_refresh":
+        path = root / "scripts/release/classify-release-impact.py"
+        spec = importlib.util.spec_from_file_location("preflight_release_impact", path)
+        classifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(classifier)
+        result, _, _ = classifier.classify_ref_changes(predecessor, "HEAD", root=root)
+        if result.delivery_mode == "app_update":
+            raise ValueError(
+                f"Release impact compared with {predecessor}: no image-runtime paths changed "
+                "to support the declared image refresh."
+            )
     # This checks source metadata, not artifact bytes or production signatures.
     # The isolated key never leaves this process and is not a trusted update key.
     key = Ed25519PrivateKey.generate()
@@ -67,15 +78,22 @@ def validate_inputs(root: Path, *, builder=None) -> dict:
             base64.b64decode(value), data),
         canonical_payload=builder.canonical_payload_bytes, validate_url=builder.validate_trusted_url)
     return {"status": "passed", "scope": "catalog-inputs-only", "catalog_schema": 2,
-            "version": version, "release_count": len(payload["releases"]), "highlights": len(release["highlights"])}
+            "version": version, "published_predecessor": predecessor, "release_count": len(payload["releases"]), "highlights": len(release["highlights"])}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--print-published-predecessor", action="store_true")
     args = parser.parse_args()
     try:
-        print(json.dumps(validate_inputs(args.root.resolve())))
+        result = validate_inputs(args.root.resolve())
+        if args.print_published_predecessor:
+            if not result["published_predecessor"]:
+                raise ValueError("A published ancestor is required for release impact classification.")
+            print(result["published_predecessor"])
+        else:
+            print(json.dumps(result))
     except (ValueError, OSError, TypeError, KeyError, subprocess.CalledProcessError) as exc:
         print(f"Release inputs rejected: {exc}", file=sys.stderr)
         return 1

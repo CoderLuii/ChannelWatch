@@ -144,7 +144,11 @@ def test_current_catalog_metadata_passes_the_real_client_validator(catalog_prefl
     assert result["catalog_schema"] == 2
     assert result["release_count"] > 1
     assert 0 < result["highlights"] <= 32
-    assert checked == [("v1.6.7", "CoderLuii/ChannelWatch", "fixture-token")]
+    assert checked == [
+        ("v1.6.8", "CoderLuii/ChannelWatch", "fixture-token"),
+        ("v1.6.7", "CoderLuii/ChannelWatch", "fixture-token"),
+    ]
+    assert result["published_predecessor"] == "v1.6.6"
 
 
 def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch, catalog_preflight):
@@ -158,6 +162,13 @@ def test_preflight_rejects_missing_catalog_predecessor(monkeypatch, catalog_pref
     module, builder, _ = catalog_preflight
     monkeypatch.setattr(builder, "load_catalog_history", lambda version: [])
     with pytest.raises(ValueError, match="nearest published predecessor 1.6.6"):
+        module.validate_inputs(ROOT, builder=builder)
+
+
+def test_preflight_rejects_refresh_without_image_runtime_changes(monkeypatch, catalog_preflight):
+    module, builder, _ = catalog_preflight
+    monkeypatch.setattr(builder, "require_previous_catalog_release", lambda *args, **kwargs: "v1.6.7")
+    with pytest.raises(ValueError, match="no image-runtime paths changed"):
         module.validate_inputs(ROOT, builder=builder)
 
 

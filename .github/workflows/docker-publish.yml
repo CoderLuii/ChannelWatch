@@ -886,7 +886,7 @@ jobs:
             '865a6054f0fbddd213fe5f2e2578de5da8bc4453f322a991003516cc1bd9cadc' "${source_dir}/channelwatch-runtime-v1.6.0-amd64.zip" \
             '60f0a7a97433778ac89e17bab90ef6e83566159649697f90e2f5918afd17c2ec' "${source_dir}/channelwatch-runtime-v1.6.0-arm64.zip" \
             | sha256sum --check --strict
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.2" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.1"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.1"
@@ -904,7 +904,7 @@ jobs:
               'a027707047a04dc5f0e52d1c50e3595f136a96b56e7efcfdce731802b8e925cd' "${source_dir}/channelwatch-runtime-v1.6.1-arm64.zip" \
               | sha256sum --check --strict
           fi
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.3" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.2"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.2"
@@ -922,7 +922,7 @@ jobs:
               'cbd8f030d03fb2c5432abf1f8fa25cfa332d795e8ec746020fe034850cb8f4bb' "${source_dir}/channelwatch-runtime-v1.6.2-arm64.zip" \
               | sha256sum --check --strict
           fi
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.4" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.3"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.3"
@@ -940,7 +940,7 @@ jobs:
               '8107bd8615c5ff72248adfe719049b5d8c65587e858dc89781038950bb3e2772' "${source_dir}/channelwatch-runtime-v1.6.3-arm64.zip" \
               | sha256sum --check --strict
           fi
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.5" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.4"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.4"
@@ -958,7 +958,7 @@ jobs:
               'ae65f667907226a8979463a4ca9b0a8019d4e6c030406c8f9291656f55b64a1c' "${source_dir}/channelwatch-runtime-v1.6.4-arm64.zip" \
               | sha256sum --check --strict
           fi
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.6" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.5"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.5"
@@ -976,7 +976,7 @@ jobs:
               'f360e8c083eec1dc64be7b1c00bb39e8ccac0cc768bd429bc98bfcd3c287696d' "${source_dir}/channelwatch-runtime-v1.6.5-arm64.zip" \
               | sha256sum --check --strict
           fi
-          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+          if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.7" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
             source_dir="${RUNNER_TEMP}/runtime-source-v1.6.6"
             mkdir -p "${source_dir}"
             base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6"
@@ -1035,7 +1035,7 @@ jobs:
             --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
             --architecture "${NATIVE_ARCHITECTURE}" \
             --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json"
-          if [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.1 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.1/channelwatch-update-catalog-v3.json" \
@@ -1050,7 +1050,7 @@ jobs:
               --architecture "${NATIVE_ARCHITECTURE}" \
               --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.1.json"
           fi
-          if [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.2 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.2/channelwatch-update-catalog-v3.json" \
@@ -1065,7 +1065,7 @@ jobs:
               --architecture "${NATIVE_ARCHITECTURE}" \
               --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.2.json"
           fi
-          if [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.3 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.3/channelwatch-update-catalog-v3.json" \
@@ -1080,7 +1080,7 @@ jobs:
               --architecture "${NATIVE_ARCHITECTURE}" \
               --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.3.json"
           fi
-          if [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.4 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.4/channelwatch-update-catalog-v3.json" \
@@ -1095,7 +1095,7 @@ jobs:
               --architecture "${NATIVE_ARCHITECTURE}" \
               --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.4.json"
           fi
-          if [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.5 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.5/channelwatch-update-catalog-v3.json" \
@@ -1110,7 +1110,7 @@ jobs:
               --architecture "${NATIVE_ARCHITECTURE}" \
               --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.5.json"
           fi
-          if [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.9" ]; then
             python scripts/release/verify-runtime-source-upgrade.py \
               --source-version 1.6.6 \
               --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.6/channelwatch-update-catalog-v3.json" \
@@ -1274,7 +1274,7 @@ jobs:
           if [ "${version}" = "1.6.6" ]; then
             legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0","1.6.1","1.6.2","1.6.3","1.6.4","1.6.5"]'
           fi
-          if [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.8" ]; then
+          if [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.9" ]; then
             legacy_sources='["1.4.0","1.4.1","1.4.5","1.6.0","1.6.1","1.6.2","1.6.3","1.6.4","1.6.5","1.6.6"]'
           fi
           test "$(jq -c '.legacy_app_update_sources' scripts/release/release-config.json)" = "${legacy_sources}"
@@ -1957,6 +1957,7 @@ jobs:
 
       - name: Verify signed v1 bridge, v2 catalog, and exact source
         env:
+          GH_TOKEN: ${{ github.token }}
           RUNTIME_SYFT_CMD: ${{ steps.runtime_syft.outputs.cmd }}
         shell: bash
         run: |
@@ -2012,11 +2013,7 @@ jobs:
               --historical-image-evidence "dist/candidate-one/channelwatch-historical-image-canaries-${tag}.json"
             )
           fi
-          base_ref="$(git tag --sort=-version:refname --merged "${GITHUB_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
-          if [ -z "${base_ref}" ]; then
-            echo "::error::A previous semantic-version release tag is required for impact classification."
-            exit 1
-          fi
+          base_ref="$(python scripts/release/verify-release-inputs.py --print-published-predecessor)"
           minimum_image_args=()
           if [ "${delivery_mode}" != "image_required" ]; then
             minimum_image_args=(
@@ -2035,37 +2032,37 @@ jobs:
               --source-commit "${GITHUB_SHA}" \
               --output "${capability_evidence}"
             source_receipt_args=()
-            if [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.2" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args=(
                 --receipt "1.6.1=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.1.json"
                 --receipt "1.6.1=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.1.json"
               )
             fi
-            if [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.3" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args+=(
                 --receipt "1.6.2=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.2.json"
                 --receipt "1.6.2=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.2.json"
               )
             fi
-            if [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.4" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args+=(
                 --receipt "1.6.3=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.3.json"
                 --receipt "1.6.3=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.3.json"
               )
             fi
-            if [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.5" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args+=(
                 --receipt "1.6.4=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.4.json"
                 --receipt "1.6.4=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.4.json"
               )
             fi
-            if [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.6" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args+=(
                 --receipt "1.6.5=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.5.json"
                 --receipt "1.6.5=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.5.json"
               )
             fi
-            if [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.7" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args+=(
                 --receipt "1.6.6=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.6.json"
                 --receipt "1.6.6=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.6.json"
@@ -2973,6 +2970,7 @@ jobs:
 
       - name: Verify generated update assets
         env:
+          GH_TOKEN: ${{ github.token }}
           EXPECTED_CHANNEL: stable
           EXPECTED_GIT_SHA: ${{ env.RELEASE_SHA }}
           EXPECTED_RUNTIME_ABI: channelwatch-runtime-v1
@@ -3038,11 +3036,7 @@ jobs:
             python scripts/release/verify-pinned-v1-bridge.py
           fi
 
-          base_ref="$(git tag --sort=-version:refname --merged "${RELEASE_SHA}^" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
-          if [ -z "${base_ref}" ]; then
-            echo "::error::A previous semantic-version release tag is required for impact classification."
-            exit 1
-          fi
+          base_ref="$(python scripts/release/verify-release-inputs.py --print-published-predecessor)"
           minimum_image_args=()
           if [ "${expected_delivery_mode}" != "image_required" ]; then
             minimum_image_args=(

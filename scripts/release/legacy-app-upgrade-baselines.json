@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "repository": "coderluii/channelwatch",
-  "target_version": "1.6.8",
+  "target_version": "1.6.9",
   "legacy_sources": [
     "1.4.0",
     "1.4.1",

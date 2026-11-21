@@ -31,6 +31,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.6": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
     "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
     "1.6.8": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
+    "1.6.9": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
 }
 QUALIFICATION_MODES = ("direct", "chained")
 SCENARIOS = [
@@ -220,7 +221,7 @@ def aggregate(
         )
         rollback_status = receipt.get("rollback_status")
         require(isinstance(rollback_status, dict), "Rollback status is missing.")
-        expected_bridge = BRIDGE_RELEASE_166 if target_version in {"1.6.7", "1.6.8"} else BRIDGE_RELEASE_160
+        expected_bridge = BRIDGE_RELEASE_166 if target_version in {"1.6.7", "1.6.8", "1.6.9"} else BRIDGE_RELEASE_160
         rollback_version = (
             expected_bridge["version"]
             if qualification_mode == "chained"

@@ -2692,9 +2692,10 @@ def apply_optional_base_refresh(
     return _impact(set(result.triggering_paths) - {path}, set(result.refresh_paths) | {path}), args.pre_image_phase
 
 
-def changed_paths(base_ref: str, target_ref: str) -> list[str]:
+def changed_paths(base_ref: str, target_ref: str, *, root: Path | None = None) -> list[str]:
     result = subprocess.run(
         ["git", "diff", "--name-only", f"{base_ref}..{target_ref}"],
+        cwd=root,
         check=True,
         capture_output=True,
         text=True,
@@ -2702,9 +2703,10 @@ def changed_paths(base_ref: str, target_ref: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def file_at_ref(ref: str, path: str) -> str | None:
+def file_at_ref(ref: str, path: str, *, root: Path | None = None) -> str | None:
     result = subprocess.run(
         ["git", "show", f"{ref}:{path}"],
+        cwd=root,
         capture_output=True,
         text=True,
     )
@@ -2765,6 +2767,25 @@ def parse_public_key_overrides(
     return parsed
 
 
+def classify_ref_changes(base_ref: str, target_ref: str, *, root: Path | None = None):
+    paths = changed_paths(base_ref, target_ref, root=root)
+    structured = [
+        path
+        for path in paths
+        if normalize_path(path)
+        in (STRUCTURED_RELEASE_PATHS | AUDITED_RUNTIME_COMPATIBILITY_PATHS)
+    ]
+    before = {path: file_at_ref(base_ref, path, root=root) for path in structured}
+    after = {path: file_at_ref(target_ref, path, root=root) for path in structured}
+    result = classify_changes(before, after)
+    ordinary = classify_paths([path for path in paths if path not in structured])
+    result = _impact(
+        set(result.triggering_paths) | set(ordinary.triggering_paths),
+        set(result.refresh_paths) | set(ordinary.refresh_paths),
+    )
+    return result, before, after
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     public_keys = parse_public_key_overrides(args.public_key)
@@ -2773,15 +2794,6 @@ def main(argv: list[str] | None = None) -> int:
     declared = config.get("image_required")
     if not isinstance(declared, bool):
         raise ReleaseImpactMismatch("release-config image_required must be a boolean")
-    paths = changed_paths(args.base_ref, args.target_ref)
-    structured = [
-        path
-        for path in paths
-        if normalize_path(path)
-        in (STRUCTURED_RELEASE_PATHS | AUDITED_RUNTIME_COMPATIBILITY_PATHS)
-    ]
-    before = {path: file_at_ref(args.base_ref, path) for path in structured}
-    after = {path: file_at_ref(args.target_ref, path) for path in structured}
     declared_delivery_mode = config.get("delivery_mode")
     if declared_delivery_mode is not None and declared_delivery_mode not in {
         "app_update",
@@ -2789,12 +2801,7 @@ def main(argv: list[str] | None = None) -> int:
         "image_required",
     }:
         raise ReleaseImpactMismatch("release-config delivery_mode is invalid")
-    result = classify_changes(before, after)
-    ordinary = classify_paths([path for path in paths if path not in structured])
-    result = _impact(
-        set(result.triggering_paths) | set(ordinary.triggering_paths),
-        set(result.refresh_paths) | set(ordinary.refresh_paths),
-    )
+    result, before, after = classify_ref_changes(args.base_ref, args.target_ref)
     result = apply_verified_runtime_compatibility(
         result,
         config=config,

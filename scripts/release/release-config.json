@@ -1,13 +1,13 @@
 {
-  "version": "1.6.8",
+  "version": "1.6.9",
   "image_required": false,
   "delivery_mode": "app_update_with_image_refresh",
   "minimum_image_version": "1.5.3",
   "updater_protocol": 4,
   "minimum_launcher_protocol": 4,
-  "recommended_image_version": "1.6.8",
-  "publication_time": "2026-11-21T10:58:19Z",
-  "automatic_install_after": "2026-11-28T10:58:19Z",
+  "recommended_image_version": "1.6.9",
+  "publication_time": "2026-11-21T12:25:59Z",
+  "automatic_install_after": "2026-11-28T12:25:59Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.5.3",
@@ -36,9 +36,10 @@
   ],
   "runtime_generation_required": true,
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.6.8 - Dependency updates",
+  "release_heading": "# ChannelWatch v1.6.9 - Dependency updates",
   "verification_assets": true,
   "unpublished_predecessor_tags": [
+    "v1.6.8",
     "v1.6.7"
   ],
   "unpublished_release_tags": [
@@ -49,7 +50,8 @@
     "v1.5.1",
     "v1.5.2",
     "v1.5.4",
-    "v1.6.7"
+    "v1.6.7",
+    "v1.6.8"
   ],
   "runtime_bootstrap_sha256": "c4574f6c99f39e1e4c009a17139571e2606bc997cf3f266756d50e74762763d3",
   "minimum_image_sha256": "sha256:c4574f6c99f39e1e4c009a17139571e2606bc997cf3f266756d50e74762763d3"

@@ -2,7 +2,6 @@
 
 import json
 import threading
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -480,12 +479,16 @@ class TestOutboundRateLimit:
 
     def test_outbound_rate_limiter_resets_after_window_expires(self):
         limiter = RateLimiter(max_notifications=2, window_seconds=1)
-        assert limiter.allow() is True
-        assert limiter.allow() is True
-        assert limiter.allow() is False
+        with patch("core.notifications.rate_limiter.time") as clock:
+            clock.time.return_value = 100.0
+            assert limiter.allow() is True
+            assert limiter.allow() is True
+            assert limiter.allow() is False
 
-        time.sleep(1.1)
-        assert limiter.allow() is True
+            clock.time.return_value = 100.99
+            assert limiter.allow() is False
+            clock.time.return_value = 101.0
+            assert limiter.allow() is True
 
     def test_outbound_rate_limiter_is_thread_safe(self):
         limiter = RateLimiter(max_notifications=10, window_seconds=60)

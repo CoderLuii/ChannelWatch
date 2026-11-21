@@ -74,6 +74,9 @@ LEGACY_PROTOCOL3_APP_UPDATE_CONTRACTS = {
     "1.6.4": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3"),
     "1.6.5": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"),
     "1.6.6": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"),
+    "1.6.7": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
+    "1.6.8": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
+    "1.6.9": ("1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
 }
 CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
     "1.6.0": ("1.5.3",),
@@ -83,6 +86,9 @@ CANONICAL_PROTOCOL4_APP_UPDATE_CONTRACTS = {
     "1.6.4": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3"),
     "1.6.5": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"),
     "1.6.6": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"),
+    "1.6.7": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
+    "1.6.8": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
+    "1.6.9": ("1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
 }
 LEGACY_PROTOCOL3_APP_UPDATE_FOUNDATION = "1.4.0"
 VERIFIED_DEPENDENCY_FOUNDATION = "1.5.3"
@@ -445,9 +451,10 @@ def require_previous_catalog_release(
     github_token: str = "",
     repo_root: Path = ROOT,
     urlopen=urllib.request.urlopen,
-) -> None:
-    """Do not publish a new feed that silently drops its immediate predecessor."""
-    previous = []
+) -> str | None:
+    """Return the nearest published ancestor without silently dropping catalog history."""
+    candidates = []
+    current = _release_version(current_version)
     for tag in published_tags:
         if not tag.startswith("v"):
             continue
@@ -455,12 +462,15 @@ def require_previous_catalog_release(
             parsed = _release_version(tag)
         except ValueError:
             continue
-        if INITIAL_V2_BRIDGE_VERSION <= parsed < _release_version(current_version):
-            previous.append(parsed)
+        if parsed < current:
+            candidates.append(parsed)
+    previous = [version for version in candidates if version >= INITIAL_V2_BRIDGE_VERSION]
     if not previous:
-        if _release_version(current_version) > INITIAL_V2_BRIDGE_VERSION:
+        if current > INITIAL_V2_BRIDGE_VERSION:
             raise ValueError("Cannot verify catalog predecessor; fetch the complete release tags.")
-        return
+        if not candidates:
+            return None
+        return "v" + ".".join(map(str, max(candidates)))
     exceptions = (
         []
         if unpublished_predecessor_tags is None
@@ -481,7 +491,7 @@ def require_previous_catalog_release(
             raise ValueError(
                 "unpublished_predecessor_tags may only name missing immediate predecessors."
             )
-        return
+        return "v" + version
     expected_tags = [f"v{'.'.join(map(str, item))}" for item in ordered]
     if not exceptions or exceptions != expected_tags[: len(exceptions)]:
         raise ValueError(f"Signed-catalog history must retain the previous release {version}.")
@@ -505,6 +515,7 @@ def require_previous_catalog_release(
             "Signed-catalog history must retain the nearest published predecessor "
             f"{retained_predecessor}."
         )
+    return "v" + retained_predecessor
 
 
 def run_git(*args: str) -> str:

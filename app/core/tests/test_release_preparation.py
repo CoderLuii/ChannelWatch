@@ -123,26 +123,49 @@ def test_early_and_late_gates_execute_one_shared_candidate_policy():
         assert "actual_subject=" not in step["run"]
 
 
-def test_current_catalog_metadata_passes_the_real_client_validator():
-    result = load_script("verify-release-inputs.py").validate_inputs(ROOT)
+@pytest.fixture
+def catalog_preflight(monkeypatch):
+    module = load_script("verify-release-inputs.py")
+    builder = module.load_builder(ROOT)
+    checked = []
+    monkeypatch.setenv("GITHUB_REPOSITORY", "CoderLuii/ChannelWatch")
+    monkeypatch.setenv("GH_TOKEN", "fixture-token")
+
+    def verify_absence(tag, *, repository, github_token, **_kwargs):
+        checked.append((tag, repository, github_token))
+
+    monkeypatch.setattr(builder, "_verify_github_release_absence", verify_absence)
+    return module, builder, checked
+
+
+def test_current_catalog_metadata_passes_the_real_client_validator(catalog_preflight):
+    module, builder, checked = catalog_preflight
+    result = module.validate_inputs(ROOT, builder=builder)
     assert result["catalog_schema"] == 2
     assert result["release_count"] > 1
     assert 0 < result["highlights"] <= 32
+    assert checked == []
+    assert result["published_predecessor"] == "v1.6.6"
 
 
-def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch):
-    module = load_script("verify-release-inputs.py")
-    builder = module.load_builder(ROOT)
+def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch, catalog_preflight):
+    module, builder, _ = catalog_preflight
     monkeypatch.setattr(builder, "release_highlights", lambda version: ["entry"] * 33)
     with pytest.raises(ValueError, match="highlights"):
         module.validate_inputs(ROOT, builder=builder)
 
 
-def test_preflight_rejects_missing_catalog_predecessor(monkeypatch):
-    module = load_script("verify-release-inputs.py")
-    builder = module.load_builder(ROOT)
+def test_preflight_rejects_missing_catalog_predecessor(monkeypatch, catalog_preflight):
+    module, builder, _ = catalog_preflight
     monkeypatch.setattr(builder, "load_catalog_history", lambda version: [])
-    with pytest.raises(ValueError, match="previous release"):
+    with pytest.raises(ValueError, match=r"previous release 1\.6\.6"):
+        module.validate_inputs(ROOT, builder=builder)
+
+
+def test_preflight_rejects_refresh_without_image_runtime_changes(monkeypatch, catalog_preflight):
+    module, builder, _ = catalog_preflight
+    monkeypatch.setattr(builder, "require_previous_catalog_release", lambda *args, **kwargs: "HEAD")
+    with pytest.raises(ValueError, match="no image-runtime paths changed"):
         module.validate_inputs(ROOT, builder=builder)
 
 

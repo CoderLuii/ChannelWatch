@@ -1048,7 +1048,7 @@ def test_current_release_delivery_dependency_diff_requires_evidence_since_publis
         )
 
 
-def test_release_config_declares_166_in_app_update_on_published_153_image():
+def test_release_config_declares_169_in_app_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -1057,17 +1057,17 @@ def test_release_config_declares_166_in_app_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.6"
+    assert config["version"] == "1.6.7"
     assert config["image_required"] is False
     assert config["delivery_mode"] == "app_update_with_image_refresh"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.6"
+    assert config["recommended_image_version"] == "1.6.7"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"]
     assert config["compatible_launcher_protocols"] == [4]
     assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
@@ -1088,7 +1088,7 @@ def test_release_config_declares_166_in_app_update_on_published_153_image():
         "v1.5.2",
         "v1.5.4",
     ]
-    assert config["release_heading"] == "# ChannelWatch v1.6.6 - Dependency security updates"
+    assert config["release_heading"] == "# ChannelWatch v1.6.7 - Dependency updates"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1162,16 +1162,16 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
 
     output = capsys.readouterr().out
     assert output.splitlines()[0] == config["release_heading"]
-    assert re.fullmatch(r"# ChannelWatch v1\.6\.6 - .+", output.splitlines()[0])
+    assert re.fullmatch(r"# ChannelWatch v1\.6\.7 - .+", output.splitlines()[0])
     assert re.findall(r"^# .+$", output, re.MULTILINE) == [
         config["release_heading"]
     ]
     for heading in ("Fixed", "Changed", "Images", "License and verification"):
         assert f"\n## {heading}\n" in output
     assert "https://channelwatch.coderluii.dev/" in output
-    assert "channelwatch-v1.6.6-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.6`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.6`" in output
+    assert "channelwatch-v1.6.7-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.7`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.7`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1281,7 +1281,7 @@ def test_release_impact_classifier_keeps_v1_patch_in_app():
     assert result.triggering_paths == ()
 
 
-def test_release_version_surfaces_use_166_release():
+def test_release_version_surfaces_use_169_release():
     module = _load_script(
         "export_release_metadata",
         "scripts/release/export-site-release-metadata.py",
@@ -1292,11 +1292,11 @@ def test_release_version_surfaces_use_166_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.6"
-    assert metadata["versionTag"] == "v1.6.6"
-    assert metadata["dockerTag"] == "1.6.6"
-    assert metadata["helmChartVersion"] == "1.6.6"
-    assert metadata["helmAppVersion"] == "1.6.6"
+    assert metadata["version"] == "1.6.7"
+    assert metadata["versionTag"] == "v1.6.7"
+    assert metadata["dockerTag"] == "1.6.7"
+    assert metadata["helmChartVersion"] == "1.6.7"
+    assert metadata["helmAppVersion"] == "1.6.7"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -2759,7 +2759,7 @@ def test_release_impact_classifier_cli_forwards_ephemeral_public_key(
     )
     encoded = base64.b64encode(b"k" * 32).decode()
     captured = {}
-    monkeypatch.setattr(module, "changed_paths", lambda _base, _target: [])
+    monkeypatch.setattr(module, "changed_paths", lambda _base, _target, *, root: [])
 
     def capture(result, **kwargs):
         captured.update(kwargs)
@@ -3307,7 +3307,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
     assert workflow.count(
         '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
-        ) == 9
+        ) == 10
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     candidate_canary = workflow.split(
@@ -4974,6 +4974,12 @@ def _release_candidate_repository(tmp_path, mutation, *, files=None, release="1.
         previous = base = "80b25765c88b6a8a20308adbcca97dea3efe944f"
     if release == "1.6.6":
         previous = base = "efa510f0ea9c5b436fc996171fb0be91143fbdf9"
+    if release == "1.6.7":
+        previous = base = "2764b98f7b95a778162e844a1b31b81d7f149386"
+    if release == "1.6.8":
+        previous = base = "7d49fb90c46d96a72d46380d5401bcce1673aafe"
+    if release == "1.6.9":
+        previous = base = "d032f959bb9032bb97d56d3dedf3e03ee9516159"
     repository = tmp_path / "release.git"
     environment = {
         **os.environ,
@@ -5014,7 +5020,7 @@ def _release_candidate_repository(tmp_path, mutation, *, files=None, release="1.
         parents.extend(["-p", side])
     message = tag + ("\n\nextra body\n" if mutation == "body" else "\n")
     candidate = git("commit-tree", tree, *parents, message=message)
-    git("update-ref", {"1.6.4": "refs/tags/v1.6.3", "1.6.5": "refs/tags/v1.6.4", "1.6.6": "refs/tags/v1.6.5"}[release], previous)
+    git("update-ref", {"1.6.4": "refs/tags/v1.6.3", "1.6.5": "refs/tags/v1.6.4", "1.6.6": "refs/tags/v1.6.5", "1.6.7": "refs/tags/v1.6.6", "1.6.8": "refs/tags/v1.6.7", "1.6.9": "refs/tags/v1.6.8"}[release], previous)
     git("update-ref", f"refs/tags/{tag}", candidate)
     git("update-ref", "refs/remotes/origin/main", base if mutation == "main" else candidate)
     if mutation == "wrong-predecessor":
@@ -5153,7 +5159,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
         "scripts/release/verify-release-timing.py",
         "scripts/release/verify-local-qualification.py",
         "scripts/release/release-config.json",
-        "deploy/security/channelwatch-v1.6.6.openvex.json",
+        "deploy/security/channelwatch-v1.6.7.openvex.json",
         "docs/releases/CHANGELOG.md", "app/ui/package.json", "app/ui/pnpm-lock.yaml",
     )
     files = {name: (ROOT / name).read_text(encoding="utf-8") for name in paths}
@@ -5163,7 +5169,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
         if step.get("name") == "Verify release identity and local qualification"
     )
     repository, environment, git, tag, candidate, base = _release_candidate_repository(
-        tmp_path, "main" if mutation == "main" else None, files=files, release="1.6.6",
+        tmp_path, "main" if mutation == "main" else None, files=files, release="1.6.7",
     )
     git("update-ref", "refs/heads/main", base if mutation == "main" else candidate)
     git("symbolic-ref", "HEAD", "refs/heads/main")
@@ -5188,7 +5194,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
     }
     record = {
         "schema": 1, "type": "maintainer_local", "repository": "CoderLuii/ChannelWatch",
-        "actor": "CoderLuii", "tag": tag, "version": "1.6.6",
+        "actor": "CoderLuii", "tag": tag, "version": "1.6.7",
         "source_commit": candidate, "source_tree": git("rev-parse", f"{candidate}^{{tree}}"),
         "workflow_sha256": hashlib.sha256(files[paths[0]].encode()).hexdigest(),
         "release_config_sha256": hashlib.sha256(

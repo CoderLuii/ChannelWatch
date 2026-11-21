@@ -41,13 +41,13 @@ def test_current_guidance_distinguishes_application_version_from_image_version()
     assert 'Confirm you\'re on the latest version (`docker pull' not in support
 
 
-def test_current_guide_discloses_legacy_image_certifi_update_path():
+def test_current_guide_discloses_legacy_image_dependency_update_path():
     version = json.loads((ROOT / "scripts/release/release-config.json").read_text())["version"]
     guide = (ROOT / "docs/how-to/update-channelwatch.md").read_text()
     current = guide.split("## Upgrade and recovery notes", 1)[0]
     assert f"install ChannelWatch v{version} directly" in current
     assert "v1.4.x route updates the application and interface while keeping the image's existing Python packages" in current
-    assert "receive the certifi security update on v1.4.x" in current
+    assert "receive the Python package updates on v1.4.x" in current
     assert f"replace the container with the v{version} image" in current
 
 

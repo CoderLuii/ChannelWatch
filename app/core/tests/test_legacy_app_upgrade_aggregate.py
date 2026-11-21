@@ -19,20 +19,30 @@ def load_module():
     return module
 
 
-@pytest.fixture(params=["1.6.1", "1.6.2", "1.6.3", "1.6.4"])
+HISTORICAL_BRIDGE = {
+    "version": "1.6.0",
+    "source_commit": "b48057184752c912e4ae9b3a474374704d896073",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-catalog-v1.6.0.json",
+    "catalog_sha256": "bc9bcdb38c44af581835fdd4f29e2a2550eb8bb5d51b8308395a803110feb185",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-app-v1.6.0.zip",
+    "bundle_sha256": "f8cbdca71ef254df84b0e3b472facce8ece201b4928218caf757f4c5ddf53914"
+}
+
+
+@pytest.fixture(params=["1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.7"])
 def matrix(tmp_path, request):
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
     target_version = request.param
     fixture["target_version"] = target_version
-    fixture["legacy_sources"] = ["1.4.0", "1.4.1", "1.4.5", "1.6.0"]
-    if target_version in {"1.6.2", "1.6.3", "1.6.4"}:
-        fixture["legacy_sources"].append("1.6.1")
-    if target_version in {"1.6.3", "1.6.4"}:
-        fixture["legacy_sources"].append("1.6.2")
-    if target_version == "1.6.4":
-        fixture["legacy_sources"].append("1.6.3")
+    if target_version != "1.6.7":
+        fixture["bridge_release"] = HISTORICAL_BRIDGE.copy()
+        prior_patch = int(target_version.rsplit(".", 1)[1]) - 1
+        fixture["legacy_sources"] = ["1.4.0", "1.4.1", "1.4.5"] + [
+            f"1.6.{patch}" for patch in range(prior_patch + 1)
+        ]
+    bridge_version = fixture["bridge_release"]["version"]
     receipts = {}
     config_sha256 = hashlib.sha256(CONFIG.read_bytes()).hexdigest()
     for architecture in ("amd64", "arm64"):
@@ -72,7 +82,7 @@ def matrix(tmp_path, request):
                 "last_job": {"operation": "check", "status": "current"},
             }
             rollback_status = {
-                "current_version": "1.6.0" if qualification_mode == "chained" else scenario["source_application_version"],
+                "current_version": bridge_version if qualification_mode == "chained" else scenario["source_application_version"],
                 "image_version": scenario["image_version"],
                 "launcher_protocol": 3,
                 "runtime_source": "app_bundle" if qualification_mode == "chained" or scenario["overlay_version"] is not None else "image",
@@ -131,13 +141,13 @@ def matrix(tmp_path, request):
                     "catalog_sha256": fixture["bridge_release"]["catalog_sha256"],
                     "bundle_sha256": fixture["bridge_release"]["bundle_sha256"],
                     "status": {
-                        "current_version": "1.6.0",
+                        "current_version": bridge_version,
                         "image_version": scenario["image_version"],
                         "launcher_protocol": 3,
                         "runtime_source": "app_bundle",
                         "active_bundle": {
-                            "version": "1.6.0",
-                            "path": "/config/app-versions/1.6.0",
+                            "version": bridge_version,
+                            "path": f"/config/app-versions/{bridge_version}",
                             "manifest": {
                                 "bundle_sha256": fixture["bridge_release"]["bundle_sha256"]
                             },
@@ -145,8 +155,8 @@ def matrix(tmp_path, request):
                     },
                     "selected_runtime_info": {
                         "diagnostic_source": "selected_application",
-                        "application_version": "1.6.0",
-                        "application_dir": "/config/app-versions/1.6.0",
+                        "application_version": bridge_version,
+                        "application_dir": f"/config/app-versions/{bridge_version}",
                         "verified_generation": None,
                         "process_runtime": {
                             "python_executable": "/venv/bin/python",

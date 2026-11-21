@@ -64,18 +64,18 @@ opentelemetry-api==1.45.2
     #   fastapi
 pycparser==3.11
     # via cffi
-pydantic==2.14.0
+pydantic==2.14.4
     # via
     #   -r deploy/requirements/runtime.txt
     #   fastapi
     #   sqlmodel
-pydantic-core==2.50.0
+pydantic-core==2.50.5
     # via pydantic
 python-dotenv==1.2.4
     # via uvicorn
-python-multipart==0.0.32
+python-multipart==0.0.34
     # via -r deploy/requirements/runtime.txt
-pytz==2026.5
+pytz==2026.6
     # via -r deploy/requirements/runtime.txt
 pyyaml==6.0.3
     # via
@@ -90,7 +90,7 @@ requests-oauthlib==2.0.0
     # via apprise
 sqlalchemy==2.1.4
     # via sqlmodel
-sqlmodel==0.0.48
+sqlmodel==0.0.50
     # via -r deploy/requirements/runtime.txt
 starlette==1.7.0
     # via fastapi

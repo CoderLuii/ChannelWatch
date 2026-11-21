@@ -45,6 +45,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.4": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3"],
     "1.6.5": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"],
     "1.6.6": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
+    "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
 }
 BRIDGE_RELEASE_160 = {
     "version": "1.6.0",
@@ -54,6 +55,16 @@ BRIDGE_RELEASE_160 = {
     "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-app-v1.6.0.zip",
     "bundle_sha256": "f8cbdca71ef254df84b0e3b472facce8ece201b4928218caf757f4c5ddf53914",
 }
+BRIDGE_RELEASE_166 = {
+    "version": "1.6.6",
+    "source_commit": "2764b98f7b95a778162e844a1b31b81d7f149386",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-catalog-v1.6.6.json",
+    "catalog_sha256": "8c9ff6c68758564028b87f7afc8a5646cf067ffb531fd6ad24f59e2efefaa250",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-app-v1.6.6.zip",
+    "bundle_sha256": "f2d74474798882777c9bcbb3d2372c0382a844664bb4638985e0e499d9d6ac6b"
+}
+
+
 LEGACY_IMAGE_BOOTSTRAP_PATHS = (
     "/usr/local/bin/channelwatch",
     "/app/channelwatch-image.json",
@@ -106,11 +117,12 @@ def validate_baselines(value: object, *, target_version: str) -> list[dict[str, 
     expected_sources = LEGACY_SOURCE_CONTRACTS.get(target_version)
     if expected_sources is None or value.get("legacy_sources") != expected_sources:
         raise LegacyAppUpgradeError("Legacy source versions are incomplete.")
-    if target_version in {"1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"}:
+    if target_version in {"1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"}:
         if value.get("qualification_modes") != ["direct", "chained"]:
             raise LegacyAppUpgradeError("Legacy qualification modes are incomplete.")
-        if value.get("bridge_release") != BRIDGE_RELEASE_160:
-            raise LegacyAppUpgradeError("Legacy bridge release is not the immutable v1.6.0 release.")
+        expected_bridge = BRIDGE_RELEASE_166 if target_version == "1.6.7" else BRIDGE_RELEASE_160
+        if value.get("bridge_release") != expected_bridge:
+            raise LegacyAppUpgradeError("Legacy bridge release is not the immutable predecessor release.")
     scenarios = value.get("scenarios")
     expected = [
         {"id": key, "image_version": image, "source_application_version": source, "overlay_version": overlay}
@@ -1323,7 +1335,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
             or sha256_file(args.bridge_bundle) != bridge["bundle_sha256"]
             or bridge_url != bridge["bundle_url"]
         ):
-            raise LegacyAppUpgradeError("Bridge assets do not match the immutable v1.6.0 release.")
+            raise LegacyAppUpgradeError("Bridge assets do not match the immutable predecessor release.")
     prefix = f"cw-legacy-{architecture}-{secrets.token_hex(5)}"
     resources = image_tool.Resources(prefix)
     root = Path(tempfile.mkdtemp(prefix=prefix + "-"))
@@ -1482,7 +1494,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
                 target_version=bridge["version"],
                 bundle_sha256=bridge["bundle_sha256"],
                 timeout=args.update_timeout,
-                description="v1.6.0 bridge update check idle",
+                description="predecessor bridge update check idle",
                 status_validator=lambda value: validate_source_status(
                     value, scenario=scenario
                 ),
@@ -1504,7 +1516,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
             bridge_attempt_id = str(bridge_job.get("scheduler_attempt_id") or "")
             if not bridge_attempt_id:
                 raise LegacyAppUpgradeError(
-                    "v1.6.0 bridge update did not return a scheduler attempt identity."
+                    "predecessor bridge update did not return a scheduler attempt identity."
                 )
             bridge_observation: dict[str, Any] = {}
             bridge_reconciled = restart_after_reconciliation(
@@ -1520,7 +1532,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
             image_tool.wait_until(
                 lambda: client.request("/healthz/startup").get("status") == "ready",
                 args.startup_timeout,
-                "v1.6.0 bridge reconciliation restart",
+                "predecessor bridge reconciliation restart",
             )
             client.login()
             require_persisted_reconciliation(
@@ -1556,7 +1568,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
                 or not image_tool.credential_api_semantics(client)
             ):
                 raise LegacyAppUpgradeError(
-                    "Persistent state changed while applying the v1.6.0 bridge."
+                    "Persistent state changed while applying the predecessor bridge."
                 )
             bridge_after_storage = runtime_storage(
                 app, active_path=bridge_status["active_bundle"]["path"]
@@ -1566,7 +1578,7 @@ def qualify(args: argparse.Namespace) -> dict[str, Any]:
                 and bridge_after_storage["dependency_generation_absent"]
             ):
                 raise LegacyAppUpgradeError(
-                    "The v1.6.0 bridge created a dependency generation on a legacy image."
+                    "The predecessor bridge created a dependency generation on a legacy image."
                 )
             receipt["bridge_qualification"] = {
                 "release": bridge,
@@ -1929,7 +1941,7 @@ def main() -> int:
     if args.qualification_mode == "chained" and (
         args.bridge_catalog is None or args.bridge_bundle is None
     ):
-        raise SystemExit("Chained qualification requires the exact signed v1.6.0 assets.")
+        raise SystemExit("Chained qualification requires the exact signed predecessor assets.")
     receipt = qualify(args)
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

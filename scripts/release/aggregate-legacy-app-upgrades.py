@@ -29,6 +29,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.4": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3"],
     "1.6.5": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"],
     "1.6.6": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
+    "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
 }
 QUALIFICATION_MODES = ("direct", "chained")
 SCENARIOS = [
@@ -39,6 +40,24 @@ SCENARIOS = [
     ("overlay-1.4.1-to-1.4.5", "1.4.1", "1.4.5", "1.4.5"),
     ("stock-1.4.5", "1.4.5", "1.4.5", None),
 ]
+
+
+BRIDGE_RELEASE_160 = {
+    "version": "1.6.0",
+    "source_commit": "b48057184752c912e4ae9b3a474374704d896073",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-catalog-v1.6.0.json",
+    "catalog_sha256": "bc9bcdb38c44af581835fdd4f29e2a2550eb8bb5d51b8308395a803110feb185",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.0/channelwatch-app-v1.6.0.zip",
+    "bundle_sha256": "f8cbdca71ef254df84b0e3b472facce8ece201b4928218caf757f4c5ddf53914",
+}
+BRIDGE_RELEASE_166 = {
+    "version": "1.6.6",
+    "source_commit": "2764b98f7b95a778162e844a1b31b81d7f149386",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-catalog-v1.6.6.json",
+    "catalog_sha256": "8c9ff6c68758564028b87f7afc8a5646cf067ffb531fd6ad24f59e2efefaa250",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-app-v1.6.6.zip",
+    "bundle_sha256": "f2d74474798882777c9bcbb3d2372c0382a844664bb4638985e0e499d9d6ac6b"
+}
 
 
 def require(value: bool, message: str) -> None:
@@ -200,8 +219,9 @@ def aggregate(
         )
         rollback_status = receipt.get("rollback_status")
         require(isinstance(rollback_status, dict), "Rollback status is missing.")
+        expected_bridge = BRIDGE_RELEASE_166 if target_version == "1.6.7" else BRIDGE_RELEASE_160
         rollback_version = (
-            "1.6.0"
+            expected_bridge["version"]
             if qualification_mode == "chained"
             else scenario["source_application_version"]
         )
@@ -219,18 +239,16 @@ def aggregate(
         )
         bridge = receipt.get("bridge_qualification")
         if qualification_mode == "chained":
-            expected_bridge = baselines.get("bridge_release")
             require(
-                isinstance(expected_bridge, dict)
+                baselines.get("bridge_release") == expected_bridge
                 and set(expected_bridge) == {
                     "version", "source_commit", "catalog_url", "catalog_sha256",
                     "bundle_url", "bundle_sha256",
                 }
-                and expected_bridge.get("version") == "1.6.0"
                 and SHA40.fullmatch(str(expected_bridge.get("source_commit") or "")) is not None
                 and HEX.fullmatch(str(expected_bridge.get("catalog_sha256") or "")) is not None
                 and HEX.fullmatch(str(expected_bridge.get("bundle_sha256") or "")) is not None,
-                "The immutable v1.6.0 bridge contract is invalid.",
+                "The immutable predecessor bridge contract is invalid.",
             )
             bridge_identity = bridge.get("identity") if isinstance(bridge, dict) else None
             bridge_storage = bridge.get("runtime_storage") if isinstance(bridge, dict) else None
@@ -244,17 +262,17 @@ def aggregate(
                 and bridge.get("catalog_sha256") == expected_bridge["catalog_sha256"]
                 and bridge.get("bundle_sha256") == expected_bridge["bundle_sha256"]
                 and isinstance(bridge_status, dict)
-                and bridge_status.get("current_version") == "1.6.0"
+                and bridge_status.get("current_version") == expected_bridge["version"]
                 and bridge_status.get("image_version") == scenario["image_version"]
                 and bridge_status.get("launcher_protocol") == 3
                 and bridge_status.get("runtime_source") == "app_bundle"
                 and isinstance(bridge_active, dict)
-                and bridge_active.get("version") == "1.6.0"
+                and bridge_active.get("version") == expected_bridge["version"]
                 and bridge_active.get("manifest", {}).get("bundle_sha256")
                 == expected_bridge["bundle_sha256"]
                 and isinstance(bridge_runtime, dict)
                 and bridge_runtime.get("diagnostic_source") == "selected_application"
-                and bridge_runtime.get("application_version") == "1.6.0"
+                and bridge_runtime.get("application_version") == expected_bridge["version"]
                 and bridge_runtime.get("application_dir") == bridge_active.get("path")
                 and bridge_runtime.get("verified_generation") is None
                 and isinstance(bridge_process, dict)
@@ -271,7 +289,7 @@ def aggregate(
                     and row.get("dependency_generation_absent") is True
                     for row in bridge_storage.values()
                 ),
-                "Chained receipt does not prove the immutable v1.6.0 bridge.",
+                "Chained receipt does not prove the immutable predecessor bridge.",
             )
         else:
             require(bridge is None, "Direct receipt unexpectedly includes bridge evidence.")

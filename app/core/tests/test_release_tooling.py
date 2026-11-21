@@ -3935,6 +3935,25 @@ def test_site_release_handoff_preserves_publication_and_live_feed_gates():
     assert "verify-live-update-manifest" in workflow["jobs"]["advance-compatible-aliases"]["needs"]
 
 
+def test_release_notes_wait_for_live_update_and_registry_aliases():
+    jobs = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )["jobs"]
+    assets = jobs["publish-github-release"]["steps"]
+    promotion = next(i for i, step in enumerate(assets)
+                     if step.get("name") == "Publish release after image verification gates")
+    retained = next(i for i, step in enumerate(assets)
+                    if step.get("name") == "Retain release notes for the deployment gate")
+    assert retained < promotion
+    assert 'body: "", make_latest: "false"' in assets[promotion]["run"]
+
+    notes = jobs["publish-release-notes"]
+    assert notes["needs"] == ["publish-github-release", "advance-compatible-aliases"]
+    assert "verify-live-update-manifest" in jobs["advance-compatible-aliases"]["needs"]
+    assert notes["steps"][0]["with"]["name"] == assets[retained]["with"]["name"]
+    assert "--notes-file release-body.md --latest" in notes["steps"][1]["run"]
+
+
 def test_publication_window_gate_runs_at_every_public_boundary():
     workflow = (ROOT / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"

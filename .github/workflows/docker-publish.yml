@@ -4215,6 +4215,14 @@ jobs:
               )
           PY
 
+      - name: Retain release notes for the deployment gate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes-${{ github.sha }}
+          path: release-body.md
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Publish release after image verification gates
         env:
           EXPECTED_CATALOG_SHA256: ${{ needs.build-update-bundle-and-release.outputs.catalog_sha256 }}
@@ -4263,12 +4271,12 @@ jobs:
             --version "${VERSION}"
           jq -n \
             --arg name "${TAG}" \
-            --rawfile body release-body.md \
-            '{name: $name, body: $body, draft: false, prerelease: false}' > publish-release.json
+            '{name: $name, body: "", make_latest: "false", draft: false, prerelease: false}' > publish-release.json
           gh api \
             --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             --input publish-release.json
+
 
   verify-public-release-assets:
     name: Verify public release assets before stable feeds
@@ -4889,3 +4897,33 @@ jobs:
               fi
             done
           done
+
+  publish-release-notes:
+    name: Publish release notes after deployment
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.actor == 'CoderLuii' && vars.CHANNELWATCH_RELEASE_RUNNER || 'ubuntu-latest' }}
+    needs:
+      - publish-github-release
+      - advance-compatible-aliases
+    permissions:
+      contents: write # Update the public release description and latest badge.
+
+    steps:
+      - name: Download exact release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes-${{ github.sha }}
+
+      - name: Publish verified release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')"
+          if [ "${tag_sha}" != "${RELEASE_SHA}" ] || [ ! -s release-body.md ]; then
+            echo "::error::Release notes do not match the verified tag."
+            exit 1
+          fi
+          gh release edit "${RELEASE_TAG}" -R "${GITHUB_REPOSITORY}" \
+            --notes-file release-body.md --latest

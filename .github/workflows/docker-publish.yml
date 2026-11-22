@@ -4323,7 +4323,8 @@ jobs:
             --version "${VERSION}"
           jq -n \
             --arg name "${TAG}" \
-            '{name: $name, body: "", make_latest: "false", draft: false, prerelease: false}' > publish-release.json
+            --arg heading "$(head -n 1 release-body.md)" \
+            '{name: $name, body: $heading, make_latest: "false", draft: false, prerelease: false}' > publish-release.json
           gh api \
             --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \

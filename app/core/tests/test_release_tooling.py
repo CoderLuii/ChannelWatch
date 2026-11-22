@@ -3969,7 +3969,12 @@ def test_release_notes_wait_for_live_update_and_registry_aliases():
     retained = next(i for i, step in enumerate(assets)
                     if step.get("name") == "Retain release notes for the deployment gate")
     assert retained < promotion
-    assert 'body: "", make_latest: "false"' in assets[promotion]["run"]
+    assert '--arg heading "$(head -n 1 release-body.md)"' in assets[promotion]["run"]
+    assert 'body: $heading, make_latest: "false"' in assets[promotion]["run"]
+    assert "--rawfile body release-body.md" not in assets[promotion]["run"]
+    public_assets = jobs["verify-public-release-assets"]["steps"]
+    assert any("Public release body heading does not match release configuration" in step.get("run", "")
+               for step in public_assets)
 
     notes = jobs["publish-release-notes"]
     assert notes["needs"] == ["publish-github-release", "advance-compatible-aliases"]

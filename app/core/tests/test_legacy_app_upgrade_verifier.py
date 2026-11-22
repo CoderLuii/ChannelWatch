@@ -903,7 +903,7 @@ def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes(
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    scenarios = module.validate_baselines(fixture, target_version="1.6.7")
+    scenarios = module.validate_baselines(fixture, target_version="1.6.8")
     assert [row["id"] for row in scenarios] == [
         "stock-1.4.0",
         "overlay-1.4.0-to-1.4.1",
@@ -915,23 +915,23 @@ def test_fixture_defines_exact_six_scenario_matrix_for_both_qualification_modes(
     broken = copy.deepcopy(fixture)
     broken["scenarios"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_baselines(broken, target_version="1.6.7")
+        module.validate_baselines(broken, target_version="1.6.8")
 
 
-def test_fixture_binds_exact_immutable_166_bridge():
+def test_fixture_binds_exact_immutable_167_bridge():
     module = load_module()
     fixture = json.loads(
         (ROOT / "scripts/release/legacy-app-upgrade-baselines.json").read_text()
     )
-    module.validate_baselines(fixture, target_version="1.6.7")
+    module.validate_baselines(fixture, target_version="1.6.8")
     assert fixture["qualification_modes"] == ["direct", "chained"]
     assert fixture["bridge_release"] == {
-        "version": "1.6.6",
-        "source_commit": "2764b98f7b95a778162e844a1b31b81d7f149386",
-        "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-catalog-v1.6.6.json",
-        "catalog_sha256": "8c9ff6c68758564028b87f7afc8a5646cf067ffb531fd6ad24f59e2efefaa250",
-        "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-app-v1.6.6.zip",
-        "bundle_sha256": "f2d74474798882777c9bcbb3d2372c0382a844664bb4638985e0e499d9d6ac6b",
+        "version": "1.6.7",
+        "source_commit": "97525b9e3e3c05f91afa93703c5c420d9a84a06c",
+        "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-catalog-v1.6.7.json",
+        "catalog_sha256": "63cc307ed417c34e99ac8c5c566bb83c1042d53ca893071cf12af75dd8146a09",
+        "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-app-v1.6.7.zip",
+        "bundle_sha256": "ea598fe0a227ede06c8260b7c4fb066068a0fb7ba5be9982f0b15c086bc8f111",
     }
 
 
@@ -940,12 +940,12 @@ def test_release_config_requires_exact_legacy_source_contract():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text()
     )
-    assert module.validate_release_config(config, target_version="1.6.7") == [
-        "1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"
+    assert module.validate_release_config(config, target_version="1.6.8") == [
+        "1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"
     ]
     config["legacy_app_update_sources"].pop()
     with pytest.raises(module.LegacyAppUpgradeError):
-        module.validate_release_config(config, target_version="1.6.7")
+        module.validate_release_config(config, target_version="1.6.8")
 
     historical = {
         "version": "1.6.0",

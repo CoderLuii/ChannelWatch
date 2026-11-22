@@ -46,7 +46,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.5": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4"],
     "1.6.6": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
     "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
-    "1.6.8": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
+    "1.6.8": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"],
     "1.6.9": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
 }
 BRIDGE_RELEASE_160 = {
@@ -64,6 +64,14 @@ BRIDGE_RELEASE_166 = {
     "catalog_sha256": "8c9ff6c68758564028b87f7afc8a5646cf067ffb531fd6ad24f59e2efefaa250",
     "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.6/channelwatch-app-v1.6.6.zip",
     "bundle_sha256": "f2d74474798882777c9bcbb3d2372c0382a844664bb4638985e0e499d9d6ac6b"
+}
+BRIDGE_RELEASE_167 = {
+    "version": "1.6.7",
+    "source_commit": "97525b9e3e3c05f91afa93703c5c420d9a84a06c",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-catalog-v1.6.7.json",
+    "catalog_sha256": "63cc307ed417c34e99ac8c5c566bb83c1042d53ca893071cf12af75dd8146a09",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-app-v1.6.7.zip",
+    "bundle_sha256": "ea598fe0a227ede06c8260b7c4fb066068a0fb7ba5be9982f0b15c086bc8f111",
 }
 
 
@@ -122,7 +130,11 @@ def validate_baselines(value: object, *, target_version: str) -> list[dict[str, 
     if target_version in {"1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8", "1.6.9"}:
         if value.get("qualification_modes") != ["direct", "chained"]:
             raise LegacyAppUpgradeError("Legacy qualification modes are incomplete.")
-        expected_bridge = BRIDGE_RELEASE_166 if target_version in {"1.6.7", "1.6.8", "1.6.9"} else BRIDGE_RELEASE_160
+        expected_bridge = {
+            "1.6.7": BRIDGE_RELEASE_166,
+            "1.6.8": BRIDGE_RELEASE_167,
+            "1.6.9": BRIDGE_RELEASE_166,
+        }.get(target_version, BRIDGE_RELEASE_160)
         if value.get("bridge_release") != expected_bridge:
             raise LegacyAppUpgradeError("Legacy bridge release is not the immutable predecessor release.")
     scenarios = value.get("scenarios")

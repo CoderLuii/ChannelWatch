@@ -145,7 +145,7 @@ def test_current_catalog_metadata_passes_the_real_client_validator(catalog_prefl
     assert result["release_count"] > 1
     assert 0 < result["highlights"] <= 32
     assert checked == []
-    assert result["published_predecessor"] == "v1.6.6"
+    assert result["published_predecessor"] == "v1.6.7"
 
 
 def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch, catalog_preflight):
@@ -158,13 +158,25 @@ def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch, cata
 def test_preflight_rejects_missing_catalog_predecessor(monkeypatch, catalog_preflight):
     module, builder, _ = catalog_preflight
     monkeypatch.setattr(builder, "load_catalog_history", lambda version: [])
-    with pytest.raises(ValueError, match=r"previous release 1\.6\.6"):
+    with pytest.raises(ValueError, match=r"previous release 1\.6\.7"):
         module.validate_inputs(ROOT, builder=builder)
 
 
 def test_preflight_rejects_refresh_without_image_runtime_changes(monkeypatch, catalog_preflight):
     module, builder, _ = catalog_preflight
     monkeypatch.setattr(builder, "require_previous_catalog_release", lambda *args, **kwargs: "HEAD")
+    config_path = ROOT / "scripts/release/release-config.json"
+    read_text = Path.read_text
+
+    def read_refresh_config(path, *args, **kwargs):
+        raw = read_text(path, *args, **kwargs)
+        if path != config_path:
+            return raw
+        config = json.loads(raw)
+        config["delivery_mode"] = "app_update_with_image_refresh"
+        return json.dumps(config)
+
+    monkeypatch.setattr(Path, "read_text", read_refresh_config)
     with pytest.raises(ValueError, match="no image-runtime paths changed"):
         module.validate_inputs(ROOT, builder=builder)
 

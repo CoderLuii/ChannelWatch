@@ -384,6 +384,32 @@ def test_health_manager_close_and_tracker_reset_are_best_effort(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["unreachable", "recovered"])
+async def test_health_delivery_uses_the_durable_activity_id(monkeypatch, event):
+    from core import main
+    from core.notifications.notification import NotificationManager
+
+    activity = MagicMock(return_value=True)
+    manager = MagicMock()
+    monkeypatch.setattr(main, "record_activity", activity)
+    monkeypatch.setattr(main, "_health_notification_manager_for", lambda *a, **k: manager)
+    dvr = SimpleNamespace(id="dvr-a", name="Synthetic DVR", overrides={})
+    settings = SimpleNamespace(
+        alert_dvr_health=True, dvr_alert_unreachable=True, dvr_alert_recovered=True
+    )
+    transition = DvrHealthTransition(event, "outage-1", notification_armed=True)
+
+    assert await main._emit_dvr_health_transition(
+        dvr, settings, transition, test_mode=True
+    )
+    event_id = f"dvr-health:dvr-a:outage-1:{event}"
+    assert activity.call_args.kwargs["activity_event_id"] == event_id
+    queued = manager.enqueue_notification.call_args.kwargs
+    assert queued["activity_event_id"] == event_id
+    assert NotificationManager._dedupe_key(queued) == f"dvr-a|health|{event_id}"
+
+
+@pytest.mark.asyncio
 async def test_health_transition_delivery_respects_global_event_and_manager_state(
     monkeypatch,
 ):

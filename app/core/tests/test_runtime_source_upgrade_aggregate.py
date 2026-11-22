@@ -2,6 +2,9 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -257,7 +260,7 @@ def test_v162_chain_requires_rollback_to_its_v161_source(tmp_path):
     ("1.6.7", "1.6.5", True),
     ("1.6.7", "1.6.6", True),
     ("1.6.8", "1.6.6", True),
-    ("1.6.8", "1.6.7", False),
+    ("1.6.8", "1.6.7", True),
     ("1.6.9", "1.6.6", True),
     ("1.6.9", "1.6.7", False),
     ("1.6.9", "1.6.8", False),
@@ -293,3 +296,86 @@ def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monk
         assert not output.exists()
         assert called == []
         assert not output.exists()
+
+
+@pytest.mark.skipif(not shutil.which("bash") or not shutil.which("jq"),
+                    reason="Native workflow replay requires bash and jq")
+def test_v168_native_matrix_covers_published_predecessors_once(tmp_path):
+    import yaml
+
+    job = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )["jobs"]["runtime-capability"]
+    rows = job["strategy"]["matrix"]["include"]
+    assert [(row["architecture"], row["shard"]) for row in rows] == [
+        ("amd64", "bootstrap"), ("amd64", "chained"),
+        ("arm64", "bootstrap"), ("arm64", "chained"),
+    ]
+    run = next(
+        step["run"] for step in job["steps"]
+        if step["name"] == "Run the native protocol-4 lifecycle verifier"
+    )
+    config = tmp_path / "scripts/release/release-config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps({"version": "1.6.8", "updater_protocol": 4,
+                    "runtime_generation_required": True}),
+        encoding="utf-8",
+    )
+    capture = r"""
+python() {
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = --evidence-json ]; then
+            printf '%s\n' "${2##*/}"
+            return
+        fi
+        shift
+    done
+    return 1
+}
+"""
+    expected = {
+        "bootstrap": ["1.5.3", "1.6.0", "1.6.1", "1.6.2"],
+        "chained": ["1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"],
+    }
+    for row in rows:
+        architecture, shard = row["architecture"], row["shard"]
+        result = subprocess.run(
+            ["bash", "-c", capture + run], cwd=tmp_path, check=True,
+            capture_output=True, text=True,
+            env={**os.environ, "NATIVE_ARCHITECTURE": architecture, "NATIVE_SHARD": shard,
+                 "RUNNER_TEMP": str(tmp_path), "GITHUB_SHA": "a" * 40},
+        )
+        assert result.stdout.splitlines() == [
+            f"runtime-capability-{architecture}-{source}.json" for source in expected[shard]
+        ]
+
+
+
+@pytest.mark.parametrize("defect", [None, "missing", "wrong-sha", "duplicate"])
+def test_merge_native_runtime_shards_requires_exact_disjoint_artifacts(tmp_path, defect):
+    source = "a" * 40
+    script = ROOT / "scripts/release/merge-runtime-capability-shards.py"
+    spec = importlib.util.spec_from_file_location("merge_runtime_shards", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    incoming = tmp_path / "incoming"
+    outgoing = tmp_path / "outgoing"
+    for architecture in ("amd64", "arm64"):
+        for shard in ("bootstrap", "chained"):
+            if defect == "missing" and architecture == "arm64" and shard == "chained":
+                continue
+            sha = "b" * 40 if defect == "wrong-sha" and shard == "chained" else source
+            artifact = incoming / f"runtime-capability-{architecture}-{shard}-{sha}"
+            artifact.mkdir(parents=True)
+            name = architecture if defect == "duplicate" else f"{architecture}-{shard}"
+            (artifact / f"{name}.json").write_text(name, encoding="utf-8")
+
+    if defect:
+        with pytest.raises(ValueError, match="exactly four|Duplicate native evidence"):
+            module.merge(incoming, outgoing, source)
+        assert not outgoing.exists()
+    else:
+        module.merge(incoming, outgoing, source)
+        assert len(list(outgoing.glob("*.json"))) == 4

@@ -1266,7 +1266,7 @@ def test_runtime_asset_verifier_checks_inventory_and_interpreter_binding(
 
 def test_v163_history_retains_the_exact_published_v162_legacy_record():
     builder = _load("v163_history_builder", "scripts/release/build-update-bundle.py")
-    history = builder.load_catalog_history("1.6.7")
+    history = builder.load_catalog_history("1.6.8")
     predecessor = next(release for release in history if release["version"] == "1.6.2")
     assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "1aa1aab169f81223084cc6ace956c662a64b02cd8830a7dd8004879093728740"
     projected = builder.project_catalog_history_v2(history)
@@ -1281,9 +1281,9 @@ def test_v163_history_retains_the_exact_published_v162_legacy_record():
 def test_v164_history_retains_authentic_v163_without_rewriting_prior_records():
     builder = _load("v164_history_builder", "scripts/release/build-update-bundle.py")
     raw = json.loads((ROOT / "scripts/release/update-catalog-history.json").read_text(encoding="utf-8"))["releases"]
-    assert len(raw) == 29
+    assert len(raw) == 30
     assert hashlib.sha256(builder.canonical_payload_bytes(raw[:25])).hexdigest() == "3e85e0b4bf3ccd5fa93ab880172ff9a895049dba7888e326682e64cec109626d"
-    history = builder.load_catalog_history("1.6.7")
+    history = builder.load_catalog_history("1.6.8")
     predecessor = next(release for release in history if release["version"] == "1.6.3")
     assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "b7d4e205bd7c102e1d3985dd3693d958b39a84f0477ae583a1b01dfb9e6b54b8"
     assert next(release for release in builder.project_catalog_history_v2(history) if release["version"] == "1.6.3") == predecessor
@@ -1294,9 +1294,9 @@ def test_v164_history_retains_authentic_v163_without_rewriting_prior_records():
 def test_v165_history_retains_authentic_v164_without_rewriting_prior_records():
     builder = _load("v165_history_builder", "scripts/release/build-update-bundle.py")
     raw = json.loads((ROOT / "scripts/release/update-catalog-history.json").read_text(encoding="utf-8"))["releases"]
-    assert len(raw) == 29
+    assert len(raw) == 30
     assert hashlib.sha256(builder.canonical_payload_bytes(raw[:26])).hexdigest() == "cbfd098f3412c153cc87ac3fc4a2b66b4c8eba2314c14709aca617f2ea86a97c"
-    history = builder.load_catalog_history("1.6.7")
+    history = builder.load_catalog_history("1.6.8")
     predecessor = next(release for release in history if release["version"] == "1.6.4")
     assert hashlib.sha256(builder.canonical_payload_bytes(predecessor)).hexdigest() == "9d6478041966bfe27e6f64d0d1fee0d951cb4ed9d26a063ebe548fdb593b4004"
     assert predecessor["bundle_sha256"] == "3a7f034ca2df13b1e16674663c9ba3dfc58b88f19e0e94cc535a8d1385b20c74"

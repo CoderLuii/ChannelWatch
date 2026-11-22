@@ -195,6 +195,7 @@ async def _emit_dvr_health_transition(
         if unreachable
         else f"ChannelWatch is connected to {dvr_name} again."
     )
+    activity_event_id = f"dvr-health:{dvr_id}:{transition.outage_id}:{transition.event}"
     stored = await asyncio.to_thread(
         record_activity,
         activity_type="dvr_unreachable" if unreachable else "dvr_recovered",
@@ -203,7 +204,7 @@ async def _emit_dvr_health_transition(
         dvr_id=dvr_id,
         dvr_name=dvr_name,
         extra={"outcome": transition.event},
-        activity_event_id=f"dvr-health:{dvr_id}:{transition.outage_id}:{transition.event}",
+        activity_event_id=activity_event_id,
     )
 
     if not stored:
@@ -237,9 +238,7 @@ async def _emit_dvr_health_transition(
                 message,
                 dvr_id=dvr_id,
                 event_type="health",
-                notification_dedupe_key=(
-                    f"dvr-health:{dvr_id}:{transition.outage_id}:{transition.event}"
-                ),
+                activity_event_id=activity_event_id,
             )
         )
         if not accepted:

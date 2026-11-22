@@ -1039,7 +1039,7 @@ def test_current_release_delivery_dependency_diff_requires_evidence_since_publis
 
     assert impact.image_required is True
     assert "deploy/requirements/runtime.constraints.txt" in impact.triggering_paths
-    assert config["delivery_mode"] == "app_update_with_image_refresh"
+    assert config["delivery_mode"] == "app_update"
     with pytest.raises(module.ReleaseImpactMismatch):
         module.verify_declared_impact(
             impact,
@@ -1048,7 +1048,7 @@ def test_current_release_delivery_dependency_diff_requires_evidence_since_publis
         )
 
 
-def test_release_config_declares_169_in_app_update_on_published_153_image():
+def test_current_release_config_declares_in_app_update_on_published_153_image():
     config = json.loads(
         (ROOT / "scripts/release/release-config.json").read_text(encoding="utf-8")
     )
@@ -1057,17 +1057,17 @@ def test_release_config_declares_169_in_app_update_on_published_153_image():
         "scripts/release/release_version_policy.py",
     )
 
-    assert config["version"] == "1.6.7"
+    assert config["version"] == "1.6.8"
     assert config["image_required"] is False
-    assert config["delivery_mode"] == "app_update_with_image_refresh"
+    assert config["delivery_mode"] == "app_update"
     assert config["minimum_image_version"] == "1.5.3"
     assert config["updater_protocol"] == 4
     assert config["minimum_launcher_protocol"] == 4
-    assert config["recommended_image_version"] == "1.6.7"
+    assert config["recommended_image_version"] == "1.6.8"
     assert config["publication_time"].endswith("Z")
     assert config["automatic_install_after"].endswith("Z")
     assert config["automatic_install_allowed"] is False
-    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"]
+    assert config["compatible_source_application_versions"] == ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"]
     assert config["compatible_launcher_protocols"] == [4]
     assert config["runtime_generation_required"] is True
     assert not config.get("runtime_variants")
@@ -1088,7 +1088,7 @@ def test_release_config_declares_169_in_app_update_on_published_153_image():
         "v1.5.2",
         "v1.5.4",
     ]
-    assert config["release_heading"] == "# ChannelWatch v1.6.7 - Dependency updates"
+    assert config["release_heading"] == "# ChannelWatch v1.6.8 - Maintenance update"
     assert config["verification_assets"] is True
     policy = policy_module.validate_release_config(config)
     assert policy.image_milestone is False
@@ -1162,16 +1162,16 @@ def test_current_release_body_uses_public_release_heading_hierarchy(
 
     output = capsys.readouterr().out
     assert output.splitlines()[0] == config["release_heading"]
-    assert re.fullmatch(r"# ChannelWatch v1\.6\.7 - .+", output.splitlines()[0])
+    assert re.fullmatch(r"# ChannelWatch v1\.6\.8 - .+", output.splitlines()[0])
     assert re.findall(r"^# .+$", output, re.MULTILINE) == [
         config["release_heading"]
     ]
-    for heading in ("Fixed", "Changed", "Images", "License and verification"):
+    for heading in ("Changed", "Images", "License and verification"):
         assert f"\n## {heading}\n" in output
     assert "https://channelwatch.coderluii.dev/" in output
-    assert "channelwatch-v1.6.7-THIRD-PARTY-LICENSES.md" in output
-    assert "`coderluii/channelwatch:1.6.7`" in output
-    assert "`ghcr.io/coderluii/channelwatch:1.6.7`" in output
+    assert "channelwatch-v1.6.8-THIRD-PARTY-LICENSES.md" in output
+    assert "`coderluii/channelwatch:1.6.8`" in output
+    assert "`ghcr.io/coderluii/channelwatch:1.6.8`" in output
     assert "scratch/" not in output
     assert "C:\\" not in output
     assert "file://" not in output
@@ -1292,11 +1292,11 @@ def test_release_version_surfaces_use_169_release():
         release_url=None,
     )
 
-    assert metadata["version"] == "1.6.7"
-    assert metadata["versionTag"] == "v1.6.7"
-    assert metadata["dockerTag"] == "1.6.7"
-    assert metadata["helmChartVersion"] == "1.6.7"
-    assert metadata["helmAppVersion"] == "1.6.7"
+    assert metadata["version"] == "1.6.8"
+    assert metadata["versionTag"] == "v1.6.8"
+    assert metadata["dockerTag"] == "1.6.8"
+    assert metadata["helmChartVersion"] == "1.6.8"
+    assert metadata["helmAppVersion"] == "1.6.8"
 
 
 def test_release_body_for_120_links_license_and_sbom_assets(
@@ -3307,7 +3307,7 @@ def test_release_workflow_serializes_publication_and_preserves_immutability():
     assert '--minimum-image-version "${minimum_image_version}"' in workflow
     assert workflow.count(
         '--image-index-digest "$(jq -r \'.minimum_image_sha256\' scripts/release/release-config.json)"'
-        ) == 10
+        ) == 11
     assert '--bundle "dist/candidate-one/channelwatch-app-v${version}.zip"' in workflow
     assert '--bundle "dist/update/channelwatch-app-${RELEASE_TAG}.zip"' in workflow
     candidate_canary = workflow.split(
@@ -3935,6 +3935,30 @@ def test_site_release_handoff_preserves_publication_and_live_feed_gates():
     assert "verify-live-update-manifest" in workflow["jobs"]["advance-compatible-aliases"]["needs"]
 
 
+def test_native_legacy_preflight_accepts_the_current_release_and_rejects_fixture_drift(tmp_path):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["legacy-app-upgrade"]["steps"]
+    command = next(step["run"] for step in steps
+                   if step.get("name") == "Run the native legacy same-container matrix")
+    preflight = command.split('tag="v${version}"', 1)[0]
+    fixtures = tmp_path / "scripts/release"
+    fixtures.mkdir(parents=True)
+    for name in ("release-config.json", "legacy-app-upgrade-baselines.json"):
+        shutil.copyfile(ROOT / "scripts/release" / name, fixtures / name)
+
+    result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    fixture_path = fixtures / "legacy-app-upgrade-baselines.json"
+    fixture = json.loads(fixture_path.read_text())
+    fixture["legacy_sources"].pop()
+    fixture_path.write_text(json.dumps(fixture))
+    result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "Legacy upgrade sources differ" in result.stdout
+
+
 def test_release_notes_wait_for_live_update_and_registry_aliases():
     jobs = yaml.safe_load(
         (ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
@@ -4260,7 +4284,7 @@ def test_release_reuse_preserves_independent_payload_images_and_native_gates():
     assert len(independent_builds) == 2
     assert all(step["with"]["platforms"] == "${{ env.DOCKER_PLATFORMS }}" for step in independent_builds)
     assert len({step["with"]["outputs"] for step in independent_builds}) == 2
-    for job_name in ("runtime-capability", "legacy-app-upgrade", "native-image-qualification"):
+    for job_name in ("legacy-app-upgrade", "native-image-qualification"):
         assert [row["architecture"] for row in jobs[job_name]["strategy"]["matrix"]["include"]] == ["amd64", "arm64"]
     assert "aggregate-runtime-source-upgrades.py" in shell
     assert "aggregate-legacy-app-upgrades.py" in shell
@@ -4332,8 +4356,9 @@ def test_release_runner_routes_only_trusted_tag_pushes_to_configured_runner():
     capability_job = workflow["jobs"]["runtime-capability"]
     assert capability_job["runs-on"] == "${{ matrix.runner }}"
     assert capability_job["strategy"]["matrix"]["include"] == [
-        {"architecture": "amd64", "runner": "ubuntu-24.04"},
-        {"architecture": "arm64", "runner": "ubuntu-24.04-arm"},
+        {"architecture": architecture, "runner": runner, "shard": shard}
+        for architecture, runner in (("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm"))
+        for shard in ("bootstrap", "chained")
     ]
     legacy_job = workflow["jobs"]["legacy-app-upgrade"]
     assert legacy_job["runs-on"] == "${{ matrix.runner }}"
@@ -4772,7 +4797,7 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.0.json" in capability
     assert "runtime-capability-${NATIVE_ARCHITECTURE}-1.6.1.json" in capability
     assert "--source-version 1.6.1" in capability
-    assert 'if [ "${version}" = "1.6.3" ]; then' in capability
+    assert "--source-version 1.6.2" in capability
     for digest in (
         "fd8cf8110c997a5259eb9f19023498dde4bc148e3785352abc1b7912cbfa9c34",
         "2da567d8b3554b156b5f8a8916f539fddce94bec27cf75c6c3460342f76c5b7a",
@@ -4794,8 +4819,11 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
             "Validate the complete native receipt before retention",
         }
     }
-    assert set(conditional_steps.values()) == {
-        "needs.candidate-source-gates.outputs.runtime_generation_required == 'true'"
+    generation_gate = "needs.candidate-source-gates.outputs.runtime_generation_required == 'true'"
+    assert conditional_steps == {
+        "Open signed assets before native qualification starts": generation_gate,
+        "Run the native protocol-4 lifecycle verifier": generation_gate,
+        "Validate the complete native receipt before retention": generation_gate + " && matrix.shard == 'bootstrap'",
     }
     browser_steps = [step for step in capability_job["steps"] if step["name"] in {
         "Set up Node for headless live Update Center verification",
@@ -4803,7 +4831,8 @@ def test_release_workflow_builds_native_runtime_generations_and_seals_exact_asse
     }]
     assert len(browser_steps) == 2
     assert all(step["if"] == (
-        "needs.candidate-source-gates.outputs.runtime_generation_required == 'true' && matrix.architecture == 'amd64'"
+        "needs.candidate-source-gates.outputs.runtime_generation_required == 'true' "
+        "&& matrix.architecture == 'amd64' && matrix.shard == 'bootstrap'"
     ) for step in browser_steps)
     assert browser_steps[0]["with"]["node-version"] == "24.22.1"
     assert 'test "$(pnpm --version)" = "11.28.9"' in browser_steps[1]["run"]
@@ -4996,7 +5025,7 @@ def _release_candidate_repository(tmp_path, mutation, *, files=None, release="1.
     if release == "1.6.7":
         previous = base = "2764b98f7b95a778162e844a1b31b81d7f149386"
     if release == "1.6.8":
-        previous = base = "7d49fb90c46d96a72d46380d5401bcce1673aafe"
+        previous = base = "97525b9e3e3c05f91afa93703c5c420d9a84a06c"
     if release == "1.6.9":
         previous = base = "d032f959bb9032bb97d56d3dedf3e03ee9516159"
     repository = tmp_path / "release.git"
@@ -5178,7 +5207,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
         "scripts/release/verify-release-timing.py",
         "scripts/release/verify-local-qualification.py",
         "scripts/release/release-config.json",
-        "deploy/security/channelwatch-v1.6.7.openvex.json",
+        "deploy/security/channelwatch-v1.6.8.openvex.json",
         "docs/releases/CHANGELOG.md", "app/ui/package.json", "app/ui/pnpm-lock.yaml",
     )
     files = {name: (ROOT / name).read_text(encoding="utf-8") for name in paths}
@@ -5188,7 +5217,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
         if step.get("name") == "Verify release identity and local qualification"
     )
     repository, environment, git, tag, candidate, base = _release_candidate_repository(
-        tmp_path, "main" if mutation == "main" else None, files=files, release="1.6.7",
+        tmp_path, "main" if mutation == "main" else None, files=files, release="1.6.8",
     )
     git("update-ref", "refs/heads/main", base if mutation == "main" else candidate)
     git("symbolic-ref", "HEAD", "refs/heads/main")
@@ -5213,7 +5242,7 @@ def test_release_preflight_workflow_shell_requires_real_local_qualification(
     }
     record = {
         "schema": 1, "type": "maintainer_local", "repository": "CoderLuii/ChannelWatch",
-        "actor": "CoderLuii", "tag": tag, "version": "1.6.7",
+        "actor": "CoderLuii", "tag": tag, "version": "1.6.8",
         "source_commit": candidate, "source_tree": git("rev-parse", f"{candidate}^{{tree}}"),
         "workflow_sha256": hashlib.sha256(files[paths[0]].encode()).hexdigest(),
         "release_config_sha256": hashlib.sha256(

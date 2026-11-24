@@ -145,7 +145,7 @@ def test_current_catalog_metadata_passes_the_real_client_validator(catalog_prefl
     assert result["release_count"] > 1
     assert 0 < result["highlights"] <= 32
     assert checked == []
-    assert result["published_predecessor"] == "v1.6.8"
+    assert result["published_predecessor"] == "v1.6.9"
 
 
 def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch, catalog_preflight):
@@ -158,7 +158,7 @@ def test_preflight_rejects_highlights_the_client_cannot_accept(monkeypatch, cata
 def test_preflight_rejects_missing_catalog_predecessor(monkeypatch, catalog_preflight):
     module, builder, _ = catalog_preflight
     monkeypatch.setattr(builder, "load_catalog_history", lambda version: [])
-    with pytest.raises(ValueError, match=r"previous release 1\.6\.8"):
+    with pytest.raises(ValueError, match=r"previous release 1\.6\.9"):
         module.validate_inputs(ROOT, builder=builder)
 
 

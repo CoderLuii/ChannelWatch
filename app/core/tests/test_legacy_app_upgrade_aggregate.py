@@ -36,7 +36,7 @@ def matrix(tmp_path, request):
     )
     target_version = request.param
     fixture["target_version"] = target_version
-    if target_version != "1.6.9":
+    if target_version != "1.7.0":
         if target_version == "1.6.7":
             fixture["bridge_release"] = load_module().BRIDGE_RELEASE_166.copy()
         elif target_version == "1.6.8":

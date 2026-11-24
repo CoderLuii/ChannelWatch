@@ -1,12 +1,12 @@
 # Update ChannelWatch
 
-On v1.6.8, v1.6.7, v1.6.6, v1.6.5, v1.6.4, v1.6.3, v1.6.2, v1.6.1, v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.6.9 directly from **Settings > Updates** without recreating the container. ChannelWatch restarts briefly and keeps the existing configuration.
+On v1.6.9, v1.6.8, v1.6.7, v1.6.6, v1.6.5, v1.6.4, v1.6.3, v1.6.2, v1.6.1, v1.6.0, v1.5.3, v1.4.5, v1.4.1 or v1.4.0, install ChannelWatch v1.7.0 directly from **Settings > Updates** without recreating the container. ChannelWatch restarts briefly and keeps the existing configuration.
 
-Install v1.6.9 manually from Update Center. Automatic installation remains disabled.
+Install v1.7.0 manually from Update Center. Automatic installation remains disabled.
 
 The legacy app-only route keeps the image's existing Python packages. On supported protocol-4 images, the update installs the signed application and package generation together. Python itself, system libraries and the image-owned launcher still require a container image update when those components change.
 
-The v1.6.9 image uses Python 3.14.9. Its signed package generation retains the Python 3.14.8 minimum for existing compatible containers.
+The v1.7.0 image uses Python 3.14.9. Its signed package generation retains the Python 3.14.8 minimum for existing compatible containers.
 
 The updater waits for stable target-runtime and Settings checks, opens Dashboard Overview, and hard-refreshes the activated frontend once. **Retry now** uses the same checks when a restart briefly disconnects the dashboard. Application and immutable container image versions are reported separately.
 

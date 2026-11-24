@@ -32,6 +32,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
     "1.6.8": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"],
     "1.6.9": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8"],
+    "1.7.0": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8", "1.6.9"],
 }
 QUALIFICATION_MODES = ("direct", "chained")
 SCENARIOS = [
@@ -75,6 +76,14 @@ BRIDGE_RELEASE_168 = {
     "catalog_sha256": "66bf26f7505470aa388bea4446c1fecabca8edf9778d0ef90a31665e84f1a9d0",
     "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.8/channelwatch-app-v1.6.8.zip",
     "bundle_sha256": "40ce63c66fd6368283572d934387e8a2907cd9c63c19265a303a409f33c9618e",
+}
+BRIDGE_RELEASE_169 = {
+    "version": "1.6.9",
+    "source_commit": "0e670ed61849ebdb613cc985573aeba14aee1e10",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.9/channelwatch-catalog-v1.6.9.json",
+    "catalog_sha256": "518cdd0b7cef8a114af42a23dae4649170c60ed49d98cc526b8bccc2734bea51",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.9/channelwatch-app-v1.6.9.zip",
+    "bundle_sha256": "eb0242c67879ad272a5dc2968379a6fde876966b4c23f9dd99f8b8ee9d34d08b"
 }
 
 
@@ -241,6 +250,7 @@ def aggregate(
             "1.6.7": BRIDGE_RELEASE_166,
             "1.6.8": BRIDGE_RELEASE_167,
             "1.6.9": BRIDGE_RELEASE_168,
+            "1.7.0": BRIDGE_RELEASE_169,
         }.get(target_version, BRIDGE_RELEASE_160)
         rollback_version = (
             expected_bridge["version"]

@@ -1,13 +1,13 @@
 {
-  "version": "1.6.9",
+  "version": "1.7.0",
   "image_required": false,
   "delivery_mode": "app_update",
   "minimum_image_version": "1.5.3",
   "updater_protocol": 4,
   "minimum_launcher_protocol": 4,
-  "recommended_image_version": "1.6.9",
-  "publication_time": "2026-11-24T09:35:42Z",
-  "automatic_install_after": "2026-12-01T09:35:42Z",
+  "recommended_image_version": "1.7.0",
+  "publication_time": "2026-11-24T18:34:52Z",
+  "automatic_install_after": "2026-12-01T18:34:52Z",
   "automatic_install_allowed": false,
   "compatible_source_application_versions": [
     "1.5.3",
@@ -19,7 +19,8 @@
     "1.6.5",
     "1.6.6",
     "1.6.7",
-    "1.6.8"
+    "1.6.8",
+    "1.6.9"
   ],
   "legacy_app_update_sources": [
     "1.4.0",
@@ -33,14 +34,15 @@
     "1.6.5",
     "1.6.6",
     "1.6.7",
-    "1.6.8"
+    "1.6.8",
+    "1.6.9"
   ],
   "compatible_launcher_protocols": [
     4
   ],
   "runtime_generation_required": true,
   "runtime_compatibility_evidence": {},
-  "release_heading": "# ChannelWatch v1.6.9 - DVR health alerts after restart",
+  "release_heading": "# ChannelWatch v1.7.0 - Stop daily DVR purge restarts",
   "verification_assets": true,
   "unpublished_predecessor_tags": [],
   "unpublished_release_tags": [

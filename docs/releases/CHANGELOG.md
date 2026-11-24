@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-24
+
+### Fixed
+
+- Skip empty archived-DVR cleanup and apply real deletions without restarting the core.
+
 ## [1.6.9] - 2026-11-24
 
 ### Fixed
@@ -1176,7 +1182,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.9...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.9...v1.7.0
 [1.6.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.8...v1.6.9
 [1.6.8]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.7...v1.6.8
 [1.6.7]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.6...v1.6.7

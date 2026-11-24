@@ -34,8 +34,17 @@ TARGET_SOURCES = {
     "1.6.7": ("1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"),
     "1.6.8": ("1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"),
     "1.6.9": ("1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8"),
+    "1.7.0": ("1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8", "1.6.9"),
 }
 SOURCE_RELEASES = {
+    "1.6.9": {
+        "source_commit": "0e670ed61849ebdb613cc985573aeba14aee1e10",
+        "catalog_sha256": "25c6847a1af146d9a145ddf181441b530d2ca295cd8f168d3e1f4ab6d3639065",
+        "bundles": {
+            "amd64": "b56a8012f8833467df0ce582a39fee4807122c4d0c428fff7352052e50c6a0a2",
+            "arm64": "8a9d5b96de9b87c9d23d88e94d71fac248d6cd1c03a9df5349871c886d92df5f",
+        },
+    },
     "1.6.8": {
         "source_commit": "de4e5393ec466e28a506cf59b825030222974c13",
         "catalog_sha256": "d3266aca192907c58564ec834983d092ecf2b31e667e6a7ee1d00d471ff109a2",
@@ -459,7 +468,7 @@ def main() -> int:
     args = parser.parse_args()
     args.target_version = args.target_version.strip().lstrip("v")
     if args.target_version not in TARGET_SOURCES or SHA40.fullmatch(args.target_commit) is None:
-        raise SystemExit("This verifier is bounded to exact v1.6.1, v1.6.2, v1.6.3, v1.6.4, v1.6.5, v1.6.6, v1.6.7, v1.6.8 and v1.6.9 candidates.")
+        raise SystemExit("This verifier is bounded to exact v1.6.1, v1.6.2, v1.6.3, v1.6.4, v1.6.5, v1.6.6, v1.6.7, v1.6.8, v1.6.9 and v1.7.0 candidates.")
     if args.source_version not in TARGET_SOURCES[args.target_version]:
         raise SystemExit("This candidate requires an exact immutable predecessor source.")
     args.evidence_json.parent.mkdir(parents=True, exist_ok=True)

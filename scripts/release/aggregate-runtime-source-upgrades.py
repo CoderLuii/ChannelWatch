@@ -24,8 +24,10 @@ SOURCE_CONTRACTS = {
     "1.6.7": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
     "1.6.8": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"],
     "1.6.9": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8"],
+    "1.7.0": ["1.5.3", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8", "1.6.9"],
 }
 SOURCE_IDENTITIES = {
+    "1.6.9": ("0e670ed61849ebdb613cc985573aeba14aee1e10", "25c6847a1af146d9a145ddf181441b530d2ca295cd8f168d3e1f4ab6d3639065"),
     "1.6.8": ("de4e5393ec466e28a506cf59b825030222974c13", "d3266aca192907c58564ec834983d092ecf2b31e667e6a7ee1d00d471ff109a2"),
     "1.6.7": (
         "97525b9e3e3c05f91afa93703c5c420d9a84a06c",
@@ -216,7 +218,7 @@ def main() -> int:
     release_config = json.loads(args.release_config.read_text(encoding="utf-8"))
     target_version = str(release_config.get("version") or "")
     sources = SOURCE_CONTRACTS.get(target_version)
-    require(sources is not None, "Source matrix is bounded to v1.6.1, v1.6.2, v1.6.3, v1.6.4, v1.6.5, v1.6.6, v1.6.7, v1.6.8 and v1.6.9.")
+    require(sources is not None, "Source matrix is bounded to v1.6.1, v1.6.2, v1.6.3, v1.6.4, v1.6.5, v1.6.6, v1.6.7, v1.6.8, v1.6.9 and v1.7.0.")
     require(
         release_config.get("compatible_source_application_versions")
         == sources,

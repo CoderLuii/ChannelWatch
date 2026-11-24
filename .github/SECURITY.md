@@ -6,7 +6,7 @@ Security fixes are provided for the current stable application release line. The
 
 | Version line | Supported |
 |---|---|
-| 1.6.x | Yes |
+| 1.7.x | Yes |
 | 1.5.x and earlier | No |
 
 If you are still on an older build, upgrade before reporting a security issue unless the issue itself blocks upgrade.

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "repository": "coderluii/channelwatch",
-  "target_version": "1.6.8",
+  "target_version": "1.6.9",
   "legacy_sources": [
     "1.4.0",
     "1.4.1",
@@ -13,19 +13,20 @@
     "1.6.4",
     "1.6.5",
     "1.6.6",
-    "1.6.7"
+    "1.6.7",
+    "1.6.8"
   ],
   "qualification_modes": [
     "direct",
     "chained"
   ],
   "bridge_release": {
-    "version": "1.6.7",
-    "source_commit": "97525b9e3e3c05f91afa93703c5c420d9a84a06c",
-    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-catalog-v1.6.7.json",
-    "catalog_sha256": "63cc307ed417c34e99ac8c5c566bb83c1042d53ca893071cf12af75dd8146a09",
-    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-app-v1.6.7.zip",
-    "bundle_sha256": "ea598fe0a227ede06c8260b7c4fb066068a0fb7ba5be9982f0b15c086bc8f111"
+    "version": "1.6.8",
+    "source_commit": "de4e5393ec466e28a506cf59b825030222974c13",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.8/channelwatch-catalog-v1.6.8.json",
+    "catalog_sha256": "66bf26f7505470aa388bea4446c1fecabca8edf9778d0ef90a31665e84f1a9d0",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.8/channelwatch-app-v1.6.8.zip",
+    "bundle_sha256": "40ce63c66fd6368283572d934387e8a2907cd9c63c19265a303a409f33c9618e"
   },
   "signed_overlays": {
     "1.4.1": {

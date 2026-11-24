@@ -1007,7 +1007,7 @@ jobs:
                 '63a859510b53b7cbb4e934a404bfea67a0a63ce05abce1ddb35b967e69c1e301' "${source_dir}/channelwatch-runtime-v1.6.6-arm64.zip" \
                 | sha256sum --check --strict
             fi
-            if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ]; then
+            if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.8" ] || [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
               source_dir="${RUNNER_TEMP}/runtime-source-v1.6.7"
               mkdir -p "${source_dir}"
               base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7"
@@ -1023,6 +1023,24 @@ jobs:
                 'bf60db03d20a2c50089b58bbb0698fa8df401f6ac98ba181920202f31ad2ce35' "${source_dir}/channelwatch-update-catalog-v3.json" \
                 '5b0be34e4139458bbfc5573d5c3193c61f2704695ad5607972273e378b128ce0' "${source_dir}/channelwatch-runtime-v1.6.7-amd64.zip" \
                 'd98bf325f271a4bbe9df4f757236f5373744784692c814c1346463e17be2fe42' "${source_dir}/channelwatch-runtime-v1.6.7-arm64.zip" \
+                | sha256sum --check --strict
+            fi
+            if [ "$(jq -r '.version' scripts/release/release-config.json)" = "1.6.9" ]; then
+              source_dir="${RUNNER_TEMP}/runtime-source-v1.6.8"
+              mkdir -p "${source_dir}"
+              base_url="https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.8"
+              curl --fail --silent --show-error --location \
+                --output "${source_dir}/channelwatch-update-catalog-v3.json" \
+                "${base_url}/channelwatch-update-catalog-v3.json"
+              for architecture in amd64 arm64; do
+                curl --fail --silent --show-error --location \
+                  --output "${source_dir}/channelwatch-runtime-v1.6.8-${architecture}.zip" \
+                  "${base_url}/channelwatch-runtime-v1.6.8-${architecture}.zip"
+              done
+              printf '%s  %s\n' \
+                'd3266aca192907c58564ec834983d092ecf2b31e667e6a7ee1d00d471ff109a2' "${source_dir}/channelwatch-update-catalog-v3.json" \
+                'dfcbe6b45f3eadc592a0bad706c4f27e7082ac75d4f287e07bbf268641aad999' "${source_dir}/channelwatch-runtime-v1.6.8-amd64.zip" \
+                '1d5becff87ca7aed73f3a90a367df5ae75be676b6b006086f645eebf08bd2431' "${source_dir}/channelwatch-runtime-v1.6.8-arm64.zip" \
                 | sha256sum --check --strict
             fi
           fi
@@ -1161,7 +1179,7 @@ jobs:
                 --architecture "${NATIVE_ARCHITECTURE}" \
                 --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.6.json"
             fi
-            if [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.9" ]; then
               python scripts/release/verify-runtime-source-upgrade.py \
                 --source-version 1.6.7 \
                 --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.7/channelwatch-update-catalog-v3.json" \
@@ -1175,6 +1193,21 @@ jobs:
                 --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
                 --architecture "${NATIVE_ARCHITECTURE}" \
                 --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.7.json"
+            fi
+            if [ "${version}" = "1.6.9" ]; then
+              python scripts/release/verify-runtime-source-upgrade.py \
+                --source-version 1.6.8 \
+                --source-catalog "${RUNNER_TEMP}/runtime-source-v1.6.8/channelwatch-update-catalog-v3.json" \
+                --source-amd64-bundle "${RUNNER_TEMP}/runtime-source-v1.6.8/channelwatch-runtime-v1.6.8-amd64.zip" \
+                --source-arm64-bundle "${RUNNER_TEMP}/runtime-source-v1.6.8/channelwatch-runtime-v1.6.8-arm64.zip" \
+                --target-catalog "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-update-catalog-v3.json" \
+                --target-amd64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-amd64.zip" \
+                --target-arm64-bundle "${RUNNER_TEMP}/signed-assets/candidate-one/channelwatch-runtime-${tag}-arm64.zip" \
+                --target-version "${version}" \
+                --target-commit "${GITHUB_SHA}" \
+                --image-index-digest "$(jq -r '.minimum_image_sha256' scripts/release/release-config.json)" \
+                --architecture "${NATIVE_ARCHITECTURE}" \
+                --evidence-json "${RUNNER_TEMP}/runtime-capability/runtime-capability-${NATIVE_ARCHITECTURE}-1.6.8.json"
             fi
           fi
       - name: Validate the complete native receipt before retention
@@ -2115,10 +2148,16 @@ jobs:
                 --receipt "1.6.6=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.6.json"
               )
             fi
-            if [ "${version}" = "1.6.8" ]; then
+            if [ "${version}" = "1.6.8" ] || [ "${version}" = "1.6.9" ]; then
               source_receipt_args+=(
                 --receipt "1.6.7=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.7.json"
                 --receipt "1.6.7=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.7.json"
+              )
+            fi
+            if [ "${version}" = "1.6.9" ]; then
+              source_receipt_args+=(
+                --receipt "1.6.8=amd64=${RUNNER_TEMP}/runtime-capability/runtime-capability-amd64-1.6.8.json"
+                --receipt "1.6.8=arm64=${RUNNER_TEMP}/runtime-capability/runtime-capability-arm64-1.6.8.json"
               )
             fi
             python scripts/release/aggregate-runtime-source-upgrades.py \

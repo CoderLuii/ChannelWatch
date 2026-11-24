@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.6.9] - 2026-11-24
+
+### Fixed
+
+- Give the DVR time to reconnect after a core restart before sending a carried-over outage warning. Real outages and their recovery alerts are still reported.
+
 ## [1.6.8] - 2026-11-22
 
 ### Fixed
@@ -1170,7 +1176,8 @@ All notable changes to this project will be documented in this file. The format 
 
 - Carry forward the project security policy and dependency security updates that existed before the v0.8 hardening work.
 
-[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.8...HEAD
+[Unreleased]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.9...HEAD
+[1.6.9]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.8...v1.6.9
 [1.6.8]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.7...v1.6.8
 [1.6.7]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.6...v1.6.7
 [1.6.6]: https://github.com/CoderLuii/ChannelWatch/compare/v1.6.5...v1.6.6

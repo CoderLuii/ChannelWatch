@@ -15,6 +15,7 @@ from core.helpers.atomic_io import atomic_write_private_json, read_regular_file_
 
 STATE_SCHEMA = 1
 STARTUP_GRACE_SECONDS = 300
+RESTART_RECONNECT_GRACE_SECONDS = 60
 MAX_STATE_BYTES = 256 * 1024
 
 
@@ -169,6 +170,13 @@ class DvrHealthTracker:
                 eligible_at = max(
                     eligible_at,
                     self.process_started_at + STARTUP_GRACE_SECONDS,
+                )
+            elif unavailable_since < self.process_started_at:
+                # A previous process observed this outage. Give the new monitor
+                # time to reconnect before announcing it for the first time.
+                eligible_at = max(
+                    eligible_at,
+                    self.process_started_at + RESTART_RECONNECT_GRACE_SECONDS,
                 )
             if current < eligible_at:
                 return None

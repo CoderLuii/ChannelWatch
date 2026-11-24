@@ -55,6 +55,33 @@ def test_outage_after_confirmed_health_uses_configured_delay(tmp_path: Path):
     assert clock[0] < 15_000.0 + STARTUP_GRACE_SECONDS
 
 
+@pytest.mark.parametrize("reconnects", [True, False])
+def test_restart_rechecks_an_unannounced_outage(tmp_path: Path, reconnects: bool):
+    clock = [10_000.0]
+    options = dict(config_dir=tmp_path, dvr_id="dvr-a", now=lambda: clock[0])
+    tracker = DvrHealthTracker(process_started_at=clock[0], **options)
+    assert tracker.evaluate(healthy=True, delay_seconds=180) is None
+    clock[0] += 30
+    assert tracker.evaluate(healthy=False, delay_seconds=180) is None
+    clock[0] += 180
+    restarted = DvrHealthTracker(process_started_at=clock[0], **options)
+
+    assert restarted.evaluate(healthy=False, delay_seconds=180) is None
+    clock[0] += 30
+    assert restarted.evaluate(healthy=reconnects, delay_seconds=180) is None
+    clock[0] += 30
+    transition = restarted.evaluate(healthy=reconnects, delay_seconds=180)
+    if reconnects:
+        assert transition is None
+    else:
+        assert transition is not None and transition.event == "unreachable"
+        restarted.acknowledge(transition, notification_armed=True)
+        recovered = restarted.evaluate(healthy=True, delay_seconds=180)
+        assert recovered is not None and recovered.event == "recovered"
+        assert recovered.outage_id == transition.outage_id
+        assert recovered.notification_armed
+
+
 def test_one_outage_and_one_corresponding_recovery_are_emitted(tmp_path: Path):
     clock = [20_000.0]
     tracker = DvrHealthTracker(

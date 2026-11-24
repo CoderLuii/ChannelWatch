@@ -47,7 +47,7 @@ LEGACY_SOURCE_CONTRACTS = {
     "1.6.6": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5"],
     "1.6.7": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
     "1.6.8": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"],
-    "1.6.9": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6"],
+    "1.6.9": ["1.4.0", "1.4.1", "1.4.5", "1.6.0", "1.6.1", "1.6.2", "1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7", "1.6.8"],
 }
 BRIDGE_RELEASE_160 = {
     "version": "1.6.0",
@@ -72,6 +72,14 @@ BRIDGE_RELEASE_167 = {
     "catalog_sha256": "63cc307ed417c34e99ac8c5c566bb83c1042d53ca893071cf12af75dd8146a09",
     "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.7/channelwatch-app-v1.6.7.zip",
     "bundle_sha256": "ea598fe0a227ede06c8260b7c4fb066068a0fb7ba5be9982f0b15c086bc8f111",
+}
+BRIDGE_RELEASE_168 = {
+    "version": "1.6.8",
+    "source_commit": "de4e5393ec466e28a506cf59b825030222974c13",
+    "catalog_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.8/channelwatch-catalog-v1.6.8.json",
+    "catalog_sha256": "66bf26f7505470aa388bea4446c1fecabca8edf9778d0ef90a31665e84f1a9d0",
+    "bundle_url": "https://github.com/CoderLuii/ChannelWatch/releases/download/v1.6.8/channelwatch-app-v1.6.8.zip",
+    "bundle_sha256": "40ce63c66fd6368283572d934387e8a2907cd9c63c19265a303a409f33c9618e",
 }
 
 
@@ -133,7 +141,7 @@ def validate_baselines(value: object, *, target_version: str) -> list[dict[str, 
         expected_bridge = {
             "1.6.7": BRIDGE_RELEASE_166,
             "1.6.8": BRIDGE_RELEASE_167,
-            "1.6.9": BRIDGE_RELEASE_166,
+            "1.6.9": BRIDGE_RELEASE_168,
         }.get(target_version, BRIDGE_RELEASE_160)
         if value.get("bridge_release") != expected_bridge:
             raise LegacyAppUpgradeError("Legacy bridge release is not the immutable predecessor release.")

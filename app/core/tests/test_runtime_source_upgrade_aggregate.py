@@ -262,8 +262,8 @@ def test_v162_chain_requires_rollback_to_its_v161_source(tmp_path):
     ("1.6.8", "1.6.6", True),
     ("1.6.8", "1.6.7", True),
     ("1.6.9", "1.6.6", True),
-    ("1.6.9", "1.6.7", False),
-    ("1.6.9", "1.6.8", False),
+    ("1.6.9", "1.6.7", True),
+    ("1.6.9", "1.6.8", True),
 ])
 def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monkeypatch, capsys, target_version, source_version, accepted):
     spec = importlib.util.spec_from_file_location("runtime_source_verifier", ROOT / "scripts/release/verify-runtime-source-upgrade.py")
@@ -300,7 +300,8 @@ def test_source_verifier_accepts_only_bounded_source_target_pairs(tmp_path, monk
 
 @pytest.mark.skipif(not shutil.which("bash") or not shutil.which("jq"),
                     reason="Native workflow replay requires bash and jq")
-def test_v168_native_matrix_covers_published_predecessors_once(tmp_path):
+@pytest.mark.parametrize("version", ["1.6.8", "1.6.9"])
+def test_native_matrix_covers_published_predecessors_once(tmp_path, version):
     import yaml
 
     job = yaml.safe_load(
@@ -318,7 +319,7 @@ def test_v168_native_matrix_covers_published_predecessors_once(tmp_path):
     config = tmp_path / "scripts/release/release-config.json"
     config.parent.mkdir(parents=True)
     config.write_text(
-        json.dumps({"version": "1.6.8", "updater_protocol": 4,
+        json.dumps({"version": version, "updater_protocol": 4,
                     "runtime_generation_required": True}),
         encoding="utf-8",
     )
@@ -338,6 +339,8 @@ python() {
         "bootstrap": ["1.5.3", "1.6.0", "1.6.1", "1.6.2"],
         "chained": ["1.6.3", "1.6.4", "1.6.5", "1.6.6", "1.6.7"],
     }
+    if version == "1.6.9":
+        expected["chained"].append("1.6.8")
     for row in rows:
         architecture, shard = row["architecture"], row["shard"]
         result = subprocess.run(

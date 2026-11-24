@@ -413,7 +413,7 @@ class TestDvrManagementEndpoints:
         assert not state_file.exists()
         history_rows = json.loads((config_dir / "activity_history.json").read_text())
         assert [row["dvr_id"] for row in history_rows] == ["dvr_keep2222"]
-        reload_mock.assert_called_once()
+        reload_mock.assert_not_called()
 
 
 class TestReaddedArchivedDvr:

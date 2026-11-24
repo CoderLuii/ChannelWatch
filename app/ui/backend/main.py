@@ -3612,7 +3612,6 @@ def _dvr_purge_loop():
 
             _, purged = _mutate_current_settings_locked(_purge, purge_removed_dvrs=True)
             if purged:
-                _signal_core_hot_reload()
                 print(
                     f"[WebUI API] Auto-purged {len(purged)} expired archived DVR(s): {purged}"
                 )
@@ -6367,11 +6366,14 @@ def _mutate_current_settings_locked(mutate, *, purge_removed_dvrs=False):
         result = mutate(settings)
         if purge_removed_dvrs:
             remaining_ids = {server.get("id") for server in settings.dvr_servers or [] if isinstance(server, dict)}
-            prepare_dvr_deletions(backend_config.CONFIG_DIR, sorted(previous_ids - remaining_ids))
+            removed_ids = sorted(previous_ids - remaining_ids)
+            if not removed_ids:
+                return settings, result
+            prepare_dvr_deletions(backend_config.CONFIG_DIR, removed_ids)
         backend_config.save_settings(settings, lock_already_held=True)
         if purge_removed_dvrs:
-            # Settings are authoritative before any destructive purge begins.
-            _signal_core_hot_reload()
+            # The core polls the saved settings. Signalling Supervisor's core
+            # PID can terminate the launcher instead of reloading its worker.
             complete_pending_dvr_deletions(backend_config.CONFIG_DIR, settings.dvr_servers or [])
         return settings, result
 

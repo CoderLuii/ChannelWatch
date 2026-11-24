@@ -104,3 +104,38 @@ def test_committed_intent_survives_process_loss_before_purge(tmp_path):
     deletion.complete_pending_dvr_deletions(config, json.loads(settings.read_text())['dvr_servers'])
     assert not state.exists()
     assert json.loads(history.read_text()) == []
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_daily_purge_persists_only_deletions_without_signalling_core(tmp_path, expired):
+    from contextlib import ExitStack
+    from ui.backend import main
+
+    config = tmp_path / "config"
+    archived = _dvr("dvr_archived", host="192.168.1.20", deleted_at="2020-01-01T00:00:00+00:00")
+    active = _dvr()
+    settings = _api_settings_file(config, [active, archived] if expired else [active])
+    original = (settings.stat().st_ino, settings.stat().st_mtime_ns, settings.read_bytes())
+
+    class EndScheduledPass(BaseException):
+        pass
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("ui.backend.config.CONFIG_FILE", settings))
+        stack.enter_context(patch("ui.backend.config.CONFIG_DIR", config))
+        stack.enter_context(patch.object(main, "_CORE_CONFIG_DIR", config))
+        signal_core = stack.enter_context(patch.object(main, "_signal_core_hot_reload"))
+
+        def run_pass():
+            with patch("time.sleep", side_effect=[None, EndScheduledPass]):
+                with pytest.raises(EndScheduledPass):
+                    main._dvr_purge_loop()
+
+        run_pass()
+        after = (settings.stat().st_ino, settings.stat().st_mtime_ns, settings.read_bytes())
+        if not expired:
+            assert after == original
+        assert [row["id"] for row in json.loads(settings.read_bytes())["dvr_servers"]] == [active["id"]]
+        run_pass()
+        assert (settings.stat().st_ino, settings.stat().st_mtime_ns, settings.read_bytes()) == after
+        signal_core.assert_not_called()
